@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "db:types": "supabase gen types typescript --project-id sksfyygufnnbzrmneccx --schema public > src/lib/database.types.ts"
+    "db:types": "supabase gen types typescript --project-id sksfyygufnnbzrmneccx --schema public 2>/dev/null > src/lib/database.types.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
