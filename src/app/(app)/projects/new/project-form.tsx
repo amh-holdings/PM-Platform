@@ -6,11 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-import {
-  PROJECT_STATUS_OPTIONS,
-  createProject,
-  type CreateProjectState,
-} from "../actions";
+import { createProject, type CreateProjectState } from "../actions";
+import { PROJECT_STATUS_OPTIONS } from "../constants";
 
 const initialState: CreateProjectState = {};
 

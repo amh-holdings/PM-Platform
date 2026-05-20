@@ -4,23 +4,12 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import { PROJECT_STATUS_OPTIONS, type ProjectStatus } from "./constants";
 
 export type CreateProjectState = {
   error?: string;
   fieldErrors?: Partial<Record<"name" | "contract_value" | "ntp_date" | "cod_date", string>>;
 };
-
-const STATUS_OPTIONS = [
-  "Planning",
-  "Permitting",
-  "Construction",
-  "Commissioning",
-  "Operational",
-  "On Hold",
-  "Cancelled",
-] as const;
-
-type StatusOption = (typeof STATUS_OPTIONS)[number];
 
 function parseDate(value: FormDataEntryValue | null): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
@@ -52,8 +41,9 @@ export async function createProject(
 
   const statusRaw = formData.get("status");
   const status =
-    typeof statusRaw === "string" && (STATUS_OPTIONS as readonly string[]).includes(statusRaw)
-      ? (statusRaw as StatusOption)
+    typeof statusRaw === "string" &&
+    (PROJECT_STATUS_OPTIONS as readonly string[]).includes(statusRaw)
+      ? (statusRaw as ProjectStatus)
       : null;
 
   const client = formData.get("client");
@@ -82,5 +72,3 @@ export async function createProject(
   revalidatePath("/");
   redirect(`/projects/${data.id}`);
 }
-
-export const PROJECT_STATUS_OPTIONS = STATUS_OPTIONS;
