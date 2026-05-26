@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 
+import { AutoFillButton } from "./auto-fill-button";
 import { DocumentsSection } from "./documents-section";
 import { ProjectChat } from "./project-chat";
 
@@ -63,7 +63,7 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-3">
         <div>
           <Link
             href="/projects"
@@ -73,9 +73,16 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
           </Link>
           <h1 className="mt-1 text-2xl font-semibold">{project.name}</h1>
         </div>
-        <Button variant="outline" disabled>
-          Edit (coming soon)
-        </Button>
+        <AutoFillButton
+          projectId={params.id}
+          current={{
+            client: project.client,
+            contract_value: project.contract_value,
+            ntp_date: project.ntp_date,
+            cod_date: project.cod_date,
+            zip_code: project.zip_code,
+          }}
+        />
       </div>
 
       <div className="rounded-lg border bg-card p-6 shadow-sm">

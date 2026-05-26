@@ -203,6 +203,151 @@ fastify.post("/chat", async (request, reply) => {
   };
 });
 
+// POST /extract-project-details
+//   body: { project_id }
+//   Looks up the project's prime contract, asks Claude to extract structured
+//   project metadata as JSON, returns it for confirmation in the UI before
+//   the user applies it to the projects row.
+fastify.post("/extract-project-details", async (request, reply) => {
+  const { project_id } = request.body || {};
+  if (!project_id || typeof project_id !== "string") {
+    reply.code(400).send({ error: "project_id required" });
+    return;
+  }
+
+  const { data: docs, error: docError } = await supabase
+    .from("project_documents")
+    .select("file_name, extracted_text")
+    .eq("project_id", project_id)
+    .eq("category", "prime_contract")
+    .eq("text_status", "ready");
+
+  if (docError) {
+    reply.code(500).send({ error: docError.message });
+    return;
+  }
+  if (!docs || docs.length === 0) {
+    reply.code(404).send({
+      error:
+        "No prime contract found for this project. Upload one and tag its category as 'prime_contract' first.",
+    });
+    return;
+  }
+
+  // Concatenate all prime contracts (usually 1). Cap at 600k chars (~150k
+  // tokens) to stay safely within the Sonnet context window. Most prime
+  // EPCs sit under 200k tokens, but trim defensively.
+  const MAX_CHARS = 600_000;
+  let contractText = docs
+    .map((d) => `=== ${d.file_name} ===\n\n${d.extracted_text}`)
+    .join("\n\n");
+  if (contractText.length > MAX_CHARS) {
+    contractText =
+      contractText.slice(0, MAX_CHARS) +
+      "\n\n[... truncated for context window]";
+  }
+
+  const systemPrompt = [
+    "You extract structured project metadata from a prime EPC (Engineering, Procurement, Construction) contract for a solar project.",
+    "",
+    "Read the contract carefully. Return ONLY a single JSON object (no markdown fences, no commentary before or after). Use exactly these field names:",
+    "",
+    "{",
+    '  "client": string | null,            // The Owner / customer entity (e.g. "Dimension Energy", "Sweet Spring Solar, LLC")',
+    '  "contract_value": number | null,    // Contract price in USD as a plain number (no commas, no $ sign)',
+    '  "ntp_date": string | null,          // Notice to Proceed date as YYYY-MM-DD',
+    '  "cod_date": string | null,          // Commercial Operation Date target as YYYY-MM-DD (use Guaranteed Placed in Service Completion Date if COD is not directly given)',
+    '  "zip_code": string | null,          // Site zip code (Exhibit A or Exhibit I typically lists the site)',
+    '  "ld_rate_per_mwdc_per_day": number | null,  // Delay Damages rate, dollars per MWDC per day',
+    '  "retainage_pct": number | null,     // Retainage percentage withheld from each progress payment',
+    '  "ld_cap_pct": number | null,        // Liquidated Damages aggregate cap as a percentage of contract price',
+    '  "notes": string                     // Brief notes about any uncertain fields, conflicts, or where you sourced unusual values',
+    "}",
+    "",
+    "Use null when you genuinely cannot find a value. Do not guess. Do not invent dates.",
+    "Return ONLY the JSON object. No prose. No code fences.",
+  ].join("\n");
+
+  const userPrompt = [
+    "Contract text follows. Extract the project metadata.",
+    "",
+    contractText,
+  ].join("\n");
+
+  const startedAt = Date.now();
+  let raw = "";
+
+  try {
+    const q = query({
+      prompt: userPrompt,
+      options: {
+        model: MODEL,
+        systemPrompt,
+        // No tools - this is a pure one-shot extraction. The agent does not
+        // need to read other documents; the prime contract text is already
+        // in the prompt.
+        permissionMode: "bypassPermissions",
+        maxTurns: 1,
+      },
+    });
+
+    for await (const message of q) {
+      if (message.type === "assistant") {
+        const content = message.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === "text" && typeof block.text === "string") {
+              raw = block.text;
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    request.log.error({ err }, "extraction query failed");
+    reply.code(500).send({ error: err.message || "Internal error" });
+    return;
+  }
+
+  if (!raw) {
+    reply.code(500).send({ error: "Claude returned no text" });
+    return;
+  }
+
+  // Claude sometimes wraps the JSON in prose or code fences despite
+  // instructions. Find the outermost { ... } and parse that.
+  let parsed;
+  const firstBrace = raw.indexOf("{");
+  const lastBrace = raw.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+    reply.code(500).send({
+      error: "Claude response did not contain a JSON object",
+      raw: raw.slice(0, 2000),
+    });
+    return;
+  }
+  const jsonText = raw.slice(firstBrace, lastBrace + 1);
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch (err) {
+    request.log.error({ raw: raw.slice(0, 500) }, "JSON parse failed");
+    reply.code(500).send({
+      error: "Claude returned invalid JSON",
+      raw: raw.slice(0, 2000),
+    });
+    return;
+  }
+
+  const elapsedMs = Date.now() - startedAt;
+  request.log.info({ project_id, elapsedMs }, "extracted project details");
+
+  return {
+    fields: parsed,
+    elapsed_ms: elapsedMs,
+    source_documents: docs.map((d) => d.file_name),
+  };
+});
+
 // ============ START ============
 
 try {
