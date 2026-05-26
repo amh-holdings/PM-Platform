@@ -1,14 +1,16 @@
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
 
+import { WbsAutoFillButton } from "./wbs-auto-fill";
 import { WbsFormDialog } from "./wbs-form-dialog";
 import { WbsList } from "./wbs-list";
 
 type Props = {
   projectId: string;
+  aiEnabled: boolean;
 };
 
-export async function WbsSection({ projectId }: Props) {
+export async function WbsSection({ projectId, aiEnabled }: Props) {
   const supabase = createClient();
 
   const [{ data: items, error }, { data: subs }] = await Promise.all([
@@ -41,11 +43,14 @@ export async function WbsSection({ projectId }: Props) {
             and billed-to-date per line.
           </p>
         </div>
-        <WbsFormDialog
-          projectId={projectId}
-          subs={subOptions}
-          trigger={<Button>Add line item</Button>}
-        />
+        <div className="flex items-center gap-2">
+          {aiEnabled && <WbsAutoFillButton projectId={projectId} />}
+          <WbsFormDialog
+            projectId={projectId}
+            subs={subOptions}
+            trigger={<Button>Add line item</Button>}
+          />
+        </div>
       </div>
 
       {error ? (

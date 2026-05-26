@@ -185,3 +185,114 @@ export async function deleteWbsItem(
   revalidatePath(`/projects/${projectId}`);
   return { ok: true };
 }
+
+export type ExtractedSovItem = {
+  wbs_code: string;
+  description: string;
+  contract_value: number | null;
+};
+
+export type ExtractSovResult =
+  | {
+      ok: true;
+      items: ExtractedSovItem[];
+      total_contract_value: number | null;
+      notes: string;
+      source_documents: string[];
+      elapsed_ms: number;
+    }
+  | { ok: false; error: string };
+
+export async function extractSov(projectId: string): Promise<ExtractSovResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const relayUrl = process.env.RELAY_URL;
+  const relaySecret = process.env.RELAY_SHARED_SECRET;
+  if (!relayUrl || !relaySecret) {
+    return {
+      ok: false,
+      error: "Extraction not configured. RELAY_URL and RELAY_SHARED_SECRET must be set.",
+    };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${relayUrl}/extract-sov`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${relaySecret}`,
+      },
+      body: JSON.stringify({ project_id: projectId }),
+      signal: AbortSignal.timeout(180_000),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Network error";
+    return { ok: false, error: `Could not reach the relay: ${msg}` };
+  }
+
+  if (!response.ok) {
+    let errText = `Relay returned ${response.status}`;
+    try {
+      const data = await response.json();
+      if (data?.error) errText = data.error;
+    } catch {}
+    return { ok: false, error: errText };
+  }
+
+  const data = await response.json();
+  return {
+    ok: true,
+    items: data.items ?? [],
+    total_contract_value: data.total_contract_value ?? null,
+    notes: data.notes ?? "",
+    source_documents: data.source_documents ?? [],
+    elapsed_ms: data.elapsed_ms ?? 0,
+  };
+}
+
+export type BulkWbsInsert = {
+  wbs_code: string;
+  description: string;
+  contract_value: number | null;
+};
+
+export async function bulkInsertWbs(
+  projectId: string,
+  items: BulkWbsInsert[],
+): Promise<{ ok: true; inserted: number } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+  if (items.length === 0) return { ok: false, error: "No items selected" };
+
+  // Dedupe against existing WBS rows by wbs_code so re-runs don't duplicate.
+  const { data: existing, error: fetchErr } = await auth.supabase
+    .from("wbs_sov")
+    .select("wbs_code")
+    .eq("project_id", projectId);
+  if (fetchErr) return { ok: false, error: fetchErr.message };
+  const existingCodes = new Set((existing ?? []).map((r) => r.wbs_code));
+
+  const rows: TablesInsert<"wbs_sov">[] = items
+    .filter((it) => !existingCodes.has(it.wbs_code))
+    .map((it) => ({
+      project_id: projectId,
+      wbs_code: it.wbs_code,
+      description: it.description,
+      contract_value: it.contract_value,
+      pct_complete_sub: 0,
+      pct_complete_ahc: 0,
+      billed_to_date: 0,
+    }));
+
+  if (rows.length === 0) {
+    return { ok: true, inserted: 0 };
+  }
+
+  const { error } = await auth.supabase.from("wbs_sov").insert(rows);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, inserted: rows.length };
+}

@@ -115,7 +115,7 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
 
       <SubcontractorsSection projectId={params.id} />
 
-      <WbsSection projectId={params.id} />
+      <WbsSection projectId={params.id} aiEnabled={aiEnabled} />
 
       <DocumentsSection projectId={params.id} />
 

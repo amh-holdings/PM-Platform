@@ -348,6 +348,171 @@ fastify.post("/extract-project-details", async (request, reply) => {
   };
 });
 
+// POST /extract-sov
+//   body: { project_id }
+//   Reads the project's prime contract documents, asks Claude to extract the
+//   Schedule of Values (Exhibit E) as structured rows, returns them for
+//   confirmation before insertion into wbs_sov.
+fastify.post("/extract-sov", async (request, reply) => {
+  const { project_id } = request.body || {};
+  if (!project_id || typeof project_id !== "string") {
+    reply.code(400).send({ error: "project_id required" });
+    return;
+  }
+
+  // Look for prime contracts OR exhibit category docs whose file_name hints
+  // at being Exhibit E (the SOV). Fall back to all prime contracts if no
+  // obvious SOV doc is found.
+  const { data: exhibitDocs } = await supabase
+    .from("project_documents")
+    .select("file_name, extracted_text")
+    .eq("project_id", project_id)
+    .eq("category", "exhibit")
+    .eq("text_status", "ready")
+    .ilike("file_name", "%exhibit_e%");
+
+  const { data: primeDocs } = await supabase
+    .from("project_documents")
+    .select("file_name, extracted_text")
+    .eq("project_id", project_id)
+    .eq("category", "prime_contract")
+    .eq("text_status", "ready");
+
+  // Prefer standalone Exhibit E if found; otherwise scan the prime contract
+  // (which usually has Exhibit E attached at the end).
+  const sourceDocs =
+    exhibitDocs && exhibitDocs.length > 0 ? exhibitDocs : primeDocs;
+
+  if (!sourceDocs || sourceDocs.length === 0) {
+    reply.code(404).send({
+      error:
+        "Could not find a prime contract or Exhibit E for this project. Upload one first.",
+    });
+    return;
+  }
+
+  const MAX_CHARS = 600_000;
+  let combined = sourceDocs
+    .map((d) => `=== ${d.file_name} ===\n\n${d.extracted_text}`)
+    .join("\n\n");
+  if (combined.length > MAX_CHARS) {
+    combined = combined.slice(0, MAX_CHARS) + "\n\n[... truncated]";
+  }
+
+  const systemPrompt = [
+    "You extract the Schedule of Values (SOV) from a solar EPC prime contract. The SOV is usually labeled Exhibit E and contains a list of payment milestones / line items with WBS codes, descriptions, percentages, and dollar amounts.",
+    "",
+    "Return ONLY a JSON object (no markdown fences, no commentary) of this exact shape:",
+    "",
+    "{",
+    '  "items": [',
+    "    {",
+    '      "wbs_code": string,             // e.g. "1.00", "1.01", "8.03"',
+    '      "description": string,          // e.g. "Engineering services (30% IFC)"',
+    '      "contract_value": number | null // dollar amount (no $ or commas)',
+    "    },",
+    "    ...",
+    "  ],",
+    '  "total_contract_value": number | null,  // sum of items, or the contract value stated in the SOV',
+    '  "notes": string                          // brief notes about ambiguity, alternate versions found, etc.',
+    "}",
+    "",
+    "Rules:",
+    "- Include every line item, including milestone-only entries that may have 0 value (e.g. Final Completion may show as 200% of punchlist holdback).",
+    "- For lines with non-numeric values (e.g. '200% of punchlist holdback'), set contract_value to null and put the description verbatim.",
+    "- If the contract contains multiple SOV versions (e.g. an updated Exhibit E in an amendment), use the MOST RECENT one and note this.",
+    "- Return ONLY the JSON object. No prose.",
+  ].join("\n");
+
+  const userPrompt = [
+    "Document text follows. Extract the Schedule of Values.",
+    "",
+    combined,
+  ].join("\n");
+
+  const startedAt = Date.now();
+  let raw = "";
+
+  try {
+    const q = query({
+      prompt: userPrompt,
+      options: {
+        model: MODEL,
+        systemPrompt,
+        permissionMode: "bypassPermissions",
+        maxTurns: 1,
+      },
+    });
+
+    for await (const message of q) {
+      if (message.type === "assistant") {
+        const content = message.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === "text" && typeof block.text === "string") {
+              raw = block.text;
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    request.log.error({ err }, "SOV extraction query failed");
+    reply.code(500).send({ error: err.message || "Internal error" });
+    return;
+  }
+
+  if (!raw) {
+    reply.code(500).send({ error: "Claude returned no text" });
+    return;
+  }
+
+  // Tolerant JSON extraction: take everything between the outermost { ... }.
+  const firstBrace = raw.indexOf("{");
+  const lastBrace = raw.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+    reply.code(500).send({
+      error: "Claude response did not contain a JSON object",
+      raw: raw.slice(0, 2000),
+    });
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw.slice(firstBrace, lastBrace + 1));
+  } catch (err) {
+    request.log.error({ raw: raw.slice(0, 500) }, "SOV JSON parse failed");
+    reply.code(500).send({
+      error: "Claude returned invalid JSON",
+      raw: raw.slice(0, 2000),
+    });
+    return;
+  }
+
+  if (!Array.isArray(parsed?.items)) {
+    reply.code(500).send({
+      error: "Extracted JSON has no 'items' array",
+      raw: raw.slice(0, 2000),
+    });
+    return;
+  }
+
+  const elapsedMs = Date.now() - startedAt;
+  request.log.info(
+    { project_id, elapsedMs, item_count: parsed.items.length },
+    "extracted SOV",
+  );
+
+  return {
+    items: parsed.items,
+    total_contract_value: parsed.total_contract_value ?? null,
+    notes: parsed.notes ?? "",
+    source_documents: sourceDocs.map((d) => d.file_name),
+    elapsed_ms: elapsedMs,
+  };
+});
+
 // ============ START ============
 
 try {
