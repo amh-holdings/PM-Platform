@@ -165,7 +165,24 @@ create policy "ahc_write_subcontractors" on public.subcontractors
   with check (public.current_user_role() in ('phil','zarina','ahc_super'));
 
 -- ============================================================================
--- TODO (Day 3+): wbs_sov, dprs, dpr_quantities, rfis, submittals, photos,
--- comms_log. All currently RLS-on with no policies, so they reject all
--- access. Their policies land alongside the features that need them.
+-- WBS / SOV
+-- ============================================================================
+-- Phase 1: AHC team full CRUD. Subs get scoped read in a future migration.
+
+drop policy if exists "ahc_read_wbs"  on public.wbs_sov;
+drop policy if exists "ahc_write_wbs" on public.wbs_sov;
+
+create policy "ahc_read_wbs" on public.wbs_sov
+  for select to authenticated
+  using (public.current_user_role() in ('phil','zarina','ahc_super'));
+
+create policy "ahc_write_wbs" on public.wbs_sov
+  for all to authenticated
+  using (public.current_user_role() in ('phil','zarina','ahc_super'))
+  with check (public.current_user_role() in ('phil','zarina','ahc_super'));
+
+-- ============================================================================
+-- TODO (Day 3+): dprs, dpr_quantities, rfis, submittals, photos, comms_log.
+-- All currently RLS-on with no policies, so they reject all access. Their
+-- policies land alongside the features that need them.
 -- ============================================================================

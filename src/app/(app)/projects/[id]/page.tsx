@@ -9,6 +9,7 @@ import { AutoFillButton } from "./auto-fill-button";
 import { DocumentsSection } from "./documents-section";
 import { ProjectChat } from "./project-chat";
 import { SubcontractorsSection } from "./subs-section";
+import { WbsSection } from "./wbs-section";
 
 type Params = { id: string };
 
@@ -114,10 +115,12 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
 
       <SubcontractorsSection projectId={params.id} />
 
+      <WbsSection projectId={params.id} />
+
       <DocumentsSection projectId={params.id} />
 
       <div className="rounded-lg border border-dashed bg-card p-6 text-sm text-muted-foreground">
-        DPRs, RFIs, submittals, photos, and WBS/SOV will live here next.
+        DPRs, RFIs, submittals, photos coming next.
       </div>
     </div>
   );
