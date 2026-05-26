@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 
+import { DocumentsSection } from "./documents-section";
+import { ProjectChat } from "./project-chat";
+
 type Params = { id: string };
 
 export async function generateMetadata({ params }: { params: Params }) {
@@ -87,6 +90,10 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
           ))}
         </dl>
       </div>
+
+      <ProjectChat projectId={params.id} />
+
+      <DocumentsSection projectId={params.id} />
 
       <div className="rounded-lg border border-dashed bg-card p-6 text-sm text-muted-foreground">
         DPRs, RFIs, submittals, photos, and WBS/SOV will live here in Day 3+.

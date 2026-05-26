@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "db:types": "supabase gen types typescript --project-id sksfyygufnnbzrmneccx --schema public 2>/dev/null > src/lib/database.types.ts"
+    "db:types": "supabase gen types typescript --project-id sksfyygufnnbzrmneccx --schema public 2>/dev/null > src/lib/database.types.ts",
+    "verify-setup": "node scripts/verify-setup.mjs",
+    "import:scan": "node scripts/bulk-import.mjs scan",
+    "import:apply": "node scripts/bulk-import.mjs apply",
+    "backfill-text": "node scripts/backfill-text.mjs"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
@@ -16,11 +20,16 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.16.0",
+    "mammoth": "^1.12.0",
     "next": "14.2.35",
+    "pdf-parse": "^2.4.5",
+    "pdf-to-img": "^6.1.0",
     "react": "^18",
     "react-dom": "^18",
     "tailwind-merge": "^3.6.0",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "tesseract.js": "^7.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^20",

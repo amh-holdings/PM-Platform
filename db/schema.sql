@@ -211,6 +211,54 @@ create table public.comms_log (
   created_at timestamptz default now()
 );
 
+-- ============ PROJECT DOCUMENTS ============
+-- Project-scoped document library. Phase 1 stores files in Supabase Storage
+-- (bucket: project-documents) and tracks metadata + extracted text here so
+-- the AI Q&A layer can query content without re-parsing PDFs on every call.
+
+create type document_category as enum (
+  'prime_contract',
+  'amendment',
+  'exhibit',
+  'subcontract',
+  'drawing',
+  'spec',
+  'submittal',
+  'rfi',
+  'daily_log',
+  'email',
+  'other'
+);
+
+create type document_text_status as enum (
+  'pending',
+  'processing',
+  'ready',
+  'failed',
+  'skipped'
+);
+
+create table public.project_documents (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references public.projects(id) on delete cascade not null,
+  uploaded_by_id uuid references public.profiles(id),
+  file_name text not null,
+  storage_path text not null unique,
+  mime_type text,
+  size_bytes bigint,
+  category document_category not null default 'other',
+  description text,
+  extracted_text text,
+  text_status document_text_status not null default 'pending',
+  text_error text,
+  pages_count integer,
+  uploaded_at timestamptz default now()
+);
+
+create index project_documents_project_id_idx on public.project_documents(project_id);
+create index project_documents_category_idx on public.project_documents(category);
+create index project_documents_text_status_idx on public.project_documents(text_status);
+
 -- ============ ROW LEVEL SECURITY ============
 
 alter table public.profiles enable row level security;
@@ -223,6 +271,7 @@ alter table public.rfis enable row level security;
 alter table public.submittals enable row level security;
 alter table public.photos enable row level security;
 alter table public.comms_log enable row level security;
+alter table public.project_documents enable row level security;
 
 -- Auto-create profile when a new auth user signs up
 create or replace function public.handle_new_user()

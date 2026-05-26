@@ -81,6 +81,72 @@ create policy "ahc_write_projects" on public.projects
   with check (public.current_user_role() in ('phil','zarina','ahc_super'));
 
 -- ============================================================================
+-- PROJECT_DOCUMENTS
+-- ============================================================================
+-- Phase 1 policy: AHC team (phil/zarina/ahc_super) has full CRUD on documents.
+-- Owners/counsel/subs get nothing yet - we'll widen reads in Phase 2 once
+-- subcontractor-scoped projects are wired up.
+
+drop policy if exists "ahc_read_documents"  on public.project_documents;
+drop policy if exists "ahc_write_documents" on public.project_documents;
+
+create policy "ahc_read_documents" on public.project_documents
+  for select to authenticated
+  using (public.current_user_role() in ('phil','zarina','ahc_super'));
+
+create policy "ahc_write_documents" on public.project_documents
+  for all to authenticated
+  using (public.current_user_role() in ('phil','zarina','ahc_super'))
+  with check (public.current_user_role() in ('phil','zarina','ahc_super'));
+
+-- ============================================================================
+-- STORAGE: project-documents bucket
+-- ============================================================================
+-- The bucket itself must be created via the Supabase dashboard or the
+-- Storage API (CREATE BUCKET isn't a SQL statement). Once it exists, these
+-- policies on storage.objects gate access to files inside it.
+--
+-- File path convention: {project_id}/{document_id}/{file_name}
+-- Bucket should be PRIVATE (not public) - all reads go through signed URLs.
+
+drop policy if exists "ahc_read_document_objects"   on storage.objects;
+drop policy if exists "ahc_write_document_objects"  on storage.objects;
+drop policy if exists "ahc_update_document_objects" on storage.objects;
+drop policy if exists "ahc_delete_document_objects" on storage.objects;
+
+create policy "ahc_read_document_objects" on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'project-documents'
+    and public.current_user_role() in ('phil','zarina','ahc_super')
+  );
+
+create policy "ahc_write_document_objects" on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'project-documents'
+    and public.current_user_role() in ('phil','zarina','ahc_super')
+  );
+
+create policy "ahc_update_document_objects" on storage.objects
+  for update to authenticated
+  using (
+    bucket_id = 'project-documents'
+    and public.current_user_role() in ('phil','zarina','ahc_super')
+  )
+  with check (
+    bucket_id = 'project-documents'
+    and public.current_user_role() in ('phil','zarina','ahc_super')
+  );
+
+create policy "ahc_delete_document_objects" on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'project-documents'
+    and public.current_user_role() in ('phil','zarina','ahc_super')
+  );
+
+-- ============================================================================
 -- TODO (Day 3+): subcontractors, wbs_sov, dprs, dpr_quantities, rfis,
 -- submittals, photos, comms_log. All currently RLS-on with no policies, so
 -- they reject all access. Their policies land alongside the features that

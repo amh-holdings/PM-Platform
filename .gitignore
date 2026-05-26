@@ -28,6 +28,14 @@ yarn-error.log*
 # local env files
 .env*.local
 
+# bulk-import manifests (contain absolute paths and extracted text)
+scripts/.import-manifest.json
+scripts/.import-text/
+
+# tesseract.js downloads language data at runtime
+eng.traineddata
+*.traineddata
+
 # supabase cli cache
 /supabase/.temp/
 

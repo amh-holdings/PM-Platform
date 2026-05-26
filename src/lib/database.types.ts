@@ -344,6 +344,72 @@ export type Database = {
         }
         Relationships: []
       }
+      project_documents: {
+        Row: {
+          category: Database["public"]["Enums"]["document_category"]
+          description: string | null
+          extracted_text: string | null
+          file_name: string
+          id: string
+          mime_type: string | null
+          pages_count: number | null
+          project_id: string
+          size_bytes: number | null
+          storage_path: string
+          text_error: string | null
+          text_status: Database["public"]["Enums"]["document_text_status"]
+          uploaded_at: string | null
+          uploaded_by_id: string | null
+        }
+        Insert: {
+          category?: Database["public"]["Enums"]["document_category"]
+          description?: string | null
+          extracted_text?: string | null
+          file_name: string
+          id?: string
+          mime_type?: string | null
+          pages_count?: number | null
+          project_id: string
+          size_bytes?: number | null
+          storage_path: string
+          text_error?: string | null
+          text_status?: Database["public"]["Enums"]["document_text_status"]
+          uploaded_at?: string | null
+          uploaded_by_id?: string | null
+        }
+        Update: {
+          category?: Database["public"]["Enums"]["document_category"]
+          description?: string | null
+          extracted_text?: string | null
+          file_name?: string
+          id?: string
+          mime_type?: string | null
+          pages_count?: number | null
+          project_id?: string
+          size_bytes?: number | null
+          storage_path?: string
+          text_error?: string | null
+          text_status?: Database["public"]["Enums"]["document_text_status"]
+          uploaded_at?: string | null
+          uploaded_by_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_documents_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_documents_uploaded_by_id_fkey"
+            columns: ["uploaded_by_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       projects: {
         Row: {
           ahc_pm_id: string | null
@@ -705,6 +771,24 @@ export type Database = {
         | "site_visit"
         | "text"
         | "other"
+      document_category:
+        | "prime_contract"
+        | "amendment"
+        | "exhibit"
+        | "subcontract"
+        | "drawing"
+        | "spec"
+        | "submittal"
+        | "rfi"
+        | "daily_log"
+        | "email"
+        | "other"
+      document_text_status:
+        | "pending"
+        | "processing"
+        | "ready"
+        | "failed"
+        | "skipped"
       dpr_status: "draft" | "submitted" | "approved" | "returned"
       photo_type: "progress" | "safety" | "delivery" | "issue" | "eod" | "other"
       rfi_status: "open" | "answered" | "closed"
@@ -850,6 +934,26 @@ export const Constants = {
   public: {
     Enums: {
       comms_type: ["phone", "email", "meeting", "site_visit", "text", "other"],
+      document_category: [
+        "prime_contract",
+        "amendment",
+        "exhibit",
+        "subcontract",
+        "drawing",
+        "spec",
+        "submittal",
+        "rfi",
+        "daily_log",
+        "email",
+        "other",
+      ],
+      document_text_status: [
+        "pending",
+        "processing",
+        "ready",
+        "failed",
+        "skipped",
+      ],
       dpr_status: ["draft", "submitted", "approved", "returned"],
       photo_type: ["progress", "safety", "delivery", "issue", "eod", "other"],
       rfi_status: ["open", "answered", "closed"],
