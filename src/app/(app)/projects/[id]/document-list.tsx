@@ -26,9 +26,15 @@ type DocumentRow = {
   pages_count: number | null;
 };
 
+type DocumentGroup = {
+  category: DocumentCategory;
+  documents: DocumentRow[];
+  defaultOpen: boolean;
+};
+
 type Props = {
   projectId: string;
-  documents: DocumentRow[];
+  groups: DocumentGroup[];
 };
 
 function formatBytes(bytes: number | null): string {
@@ -65,13 +71,13 @@ const TEXT_STATUS_TONE: Record<DocumentTextStatus, string> = {
   skipped: "bg-muted text-muted-foreground",
 };
 
-export function DocumentList({ projectId, documents }: Props) {
+export function DocumentList({ projectId, groups }: Props) {
   const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  if (documents.length === 0) {
+  if (groups.length === 0) {
     return (
       <div className="rounded-lg border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
         No documents uploaded yet.
@@ -115,65 +121,85 @@ export function DocumentList({ projectId, documents }: Props) {
           {error}
         </div>
       )}
-      <div className="overflow-hidden rounded-lg border bg-card shadow-sm">
-        <table className="w-full text-sm">
-          <thead className="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3 font-medium">File</th>
-              <th className="px-4 py-3 font-medium">Category</th>
-              <th className="px-4 py-3 font-medium">Size</th>
-              <th className="px-4 py-3 font-medium">Text</th>
-              <th className="px-4 py-3 font-medium">Uploaded</th>
-              <th className="px-4 py-3 text-right font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {documents.map((doc) => (
-              <tr key={doc.id} className="hover:bg-muted/30">
-                <td className="px-4 py-3">
-                  <button
-                    type="button"
-                    onClick={() => handleOpen(doc.id)}
-                    disabled={pendingId === doc.id}
-                    className="text-left font-medium hover:underline disabled:opacity-60"
-                  >
-                    {doc.file_name}
-                  </button>
-                </td>
-                <td className="px-4 py-3 text-muted-foreground">
-                  {DOCUMENT_CATEGORY_LABEL[doc.category]}
-                </td>
-                <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                  {formatBytes(doc.size_bytes)}
-                </td>
-                <td className="px-4 py-3">
-                  <span
-                    className={cn(
-                      "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
-                      TEXT_STATUS_TONE[doc.text_status],
-                    )}
-                  >
-                    {TEXT_STATUS_LABEL[doc.text_status]}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-muted-foreground">
-                  {formatTimestamp(doc.uploaded_at)}
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleDelete(doc.id, doc.file_name)}
-                    disabled={pendingId === doc.id}
-                  >
-                    {pendingId === doc.id ? "Working..." : "Delete"}
-                  </Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {groups.map((group) => (
+        <details
+          key={group.category}
+          open={group.defaultOpen}
+          className="group overflow-hidden rounded-lg border bg-card shadow-sm"
+        >
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border-b bg-muted/30 px-4 py-3 text-sm hover:bg-muted/50 [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center gap-2">
+              <span
+                aria-hidden
+                className="inline-block transition-transform group-open:rotate-90 text-muted-foreground"
+              >
+                ▶
+              </span>
+              <span className="font-medium">
+                {DOCUMENT_CATEGORY_LABEL[group.category]}
+              </span>
+              <span className="rounded-full bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                {group.documents.length}
+              </span>
+            </div>
+          </summary>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <tr className="border-b">
+                  <th className="px-4 py-2 font-medium">File</th>
+                  <th className="px-4 py-2 font-medium">Size</th>
+                  <th className="px-4 py-2 font-medium">Text</th>
+                  <th className="px-4 py-2 font-medium">Uploaded</th>
+                  <th className="px-4 py-2 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {group.documents.map((doc) => (
+                  <tr key={doc.id} className="hover:bg-muted/30">
+                    <td className="px-4 py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => handleOpen(doc.id)}
+                        disabled={pendingId === doc.id}
+                        className="text-left font-medium hover:underline disabled:opacity-60"
+                      >
+                        {doc.file_name}
+                      </button>
+                    </td>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
+                      {formatBytes(doc.size_bytes)}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span
+                        className={cn(
+                          "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                          TEXT_STATUS_TONE[doc.text_status],
+                        )}
+                      >
+                        {TEXT_STATUS_LABEL[doc.text_status]}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-muted-foreground">
+                      {formatTimestamp(doc.uploaded_at)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDelete(doc.id, doc.file_name)}
+                        disabled={pendingId === doc.id}
+                      >
+                        {pendingId === doc.id ? "Working..." : "Delete"}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      ))}
     </div>
   );
 }

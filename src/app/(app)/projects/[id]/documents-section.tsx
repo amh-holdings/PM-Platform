@@ -2,6 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 
 import { DocumentList } from "./document-list";
 import { DocumentUploader } from "./document-uploader";
+import {
+  DOCUMENT_CATEGORY_DEFAULT_OPEN,
+  DOCUMENT_CATEGORY_ORDER,
+  type DocumentCategory,
+} from "./documents-constants";
 
 type Props = {
   projectId: string;
@@ -15,7 +20,16 @@ export async function DocumentsSection({ projectId }: Props) {
       "id, file_name, category, size_bytes, mime_type, text_status, uploaded_at, pages_count",
     )
     .eq("project_id", projectId)
-    .order("uploaded_at", { ascending: false });
+    .order("file_name", { ascending: true });
+
+  // Group by category, preserving the display order from constants.
+  const groups = DOCUMENT_CATEGORY_ORDER
+    .map((category: DocumentCategory) => ({
+      category,
+      documents: (documents ?? []).filter((d) => d.category === category),
+      defaultOpen: DOCUMENT_CATEGORY_DEFAULT_OPEN.includes(category),
+    }))
+    .filter((g) => g.documents.length > 0);
 
   return (
     <section className="space-y-4">
@@ -41,7 +55,7 @@ export async function DocumentsSection({ projectId }: Props) {
           Failed to load documents: {error.message}
         </div>
       ) : (
-        <DocumentList projectId={projectId} documents={documents ?? []} />
+        <DocumentList projectId={projectId} groups={groups} />
       )}
     </section>
   );

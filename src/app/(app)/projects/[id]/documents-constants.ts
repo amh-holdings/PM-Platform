@@ -30,6 +30,28 @@ export const DOCUMENT_CATEGORY_LABEL: Record<DocumentCategory, string> =
     DOCUMENT_CATEGORY_OPTIONS.map((o) => [o.value, o.label]),
   ) as Record<DocumentCategory, string>;
 
+// Display order in the document list - more important categories first.
+export const DOCUMENT_CATEGORY_ORDER: DocumentCategory[] = [
+  "prime_contract",
+  "amendment",
+  "exhibit",
+  "subcontract",
+  "drawing",
+  "spec",
+  "submittal",
+  "rfi",
+  "daily_log",
+  "email",
+  "other",
+];
+
+// Which categories are expanded by default in the documents section.
+// Everything else stays collapsed (user clicks to expand).
+export const DOCUMENT_CATEGORY_DEFAULT_OPEN: DocumentCategory[] = [
+  "prime_contract",
+  "amendment",
+];
+
 export const DOCUMENT_BUCKET = "project-documents";
 
 export const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
