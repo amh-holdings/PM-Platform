@@ -211,6 +211,28 @@ create table public.comms_log (
   created_at timestamptz default now()
 );
 
+-- ============ COST CODES ============
+-- AHC's internal cost categories, scoped per project. Example codes:
+-- "SSC A-AHC Labor", "SSC B-General Conditions". Change orders are also
+-- tracked here with is_change_order=true.
+
+create table public.cost_codes (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references public.projects(id) on delete cascade not null,
+  code text not null,
+  name text not null,
+  description text,
+  estimated_cost numeric(14,2),
+  actual_cost numeric(14,2) default 0,
+  is_change_order boolean default false,
+  sort_order integer,
+  created_at timestamptz default now(),
+  unique (project_id, code)
+);
+
+create index cost_codes_project_id_idx on public.cost_codes(project_id);
+create index cost_codes_sort_order_idx on public.cost_codes(project_id, sort_order);
+
 -- ============ PROJECT DOCUMENTS ============
 -- Project-scoped document library. Phase 1 stores files in Supabase Storage
 -- (bucket: project-documents) and tracks metadata + extracted text here so
@@ -272,6 +294,7 @@ alter table public.submittals enable row level security;
 alter table public.photos enable row level security;
 alter table public.comms_log enable row level security;
 alter table public.project_documents enable row level security;
+alter table public.cost_codes enable row level security;
 
 -- Auto-create profile when a new auth user signs up
 create or replace function public.handle_new_user()

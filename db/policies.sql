@@ -182,6 +182,22 @@ create policy "ahc_write_wbs" on public.wbs_sov
   with check (public.current_user_role() in ('phil','zarina','ahc_super'));
 
 -- ============================================================================
+-- COST CODES
+-- ============================================================================
+
+drop policy if exists "ahc_read_cost_codes"  on public.cost_codes;
+drop policy if exists "ahc_write_cost_codes" on public.cost_codes;
+
+create policy "ahc_read_cost_codes" on public.cost_codes
+  for select to authenticated
+  using (public.current_user_role() in ('phil','zarina','ahc_super'));
+
+create policy "ahc_write_cost_codes" on public.cost_codes
+  for all to authenticated
+  using (public.current_user_role() in ('phil','zarina','ahc_super'))
+  with check (public.current_user_role() in ('phil','zarina','ahc_super'));
+
+-- ============================================================================
 -- TODO (Day 3+): dprs, dpr_quantities, rfis, submittals, photos, comms_log.
 -- All currently RLS-on with no policies, so they reject all access. Their
 -- policies land alongside the features that need them.

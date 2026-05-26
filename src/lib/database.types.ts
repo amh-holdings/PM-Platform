@@ -85,6 +85,53 @@ export type Database = {
           },
         ]
       }
+      cost_codes: {
+        Row: {
+          actual_cost: number | null
+          code: string
+          created_at: string | null
+          description: string | null
+          estimated_cost: number | null
+          id: string
+          is_change_order: boolean | null
+          name: string
+          project_id: string
+          sort_order: number | null
+        }
+        Insert: {
+          actual_cost?: number | null
+          code: string
+          created_at?: string | null
+          description?: string | null
+          estimated_cost?: number | null
+          id?: string
+          is_change_order?: boolean | null
+          name: string
+          project_id: string
+          sort_order?: number | null
+        }
+        Update: {
+          actual_cost?: number | null
+          code?: string
+          created_at?: string | null
+          description?: string | null
+          estimated_cost?: number | null
+          id?: string
+          is_change_order?: boolean | null
+          name?: string
+          project_id?: string
+          sort_order?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cost_codes_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dpr_quantities: {
         Row: {
           dpr_id: string | null

@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 
 import { AutoFillButton } from "./auto-fill-button";
+import { CostCodesSection } from "./cost-section";
 import { DocumentsSection } from "./documents-section";
 import { ProjectChat } from "./project-chat";
 import { SubcontractorsSection } from "./subs-section";
@@ -117,10 +118,12 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
 
       <WbsSection projectId={params.id} aiEnabled={aiEnabled} />
 
+      <CostCodesSection projectId={params.id} />
+
       <DocumentsSection projectId={params.id} />
 
       <div className="rounded-lg border border-dashed bg-card p-6 text-sm text-muted-foreground">
-        DPRs, RFIs, submittals, photos coming next.
+        Schedule, DPRs, RFIs, submittals, photos coming next.
       </div>
     </div>
   );
