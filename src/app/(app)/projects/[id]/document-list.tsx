@@ -5,10 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import {
-  createSignedDocumentUrl,
-  deleteDocument,
-} from "./documents-actions";
+import { deleteDocument } from "./documents-actions";
 import {
   DOCUMENT_CATEGORY_LABEL,
   type DocumentCategory,
@@ -85,18 +82,6 @@ export function DocumentList({ projectId, groups }: Props) {
     );
   }
 
-  const handleOpen = async (id: string) => {
-    setPendingId(id);
-    setError(null);
-    const result = await createSignedDocumentUrl(id);
-    setPendingId(null);
-    if (!result.ok) {
-      setError(result.error);
-      return;
-    }
-    window.open(result.url, "_blank", "noopener,noreferrer");
-  };
-
   const handleDelete = async (id: string, fileName: string) => {
     if (!confirm(`Delete "${fileName}"? This removes the file and its extracted text.`)) {
       return;
@@ -157,15 +142,8 @@ export function DocumentList({ projectId, groups }: Props) {
               <tbody className="divide-y">
                 {group.documents.map((doc) => (
                   <tr key={doc.id} className="hover:bg-muted/30">
-                    <td className="px-4 py-2.5">
-                      <button
-                        type="button"
-                        onClick={() => handleOpen(doc.id)}
-                        disabled={pendingId === doc.id}
-                        className="text-left font-medium hover:underline disabled:opacity-60"
-                      >
-                        {doc.file_name}
-                      </button>
+                    <td className="px-4 py-2.5 font-medium">
+                      {doc.file_name}
                     </td>
                     <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
                       {formatBytes(doc.size_bytes)}

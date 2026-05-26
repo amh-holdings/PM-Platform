@@ -97,31 +97,3 @@ export async function deleteDocument(
   revalidatePath(`/projects/${projectId}`);
   return { ok: true };
 }
-
-export type SignedUrlResult =
-  | { ok: true; url: string }
-  | { ok: false; error: string };
-
-export async function createSignedDocumentUrl(
-  documentId: string,
-): Promise<SignedUrlResult> {
-  const supabase = createClient();
-
-  const { data: doc, error: fetchError } = await supabase
-    .from("project_documents")
-    .select("storage_path")
-    .eq("id", documentId)
-    .maybeSingle();
-
-  if (fetchError) return { ok: false, error: fetchError.message };
-  if (!doc) return { ok: false, error: "Document not found" };
-
-  const { data, error } = await supabase.storage
-    .from(DOCUMENT_BUCKET)
-    .createSignedUrl(doc.storage_path, 60 * 10); // 10 minutes
-
-  if (error || !data) {
-    return { ok: false, error: error?.message ?? "Could not sign URL" };
-  }
-  return { ok: true, url: data.signedUrl };
-}
