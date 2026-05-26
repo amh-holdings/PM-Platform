@@ -7,6 +7,7 @@ import { formatCurrency, formatDate } from "@/lib/format";
 import { AutoFillButton } from "./auto-fill-button";
 import { DocumentsSection } from "./documents-section";
 import { ProjectChat } from "./project-chat";
+import { SubcontractorsSection } from "./subs-section";
 
 type Params = { id: string };
 
@@ -105,10 +106,12 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
 
       {aiEnabled && <ProjectChat projectId={params.id} />}
 
+      <SubcontractorsSection projectId={params.id} />
+
       <DocumentsSection projectId={params.id} />
 
       <div className="rounded-lg border border-dashed bg-card p-6 text-sm text-muted-foreground">
-        DPRs, RFIs, submittals, photos, and WBS/SOV will live here in Day 3+.
+        DPRs, RFIs, submittals, photos, and WBS/SOV will live here next.
       </div>
     </div>
   );

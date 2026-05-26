@@ -147,8 +147,25 @@ create policy "ahc_delete_document_objects" on storage.objects
   );
 
 -- ============================================================================
--- TODO (Day 3+): subcontractors, wbs_sov, dprs, dpr_quantities, rfis,
--- submittals, photos, comms_log. All currently RLS-on with no policies, so
--- they reject all access. Their policies land alongside the features that
--- need them.
+-- SUBCONTRACTORS
+-- ============================================================================
+-- Phase 1: AHC team has full CRUD. Subs themselves get scoped read in a
+-- future migration once we wire profiles.subcontractor_id.
+
+drop policy if exists "ahc_read_subcontractors"  on public.subcontractors;
+drop policy if exists "ahc_write_subcontractors" on public.subcontractors;
+
+create policy "ahc_read_subcontractors" on public.subcontractors
+  for select to authenticated
+  using (public.current_user_role() in ('phil','zarina','ahc_super'));
+
+create policy "ahc_write_subcontractors" on public.subcontractors
+  for all to authenticated
+  using (public.current_user_role() in ('phil','zarina','ahc_super'))
+  with check (public.current_user_role() in ('phil','zarina','ahc_super'));
+
+-- ============================================================================
+-- TODO (Day 3+): wbs_sov, dprs, dpr_quantities, rfis, submittals, photos,
+-- comms_log. All currently RLS-on with no policies, so they reject all
+-- access. Their policies land alongside the features that need them.
 -- ============================================================================
