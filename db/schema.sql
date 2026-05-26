@@ -233,6 +233,40 @@ create table public.cost_codes (
 create index cost_codes_project_id_idx on public.cost_codes(project_id);
 create index cost_codes_sort_order_idx on public.cost_codes(project_id, sort_order);
 
+-- ============ SCHEDULE TASKS ============
+-- Hierarchical task structure for the project schedule. Imported from
+-- Smartsheet or entered via the schedule UI. Hierarchy is captured both
+-- via parent_wbs_code (closest ancestor in WBS dotted path) and level_code.
+
+create table public.schedule_tasks (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references public.projects(id) on delete cascade not null,
+  wbs_code text not null,
+  task_name text not null,
+  description text,
+  phase text,
+  assigned_to text,
+  status text,
+  duration_days integer,
+  start_date date,
+  end_date date,
+  predecessors text,
+  is_at_risk boolean default false,
+  is_internal boolean default false,
+  non_ahc_delay boolean default false,
+  level_code integer,
+  sort_order integer,
+  parent_wbs_code text,
+  source_row_id text,
+  created_at timestamptz default now(),
+  unique (project_id, wbs_code)
+);
+
+create index schedule_tasks_project_id_idx on public.schedule_tasks(project_id);
+create index schedule_tasks_phase_idx on public.schedule_tasks(project_id, phase);
+create index schedule_tasks_status_idx on public.schedule_tasks(project_id, status);
+create index schedule_tasks_sort_idx on public.schedule_tasks(project_id, sort_order);
+
 -- ============ PROJECT DOCUMENTS ============
 -- Project-scoped document library. Phase 1 stores files in Supabase Storage
 -- (bucket: project-documents) and tracks metadata + extracted text here so
@@ -295,6 +329,7 @@ alter table public.photos enable row level security;
 alter table public.comms_log enable row level security;
 alter table public.project_documents enable row level security;
 alter table public.cost_codes enable row level security;
+alter table public.schedule_tasks enable row level security;
 
 -- Auto-create profile when a new auth user signs up
 create or replace function public.handle_new_user()

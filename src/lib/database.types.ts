@@ -591,6 +591,83 @@ export type Database = {
           },
         ]
       }
+      schedule_tasks: {
+        Row: {
+          assigned_to: string | null
+          created_at: string | null
+          description: string | null
+          duration_days: number | null
+          end_date: string | null
+          id: string
+          is_at_risk: boolean | null
+          is_internal: boolean | null
+          level_code: number | null
+          non_ahc_delay: boolean | null
+          parent_wbs_code: string | null
+          phase: string | null
+          predecessors: string | null
+          project_id: string
+          sort_order: number | null
+          source_row_id: string | null
+          start_date: string | null
+          status: string | null
+          task_name: string
+          wbs_code: string
+        }
+        Insert: {
+          assigned_to?: string | null
+          created_at?: string | null
+          description?: string | null
+          duration_days?: number | null
+          end_date?: string | null
+          id?: string
+          is_at_risk?: boolean | null
+          is_internal?: boolean | null
+          level_code?: number | null
+          non_ahc_delay?: boolean | null
+          parent_wbs_code?: string | null
+          phase?: string | null
+          predecessors?: string | null
+          project_id: string
+          sort_order?: number | null
+          source_row_id?: string | null
+          start_date?: string | null
+          status?: string | null
+          task_name: string
+          wbs_code: string
+        }
+        Update: {
+          assigned_to?: string | null
+          created_at?: string | null
+          description?: string | null
+          duration_days?: number | null
+          end_date?: string | null
+          id?: string
+          is_at_risk?: boolean | null
+          is_internal?: boolean | null
+          level_code?: number | null
+          non_ahc_delay?: boolean | null
+          parent_wbs_code?: string | null
+          phase?: string | null
+          predecessors?: string | null
+          project_id?: string
+          sort_order?: number | null
+          source_row_id?: string | null
+          start_date?: string | null
+          status?: string | null
+          task_name?: string
+          wbs_code?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "schedule_tasks_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       subcontractors: {
         Row: {
           active: boolean | null

@@ -198,6 +198,22 @@ create policy "ahc_write_cost_codes" on public.cost_codes
   with check (public.current_user_role() in ('phil','zarina','ahc_super'));
 
 -- ============================================================================
+-- SCHEDULE TASKS
+-- ============================================================================
+
+drop policy if exists "ahc_read_schedule"  on public.schedule_tasks;
+drop policy if exists "ahc_write_schedule" on public.schedule_tasks;
+
+create policy "ahc_read_schedule" on public.schedule_tasks
+  for select to authenticated
+  using (public.current_user_role() in ('phil','zarina','ahc_super'));
+
+create policy "ahc_write_schedule" on public.schedule_tasks
+  for all to authenticated
+  using (public.current_user_role() in ('phil','zarina','ahc_super'))
+  with check (public.current_user_role() in ('phil','zarina','ahc_super'));
+
+-- ============================================================================
 -- TODO (Day 3+): dprs, dpr_quantities, rfis, submittals, photos, comms_log.
 -- All currently RLS-on with no policies, so they reject all access. Their
 -- policies land alongside the features that need them.

@@ -9,6 +9,7 @@ import { AutoFillButton } from "./auto-fill-button";
 import { CostCodesSection } from "./cost-section";
 import { DocumentsSection } from "./documents-section";
 import { ProjectChat } from "./project-chat";
+import { ScheduleSummary } from "./schedule-summary";
 import { SubcontractorsSection } from "./subs-section";
 import { WbsSection } from "./wbs-section";
 
@@ -114,6 +115,8 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
 
       {aiEnabled && <ProjectChat projectId={params.id} />}
 
+      <ScheduleSummary projectId={params.id} />
+
       <SubcontractorsSection projectId={params.id} />
 
       <WbsSection projectId={params.id} aiEnabled={aiEnabled} />
@@ -123,7 +126,7 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
       <DocumentsSection projectId={params.id} />
 
       <div className="rounded-lg border border-dashed bg-card p-6 text-sm text-muted-foreground">
-        Schedule, DPRs, RFIs, submittals, photos coming next.
+        DPRs, RFIs, submittals, photos coming next.
       </div>
     </div>
   );
