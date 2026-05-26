@@ -24,6 +24,9 @@ export async function generateMetadata({ params }: { params: Params }) {
 
 export default async function ProjectDetailPage({ params }: { params: Params }) {
   const supabase = createClient();
+  const aiEnabled = Boolean(
+    process.env.RELAY_URL && process.env.RELAY_SHARED_SECRET,
+  );
   const { data: project, error } = await supabase
     .from("projects")
     .select("*")
@@ -73,16 +76,18 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
           </Link>
           <h1 className="mt-1 text-2xl font-semibold">{project.name}</h1>
         </div>
-        <AutoFillButton
-          projectId={params.id}
-          current={{
-            client: project.client,
-            contract_value: project.contract_value,
-            ntp_date: project.ntp_date,
-            cod_date: project.cod_date,
-            zip_code: project.zip_code,
-          }}
-        />
+        {aiEnabled && (
+          <AutoFillButton
+            projectId={params.id}
+            current={{
+              client: project.client,
+              contract_value: project.contract_value,
+              ntp_date: project.ntp_date,
+              cod_date: project.cod_date,
+              zip_code: project.zip_code,
+            }}
+          />
+        )}
       </div>
 
       <div className="rounded-lg border bg-card p-6 shadow-sm">
@@ -98,7 +103,7 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
         </dl>
       </div>
 
-      <ProjectChat projectId={params.id} />
+      {aiEnabled && <ProjectChat projectId={params.id} />}
 
       <DocumentsSection projectId={params.id} />
 
