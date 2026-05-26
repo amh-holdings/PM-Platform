@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 
@@ -77,18 +78,23 @@ export default async function ProjectDetailPage({ params }: { params: Params }) 
           </Link>
           <h1 className="mt-1 text-2xl font-semibold">{project.name}</h1>
         </div>
-        {aiEnabled && (
-          <AutoFillButton
-            projectId={params.id}
-            current={{
-              client: project.client,
-              contract_value: project.contract_value,
-              ntp_date: project.ntp_date,
-              cod_date: project.cod_date,
-              zip_code: project.zip_code,
-            }}
-          />
-        )}
+        <div className="flex items-center gap-2">
+          {aiEnabled && (
+            <AutoFillButton
+              projectId={params.id}
+              current={{
+                client: project.client,
+                contract_value: project.contract_value,
+                ntp_date: project.ntp_date,
+                cod_date: project.cod_date,
+                zip_code: project.zip_code,
+              }}
+            />
+          )}
+          <Button asChild variant="outline">
+            <Link href={`/projects/${params.id}/edit`}>Edit</Link>
+          </Button>
+        </div>
       </div>
 
       <div className="rounded-lg border bg-card p-6 shadow-sm">

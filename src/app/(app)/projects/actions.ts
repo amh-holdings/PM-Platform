@@ -72,3 +72,52 @@ export async function createProject(
   revalidatePath("/");
   redirect(`/projects/${data.id}`);
 }
+
+export async function updateProject(
+  projectId: string,
+  _previous: CreateProjectState,
+  formData: FormData,
+): Promise<CreateProjectState> {
+  const name = formData.get("name");
+  if (typeof name !== "string" || !name.trim()) {
+    return { fieldErrors: { name: "Name is required" } };
+  }
+
+  const contractValue = parseCurrency(formData.get("contract_value"));
+  if (contractValue === "invalid") {
+    return { fieldErrors: { contract_value: "Enter a valid dollar amount" } };
+  }
+
+  const statusRaw = formData.get("status");
+  const status =
+    typeof statusRaw === "string" &&
+    (PROJECT_STATUS_OPTIONS as readonly string[]).includes(statusRaw)
+      ? (statusRaw as ProjectStatus)
+      : null;
+
+  const client = formData.get("client");
+  const zipCode = formData.get("zip_code");
+
+  const supabase = createClient();
+  const { error } = await supabase
+    .from("projects")
+    .update({
+      name: name.trim(),
+      client: typeof client === "string" && client.trim() ? client.trim() : null,
+      status,
+      contract_value: contractValue,
+      ntp_date: parseDate(formData.get("ntp_date")),
+      cod_date: parseDate(formData.get("cod_date")),
+      zip_code: typeof zipCode === "string" && zipCode.trim() ? zipCode.trim() : null,
+    })
+    .eq("id", projectId);
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath("/projects");
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/");
+  redirect(`/projects/${projectId}`);
+}
