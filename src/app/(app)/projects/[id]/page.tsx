@@ -1,3 +1,4 @@
+import { DashboardCost } from "./dashboard-cost";
 import { DashboardFinancial } from "./dashboard-financial";
 import { DashboardKpis } from "./dashboard-kpis";
 import { DashboardSchedule } from "./dashboard-schedule";
@@ -17,6 +18,7 @@ export default function ProjectDashboardPage({ params }: { params: Params }) {
       <div className="grid gap-4 md:grid-cols-2">
         <DashboardSchedule projectId={params.id} />
         <DashboardFinancial projectId={params.id} />
+        <DashboardCost projectId={params.id} />
       </div>
 
       {aiEnabled && <ProjectChat projectId={params.id} />}
