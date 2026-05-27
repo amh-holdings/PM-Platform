@@ -2,6 +2,7 @@ import { DashboardCompliance } from "./dashboard-compliance";
 import { DashboardCost } from "./dashboard-cost";
 import { DashboardFinancial } from "./dashboard-financial";
 import { DashboardKpis } from "./dashboard-kpis";
+import { DashboardMilestones } from "./dashboard-milestones";
 import { DashboardSchedule } from "./dashboard-schedule";
 import { ProjectChat } from "./project-chat";
 
@@ -22,6 +23,8 @@ export default function ProjectDashboardPage({ params }: { params: Params }) {
         <DashboardCost projectId={params.id} />
         <DashboardCompliance projectId={params.id} />
       </div>
+
+      <DashboardMilestones projectId={params.id} />
 
       {aiEnabled && <ProjectChat projectId={params.id} />}
     </div>
