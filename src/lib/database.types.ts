@@ -251,6 +251,7 @@ export type Database = {
           estimated_cost: number | null
           id: string
           is_change_order: boolean | null
+          linked_task_wbs_codes: string[] | null
           name: string
           project_id: string
           sort_order: number | null
@@ -263,6 +264,7 @@ export type Database = {
           estimated_cost?: number | null
           id?: string
           is_change_order?: boolean | null
+          linked_task_wbs_codes?: string[] | null
           name: string
           project_id: string
           sort_order?: number | null
@@ -275,6 +277,7 @@ export type Database = {
           estimated_cost?: number | null
           id?: string
           is_change_order?: boolean | null
+          linked_task_wbs_codes?: string[] | null
           name?: string
           project_id?: string
           sort_order?: number | null

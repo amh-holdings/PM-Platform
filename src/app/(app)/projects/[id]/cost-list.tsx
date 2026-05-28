@@ -11,6 +11,7 @@ import {
   CostCodeFormDialog,
   type CostCodeFormValues,
 } from "./cost-form-dialog";
+import { CostLinkForm } from "./cost-link-form";
 
 type CostCodeRow = {
   id: string;
@@ -20,6 +21,7 @@ type CostCodeRow = {
   estimated_cost: number | null;
   actual_cost: number | null;
   is_change_order: boolean | null;
+  linked_task_wbs_codes: string[] | null;
 };
 
 type Props = {
@@ -78,6 +80,7 @@ export function CostCodeList({ projectId, codes }: Props) {
               <th className="px-3 py-3 text-right font-medium">Estimated</th>
               <th className="px-3 py-3 text-right font-medium">Actual</th>
               <th className="px-3 py-3 text-right font-medium">Variance</th>
+              <th className="px-3 py-3 font-medium">Linked tasks</th>
               <th className="px-3 py-3 text-right font-medium">Actions</th>
             </tr>
           </thead>
@@ -102,12 +105,13 @@ export function CostCodeList({ projectId, codes }: Props) {
                   {formatCurrency(baseTotals.actual - baseTotals.estimated)}
                 </td>
                 <td />
+                <td />
               </tr>
             )}
             {changeOrderCodes.length > 0 && (
               <>
                 <tr>
-                  <td colSpan={6} className="bg-muted/10 px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  <td colSpan={7} className="bg-muted/10 px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Change orders
                   </td>
                 </tr>
@@ -130,6 +134,7 @@ export function CostCodeList({ projectId, codes }: Props) {
                     {formatCurrency(coTotals.actual - coTotals.estimated)}
                   </td>
                   <td />
+                  <td />
                 </tr>
               </>
             )}
@@ -144,6 +149,7 @@ export function CostCodeList({ projectId, codes }: Props) {
               <td className={cn("px-3 py-2 text-right tabular-nums", grandTotals.actual > grandTotals.estimated && "text-destructive")}>
                 {formatCurrency(grandTotals.actual - grandTotals.estimated)}
               </td>
+              <td />
               <td />
             </tr>
           </tfoot>
@@ -199,6 +205,15 @@ function CostRow({
         )}
       >
         {row.estimated_cost == null ? "-" : formatCurrency(variance)}
+      </td>
+      <td className="px-3 py-2.5">
+        <CostLinkForm
+          costCodeId={row.id}
+          projectId={projectId}
+          code={row.code}
+          name={row.name}
+          initialCodes={row.linked_task_wbs_codes ?? []}
+        />
       </td>
       <td className="px-3 py-2.5 text-right">
         <div className="flex justify-end gap-1">
