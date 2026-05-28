@@ -39,6 +39,17 @@ eng.traineddata
 # supabase cli cache
 /supabase/.temp/
 
+# Source spreadsheets / reference docs (contain owner names + financial data)
+db/reference/
+
+# Scratch / one-off scripts (prefixed with _)
+scripts/_*.mjs
+scripts/_*.js
+scripts/_*.ts
+
+# Overnight prompt + handoff doc (session-only)
+/OVERNIGHT_HANDOFF.md
+
 # vercel
 .vercel
 

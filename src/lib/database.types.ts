@@ -14,6 +14,163 @@ export type Database = {
   }
   public: {
     Tables: {
+      billing_entries: {
+        Row: {
+          actual_amount: number | null
+          afp_number: string | null
+          billing_line_id: string
+          created_at: string | null
+          id: string
+          notes: string | null
+          paid_at: string | null
+          period_month: string
+          planned_amount: number | null
+          retainage_amount: number | null
+          submitted_at: string | null
+        }
+        Insert: {
+          actual_amount?: number | null
+          afp_number?: string | null
+          billing_line_id: string
+          created_at?: string | null
+          id?: string
+          notes?: string | null
+          paid_at?: string | null
+          period_month: string
+          planned_amount?: number | null
+          retainage_amount?: number | null
+          submitted_at?: string | null
+        }
+        Update: {
+          actual_amount?: number | null
+          afp_number?: string | null
+          billing_line_id?: string
+          created_at?: string | null
+          id?: string
+          notes?: string | null
+          paid_at?: string | null
+          period_month?: string
+          planned_amount?: number | null
+          retainage_amount?: number | null
+          submitted_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_entries_billing_line_id_fkey"
+            columns: ["billing_line_id"]
+            isOneToOne: false
+            referencedRelation: "billing_lines"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      billing_lines: {
+        Row: {
+          change_order_id: string | null
+          created_at: string | null
+          description: string
+          id: string
+          item_number: string
+          linked_task_wbs_codes: string[] | null
+          notes: string | null
+          project_id: string
+          scheduled_value: number | null
+          sort_order: number | null
+          type: string | null
+        }
+        Insert: {
+          change_order_id?: string | null
+          created_at?: string | null
+          description: string
+          id?: string
+          item_number: string
+          linked_task_wbs_codes?: string[] | null
+          notes?: string | null
+          project_id: string
+          scheduled_value?: number | null
+          sort_order?: number | null
+          type?: string | null
+        }
+        Update: {
+          change_order_id?: string | null
+          created_at?: string | null
+          description?: string
+          id?: string
+          item_number?: string
+          linked_task_wbs_codes?: string[] | null
+          notes?: string | null
+          project_id?: string
+          scheduled_value?: number | null
+          sort_order?: number | null
+          type?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_lines_change_order_id_fkey"
+            columns: ["change_order_id"]
+            isOneToOne: false
+            referencedRelation: "change_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_lines_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      change_orders: {
+        Row: {
+          approved_at: string | null
+          co_number: string
+          co_value: number | null
+          created_at: string | null
+          description: string | null
+          id: string
+          notes: string | null
+          project_id: string
+          schedule_impact_days: number | null
+          status: string | null
+          submitted_at: string | null
+        }
+        Insert: {
+          approved_at?: string | null
+          co_number: string
+          co_value?: number | null
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          notes?: string | null
+          project_id: string
+          schedule_impact_days?: number | null
+          status?: string | null
+          submitted_at?: string | null
+        }
+        Update: {
+          approved_at?: string | null
+          co_number?: string
+          co_value?: number | null
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          notes?: string | null
+          project_id?: string
+          schedule_impact_days?: number | null
+          status?: string | null
+          submitted_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "change_orders_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       comms_log: {
         Row: {
           comm_date: string | null
@@ -128,6 +285,44 @@ export type Database = {
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      cost_forecasts: {
+        Row: {
+          actual_amount: number | null
+          cost_code_id: string
+          created_at: string | null
+          id: string
+          notes: string | null
+          period_month: string
+          planned_amount: number | null
+        }
+        Insert: {
+          actual_amount?: number | null
+          cost_code_id: string
+          created_at?: string | null
+          id?: string
+          notes?: string | null
+          period_month: string
+          planned_amount?: number | null
+        }
+        Update: {
+          actual_amount?: number | null
+          cost_code_id?: string
+          created_at?: string | null
+          id?: string
+          notes?: string | null
+          period_month?: string
+          planned_amount?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cost_forecasts_cost_code_id_fkey"
+            columns: ["cost_code_id"]
+            isOneToOne: false
+            referencedRelation: "cost_codes"
             referencedColumns: ["id"]
           },
         ]
@@ -468,6 +663,7 @@ export type Database = {
           id: string
           name: string
           ntp_date: string | null
+          retainage_pct_default: number | null
           status: string | null
           zip_code: string | null
         }
@@ -481,6 +677,7 @@ export type Database = {
           id?: string
           name: string
           ntp_date?: string | null
+          retainage_pct_default?: number | null
           status?: string | null
           zip_code?: string | null
         }
@@ -494,6 +691,7 @@ export type Database = {
           id?: string
           name?: string
           ntp_date?: string | null
+          retainage_pct_default?: number | null
           status?: string | null
           zip_code?: string | null
         }
