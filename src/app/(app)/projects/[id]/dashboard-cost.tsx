@@ -13,12 +13,10 @@ type Props = {
 export async function DashboardCost({ projectId }: Props) {
   const supabase = createClient();
 
-  const { data: codes, error } = await supabase
-    .from("cost_codes")
-    .select("code, name, estimated_cost, actual_cost, is_change_order")
-    .eq("project_id", projectId)
-    .order("sort_order", { ascending: true, nullsFirst: false })
-    .order("code", { ascending: true });
+  const { data: rowsRaw, error } = await supabase
+    .from("v_cost_code_totals")
+    .select("cost_code_id, code, estimated_cost, total_planned, total_actual, remaining_budget")
+    .eq("project_id", projectId);
 
   if (error) {
     return (
@@ -31,17 +29,39 @@ export async function DashboardCost({ projectId }: Props) {
     );
   }
 
-  const rows = (codes ?? []).map((c) => ({
-    code: c.code,
-    name: c.name,
-    is_change_order: Boolean(c.is_change_order),
-    estimated: Number(c.estimated_cost ?? 0),
-    actual: Number(c.actual_cost ?? 0),
-    variance: Number(c.actual_cost ?? 0) - Number(c.estimated_cost ?? 0),
-  }));
+  // Pull the human-readable name from cost_codes since the view doesn't have it
+  const codeIds = (rowsRaw ?? [])
+    .map((r) => r.cost_code_id)
+    .filter((id): id is string => !!id);
+  const { data: nameRows } = codeIds.length
+    ? await supabase
+        .from("cost_codes")
+        .select("id, name, is_change_order")
+        .in("id", codeIds)
+    : { data: [] };
+  const nameById = new Map<string, { name: string; isCO: boolean }>();
+  for (const c of nameRows ?? []) {
+    nameById.set(c.id, {
+      name: c.name,
+      isCO: Boolean(c.is_change_order),
+    });
+  }
+
+  const rows = (rowsRaw ?? []).map((r) => {
+    const meta = nameById.get(r.cost_code_id ?? "");
+    return {
+      code: String(r.code ?? ""),
+      name: meta?.name ?? r.code ?? "",
+      is_change_order: meta?.isCO ?? false,
+      estimated: Number(r.estimated_cost ?? 0),
+      actual: Number(r.total_actual ?? 0),
+      planned: Number(r.total_planned ?? 0),
+      variance: Number(r.total_actual ?? 0) - Number(r.estimated_cost ?? 0),
+    };
+  });
 
   const chartData = rows
-    .filter((r) => r.estimated > 0 || r.actual > 0)
+    .filter((r) => r.estimated > 0 || r.actual > 0 || r.planned > 0)
     .map((r) => ({ code: r.code, estimated: r.estimated, actual: r.actual }));
 
   const topOverruns = rows
