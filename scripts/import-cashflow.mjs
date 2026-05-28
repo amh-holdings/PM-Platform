@@ -40,10 +40,14 @@ const sb = createClient(SB_URL, SB_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
-// Item numbers to skip during import. CO-04 sits in AHC's working spreadsheet
-// as a placeholder OH&P line that is not a real change order today
-// (per Phil 2026-05-28). Re-enable by removing the entry below if it
-// becomes real again.
+// Item numbers to skip during auto-import from the spreadsheet.
+// CO-04 IS a real change order ($364,000, paid Jan 2026 per Phil
+// 2026-05-28), but the spreadsheet's Cash-In sheet has CO-04 spread
+// across many months in a way that does not reflect the actual billing
+// event. The correct entry (single $364k Jan 2026 actual) was inserted
+// via scripts/_restore-co04.mjs and lives in Supabase already; we skip
+// auto-importing CO-04's monthly cells so a re-run of this script
+// doesn't re-spread it.
 const SKIP_ITEM_NUMBERS = new Set(["CO-04"]);
 
 // ============ HELPERS ============
