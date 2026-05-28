@@ -1,0 +1,239 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+
+import { createClient } from "@/lib/supabase/server";
+
+async function assertAhcUser() {
+  const supabase = createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+  if (userError || !user) return { ok: false as const, error: "Not signed in" };
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (!profile || !["phil", "zarina", "ahc_super"].includes(profile.role)) {
+    return { ok: false as const, error: "Restricted to AHC team members" };
+  }
+  return { ok: true as const, supabase };
+}
+
+function parseWbsCodes(input: string): string[] {
+  return Array.from(
+    new Set(
+      input
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+export type LinkResult =
+  | { ok: true; unknownCodes: string[] }
+  | { ok: false; error: string };
+
+export async function updateLinkedTasks(
+  billingLineId: string,
+  projectId: string,
+  rawCodes: string,
+): Promise<LinkResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const codes = parseWbsCodes(rawCodes);
+
+  // Validate codes against existing schedule_tasks for this project
+  const { data: known, error: lookupErr } = await auth.supabase
+    .from("schedule_tasks")
+    .select("wbs_code")
+    .eq("project_id", projectId);
+  if (lookupErr) return { ok: false, error: lookupErr.message };
+  const knownSet = new Set((known ?? []).map((r) => r.wbs_code));
+  const unknownCodes = codes.filter((c) => !knownSet.has(c));
+
+  const { error } = await auth.supabase
+    .from("billing_lines")
+    .update({ linked_task_wbs_codes: codes.length ? codes : null })
+    .eq("id", billingLineId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/billing`);
+  return { ok: true, unknownCodes };
+}
+
+// ============ AUTO-SUGGEST ============
+//
+// Heuristic mapping from schedule_task -> billing recommendation:
+//
+//   status = Complete          -> 100% of the line
+//   status = In Progress       -> 50% of the line
+//   end_date < today and not Complete -> 75% (work should be done)
+//   anything else              -> 0%
+//
+// When multiple linked tasks point at one billing line, average their %.
+// The "target billed to date by next month" is target_pct * scheduled_value;
+// the suggested next-month dollar amount is target - already_billed,
+// capped at remaining_to_bill and never negative.
+
+const STATUS_PCT: Record<string, number> = {
+  Complete: 1.0,
+  "In Progress": 0.5,
+};
+
+function pctForTask(t: {
+  status: string | null;
+  end_date: string | null;
+}, todayIso: string): number {
+  if (t.status && STATUS_PCT[t.status] != null) return STATUS_PCT[t.status];
+  if (t.end_date && t.end_date < todayIso && t.status !== "Complete") {
+    return 0.75;
+  }
+  return 0;
+}
+
+export type BillingSuggestion = {
+  billingLineId: string;
+  itemNumber: string;
+  description: string;
+  scheduledValue: number;
+  alreadyBilled: number;
+  remaining: number;
+  linkedTaskCount: number;
+  targetPct: number;
+  suggestedAmount: number;
+};
+
+export async function computeBillingSuggestions(
+  projectId: string,
+): Promise<{ ok: true; suggestions: BillingSuggestion[]; nextMonthIso: string } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const today = new Date();
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  const nextMonthIso = `${nextMonthStart.getFullYear()}-${String(nextMonthStart.getMonth() + 1).padStart(2, "0")}-01`;
+
+  const [{ data: lines }, { data: tasks }, { data: totals }] = await Promise.all([
+    auth.supabase
+      .from("billing_lines")
+      .select("id, item_number, description, scheduled_value, linked_task_wbs_codes")
+      .eq("project_id", projectId),
+    auth.supabase
+      .from("schedule_tasks")
+      .select("wbs_code, status, end_date")
+      .eq("project_id", projectId),
+    auth.supabase
+      .from("v_billing_line_totals")
+      .select("billing_line_id, total_billed, remaining_to_bill")
+      .eq("project_id", projectId),
+  ]);
+
+  const taskByCode = new Map<
+    string,
+    { status: string | null; end_date: string | null }
+  >();
+  for (const t of tasks ?? []) {
+    taskByCode.set(t.wbs_code, { status: t.status, end_date: t.end_date });
+  }
+  const totalsById = new Map<string, { billed: number; remaining: number }>();
+  for (const t of totals ?? []) {
+    if (!t.billing_line_id) continue;
+    totalsById.set(t.billing_line_id, {
+      billed: Number(t.total_billed ?? 0),
+      remaining: Number(t.remaining_to_bill ?? 0),
+    });
+  }
+
+  const suggestions: BillingSuggestion[] = [];
+  for (const line of lines ?? []) {
+    const links = line.linked_task_wbs_codes ?? [];
+    if (links.length === 0) continue;
+    const matched = links
+      .map((c) => taskByCode.get(c))
+      .filter((t): t is { status: string | null; end_date: string | null } => !!t);
+    if (matched.length === 0) continue;
+    const avgPct =
+      matched.reduce((s, t) => s + pctForTask(t, todayIso), 0) / matched.length;
+    const scheduledValue = Number(line.scheduled_value ?? 0);
+    const target = avgPct * scheduledValue;
+    const t = totalsById.get(line.id) ?? { billed: 0, remaining: scheduledValue };
+    const raw = target - t.billed;
+    const suggested = Math.max(0, Math.min(t.remaining, raw));
+    if (suggested <= 0) continue;
+    suggestions.push({
+      billingLineId: line.id,
+      itemNumber: line.item_number,
+      description: line.description,
+      scheduledValue,
+      alreadyBilled: t.billed,
+      remaining: t.remaining,
+      linkedTaskCount: matched.length,
+      targetPct: avgPct,
+      suggestedAmount: Math.round(suggested * 100) / 100,
+    });
+  }
+
+  suggestions.sort((a, b) => b.suggestedAmount - a.suggestedAmount);
+
+  return { ok: true, suggestions, nextMonthIso };
+}
+
+export type PromoteResult =
+  | { ok: true; written: number; period_month: string }
+  | { ok: false; error: string };
+
+export async function promoteSuggestionsToPlanned(
+  projectId: string,
+): Promise<PromoteResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const result = await computeBillingSuggestions(projectId);
+  if (!result.ok) return result;
+  const { suggestions, nextMonthIso } = result;
+
+  if (suggestions.length === 0) {
+    return { ok: true, written: 0, period_month: nextMonthIso };
+  }
+
+  // For each suggestion, upsert a billing_entry at next month with the suggested
+  // planned_amount, but only if no entry exists at that month yet.
+  let written = 0;
+  for (const s of suggestions) {
+    const { data: existing } = await auth.supabase
+      .from("billing_entries")
+      .select("id, planned_amount, actual_amount")
+      .eq("billing_line_id", s.billingLineId)
+      .eq("period_month", nextMonthIso)
+      .maybeSingle();
+    if (existing && (Number(existing.planned_amount ?? 0) > 0 || Number(existing.actual_amount ?? 0) > 0)) {
+      // Don't overwrite a row that already has a real value
+      continue;
+    }
+    const { error } = await auth.supabase
+      .from("billing_entries")
+      .upsert(
+        {
+          billing_line_id: s.billingLineId,
+          period_month: nextMonthIso,
+          planned_amount: s.suggestedAmount,
+          actual_amount: 0,
+          notes: "Auto-suggested from schedule",
+        },
+        { onConflict: "billing_line_id,period_month" },
+      );
+    if (error) return { ok: false, error: error.message };
+    written += 1;
+  }
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/billing`);
+  return { ok: true, written, period_month: nextMonthIso };
+}
