@@ -1080,7 +1080,41 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      v_billing_line_totals: {
+        Row: {
+          billing_line_id: string | null
+          project_id: string | null
+          item_number: string | null
+          scheduled_value: number | null
+          total_planned: number | null
+          total_billed: number | null
+          total_retainage: number | null
+          remaining_to_bill: number | null
+        }
+        Relationships: []
+      }
+      v_project_billing_summary: {
+        Row: {
+          project_id: string | null
+          total_scheduled: number | null
+          total_billed: number | null
+          total_retainage: number | null
+          future_planned: number | null
+        }
+        Relationships: []
+      }
+      v_cost_code_totals: {
+        Row: {
+          cost_code_id: string | null
+          project_id: string | null
+          code: string | null
+          estimated_cost: number | null
+          total_planned: number | null
+          total_actual: number | null
+          remaining_budget: number | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       [_ in never]: never

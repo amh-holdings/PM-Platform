@@ -16,48 +16,50 @@ type Kpi = {
 export async function DashboardKpis({ projectId }: Props) {
   const supabase = createClient();
 
-  const [projectRes, sovRes, tasksRes, costsRes] = await Promise.all([
-    supabase
-      .from("projects")
-      .select("contract_value")
-      .eq("id", projectId)
-      .maybeSingle(),
-    supabase
-      .from("wbs_sov")
-      .select("contract_value, billed_to_date")
-      .eq("project_id", projectId),
-    supabase
-      .from("schedule_tasks")
-      .select("status, is_at_risk")
-      .eq("project_id", projectId),
-    supabase
-      .from("cost_codes")
-      .select("estimated_cost, actual_cost")
-      .eq("project_id", projectId),
-  ]);
+  const [projectRes, billingSumRes, tasksRes, costsRes, costForecastsRes] =
+    await Promise.all([
+      supabase
+        .from("projects")
+        .select("contract_value")
+        .eq("id", projectId)
+        .maybeSingle(),
+      supabase
+        .from("v_project_billing_summary")
+        .select("total_scheduled, total_billed, future_planned, total_retainage")
+        .eq("project_id", projectId)
+        .maybeSingle(),
+      supabase
+        .from("schedule_tasks")
+        .select("status, is_at_risk")
+        .eq("project_id", projectId),
+      supabase
+        .from("cost_codes")
+        .select("id, estimated_cost")
+        .eq("project_id", projectId),
+      supabase
+        .from("cost_forecasts")
+        .select("actual_amount, cost_codes!inner(project_id)")
+        .eq("cost_codes.project_id", projectId),
+    ]);
 
-  const contractValue = Number(projectRes.data?.contract_value ?? 0);
-  const sov = sovRes.data ?? [];
-  const tasks = tasksRes.data ?? [];
-  const costs = costsRes.data ?? [];
-
-  const billedToDate = sov.reduce(
-    (sum, r) => sum + Number(r.billed_to_date ?? 0),
-    0,
-  );
+  const contractValue =
+    Number(billingSumRes.data?.total_scheduled ?? projectRes.data?.contract_value ?? 0);
+  const billedToDate = Number(billingSumRes.data?.total_billed ?? 0);
+  const futurePlanned = Number(billingSumRes.data?.future_planned ?? 0);
   const billedPct = contractValue > 0 ? (billedToDate / contractValue) * 100 : 0;
 
+  const tasks = tasksRes.data ?? [];
   const totalTasks = tasks.length;
   const completeTasks = tasks.filter((t) => t.status === "Complete").length;
   const schedulePct = totalTasks > 0 ? (completeTasks / totalTasks) * 100 : 0;
   const atRisk = tasks.filter((t) => t.is_at_risk).length;
 
-  const estTotal = costs.reduce(
+  const estTotal = (costsRes.data ?? []).reduce(
     (sum, c) => sum + Number(c.estimated_cost ?? 0),
     0,
   );
-  const actTotal = costs.reduce(
-    (sum, c) => sum + Number(c.actual_cost ?? 0),
+  const actTotal = (costForecastsRes.data ?? []).reduce(
+    (sum, c) => sum + Number(c.actual_amount ?? 0),
     0,
   );
   const variance = actTotal - estTotal;
@@ -66,7 +68,7 @@ export async function DashboardKpis({ projectId }: Props) {
     {
       label: "Contract value",
       value: formatCurrency(contractValue),
-      sub: contractValue > 0 ? "Prime contract" : "Not set",
+      sub: contractValue > 0 ? "Includes approved COs" : "Not set",
     },
     {
       label: "Billed to date",
@@ -78,9 +80,15 @@ export async function DashboardKpis({ projectId }: Props) {
       tone: billedPct >= 100 ? "good" : "default",
     },
     {
+      label: "Future planned",
+      value: formatCurrency(futurePlanned),
+      sub: futurePlanned > 0 ? "Forecast next months" : "Nothing scheduled",
+    },
+    {
       label: "Schedule complete",
       value: `${schedulePct.toFixed(0)}%`,
-      sub: totalTasks > 0 ? `${completeTasks} of ${totalTasks} tasks` : "No tasks",
+      sub:
+        totalTasks > 0 ? `${completeTasks} of ${totalTasks} tasks` : "No tasks",
     },
     {
       label: "At-risk tasks",
@@ -103,7 +111,7 @@ export async function DashboardKpis({ projectId }: Props) {
   ];
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
       {kpis.map((k) => (
         <div
           key={k.label}
