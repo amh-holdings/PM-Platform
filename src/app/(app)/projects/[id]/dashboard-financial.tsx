@@ -13,42 +13,41 @@ type Props = {
 export async function DashboardFinancial({ projectId }: Props) {
   const supabase = createClient();
 
-  const { data: rows, error } = await supabase
-    .from("wbs_sov")
-    .select("trade, contract_value, billed_to_date")
-    .eq("project_id", projectId);
+  const [linesRes, summaryRes] = await Promise.all([
+    supabase
+      .from("billing_lines")
+      .select("type, scheduled_value")
+      .eq("project_id", projectId),
+    supabase
+      .from("v_project_billing_summary")
+      .select("total_scheduled, total_billed, future_planned")
+      .eq("project_id", projectId)
+      .maybeSingle(),
+  ]);
 
-  if (error) {
+  if (linesRes.error) {
     return (
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h2 className="text-sm font-semibold">Financial</h2>
         <p className="mt-2 text-xs text-destructive">
-          Failed to load: {error.message}
+          Failed to load: {linesRes.error.message}
         </p>
       </section>
     );
   }
 
-  const items = rows ?? [];
-  const totalContract = items.reduce(
-    (sum, r) => sum + Number(r.contract_value ?? 0),
-    0,
-  );
-  const totalBilled = items.reduce(
-    (sum, r) => sum + Number(r.billed_to_date ?? 0),
-    0,
-  );
+  const lines = linesRes.data ?? [];
+  const totalContract = Number(summaryRes.data?.total_scheduled ?? 0);
+  const totalBilled = Number(summaryRes.data?.total_billed ?? 0);
+  const futurePlanned = Number(summaryRes.data?.future_planned ?? 0);
   const billedPct = totalContract > 0 ? (totalBilled / totalContract) * 100 : 0;
 
-  const byTrade = new Map<string, number>();
-  for (const r of items) {
-    const trade = (r.trade ?? "Untagged").trim() || "Untagged";
-    byTrade.set(
-      trade,
-      (byTrade.get(trade) ?? 0) + Number(r.contract_value ?? 0),
-    );
+  const byType = new Map<string, number>();
+  for (const r of lines) {
+    const type = (r.type ?? "Untagged").trim() || "Untagged";
+    byType.set(type, (byType.get(type) ?? 0) + Number(r.scheduled_value ?? 0));
   }
-  const chartData = Array.from(byTrade.entries())
+  const chartData = Array.from(byType.entries())
     .map(([trade, value]) => ({ trade, value }))
     .filter((d) => d.value > 0)
     .sort((a, b) => b.value - a.value);
@@ -59,14 +58,14 @@ export async function DashboardFinancial({ projectId }: Props) {
         <div>
           <h2 className="text-sm font-semibold">Financial</h2>
           <p className="text-xs text-muted-foreground">
-            Billed vs contract, by SOV line
+            Billed vs contract, by billing line type
           </p>
         </div>
         <Link
           href={`/projects/${projectId}/wbs`}
           className="text-xs text-muted-foreground hover:text-foreground"
         >
-          View all &rarr;
+          View SOV &rarr;
         </Link>
       </div>
 
@@ -83,11 +82,16 @@ export async function DashboardFinancial({ projectId }: Props) {
             style={{ width: `${Math.min(100, billedPct)}%` }}
           />
         </div>
+        {futurePlanned > 0 && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {formatCurrency(futurePlanned)} planned in upcoming months
+          </p>
+        )}
       </div>
 
       <div className="border-t pt-3">
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Contract by trade
+          Contract by line type
         </h3>
         <div className="flex flex-col items-stretch gap-3 sm:flex-row">
           <div className="sm:w-1/2">
@@ -95,7 +99,7 @@ export async function DashboardFinancial({ projectId }: Props) {
           </div>
           <ul className="space-y-1 sm:w-1/2">
             {chartData.length === 0 ? (
-              <li className="text-xs text-muted-foreground">No trades set</li>
+              <li className="text-xs text-muted-foreground">No lines yet</li>
             ) : (
               chartData.slice(0, 6).map((d, i) => {
                 const palette = [
