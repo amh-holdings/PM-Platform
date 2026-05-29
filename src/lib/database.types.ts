@@ -554,6 +554,139 @@ export type Database = {
           },
         ]
       }
+      pay_application_lines: {
+        Row: {
+          balance_to_finish: number | null
+          billing_line_id: string | null
+          created_at: string | null
+          description: string
+          id: string
+          item_number: string
+          materials_stored: number | null
+          pay_application_id: string
+          pct_complete: number | null
+          retainage_amount: number | null
+          scheduled_value: number | null
+          sort_order: number | null
+          total_completed_and_stored: number | null
+          work_completed_previous: number | null
+          work_completed_this_period: number | null
+        }
+        Insert: {
+          balance_to_finish?: number | null
+          billing_line_id?: string | null
+          created_at?: string | null
+          description: string
+          id?: string
+          item_number: string
+          materials_stored?: number | null
+          pay_application_id: string
+          pct_complete?: number | null
+          retainage_amount?: number | null
+          scheduled_value?: number | null
+          sort_order?: number | null
+          total_completed_and_stored?: number | null
+          work_completed_previous?: number | null
+          work_completed_this_period?: number | null
+        }
+        Update: {
+          balance_to_finish?: number | null
+          billing_line_id?: string | null
+          created_at?: string | null
+          description?: string
+          id?: string
+          item_number?: string
+          materials_stored?: number | null
+          pay_application_id?: string
+          pct_complete?: number | null
+          retainage_amount?: number | null
+          scheduled_value?: number | null
+          sort_order?: number | null
+          total_completed_and_stored?: number | null
+          work_completed_previous?: number | null
+          work_completed_this_period?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pay_application_lines_pay_application_id_fkey"
+            columns: ["pay_application_id"]
+            isOneToOne: false
+            referencedRelation: "pay_applications"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      pay_applications: {
+        Row: {
+          amount_due: number | null
+          app_number: string
+          approved_at: string | null
+          approved_by_owner: string | null
+          created_at: string | null
+          id: string
+          notes: string | null
+          paid_at: string | null
+          pdf_storage_path: string | null
+          period_end: string
+          period_start: string
+          previous_billings: number | null
+          project_id: string
+          status: string | null
+          submitted_at: string | null
+          submitted_by: string | null
+          total_completed: number | null
+          total_retainage: number | null
+        }
+        Insert: {
+          amount_due?: number | null
+          app_number: string
+          approved_at?: string | null
+          approved_by_owner?: string | null
+          created_at?: string | null
+          id?: string
+          notes?: string | null
+          paid_at?: string | null
+          pdf_storage_path?: string | null
+          period_end: string
+          period_start: string
+          previous_billings?: number | null
+          project_id: string
+          status?: string | null
+          submitted_at?: string | null
+          submitted_by?: string | null
+          total_completed?: number | null
+          total_retainage?: number | null
+        }
+        Update: {
+          amount_due?: number | null
+          app_number?: string
+          approved_at?: string | null
+          approved_by_owner?: string | null
+          created_at?: string | null
+          id?: string
+          notes?: string | null
+          paid_at?: string | null
+          pdf_storage_path?: string | null
+          period_end?: string
+          period_start?: string
+          previous_billings?: number | null
+          project_id?: string
+          status?: string | null
+          submitted_at?: string | null
+          submitted_by?: string | null
+          total_completed?: number | null
+          total_retainage?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pay_applications_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       photos: {
         Row: {
           caption: string | null

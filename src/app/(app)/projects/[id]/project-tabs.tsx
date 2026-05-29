@@ -17,6 +17,7 @@ export function ProjectTabs({ projectId }: Props) {
     { href: base, label: "Dashboard" },
     { href: `${base}/dprs`, label: "DPRs" },
     { href: `${base}/billing`, label: "Billing" },
+    { href: `${base}/pay-apps`, label: "Pay apps" },
     { href: `${base}/schedule`, label: "Schedule" },
     { href: `${base}/subs`, label: "Subs" },
     { href: `${base}/costs`, label: "Costs" },
