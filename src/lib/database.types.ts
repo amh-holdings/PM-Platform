@@ -23,9 +23,13 @@ export type Database = {
           id: string
           notes: string | null
           paid_at: string | null
+          pay_application_id: string | null
           period_month: string
           planned_amount: number | null
           retainage_amount: number | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          status: string | null
           submitted_at: string | null
         }
         Insert: {
@@ -36,9 +40,13 @@ export type Database = {
           id?: string
           notes?: string | null
           paid_at?: string | null
+          pay_application_id?: string | null
           period_month: string
           planned_amount?: number | null
           retainage_amount?: number | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string | null
           submitted_at?: string | null
         }
         Update: {
@@ -49,9 +57,13 @@ export type Database = {
           id?: string
           notes?: string | null
           paid_at?: string | null
+          pay_application_id?: string | null
           period_month?: string
           planned_amount?: number | null
           retainage_amount?: number | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string | null
           submitted_at?: string | null
         }
         Relationships: [
@@ -368,6 +380,60 @@ export type Database = {
             columns: ["wbs_sov_id"]
             isOneToOne: false
             referencedRelation: "wbs_sov"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dpr_task_updates: {
+        Row: {
+          created_at: string | null
+          dpr_id: string
+          id: string
+          installed_quantity: number | null
+          new_pct_complete: number | null
+          new_status: string | null
+          notes: string | null
+          previous_pct_complete: number | null
+          previous_status: string | null
+          schedule_task_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          dpr_id: string
+          id?: string
+          installed_quantity?: number | null
+          new_pct_complete?: number | null
+          new_status?: string | null
+          notes?: string | null
+          previous_pct_complete?: number | null
+          previous_status?: string | null
+          schedule_task_id: string
+        }
+        Update: {
+          created_at?: string | null
+          dpr_id?: string
+          id?: string
+          installed_quantity?: number | null
+          new_pct_complete?: number | null
+          new_status?: string | null
+          notes?: string | null
+          previous_pct_complete?: number | null
+          previous_status?: string | null
+          schedule_task_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dpr_task_updates_dpr_id_fkey"
+            columns: ["dpr_id"]
+            isOneToOne: false
+            referencedRelation: "dprs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dpr_task_updates_schedule_task_id_fkey"
+            columns: ["schedule_task_id"]
+            isOneToOne: false
+            referencedRelation: "schedule_tasks"
             referencedColumns: ["id"]
           },
         ]
@@ -800,11 +866,14 @@ export type Database = {
           duration_days: number | null
           end_date: string | null
           id: string
+          installed_quantity: number | null
           is_at_risk: boolean | null
           is_internal: boolean | null
+          last_dpr_at: string | null
           level_code: number | null
           non_ahc_delay: boolean | null
           parent_wbs_code: string | null
+          pct_complete: number | null
           phase: string | null
           predecessors: string | null
           project_id: string
@@ -812,7 +881,10 @@ export type Database = {
           source_row_id: string | null
           start_date: string | null
           status: string | null
+          status_source: string | null
+          target_quantity: number | null
           task_name: string
+          unit_of_measure: string | null
           wbs_code: string
         }
         Insert: {
@@ -822,11 +894,14 @@ export type Database = {
           duration_days?: number | null
           end_date?: string | null
           id?: string
+          installed_quantity?: number | null
           is_at_risk?: boolean | null
           is_internal?: boolean | null
+          last_dpr_at?: string | null
           level_code?: number | null
           non_ahc_delay?: boolean | null
           parent_wbs_code?: string | null
+          pct_complete?: number | null
           phase?: string | null
           predecessors?: string | null
           project_id: string
@@ -834,7 +909,10 @@ export type Database = {
           source_row_id?: string | null
           start_date?: string | null
           status?: string | null
+          status_source?: string | null
+          target_quantity?: number | null
           task_name: string
+          unit_of_measure?: string | null
           wbs_code: string
         }
         Update: {
@@ -844,11 +922,14 @@ export type Database = {
           duration_days?: number | null
           end_date?: string | null
           id?: string
+          installed_quantity?: number | null
           is_at_risk?: boolean | null
           is_internal?: boolean | null
+          last_dpr_at?: string | null
           level_code?: number | null
           non_ahc_delay?: boolean | null
           parent_wbs_code?: string | null
+          pct_complete?: number | null
           phase?: string | null
           predecessors?: string | null
           project_id?: string
@@ -856,7 +937,10 @@ export type Database = {
           source_row_id?: string | null
           start_date?: string | null
           status?: string | null
+          status_source?: string | null
+          target_quantity?: number | null
           task_name?: string
+          unit_of_measure?: string | null
           wbs_code?: string
         }
         Relationships: [

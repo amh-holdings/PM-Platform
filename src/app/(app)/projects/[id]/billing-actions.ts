@@ -83,13 +83,24 @@ export async function updateLinkedTasks(
 
 const STATUS_PCT: Record<string, number> = {
   Complete: 1.0,
+  Approved: 1.0,
   "In Progress": 0.5,
 };
 
-function pctForTask(t: {
-  status: string | null;
-  end_date: string | null;
-}, todayIso: string): number {
+// Returns 0..1. Reads pct_complete when set by a DPR, otherwise falls back
+// to status buckets: Complete/Approved=100%, In Progress=50%,
+// past-due-not-Complete=75%, else 0%.
+function pctForTask(
+  t: {
+    status: string | null;
+    end_date: string | null;
+    pct_complete: number | null;
+  },
+  todayIso: string,
+): number {
+  if (t.pct_complete != null && Number.isFinite(Number(t.pct_complete))) {
+    return Math.max(0, Math.min(1, Number(t.pct_complete) / 100));
+  }
   if (t.status && STATUS_PCT[t.status] != null) return STATUS_PCT[t.status];
   if (t.end_date && t.end_date < todayIso && t.status !== "Complete") {
     return 0.75;
@@ -127,7 +138,7 @@ export async function computeBillingSuggestions(
       .eq("project_id", projectId),
     auth.supabase
       .from("schedule_tasks")
-      .select("wbs_code, status, end_date")
+      .select("wbs_code, status, end_date, pct_complete")
       .eq("project_id", projectId),
     auth.supabase
       .from("v_billing_line_totals")
@@ -137,10 +148,14 @@ export async function computeBillingSuggestions(
 
   const taskByCode = new Map<
     string,
-    { status: string | null; end_date: string | null }
+    { status: string | null; end_date: string | null; pct_complete: number | null }
   >();
   for (const t of tasks ?? []) {
-    taskByCode.set(t.wbs_code, { status: t.status, end_date: t.end_date });
+    taskByCode.set(t.wbs_code, {
+      status: t.status,
+      end_date: t.end_date,
+      pct_complete: t.pct_complete == null ? null : Number(t.pct_complete),
+    });
   }
   const totalsById = new Map<string, { billed: number; remaining: number }>();
   for (const t of totals ?? []) {
@@ -157,7 +172,10 @@ export async function computeBillingSuggestions(
     if (links.length === 0) continue;
     const matched = links
       .map((c) => taskByCode.get(c))
-      .filter((t): t is { status: string | null; end_date: string | null } => !!t);
+      .filter(
+        (t): t is { status: string | null; end_date: string | null; pct_complete: number | null } =>
+          !!t,
+      );
     if (matched.length === 0) continue;
     const avgPct =
       matched.reduce((s, t) => s + pctForTask(t, todayIso), 0) / matched.length;
