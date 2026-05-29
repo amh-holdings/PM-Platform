@@ -88,11 +88,14 @@ export async function createPayApplication(
   const { data: entries } = await auth.supabase
     .from("billing_entries")
     .select(
-      "id, billing_line_id, period_month, actual_amount, pay_application_id",
+      "id, billing_line_id, period_month, actual_amount, planned_amount, pay_application_id",
     )
     .in("billing_line_id", lineIds);
 
-  // Bucket entries per line
+  // Bucket entries per line. The "this period" amount uses actual_amount when
+  // set, falling back to planned_amount. That way a freshly promoted forecast
+  // (planned only, no actual yet) still rolls into the pay app, but real
+  // billed amounts win when both exist.
   type Bucket = {
     previous: number;
     thisPeriodIds: string[];
@@ -105,17 +108,21 @@ export async function createPayApplication(
   for (const e of entries ?? []) {
     const b = buckets.get(e.billing_line_id);
     if (!b) continue;
-    const amount = Number(e.actual_amount ?? 0);
+    const actual = Number(e.actual_amount ?? 0);
+    const planned = Number(e.planned_amount ?? 0);
     if (e.pay_application_id) {
-      b.previous += amount;
+      b.previous += actual || planned;
       continue;
     }
     if (
       e.period_month >= input.periodStart &&
       e.period_month <= input.periodEnd
     ) {
-      b.thisPeriodIds.push(e.id);
-      b.thisPeriodAmount += amount;
+      const amount = actual > 0 ? actual : planned;
+      if (amount > 0) {
+        b.thisPeriodIds.push(e.id);
+        b.thisPeriodAmount += amount;
+      }
     }
   }
 
@@ -178,16 +185,26 @@ export async function createPayApplication(
     })
     .eq("id", app.id);
 
-  // Stamp the billing_entries that were rolled into this pay app
-  const allEntryIds: string[] = [];
-  buckets.forEach((b) => {
-    allEntryIds.push(...b.thisPeriodIds);
-  });
-  if (allEntryIds.length > 0) {
+  // Stamp the billing_entries that were rolled into this pay app, and
+  // promote the value used (actual or planned-fallback) into actual_amount
+  // so the dashboard's Billing timeline reflects what is being billed.
+  const entryById = new Map((entries ?? []).map((e) => [e.id, e]));
+  const stampIds: string[] = [];
+  buckets.forEach((b) => stampIds.push(...b.thisPeriodIds));
+  for (const id of stampIds) {
+    const e = entryById.get(id);
+    if (!e) continue;
+    const actual = Number(e.actual_amount ?? 0);
+    const planned = Number(e.planned_amount ?? 0);
+    const used = actual > 0 ? actual : planned;
     await auth.supabase
       .from("billing_entries")
-      .update({ pay_application_id: app.id, status: "on_pay_app" })
-      .in("id", allEntryIds);
+      .update({
+        pay_application_id: app.id,
+        status: "on_pay_app",
+        actual_amount: used,
+      })
+      .eq("id", id);
   }
 
   revalidatePath(`/projects/${input.projectId}`);
