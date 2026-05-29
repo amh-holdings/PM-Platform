@@ -29,7 +29,18 @@ export type ProjectEditValues = {
   ntp_date: string | null;
   cod_date: string | null;
   zip_code: string | null;
+  owner_payment_terms_days: number | null;
+  retainage_pct_default: number | null;
+  retainage_release_event: string | null;
 };
+
+const RETAINAGE_RELEASE_OPTIONS = [
+  { value: "", label: "- not set -" },
+  { value: "substantial_completion", label: "At Substantial Completion" },
+  { value: "final_completion", label: "At Final Completion" },
+  { value: "cod_plus_30", label: "30 days after COD" },
+  { value: "cod_plus_60", label: "60 days after COD" },
+];
 
 export function ProjectEditForm({ project }: { project: ProjectEditValues }) {
   const action = updateProject.bind(null, project.id);
@@ -128,6 +139,57 @@ export function ProjectEditForm({ project }: { project: ProjectEditValues }) {
             type="date"
             defaultValue={project.cod_date ?? ""}
           />
+        </div>
+      </div>
+
+      <div className="rounded-md border bg-muted/30 p-4">
+        <h3 className="text-sm font-semibold">Cash flow timing</h3>
+        <p className="text-xs text-muted-foreground">
+          Drives the cash IN side of the projection model. Without these the
+          dashboard treats &quot;billed&quot; as &quot;cash arrived&quot; which is wrong.
+        </p>
+        <div className="mt-3 grid gap-4 sm:grid-cols-3">
+          <div className="space-y-2">
+            <Label htmlFor="owner_payment_terms_days">Owner payment terms (days)</Label>
+            <Input
+              id="owner_payment_terms_days"
+              name="owner_payment_terms_days"
+              type="number"
+              min="0"
+              defaultValue={project.owner_payment_terms_days ?? ""}
+              placeholder="e.g. 45"
+            />
+            <p className="text-[10px] text-muted-foreground">
+              Net X from AFP submission
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="retainage_pct_default">Default retainage %</Label>
+            <Input
+              id="retainage_pct_default"
+              name="retainage_pct_default"
+              type="number"
+              step="0.01"
+              defaultValue={project.retainage_pct_default ?? 10}
+              placeholder="10"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="retainage_release_event">Retainage released</Label>
+            <select
+              id="retainage_release_event"
+              name="retainage_release_event"
+              defaultValue={project.retainage_release_event ?? ""}
+              className={cn(
+                "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm",
+                "ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              )}
+            >
+              {RETAINAGE_RELEASE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 

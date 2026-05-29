@@ -80,6 +80,12 @@ export async function createSubcontractor(
     coi_status: getStr(formData.get("coi_status")) ?? "pending",
     w9_status: getStr(formData.get("w9_status")) ?? "pending",
     payment_terms: getStr(formData.get("payment_terms")) ?? "Net 30",
+    payment_terms_days: (() => {
+      const v = formData.get("payment_terms_days");
+      if (typeof v !== "string" || !v.trim()) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    })(),
     active: true,
   };
 
@@ -126,6 +132,12 @@ export async function updateSubcontractor(
     coi_status: getStr(formData.get("coi_status")),
     w9_status: getStr(formData.get("w9_status")),
     payment_terms: getStr(formData.get("payment_terms")),
+    payment_terms_days: (() => {
+      const v = formData.get("payment_terms_days");
+      if (typeof v !== "string" || !v.trim()) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    })(),
   };
 
   const { error } = await auth.supabase

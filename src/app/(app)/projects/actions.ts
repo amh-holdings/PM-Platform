@@ -98,6 +98,21 @@ export async function updateProject(
   const client = formData.get("client");
   const zipCode = formData.get("zip_code");
 
+  const parseIntField = (v: FormDataEntryValue | null): number | null => {
+    if (typeof v !== "string" || !v.trim()) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const parseFloatField = (v: FormDataEntryValue | null): number | null => {
+    if (typeof v !== "string" || !v.trim()) return null;
+    const n = Number(v.replace(/[$,\s]/g, ""));
+    return Number.isFinite(n) ? n : null;
+  };
+  const parseEnumField = (v: FormDataEntryValue | null): string | null => {
+    if (typeof v !== "string" || !v.trim()) return null;
+    return v;
+  };
+
   const supabase = createClient();
   const { error } = await supabase
     .from("projects")
@@ -109,6 +124,9 @@ export async function updateProject(
       ntp_date: parseDate(formData.get("ntp_date")),
       cod_date: parseDate(formData.get("cod_date")),
       zip_code: typeof zipCode === "string" && zipCode.trim() ? zipCode.trim() : null,
+      owner_payment_terms_days: parseIntField(formData.get("owner_payment_terms_days")),
+      retainage_pct_default: parseFloatField(formData.get("retainage_pct_default")),
+      retainage_release_event: parseEnumField(formData.get("retainage_release_event")),
     })
     .eq("id", projectId);
 

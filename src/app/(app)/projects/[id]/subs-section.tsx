@@ -13,7 +13,7 @@ export async function SubcontractorsSection({ projectId }: Props) {
   const { data: subs, error } = await supabase
     .from("subcontractors")
     .select(
-      "id, company_name, trade, contact_name, contact_email, contact_phone, contract_value, retainage_pct, coi_status, w9_status, payment_terms, active",
+      "id, company_name, trade, contact_name, contact_email, contact_phone, contract_value, retainage_pct, coi_status, w9_status, payment_terms, payment_terms_days, active",
     )
     .eq("project_id", projectId)
     .order("active", { ascending: false })
