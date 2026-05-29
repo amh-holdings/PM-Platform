@@ -265,8 +265,10 @@ export type Database = {
           is_change_order: boolean | null
           linked_task_wbs_codes: string[] | null
           name: string
+          procurement_order_id: string | null
           project_id: string
           sort_order: number | null
+          subcontractor_id: string | null
         }
         Insert: {
           actual_cost?: number | null
@@ -278,8 +280,10 @@ export type Database = {
           is_change_order?: boolean | null
           linked_task_wbs_codes?: string[] | null
           name: string
+          procurement_order_id?: string | null
           project_id: string
           sort_order?: number | null
+          subcontractor_id?: string | null
         }
         Update: {
           actual_cost?: number | null
@@ -291,8 +295,10 @@ export type Database = {
           is_change_order?: boolean | null
           linked_task_wbs_codes?: string[] | null
           name?: string
+          procurement_order_id?: string | null
           project_id?: string
           sort_order?: number | null
+          subcontractor_id?: string | null
         }
         Relationships: [
           {
@@ -854,6 +860,118 @@ export type Database = {
           },
         ]
       }
+      procurement_orders: {
+        Row: {
+          actual_delivery_date: string | null
+          created_at: string | null
+          description: string | null
+          document_id: string | null
+          expected_delivery_date: string | null
+          id: string
+          notes: string | null
+          ordered_date: string | null
+          payment_terms_summary: string | null
+          po_number: string | null
+          project_id: string
+          status: string | null
+          total_value: number | null
+          vendor_name: string
+        }
+        Insert: {
+          actual_delivery_date?: string | null
+          created_at?: string | null
+          description?: string | null
+          document_id?: string | null
+          expected_delivery_date?: string | null
+          id?: string
+          notes?: string | null
+          ordered_date?: string | null
+          payment_terms_summary?: string | null
+          po_number?: string | null
+          project_id: string
+          status?: string | null
+          total_value?: number | null
+          vendor_name: string
+        }
+        Update: {
+          actual_delivery_date?: string | null
+          created_at?: string | null
+          description?: string | null
+          document_id?: string | null
+          expected_delivery_date?: string | null
+          id?: string
+          notes?: string | null
+          ordered_date?: string | null
+          payment_terms_summary?: string | null
+          po_number?: string | null
+          project_id?: string
+          status?: string | null
+          total_value?: number | null
+          vendor_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "procurement_orders_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      procurement_payments: {
+        Row: {
+          amount: number | null
+          created_at: string | null
+          expected_date: string | null
+          id: string
+          milestone_name: string
+          notes: string | null
+          paid_amount: number | null
+          paid_at: string | null
+          pct_of_total: number | null
+          procurement_order_id: string
+          sort_order: number | null
+          trigger_event: string | null
+        }
+        Insert: {
+          amount?: number | null
+          created_at?: string | null
+          expected_date?: string | null
+          id?: string
+          milestone_name: string
+          notes?: string | null
+          paid_amount?: number | null
+          paid_at?: string | null
+          pct_of_total?: number | null
+          procurement_order_id: string
+          sort_order?: number | null
+          trigger_event?: string | null
+        }
+        Update: {
+          amount?: number | null
+          created_at?: string | null
+          expected_date?: string | null
+          id?: string
+          milestone_name?: string
+          notes?: string | null
+          paid_amount?: number | null
+          paid_at?: string | null
+          pct_of_total?: number | null
+          procurement_order_id?: string
+          sort_order?: number | null
+          trigger_event?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "procurement_payments_procurement_order_id_fkey"
+            columns: ["procurement_order_id"]
+            isOneToOne: false
+            referencedRelation: "procurement_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       projects: {
         Row: {
           ahc_pm_id: string | null
@@ -865,7 +983,9 @@ export type Database = {
           id: string
           name: string
           ntp_date: string | null
+          owner_payment_terms_days: number | null
           retainage_pct_default: number | null
+          retainage_release_event: string | null
           status: string | null
           zip_code: string | null
         }
@@ -879,7 +999,9 @@ export type Database = {
           id?: string
           name: string
           ntp_date?: string | null
+          owner_payment_terms_days?: number | null
           retainage_pct_default?: number | null
+          retainage_release_event?: string | null
           status?: string | null
           zip_code?: string | null
         }
@@ -893,7 +1015,9 @@ export type Database = {
           id?: string
           name?: string
           ntp_date?: string | null
+          owner_payment_terms_days?: number | null
           retainage_pct_default?: number | null
+          retainage_release_event?: string | null
           status?: string | null
           zip_code?: string | null
         }
@@ -1098,6 +1222,7 @@ export type Database = {
           created_at: string | null
           id: string
           payment_terms: string | null
+          payment_terms_days: number | null
           project_id: string | null
           retainage_pct: number | null
           trade: string | null
@@ -1114,6 +1239,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           payment_terms?: string | null
+          payment_terms_days?: number | null
           project_id?: string | null
           retainage_pct?: number | null
           trade?: string | null
@@ -1130,6 +1256,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           payment_terms?: string | null
+          payment_terms_days?: number | null
           project_id?: string | null
           retainage_pct?: number | null
           trade?: string | null
