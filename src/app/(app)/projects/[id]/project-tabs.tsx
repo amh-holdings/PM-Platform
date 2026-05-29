@@ -18,7 +18,6 @@ export function ProjectTabs({ projectId }: Props) {
     { href: `${base}/billing`, label: "Billing" },
     { href: `${base}/schedule`, label: "Schedule" },
     { href: `${base}/subs`, label: "Subs" },
-    { href: `${base}/wbs`, label: "WBS / SOV" },
     { href: `${base}/costs`, label: "Costs" },
     { href: `${base}/documents`, label: "Documents" },
   ];

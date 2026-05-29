@@ -62,10 +62,10 @@ export async function DashboardFinancial({ projectId }: Props) {
           </p>
         </div>
         <Link
-          href={`/projects/${projectId}/wbs`}
+          href={`/projects/${projectId}/billing`}
           className="text-xs text-muted-foreground hover:text-foreground"
         >
-          View SOV &rarr;
+          View billing &rarr;
         </Link>
       </div>
 
