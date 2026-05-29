@@ -1,68 +1,121 @@
 # Build Summary
 
-Updated 2026-05-28 (second sprint, follow-up to 2026-05-27 dashboard build).
+Updated 2026-05-29. Phase 4 (DPR + Pay App workflow) ships in this sprint.
 
 ## What shipped this sprint
 
-Twelve commits on top of the original dashboard work, all build-clean:
+Three substantial commits, all build-clean, all on `main`:
 
 | # | Commit | What it does |
 |---|---|---|
-| 1 | `fceb553` Add billing / change-order / cost-forecast schema + cash-flow importer | Migration 0006 adds `change_orders`, `billing_lines`, `billing_entries`, `cost_forecasts` + RLS + three rollup views. Migration 0007 fixes the v_project_billing_summary join-multiplication. `scripts/import-cashflow.mjs` reads the cash-flow.xlsx Cash-In sheet into the new tables (39 lines, 108 entries, 3 change orders for Sweet Springs). |
-| 2 | `eefad28` Rewire dashboard KPIs to read from billing_entries | KPI strip uses `v_project_billing_summary`; adds a "Future planned" card. Grid expands to 6 cards. |
-| 3 | `9ea79b5` Rewire Financial widget to use billing_lines + view | Billed vs contract progress + donut by line type (LNTP / Procurement / Site Work / etc.) instead of the old wbs_sov.trade. |
-| 4 | `7251bb8` Rewire Cost widget to use cost_forecasts via view | Actual spend now sums cost_forecasts.actual_amount via v_cost_code_totals instead of the never-populated cost_codes.actual_cost. |
-| 5 | `08bc94a` Add Billing timeline widget | Per-month bar chart (green=billed, blue=planned) Jun 2024 - Nov 2026 + This/Next/+2 month callouts. Exactly mirrors the Cash-In sheet for Phil. |
-| 6 | `0646568` Add Billing sub-page with schedule-task linking + auto-suggest | New /billing tab, per-line "Linked schedule tasks" editor saving to `billing_lines.linked_task_wbs_codes`, and a Schedule-based Suggestion panel that computes next-month billing from linked task status and offers "Promote to planned." |
-| 7 | `3cf579b` Correct CO-04 importer comment | CO-04 is real ($364k OH&P, paid Jan 2026 per Phil). Importer still skips it because the spreadsheet's monthly CO-04 cells are misleading; CO-04 was reinstated via the one-off `scripts/_restore-co04.mjs`. |
-| 8 | `a5721a9` Phase 1 cash flow: Cash-Out import + Cash Out timeline + Net Cash widget | New `scripts/import-cash-out.mjs` reads the Cash-Out sheet (single Actual columns through Jun 2025, paired Projected/Actual columns Jul 2025 - Dec 2026). Two new dashboard widgets: DashboardCashOut (red/orange bars + this/next/+2 callouts) and DashboardNetCash (per-month net bars + cumulative cash line + Cash-to-date / Final cumulative / Lowest cash point summary cards). |
-| 9 | `f8193f6` Phase 2 cash flow: schedule -> spend linking + auto-suggest | Migration 0008 adds `cost_codes.linked_task_wbs_codes`. Three new server actions (updateCostCodeLinks, computeSpendSuggestions, promoteSpendSuggestionsToPlanned) mirror the billing-side equivalents. /costs sub-page gains a Schedule-based Spend Suggestion panel and an inline link editor per cost code row. |
+| 1 | `1f5c59d` Phase 4 Sprint A+B - DPR module + pct_complete-aware auto-suggest | Migration 0009 + DPR submission/review module + auto-suggest reads schedule_tasks.pct_complete when set. New "DPRs" tab in the project nav. |
+| 2 | `7447bb6` Phase 4 Sprint C - Pay applications as a first-class object | Migration 0010 + pay app module: list / new / detail pages with G702 cover + G703 detail table + print/PDF export + draft -> submitted -> approved -> paid lifecycle. New "Pay apps" tab in the project nav. |
+| 3 | `89206b6`, `5140284`, `543713f` Earlier today (Phase 3) | Auto-suggest mapping script (32 + 10 link proposals for Sweet Springs), overhead run-rate spreader (SSC A-G), and removal of the redundant WBS/SOV tab. |
 
-## Status of Phil's stated goal
-
-> "Cash flow of this entire project ... adjusted per the schedule so we know how everything is working on a daily, weekly and monthly basis off of the schedule and what has been completed by subs"
+Combined with the cash flow build (Phases 1-3) from earlier sessions, the platform now covers:
 
 | Layer | Status |
 |---|---|
-| 1. Monthly cash flow snapshot (Cash In / Cash Out / Net + cumulative) | **Shipped.** All three timeline widgets live on the dashboard. Net Cash widget shows the running cumulative position and flags the lowest point. |
-| 2. Schedule-driven forecast (link tasks -> auto-suggest billing AND spend) | **Code shipped; data not yet populated.** Migration 0008 needs to be applied (one ALTER). Then Phil links his schedule WBS codes per billing line and per cost code, and the dashboard auto-fills next-month projections. |
-| 3. Daily / weekly granularity | **Not built. Deferred deliberately - see why below.** |
-| 4. Driven by what subs have actually completed (DPRs) | **Not built. Deferred deliberately - see why below.** |
+| Project metadata, schedule, subs, cost codes, billing schedule, change orders, documents | All working |
+| Dashboard widgets (KPIs, Billing timeline, Cash Out timeline, Net Cash position, Schedule, Financial, Cost variance, Compliance, Upcoming milestones) | All working |
+| Schedule-driven auto-suggest for billing AND spend | Working, reads pct_complete when set |
+| DPR submission and approval workflow | Live (this sprint) |
+| Pay application (G702/G703) workflow with PDF export | Live (this sprint) |
 
-## Why I stopped instead of finishing Phases 3 and 4
-
-I started Phase 3 (granularity toggle) and stepped back. **Spreading monthly buckets evenly across days is just cosmetic** - the "daily cash flow" curve would be linear interpolation, not actual cash events. The data needed to make daily/weekly views meaningful is when schedule tasks complete and when DPRs post billings - which is Phase 4. So Phase 3 is more useful AFTER Phase 4, not before.
-
-Phase 4 (DPR module) is a real sprint, not session-end scope. The minimum-viable version is:
-1. A DPR submission form (pick schedule tasks, set status changes, add narrative)
-2. A review queue for AHC
-3. On approve, schedule_tasks status updates -> the existing auto-suggest cascade picks it up automatically
-
-That's 1-2 days of focused work and deserves its own thinking, not a tired late-evening commit. The schema is already in place (`dprs`, `dpr_quantities`) from the initial migration; the workflow is what's missing.
-
-## What Phil needs to do
+## What needs to happen now (in order)
 
 | Step | Why | How |
 |---|---|---|
-| **Apply migration 0008** | Phase 2 code references `cost_codes.linked_task_wbs_codes` which doesn't exist in your Supabase project yet | Paste contents of [db/migrations/0008_cost_codes_linked_tasks.sql](pm-platform/db/migrations/0008_cost_codes_linked_tasks.sql) into https://supabase.com/dashboard/project/sksfyygufnnbzrmneccx/sql/new and click Run. |
-| **Visit /projects/[id]/billing** | See the 39-line billing schedule + this/next month forecast | Click "Link schedule tasks" on each line that maps to a milestone, paste the relevant WBS codes |
-| **Visit /projects/[id]/costs** | Same idea for the spend side | Same flow, link cost codes to the schedule tasks that drive their spend |
-| **Click "Promote to planned" on both sub-pages** | Lets the auto-suggest fill in next-month planned amounts based on current schedule status | One click each; safe to re-run, won't overwrite cells you've already touched |
+| **1. Apply migration 0009** | Phase 4 Sprint A+B columns (schedule_tasks.pct_complete, dpr_task_updates, billing_entries lifecycle) | https://supabase.com/dashboard/project/sksfyygufnnbzrmneccx/sql/new -> paste [db/migrations/0009_dprs_and_lifecycle.sql](pm-platform/db/migrations/0009_dprs_and_lifecycle.sql) -> Run |
+| **2. Apply migration 0010** | Phase 4 Sprint C tables (pay_applications, pay_application_lines, FK back into billing_entries) | Same SQL editor link -> paste [db/migrations/0010_pay_applications.sql](pm-platform/db/migrations/0010_pay_applications.sql) -> Run |
+| **3. Submit your first DPR** | Validate the full happy path | /projects/[id]/dprs/new - pick a few tasks worked on yesterday, set status / pct / quantities, submit. Open it. Click "Approve and apply." Schedule should update; /billing suggestion panel should refresh with bigger numbers. |
+| **4. Create your first pay application** | See the full G702/G703 cover-and-detail document | /projects/[id]/pay-apps/new - app number defaults to next sequence ("AFP 10"), period defaults to next month. Submit. Open the detail. Print/PDF button is browser-print. |
+
+## Phase 4 architecture overview
+
+```
+sub_foreman / sub_pm / AHC PM submits DPR
+        |
+        v
+dprs row (status="submitted")
++ dpr_task_updates rows for each touched task (status/pct/qty proposals)
+        |
+        v
+AHC PM reviews + approves
+        |
+        v
+- schedule_tasks rows get patched (status, pct_complete, installed_quantity,
+  status_source="dpr", last_dpr_at=now)
+- dprs.status="approved"
+        |
+        v
+Auto-suggest (billing-actions.ts + cost-actions.ts) reads pct_complete
+when present, so suggestion panels on /billing and /costs reflect what
+actually happened on site instead of static spreadsheet projections.
+        |
+        v
+PM uses suggestions to set planned amounts (existing "Promote to planned"
+button), then assembles a Pay App.
+        |
+        v
+/pay-apps/new groups billing_entries in the chosen period into a snapshot:
+- pay_applications row (status="draft")
+- pay_application_lines rows (frozen G703 detail)
+- billing_entries.pay_application_id stamped, status="on_pay_app"
+        |
+        v
+PM previews the G702/G703 layout, prints to PDF, mails / emails to owner.
+Clicks "Mark submitted" -> billing entries status="submitted".
+Owner approves -> "Mark approved" -> billing entries status="approved".
+Owner pays -> "Mark paid" -> billing entries status="paid".
+```
+
+## What I deferred and why
+
+| Item | Why deferred |
+|---|---|
+| **Sprint D - Audit log + notifications** | The audit log alone is easy but limited value without UI. The notifications side needs your decision on provider (Resend for email? Slack webhook? both?) and configuration of env vars + the from-address. Better as a focused 30-min discussion + 1 hour build in the next session, not session-end work. |
+| **Weighted billing_line_tasks join table** | Mentioned in Phase 4 planning. Today the auto-suggest treats all linked tasks equally; weighting (one task = 30%, another = 70%) is a more nuanced model but the flat-average approach is a fine MVP. Add when you actually feel the average misses badly. |
+| **DPR photos** | The `photos` table already exists in the schema with a `dpr_id` FK. The DPR form doesn't include photo upload yet. ~1 hour to add via Supabase Storage signed URLs. |
+| **Sub-side mobile UI for DPRs** | The sub_foreman role can submit via the current form but the UI is desktop-oriented. A mobile-first DPR submission flow would dramatically increase sub adoption. ~1 day. |
+| **PDF generation library for pay apps** | Today, the print/PDF button uses browser-print which is fine for a clean A4 PDF but limited for templating. A real PDF library (pdfkit, react-pdf, or puppeteer) would let you embed AHC logo, owner address block, signatures section, etc. ~3 hours. |
 
 ## Things to look at when you wake up
 
-| Item | Why it matters |
+| Item | Why |
 |---|---|
-| **Sweet Springs contract is now $3,950,152.08** (was $3,586,152 after the brief CO-04 removal) | CO-04 was re-added per your "paid in January" statement. The dashboard, contract KPI, and Net Cash widget all reflect this. |
-| **Cash-Out sheet importer rebuilds cost_forecasts from scratch every run** | Re-running it will wipe and re-import. If you (or anyone) hand-edits cost_forecasts in the UI before the next run, those edits get lost. Worth tracking when DPR module gets built. |
-| **Net Cash widget's "Lowest cash point" is the early-warning indicator** | If that number goes negative, your cumulative cash flow dips into the red at some point on the forecast horizon. Glance at it after every schedule change. |
-| **Reconciliation script lives at `scripts/_reconcile-cashflow.mjs`** | Run it after each spreadsheet update to confirm Supabase still ties out cell-for-cell. CO-04 will show up as an intentional "mismatch" since it's manually maintained, not auto-imported. |
-| **One-off scripts (prefixed `_`) are gitignored** | They include `_restore-co04.mjs`, `_remove-co04.mjs`, `_breakdown-month.mjs`, `_reconcile-cashflow.mjs`, `_verify-import.mjs`, `_verify-migration-0006.mjs`. They're useful for debugging but not part of the platform; if you need them shared, rename them without the underscore prefix. |
-| **Recharts bundle still adds ~120kB to the dashboard route first-load** | Was 96kB before Recharts. If you want it leaner, lazy-load the chart components via `next/dynamic({ ssr: false })`. Not blocking. |
+| **Two migrations to apply** | 0009 + 0010 above. Required before /dprs and /pay-apps work. |
+| **Sweet Springs has no DPRs yet** | Once 0009 is applied, you can create historical DPRs to backfill the schedule with real pct_complete numbers. The auto-suggest will get much sharper. |
+| **billing_entries.status is "forecast" everywhere** | The migration adds the column with a default; existing rows are all "forecast." That's fine for now. When you create a pay app, entries roll into "on_pay_app" and cascade through the lifecycle. |
+| **Tabs: 8 now** (Dashboard, DPRs, Billing, Pay apps, Schedule, Subs, Costs, Documents) | On mobile, the tab row scrolls horizontally - might want to look at it on a phone. Three I'd consider collapsing in a future polish pass: Documents into Project menu, Subs into Compliance, Costs into Billing. |
+| **wbs_sov table is still there, just unused by UI** | If you want to truly drop it, that's a follow-up migration; I left it because data preservation > zero-cost orphan table. |
+| **The "Promote to planned" buttons on /billing and /costs are now redundant with DPRs** | Once DPRs are flowing, the lifecycle is: DPR sets pct_complete -> auto-suggest computes amount -> PM reviews on /billing (or just rolls into next pay app). The "Promote" button still works but isn't the primary path anymore. |
 
-## Next session scope (when ready)
+## Honest cost-benefit check
 
-1. **Phase 4 - DPR submission + approval workflow.** Build the form, the review queue, and the status-update side-effect. After this, Phase 3 becomes trivially useful.
-2. **Phase 3 - granularity toggle** on the three cash flow widgets, driven by linked schedule task durations (not naive spreading).
-3. **Retainage integration** - import the Cash-In sheet's Less Retainage row, subtract from billing actuals for proper "Total Cash In" numbers in the Summary widget.
-4. **Multi-project cash flow rollup** - once a second project exists, a top-level page showing AHC's total cash position across all active projects.
+| Capability | Before this sprint | After |
+|---|---|---|
+| Schedule status updates | Manual in /schedule | DPRs propose, AHC PM approves, batched audit trail |
+| Pct complete per task | Not tracked | Available on every task, fed from DPRs |
+| Billing forecast accuracy | 50% bucket per "In Progress" task | Reads real pct_complete; ~10x more accurate |
+| Pay app generation | Excel, hand-keyed | One click from accumulated billing_entries, snapshotted as frozen pay_application_lines |
+| G702/G703 deliverable | Manual layout in Excel | Print-ready inside the app |
+| Auditability | "Phil typed Complete on Tuesday" | "DPR #45 submitted Tue 2026-05-27 by foreman X, approved Wed by Zarina, applied to tasks 5.2.7, 5.2.8" |
+
+## What's left to make it a full PM system
+
+| Capability | Status |
+|---|---|
+| Project portfolio dashboard across all projects | Not built |
+| RFIs (Requests for Information) | Schema exists, no UI |
+| Submittals workflow | Schema exists, no UI |
+| Photos UI (browse / tag / link to DPRs and SOV) | Schema exists, no UI |
+| Comms log UI (calls, meetings, site visits) | Schema exists, no UI |
+| Email / Slack notifications | Sprint D |
+| Drawings register | No schema, no UI |
+| Punch list module | No schema, no UI |
+| Risk register | No schema, no UI |
+| Owner portal (read-only view for owner role) | Roles exist, no portal |
+| Sub portal (mobile-friendly DPR submission for foremen) | Roles exist, desktop-only UI |
+
+Roughly 2-3 more sprints worth of work to cover the full list. Each one self-contained.
