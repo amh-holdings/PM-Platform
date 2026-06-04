@@ -19,6 +19,7 @@ export type Database = {
           actual_amount: number | null
           afp_number: string | null
           billing_line_id: string
+          cash_in_month: string | null
           created_at: string | null
           id: string
           notes: string | null
@@ -36,6 +37,7 @@ export type Database = {
           actual_amount?: number | null
           afp_number?: string | null
           billing_line_id: string
+          cash_in_month?: string | null
           created_at?: string | null
           id?: string
           notes?: string | null
@@ -53,6 +55,7 @@ export type Database = {
           actual_amount?: number | null
           afp_number?: string | null
           billing_line_id?: string
+          cash_in_month?: string | null
           created_at?: string | null
           id?: string
           notes?: string | null
