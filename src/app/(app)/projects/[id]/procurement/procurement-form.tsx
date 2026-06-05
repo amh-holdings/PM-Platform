@@ -1,13 +1,20 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 import { createProcurementOrder, updateProcurementOrder } from "../procurement-actions";
+import { recordDocument } from "../documents-actions";
+import {
+  ACCEPTED_MIME_PREFIXES,
+  DOCUMENT_BUCKET,
+  MAX_FILE_BYTES,
+} from "../documents-constants";
 
 export type ProcurementFormValues = {
   id?: string;
@@ -47,28 +54,96 @@ const EMPTY: ProcurementFormValues = {
   notes: null,
 };
 
+function sanitizeFileName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_{2,}/g, "_");
+}
+function isAcceptedMime(mime: string | null | undefined): boolean {
+  if (!mime) return true;
+  return ACCEPTED_MIME_PREFIXES.some((prefix) => mime.startsWith(prefix));
+}
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export function ProcurementForm({ projectId, mode, initial, documents }: Props) {
   const router = useRouter();
   const values = initial ?? EMPTY;
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [uploadedDocId, setUploadedDocId] = useState<string | null>(null);
+  const [uploadedDocLabel, setUploadedDocLabel] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [, startTransition] = useTransition();
+
+  // Upload the picked file (if any) to Supabase Storage + project_documents,
+  // then return the new document_id so the form save can link it. Returns
+  // null if no file was picked, throws if upload fails (caught by caller).
+  async function uploadPendingFile(): Promise<string | null> {
+    if (!pendingFile) return null;
+    if (pendingFile.size > MAX_FILE_BYTES) {
+      throw new Error("File exceeds 50 MB limit");
+    }
+    if (!isAcceptedMime(pendingFile.type)) {
+      throw new Error(`Unsupported file type: ${pendingFile.type || "unknown"}`);
+    }
+    const supabase = createClient();
+    const documentId = crypto.randomUUID();
+    const storagePath = `${projectId}/${documentId}/${sanitizeFileName(pendingFile.name)}`;
+    setUploadStatus("Uploading file...");
+    const { error: upErr } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .upload(storagePath, pendingFile, {
+        cacheControl: "3600",
+        contentType: pendingFile.type || undefined,
+        upsert: false,
+      });
+    if (upErr) throw new Error(upErr.message);
+    setUploadStatus("Recording document...");
+    const rec = await recordDocument({
+      projectId,
+      storagePath,
+      fileName: pendingFile.name,
+      mimeType: pendingFile.type || null,
+      sizeBytes: pendingFile.size,
+      category: "subcontract",
+    });
+    if (!rec.ok) throw new Error(rec.error);
+    setUploadStatus(null);
+    setUploadedDocId(rec.id);
+    setUploadedDocLabel(pendingFile.name);
+    return rec.id;
+  }
 
   async function action(formData: FormData) {
     setError(null);
     setSubmitting(true);
-    const result =
-      mode === "edit" && values.id
-        ? await updateProcurementOrder(values.id, projectId, formData)
-        : await createProcurementOrder(projectId, formData);
-    setSubmitting(false);
-    if (!result.ok) {
-      setError(result.error);
-      return;
+    try {
+      // Upload picked file first if any. If upload succeeds, override the
+      // form's document_id with the newly-created document id.
+      const newDocId = await uploadPendingFile();
+      if (newDocId) {
+        formData.set("document_id", newDocId);
+      }
+      const result =
+        mode === "edit" && values.id
+          ? await updateProcurementOrder(values.id, projectId, formData)
+          : await createProcurementOrder(projectId, formData);
+      setSubmitting(false);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      startTransition(() => {
+        router.push(`/projects/${projectId}/procurement/${result.id}`);
+      });
+    } catch (e) {
+      setSubmitting(false);
+      setError(e instanceof Error ? e.message : String(e));
     }
-    startTransition(() => {
-      router.push(`/projects/${projectId}/procurement/${result.id}`);
-    });
   }
 
   return (
@@ -156,7 +231,8 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
               id="document_id"
               name="document_id"
               defaultValue={values.document_id ?? ""}
-              className="h-10 w-full rounded-md border border-input bg-background px-2 text-sm"
+              disabled={Boolean(pendingFile || uploadedDocId)}
+              className="h-10 w-full rounded-md border border-input bg-background px-2 text-sm disabled:opacity-60"
             >
               <option value="">- none -</option>
               {documents.map((d) => (
@@ -164,10 +240,69 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
                   {d.label}
                 </option>
               ))}
+              {uploadedDocId && uploadedDocLabel && (
+                <option value={uploadedDocId}>{uploadedDocLabel} (just uploaded)</option>
+              )}
             </select>
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              Upload contracts on /documents with category &quot;subcontract&quot; to see them here.
-            </p>
+            <div className="mt-2 space-y-1">
+              <p className="text-[10px] text-muted-foreground">
+                Pick from existing uploads above, OR upload a new contract PDF
+                below - it will be saved to /documents and linked to this PO
+                automatically.
+              </p>
+              <input
+                ref={fileInputRef}
+                id="po-file"
+                type="file"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  setPendingFile(f);
+                  if (f) {
+                    setUploadedDocId(null);
+                    setUploadedDocLabel(null);
+                  }
+                }}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={submitting}
+                >
+                  {pendingFile ? "Replace file" : "Choose contract PDF"}
+                </Button>
+                {pendingFile && (
+                  <>
+                    <span className="text-xs">
+                      {pendingFile.name} ({formatBytes(pendingFile.size)})
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={submitting}
+                      onClick={() => {
+                        setPendingFile(null);
+                        if (fileInputRef.current) fileInputRef.current.value = "";
+                      }}
+                    >
+                      Clear
+                    </Button>
+                  </>
+                )}
+                {!pendingFile && uploadedDocLabel && (
+                  <span className="text-xs text-emerald-700">
+                    Uploaded: {uploadedDocLabel}
+                  </span>
+                )}
+                {uploadStatus && (
+                  <span className="text-xs text-muted-foreground">{uploadStatus}</span>
+                )}
+              </div>
+            </div>
           </div>
           <div className="sm:col-span-2">
             <Label htmlFor="payment_terms_summary">Payment terms (free-text summary)</Label>

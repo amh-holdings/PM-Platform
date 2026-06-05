@@ -13,7 +13,7 @@ export default async function NewProcurementPage({ params }: { params: Params })
     .from("project_documents")
     .select("id, file_name, category")
     .eq("project_id", params.id)
-    .eq("category", "subcontract")
+    .in("category", ["subcontract", "prime_contract", "amendment", "exhibit", "other"])
     .order("uploaded_at", { ascending: false });
 
   return (
