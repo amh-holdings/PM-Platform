@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { formatDate } from "@/lib/format";
 
 import { DprReviewActions } from "./dpr-review-actions";
+import { DPR_PHOTO_BUCKET } from "../new/dpr-photo-uploader";
 
 type Params = { id: string; dprId: string };
 
@@ -28,16 +29,63 @@ export default async function DprDetailPage({ params }: { params: Params }) {
     .maybeSingle();
   if (error || !dpr) notFound();
 
-  const { data: updates } = await supabase
-    .from("dpr_task_updates")
-    .select(
-      "id, schedule_task_id, previous_status, new_status, previous_pct_complete, new_pct_complete, installed_quantity, notes",
-    )
-    .eq("dpr_id", params.dprId);
+  const [
+    updatesRes,
+    manpowerRes,
+    equipmentRes,
+    deliveriesRes,
+    delaysRes,
+    photosRes,
+  ] = await Promise.all([
+    supabase
+      .from("dpr_task_updates")
+      .select(
+        "id, schedule_task_id, previous_status, new_status, previous_pct_complete, new_pct_complete, installed_quantity, notes",
+      )
+      .eq("dpr_id", params.dprId),
+    supabase
+      .from("dpr_manpower")
+      .select("id, subcontractor_id, trade, headcount, regular_hours, ot_hours, notes")
+      .eq("dpr_id", params.dprId),
+    supabase
+      .from("dpr_equipment")
+      .select("id, equipment_name, quantity, on_rent, rental_company, notes")
+      .eq("dpr_id", params.dprId),
+    supabase
+      .from("dpr_deliveries")
+      .select(
+        "id, vendor_name, materials, quantity, unit_of_measure, po_number, procurement_order_id, notes",
+      )
+      .eq("dpr_id", params.dprId),
+    supabase
+      .from("dpr_delays")
+      .select(
+        "id, cause_code, hours_lost, impacted_schedule_task_id, narrative",
+      )
+      .eq("dpr_id", params.dprId),
+    supabase
+      .from("photos")
+      .select("id, storage_path, caption, photo_type, taken_at")
+      .eq("dpr_id", params.dprId)
+      .order("taken_at", { ascending: true }),
+  ]);
 
-  const taskIds = (updates ?? [])
-    .map((u) => u.schedule_task_id)
-    .filter((id): id is string => !!id);
+  const updates = updatesRes.data ?? [];
+  const manpower = manpowerRes.data ?? [];
+  const equipment = equipmentRes.data ?? [];
+  const deliveries = deliveriesRes.data ?? [];
+  const delays = delaysRes.data ?? [];
+  const photos = photosRes.data ?? [];
+
+  // Resolve schedule task labels for both task updates and delay impacted_schedule_task_id
+  const taskIds = Array.from(
+    new Set([
+      ...updates.map((u) => u.schedule_task_id).filter((id): id is string => !!id),
+      ...delays
+        .map((d) => d.impacted_schedule_task_id)
+        .filter((id): id is string => !!id),
+    ]),
+  );
   const { data: taskRows } = taskIds.length
     ? await supabase
         .from("schedule_tasks")
@@ -45,6 +93,58 @@ export default async function DprDetailPage({ params }: { params: Params }) {
         .in("id", taskIds)
     : { data: [] };
   const taskById = new Map((taskRows ?? []).map((t) => [t.id, t]));
+
+  // Resolve subcontractors for manpower
+  const subIds = Array.from(
+    new Set(
+      manpower
+        .map((m) => m.subcontractor_id)
+        .filter((id): id is string => !!id),
+    ),
+  );
+  const { data: subRows } = subIds.length
+    ? await supabase
+        .from("subcontractors")
+        .select("id, company_name")
+        .in("id", subIds)
+    : { data: [] };
+  const subById = new Map((subRows ?? []).map((s) => [s.id, s.company_name]));
+
+  // Sign photo URLs server-side. Hour-long expiry; this page is server-rendered.
+  const signedPhotos: Array<{
+    id: string;
+    url: string | null;
+    caption: string | null;
+    photoType: string | null;
+  }> = [];
+  if (photos.length > 0) {
+    const paths = photos.map((p) => p.storage_path);
+    const { data: signed } = await supabase.storage
+      .from(DPR_PHOTO_BUCKET)
+      .createSignedUrls(paths, 60 * 60);
+    const urlByPath = new Map(
+      (signed ?? []).map((s) => [s.path ?? "", s.signedUrl]),
+    );
+    for (const p of photos) {
+      signedPhotos.push({
+        id: p.id,
+        url: urlByPath.get(p.storage_path) ?? null,
+        caption: p.caption,
+        photoType: p.photo_type,
+      });
+    }
+  }
+
+  // Manpower rollups
+  const totalHeadcount = manpower.reduce((sum, m) => sum + (m.headcount ?? 0), 0);
+  const totalHours = manpower.reduce(
+    (sum, m) => sum + Number(m.regular_hours ?? 0) + Number(m.ot_hours ?? 0),
+    0,
+  );
+  const totalDelayHours = delays.reduce(
+    (sum, d) => sum + Number(d.hours_lost ?? 0),
+    0,
+  );
 
   return (
     <div className="space-y-4">
@@ -100,6 +200,212 @@ export default async function DprDetailPage({ params }: { params: Params }) {
         <p className="mt-2 whitespace-pre-wrap text-sm">{dpr.work_narrative}</p>
       </section>
 
+      {/* ===== Photos ===== */}
+      {signedPhotos.length > 0 && (
+        <section className="rounded-lg border bg-card p-4 shadow-sm">
+          <h3 className="text-sm font-semibold">Photos ({signedPhotos.length})</h3>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {signedPhotos.map((p) => (
+              <a
+                key={p.id}
+                href={p.url ?? "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="space-y-1 rounded-md border bg-background p-2 transition-colors hover:bg-muted/30"
+              >
+                {p.url ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={p.url}
+                    alt={p.caption ?? "DPR photo"}
+                    className="aspect-square w-full rounded object-cover"
+                  />
+                ) : (
+                  <div className="flex aspect-square w-full items-center justify-center rounded bg-muted text-[10px] text-muted-foreground">
+                    Signed URL failed
+                  </div>
+                )}
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {p.photoType ?? "photo"}
+                </div>
+                {p.caption && (
+                  <div className="line-clamp-2 text-xs">{p.caption}</div>
+                )}
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ===== Manpower ===== */}
+      {manpower.length > 0 && (
+        <section className="rounded-lg border bg-card p-4 shadow-sm">
+          <div className="flex items-baseline justify-between">
+            <h3 className="text-sm font-semibold">
+              Manpower ({manpower.length})
+            </h3>
+            <div className="text-xs text-muted-foreground">
+              Total: {totalHeadcount} crew, {totalHours} hrs
+            </div>
+          </div>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="text-muted-foreground">
+                <tr className="border-b">
+                  <th className="py-1.5 pr-2 text-left font-medium">Sub</th>
+                  <th className="py-1.5 pr-2 text-left font-medium">Trade</th>
+                  <th className="py-1.5 pr-2 text-right font-medium">Crew</th>
+                  <th className="py-1.5 pr-2 text-right font-medium">Reg hrs</th>
+                  <th className="py-1.5 pr-2 text-right font-medium">OT hrs</th>
+                  <th className="py-1.5 text-left font-medium">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {manpower.map((m) => (
+                  <tr key={m.id} className="border-b last:border-0">
+                    <td className="py-1.5 pr-2">
+                      {m.subcontractor_id
+                        ? subById.get(m.subcontractor_id) ?? "?"
+                        : "-"}
+                    </td>
+                    <td className="py-1.5 pr-2">{m.trade ?? "-"}</td>
+                    <td className="py-1.5 pr-2 text-right">{m.headcount}</td>
+                    <td className="py-1.5 pr-2 text-right">{m.regular_hours}</td>
+                    <td className="py-1.5 pr-2 text-right">{m.ot_hours}</td>
+                    <td className="py-1.5 text-muted-foreground">
+                      {m.notes ?? "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* ===== Equipment ===== */}
+      {equipment.length > 0 && (
+        <section className="rounded-lg border bg-card p-4 shadow-sm">
+          <h3 className="text-sm font-semibold">Equipment ({equipment.length})</h3>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="text-muted-foreground">
+                <tr className="border-b">
+                  <th className="py-1.5 pr-2 text-left font-medium">Equipment</th>
+                  <th className="py-1.5 pr-2 text-right font-medium">Qty</th>
+                  <th className="py-1.5 pr-2 text-left font-medium">On rent</th>
+                  <th className="py-1.5 pr-2 text-left font-medium">Rental</th>
+                  <th className="py-1.5 text-left font-medium">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {equipment.map((e) => (
+                  <tr key={e.id} className="border-b last:border-0">
+                    <td className="py-1.5 pr-2 font-medium">{e.equipment_name}</td>
+                    <td className="py-1.5 pr-2 text-right">{e.quantity}</td>
+                    <td className="py-1.5 pr-2">{e.on_rent ? "Yes" : "No"}</td>
+                    <td className="py-1.5 pr-2">{e.rental_company ?? "-"}</td>
+                    <td className="py-1.5 text-muted-foreground">
+                      {e.notes ?? "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* ===== Deliveries ===== */}
+      {deliveries.length > 0 && (
+        <section className="rounded-lg border bg-card p-4 shadow-sm">
+          <h3 className="text-sm font-semibold">Deliveries ({deliveries.length})</h3>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="text-muted-foreground">
+                <tr className="border-b">
+                  <th className="py-1.5 pr-2 text-left font-medium">Vendor</th>
+                  <th className="py-1.5 pr-2 text-left font-medium">Materials</th>
+                  <th className="py-1.5 pr-2 text-right font-medium">Qty</th>
+                  <th className="py-1.5 pr-2 text-left font-medium">UoM</th>
+                  <th className="py-1.5 pr-2 text-left font-medium">PO</th>
+                  <th className="py-1.5 text-left font-medium">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deliveries.map((d) => (
+                  <tr key={d.id} className="border-b last:border-0">
+                    <td className="py-1.5 pr-2">{d.vendor_name ?? "-"}</td>
+                    <td className="py-1.5 pr-2 font-medium">{d.materials}</td>
+                    <td className="py-1.5 pr-2 text-right">{d.quantity ?? "-"}</td>
+                    <td className="py-1.5 pr-2">{d.unit_of_measure ?? "-"}</td>
+                    <td className="py-1.5 pr-2 font-mono">{d.po_number ?? "-"}</td>
+                    <td className="py-1.5 text-muted-foreground">
+                      {d.notes ?? "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* ===== Delays ===== */}
+      {delays.length > 0 && (
+        <section className="rounded-lg border border-amber-500/40 bg-amber-50/30 p-4 shadow-sm">
+          <div className="flex items-baseline justify-between">
+            <h3 className="text-sm font-semibold">Delays ({delays.length})</h3>
+            <div className="text-xs text-muted-foreground">
+              Total hours lost: {totalDelayHours}
+            </div>
+          </div>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="text-muted-foreground">
+                <tr className="border-b">
+                  <th className="py-1.5 pr-2 text-left font-medium">Cause</th>
+                  <th className="py-1.5 pr-2 text-right font-medium">Hrs lost</th>
+                  <th className="py-1.5 pr-2 text-left font-medium">Impacted task</th>
+                  <th className="py-1.5 text-left font-medium">Narrative</th>
+                </tr>
+              </thead>
+              <tbody>
+                {delays.map((d) => {
+                  const task = d.impacted_schedule_task_id
+                    ? taskById.get(d.impacted_schedule_task_id)
+                    : null;
+                  return (
+                    <tr key={d.id} className="border-b last:border-0">
+                      <td className="py-1.5 pr-2 font-medium capitalize">
+                        {d.cause_code}
+                      </td>
+                      <td className="py-1.5 pr-2 text-right">
+                        {d.hours_lost ?? "-"}
+                      </td>
+                      <td className="py-1.5 pr-2">
+                        {task ? (
+                          <span>
+                            <span className="font-mono text-[10px]">{task.wbs_code}</span>{" "}
+                            {task.task_name}
+                          </span>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                      <td className="py-1.5 text-muted-foreground">
+                        {d.narrative ?? "-"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* ===== Safety ===== */}
       {(dpr.safety_incident || dpr.near_miss || dpr.safety_narrative) && (
         <section className="rounded-lg border border-amber-500/40 bg-amber-50/30 p-4 shadow-sm">
           <h3 className="text-sm font-semibold">Safety</h3>
@@ -123,11 +429,12 @@ export default async function DprDetailPage({ params }: { params: Params }) {
         </section>
       )}
 
+      {/* ===== Schedule task updates ===== */}
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h3 className="text-sm font-semibold">
-          Proposed schedule task updates ({updates?.length ?? 0})
+          Proposed schedule task updates ({updates.length})
         </h3>
-        {(updates ?? []).length === 0 ? (
+        {updates.length === 0 ? (
           <p className="mt-2 text-xs text-muted-foreground">
             This DPR did not propose any task changes.
           </p>
@@ -144,7 +451,7 @@ export default async function DprDetailPage({ params }: { params: Params }) {
                 </tr>
               </thead>
               <tbody>
-                {(updates ?? []).map((u) => {
+                {updates.map((u) => {
                   const t = u.schedule_task_id ? taskById.get(u.schedule_task_id) : null;
                   return (
                     <tr key={u.id} className="border-b last:border-0">

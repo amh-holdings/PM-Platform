@@ -2,10 +2,12 @@ import { DashboardBilling } from "./dashboard-billing";
 import { DashboardCashOut } from "./dashboard-cashout";
 import { DashboardCompliance } from "./dashboard-compliance";
 import { DashboardCost } from "./dashboard-cost";
+import { DashboardFieldStatus } from "./dashboard-field-status";
 import { DashboardFinancial } from "./dashboard-financial";
 import { DashboardKpis } from "./dashboard-kpis";
 import { DashboardMilestones } from "./dashboard-milestones";
 import { DashboardNetCash } from "./dashboard-netcash";
+import { DashboardPlanActual } from "./dashboard-plan-actual";
 import { DashboardSchedule } from "./dashboard-schedule";
 import { ProjectChat } from "./project-chat";
 
@@ -20,6 +22,8 @@ export default function ProjectDashboardPage({ params }: { params: Params }) {
     <div className="space-y-6">
       <DashboardKpis projectId={params.id} />
 
+      <DashboardPlanActual projectId={params.id} />
+
       <DashboardNetCash projectId={params.id} />
 
       <DashboardBilling projectId={params.id} />
@@ -28,6 +32,7 @@ export default function ProjectDashboardPage({ params }: { params: Params }) {
 
       <div className="grid gap-4 md:grid-cols-2">
         <DashboardSchedule projectId={params.id} />
+        <DashboardFieldStatus projectId={params.id} />
         <DashboardFinancial projectId={params.id} />
         <DashboardCost projectId={params.id} />
         <DashboardCompliance projectId={params.id} />

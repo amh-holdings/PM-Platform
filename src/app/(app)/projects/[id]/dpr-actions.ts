@@ -44,6 +44,47 @@ async function assertSubmitter() {
   return { ok: true as const, supabase, userId: user.id, role: profile.role };
 }
 
+export type DprPhotoInput = {
+  photoId: string;
+  storagePath: string;
+  caption: string | null;
+  photoType: string;
+};
+
+export type DprManpowerInput = {
+  subcontractorId: string | null;
+  trade: string | null;
+  headcount: number;
+  regularHours: number;
+  otHours: number;
+  notes: string | null;
+};
+
+export type DprEquipmentInput = {
+  equipmentName: string;
+  quantity: number;
+  onRent: boolean;
+  rentalCompany: string | null;
+  notes: string | null;
+};
+
+export type DprDeliveryInput = {
+  vendorName: string | null;
+  materials: string;
+  quantity: number | null;
+  unitOfMeasure: string | null;
+  poNumber: string | null;
+  procurementOrderId: string | null;
+  notes: string | null;
+};
+
+export type DprDelayInput = {
+  causeCode: string;
+  hoursLost: number | null;
+  impactedScheduleTaskId: string | null;
+  narrative: string | null;
+};
+
 export type DprSubmitInput = {
   projectId: string;
   reportDate: string; // YYYY-MM-DD
@@ -61,6 +102,11 @@ export type DprSubmitInput = {
     installedQuantity?: number | null;
     notes?: string | null;
   }>;
+  manpower?: DprManpowerInput[];
+  equipment?: DprEquipmentInput[];
+  deliveries?: DprDeliveryInput[];
+  delays?: DprDelayInput[];
+  photos?: DprPhotoInput[];
 };
 
 export type DprActionResult =
@@ -98,8 +144,7 @@ export async function submitDpr(input: DprSubmitInput): Promise<DprActionResult>
     return { ok: false, error: insertErr?.message ?? "Failed to create DPR" };
   }
 
-  // Insert task updates. Look up previous status/pct for each task to capture
-  // a before-snapshot.
+  // ===== task updates with before-snapshot =====
   const taskIds = input.taskUpdates.map((u) => u.scheduleTaskId);
   let prevByTask: Map<string, { status: string | null; pct: number | null }> =
     new Map();
@@ -140,6 +185,101 @@ export async function submitDpr(input: DprSubmitInput): Promise<DprActionResult>
         return { ok: false, error: `Task updates failed: ${updErr.message}` };
       }
     }
+  }
+
+  // ===== manpower =====
+  if (input.manpower && input.manpower.length > 0) {
+    const rows = input.manpower.map((m) => ({
+      dpr_id: dpr.id,
+      subcontractor_id: m.subcontractorId,
+      trade: m.trade,
+      headcount: m.headcount,
+      regular_hours: m.regularHours,
+      ot_hours: m.otHours,
+      notes: m.notes,
+    }));
+    const { error } = await auth.supabase.from("dpr_manpower").insert(rows);
+    if (error) return { ok: false, error: `Manpower failed: ${error.message}` };
+  }
+
+  // ===== equipment =====
+  if (input.equipment && input.equipment.length > 0) {
+    const rows = input.equipment
+      .filter((e) => e.equipmentName.trim())
+      .map((e) => ({
+        dpr_id: dpr.id,
+        equipment_name: e.equipmentName.trim(),
+        quantity: e.quantity,
+        on_rent: e.onRent,
+        rental_company: e.rentalCompany,
+        notes: e.notes,
+      }));
+    if (rows.length > 0) {
+      const { error } = await auth.supabase.from("dpr_equipment").insert(rows);
+      if (error) return { ok: false, error: `Equipment failed: ${error.message}` };
+    }
+  }
+
+  // ===== deliveries =====
+  if (input.deliveries && input.deliveries.length > 0) {
+    const rows = input.deliveries
+      .filter((d) => d.materials.trim())
+      .map((d) => ({
+        dpr_id: dpr.id,
+        vendor_name: d.vendorName,
+        materials: d.materials.trim(),
+        quantity: d.quantity,
+        unit_of_measure: d.unitOfMeasure,
+        po_number: d.poNumber,
+        procurement_order_id: d.procurementOrderId,
+        notes: d.notes,
+      }));
+    if (rows.length > 0) {
+      const { error } = await auth.supabase.from("dpr_deliveries").insert(rows);
+      if (error) return { ok: false, error: `Deliveries failed: ${error.message}` };
+    }
+  }
+
+  // ===== delays =====
+  if (input.delays && input.delays.length > 0) {
+    const rows = input.delays
+      .filter((d) => d.causeCode.trim())
+      .map((d) => ({
+        dpr_id: dpr.id,
+        cause_code: d.causeCode.trim(),
+        hours_lost: d.hoursLost,
+        impacted_schedule_task_id: d.impactedScheduleTaskId,
+        narrative: d.narrative,
+      }));
+    if (rows.length > 0) {
+      const { error } = await auth.supabase.from("dpr_delays").insert(rows);
+      if (error) return { ok: false, error: `Delays failed: ${error.message}` };
+    }
+  }
+
+  // ===== photos =====
+  // Photos were uploaded by the client to dpr-photos/{projectId}/_drafts/...;
+  // here we record the metadata row pointing at that path. We leave the blob
+  // where it is (cheap enough). A nightly cleanup job can sweep abandoned
+  // draft prefixes later if needed.
+  if (input.photos && input.photos.length > 0) {
+    const rows = input.photos.map((p) => ({
+      project_id: input.projectId,
+      dpr_id: dpr.id,
+      uploaded_by_id: auth.userId,
+      photo_type: p.photoType as
+        | "progress"
+        | "safety"
+        | "delivery"
+        | "issue"
+        | "eod"
+        | "other",
+      storage_path: p.storagePath,
+      caption: p.caption,
+      taken_at: new Date().toISOString(),
+    }));
+    const { error } = await auth.supabase.from("photos").insert(rows);
+    if (error) return { ok: false, error: `Photos failed: ${error.message}` };
   }
 
   revalidatePath(`/projects/${input.projectId}`);

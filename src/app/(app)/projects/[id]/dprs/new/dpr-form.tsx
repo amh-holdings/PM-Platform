@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { submitDpr } from "../../dpr-actions";
 
+import { DprPhotoUploader, type StagedPhoto } from "./dpr-photo-uploader";
+
 const STATUS_OPTIONS = [
   "Not Started",
   "In Progress",
@@ -17,6 +19,20 @@ const STATUS_OPTIONS = [
   "Approved",
   "Rejected",
 ];
+
+const DELAY_CAUSE_CODES = [
+  "weather",
+  "manpower",
+  "materials",
+  "equipment",
+  "design",
+  "owner",
+  "inspection",
+  "permitting",
+  "utility",
+  "safety",
+  "other",
+] as const;
 
 type Task = {
   id: string;
@@ -28,9 +44,19 @@ type Task = {
   endDate: string | null;
 };
 
+type Sub = { id: string; companyName: string; trade: string | null };
+type Po = {
+  id: string;
+  vendorName: string;
+  poNumber: string | null;
+  description: string | null;
+};
+
 type Props = {
   projectId: string;
   tasks: Task[];
+  subs: Sub[];
+  procurementOrders: Po[];
 };
 
 type TaskUpdate = {
@@ -41,27 +67,98 @@ type TaskUpdate = {
   notes: string;
 };
 
+type ManpowerRow = {
+  rowId: string;
+  subcontractorId: string;
+  trade: string;
+  headcount: string;
+  regularHours: string;
+  otHours: string;
+  notes: string;
+};
+
+type EquipmentRow = {
+  rowId: string;
+  equipmentName: string;
+  quantity: string;
+  onRent: boolean;
+  rentalCompany: string;
+  notes: string;
+};
+
+type DeliveryRow = {
+  rowId: string;
+  vendorName: string;
+  materials: string;
+  quantity: string;
+  unitOfMeasure: string;
+  poNumber: string;
+  procurementOrderId: string;
+  notes: string;
+};
+
+type DelayRow = {
+  rowId: string;
+  causeCode: string;
+  hoursLost: string;
+  impactedScheduleTaskId: string;
+  narrative: string;
+};
+
 function todayIso(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export function DprForm({ projectId, tasks }: Props) {
+function newRowId(): string {
+  return crypto.randomUUID();
+}
+
+export function DprForm({ projectId, tasks, subs, procurementOrders }: Props) {
   const router = useRouter();
+  const [draftId] = useState(() => crypto.randomUUID());
+
   const [reportDate, setReportDate] = useState(todayIso());
   const [narrative, setNarrative] = useState("");
-  const [crewCount, setCrewCount] = useState("");
-  const [hours, setHours] = useState("");
   const [weather, setWeather] = useState("");
+  const [crewOverride, setCrewOverride] = useState("");
+  const [hoursOverride, setHoursOverride] = useState("");
+
   const [safetyIncident, setSafetyIncident] = useState(false);
   const [nearMiss, setNearMiss] = useState(false);
   const [safetyNarrative, setSafetyNarrative] = useState("");
+
+  const [photos, setPhotos] = useState<StagedPhoto[]>([]);
+  const [manpower, setManpower] = useState<ManpowerRow[]>([]);
+  const [equipment, setEquipment] = useState<EquipmentRow[]>([]);
+  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
+  const [delays, setDelays] = useState<DelayRow[]>([]);
+
   const [search, setSearch] = useState("");
   const [updates, setUpdates] = useState<Map<string, TaskUpdate>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [, startTransition] = useTransition();
 
+  // ===== rollups =====
+  const manpowerTotals = useMemo(() => {
+    let headcount = 0;
+    let hours = 0;
+    for (const m of manpower) {
+      headcount += Number(m.headcount) || 0;
+      hours += (Number(m.regularHours) || 0) + (Number(m.otHours) || 0);
+    }
+    return { headcount, hours };
+  }, [manpower]);
+
+  const effectiveCrewCount = crewOverride
+    ? Number(crewOverride)
+    : manpowerTotals.headcount;
+  const effectiveHours = hoursOverride
+    ? Number(hoursOverride)
+    : manpowerTotals.hours;
+
+  // ===== task updates =====
   const filteredTasks = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return tasks;
@@ -101,6 +198,100 @@ export function DprForm({ projectId, tasks }: Props) {
     });
   }
 
+  // ===== manpower row helpers =====
+  function addManpowerRow() {
+    setManpower((prev) => [
+      ...prev,
+      {
+        rowId: newRowId(),
+        subcontractorId: "",
+        trade: "",
+        headcount: "",
+        regularHours: "",
+        otHours: "",
+        notes: "",
+      },
+    ]);
+  }
+  function patchManpower(rowId: string, patch: Partial<ManpowerRow>) {
+    setManpower((prev) =>
+      prev.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)),
+    );
+  }
+  function removeManpower(rowId: string) {
+    setManpower((prev) => prev.filter((r) => r.rowId !== rowId));
+  }
+
+  // ===== equipment row helpers =====
+  function addEquipmentRow() {
+    setEquipment((prev) => [
+      ...prev,
+      {
+        rowId: newRowId(),
+        equipmentName: "",
+        quantity: "1",
+        onRent: false,
+        rentalCompany: "",
+        notes: "",
+      },
+    ]);
+  }
+  function patchEquipment(rowId: string, patch: Partial<EquipmentRow>) {
+    setEquipment((prev) =>
+      prev.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)),
+    );
+  }
+  function removeEquipment(rowId: string) {
+    setEquipment((prev) => prev.filter((r) => r.rowId !== rowId));
+  }
+
+  // ===== delivery row helpers =====
+  function addDeliveryRow() {
+    setDeliveries((prev) => [
+      ...prev,
+      {
+        rowId: newRowId(),
+        vendorName: "",
+        materials: "",
+        quantity: "",
+        unitOfMeasure: "",
+        poNumber: "",
+        procurementOrderId: "",
+        notes: "",
+      },
+    ]);
+  }
+  function patchDelivery(rowId: string, patch: Partial<DeliveryRow>) {
+    setDeliveries((prev) =>
+      prev.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)),
+    );
+  }
+  function removeDelivery(rowId: string) {
+    setDeliveries((prev) => prev.filter((r) => r.rowId !== rowId));
+  }
+
+  // ===== delay row helpers =====
+  function addDelayRow() {
+    setDelays((prev) => [
+      ...prev,
+      {
+        rowId: newRowId(),
+        causeCode: "weather",
+        hoursLost: "",
+        impactedScheduleTaskId: "",
+        narrative: "",
+      },
+    ]);
+  }
+  function patchDelay(rowId: string, patch: Partial<DelayRow>) {
+    setDelays((prev) =>
+      prev.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)),
+    );
+  }
+  function removeDelay(rowId: string) {
+    setDelays((prev) => prev.filter((r) => r.rowId !== rowId));
+  }
+
   async function onSubmit() {
     setError(null);
     if (!narrative.trim()) {
@@ -116,8 +307,8 @@ export function DprForm({ projectId, tasks }: Props) {
       projectId,
       reportDate,
       workNarrative: narrative,
-      crewCount: crewCount ? Number(crewCount) : null,
-      totalManHours: hours ? Number(hours) : null,
+      crewCount: effectiveCrewCount || null,
+      totalManHours: effectiveHours || null,
       weatherConditions: weather || null,
       safetyIncident,
       nearMiss,
@@ -128,6 +319,44 @@ export function DprForm({ projectId, tasks }: Props) {
         newPctComplete: u.newPct ? Number(u.newPct) : null,
         installedQuantity: u.installed ? Number(u.installed) : null,
         notes: u.notes || null,
+      })),
+      manpower: manpower
+        .filter((m) => Number(m.headcount) > 0 || Number(m.regularHours) > 0)
+        .map((m) => ({
+          subcontractorId: m.subcontractorId || null,
+          trade: m.trade.trim() || null,
+          headcount: Number(m.headcount) || 0,
+          regularHours: Number(m.regularHours) || 0,
+          otHours: Number(m.otHours) || 0,
+          notes: m.notes.trim() || null,
+        })),
+      equipment: equipment.map((e) => ({
+        equipmentName: e.equipmentName,
+        quantity: Number(e.quantity) || 1,
+        onRent: e.onRent,
+        rentalCompany: e.rentalCompany.trim() || null,
+        notes: e.notes.trim() || null,
+      })),
+      deliveries: deliveries.map((d) => ({
+        vendorName: d.vendorName.trim() || null,
+        materials: d.materials,
+        quantity: d.quantity ? Number(d.quantity) : null,
+        unitOfMeasure: d.unitOfMeasure.trim() || null,
+        poNumber: d.poNumber.trim() || null,
+        procurementOrderId: d.procurementOrderId || null,
+        notes: d.notes.trim() || null,
+      })),
+      delays: delays.map((d) => ({
+        causeCode: d.causeCode,
+        hoursLost: d.hoursLost ? Number(d.hoursLost) : null,
+        impactedScheduleTaskId: d.impactedScheduleTaskId || null,
+        narrative: d.narrative.trim() || null,
+      })),
+      photos: photos.map((p) => ({
+        photoId: p.photoId,
+        storagePath: p.storagePath,
+        caption: p.caption.trim() || null,
+        photoType: p.photoType,
       })),
     });
     setSubmitting(false);
@@ -142,6 +371,7 @@ export function DprForm({ projectId, tasks }: Props) {
 
   return (
     <div className="space-y-6">
+      {/* ===== Day details ===== */}
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h3 className="text-sm font-semibold">Day details</h3>
         <div className="mt-3 grid gap-4 sm:grid-cols-3">
@@ -155,24 +385,46 @@ export function DprForm({ projectId, tasks }: Props) {
             />
           </div>
           <div>
-            <Label htmlFor="dpr-crew">Crew count</Label>
+            <Label htmlFor="dpr-crew">
+              Crew count
+              {!crewOverride && manpowerTotals.headcount > 0 && (
+                <span className="ml-1 text-[10px] text-muted-foreground">
+                  (auto: {manpowerTotals.headcount})
+                </span>
+              )}
+            </Label>
             <Input
               id="dpr-crew"
               type="number"
-              value={crewCount}
-              onChange={(e) => setCrewCount(e.target.value)}
-              placeholder="e.g. 8"
+              value={crewOverride}
+              onChange={(e) => setCrewOverride(e.target.value)}
+              placeholder={
+                manpowerTotals.headcount > 0
+                  ? `auto ${manpowerTotals.headcount}`
+                  : "e.g. 8"
+              }
             />
           </div>
           <div>
-            <Label htmlFor="dpr-hours">Total man-hours</Label>
+            <Label htmlFor="dpr-hours">
+              Total man-hours
+              {!hoursOverride && manpowerTotals.hours > 0 && (
+                <span className="ml-1 text-[10px] text-muted-foreground">
+                  (auto: {manpowerTotals.hours})
+                </span>
+              )}
+            </Label>
             <Input
               id="dpr-hours"
               type="number"
               step="0.25"
-              value={hours}
-              onChange={(e) => setHours(e.target.value)}
-              placeholder="e.g. 64"
+              value={hoursOverride}
+              onChange={(e) => setHoursOverride(e.target.value)}
+              placeholder={
+                manpowerTotals.hours > 0
+                  ? `auto ${manpowerTotals.hours}`
+                  : "e.g. 64"
+              }
             />
           </div>
           <div className="sm:col-span-3">
@@ -200,6 +452,359 @@ export function DprForm({ projectId, tasks }: Props) {
         </div>
       </section>
 
+      {/* ===== Photos ===== */}
+      <section className="rounded-lg border bg-card p-4 shadow-sm">
+        <h3 className="text-sm font-semibold">Photos ({photos.length})</h3>
+        <p className="text-xs text-muted-foreground">
+          Progress, safety, deliveries, issues, end-of-day. Foreman pics are
+          the proof behind any status change.
+        </p>
+        <div className="mt-3">
+          <DprPhotoUploader
+            projectId={projectId}
+            draftId={draftId}
+            photos={photos}
+            onChange={setPhotos}
+          />
+        </div>
+      </section>
+
+      {/* ===== Manpower ===== */}
+      <section className="rounded-lg border bg-card p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold">
+              Manpower by sub / trade ({manpower.length})
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Headcount and hours per sub. Rolls up into crew count and total
+              man-hours unless you override above.
+            </p>
+          </div>
+          <Button type="button" size="sm" variant="outline" onClick={addManpowerRow}>
+            Add row
+          </Button>
+        </div>
+        {manpower.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {manpower.map((m) => (
+              <div
+                key={m.rowId}
+                className="grid gap-2 rounded-md border bg-background p-2 sm:grid-cols-[1fr_1fr_90px_90px_90px_auto]"
+              >
+                <select
+                  value={m.subcontractorId}
+                  onChange={(e) =>
+                    patchManpower(m.rowId, { subcontractorId: e.target.value })
+                  }
+                  className="h-9 rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  <option value="">- Sub (optional) -</option>
+                  {subs.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.companyName}
+                      {s.trade ? ` (${s.trade})` : ""}
+                    </option>
+                  ))}
+                </select>
+                <Input
+                  value={m.trade}
+                  onChange={(e) => patchManpower(m.rowId, { trade: e.target.value })}
+                  placeholder="Trade (e.g. ironworker)"
+                />
+                <Input
+                  type="number"
+                  value={m.headcount}
+                  onChange={(e) =>
+                    patchManpower(m.rowId, { headcount: e.target.value })
+                  }
+                  placeholder="Heads"
+                />
+                <Input
+                  type="number"
+                  step="0.25"
+                  value={m.regularHours}
+                  onChange={(e) =>
+                    patchManpower(m.rowId, { regularHours: e.target.value })
+                  }
+                  placeholder="Reg hrs"
+                />
+                <Input
+                  type="number"
+                  step="0.25"
+                  value={m.otHours}
+                  onChange={(e) =>
+                    patchManpower(m.rowId, { otHours: e.target.value })
+                  }
+                  placeholder="OT hrs"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removeManpower(m.rowId)}
+                >
+                  Remove
+                </Button>
+                <Input
+                  value={m.notes}
+                  onChange={(e) => patchManpower(m.rowId, { notes: e.target.value })}
+                  placeholder="Notes (optional)"
+                  className="sm:col-span-6"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ===== Equipment ===== */}
+      <section className="rounded-lg border bg-card p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold">Equipment on site ({equipment.length})</h3>
+            <p className="text-xs text-muted-foreground">
+              Owned or rented. Flag on-rent so we can track standby vs idle days.
+            </p>
+          </div>
+          <Button type="button" size="sm" variant="outline" onClick={addEquipmentRow}>
+            Add row
+          </Button>
+        </div>
+        {equipment.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {equipment.map((e) => (
+              <div
+                key={e.rowId}
+                className="grid gap-2 rounded-md border bg-background p-2 sm:grid-cols-[1fr_80px_auto_1fr_auto]"
+              >
+                <Input
+                  value={e.equipmentName}
+                  onChange={(ev) =>
+                    patchEquipment(e.rowId, { equipmentName: ev.target.value })
+                  }
+                  placeholder="e.g. 40-ton crane"
+                />
+                <Input
+                  type="number"
+                  value={e.quantity}
+                  onChange={(ev) =>
+                    patchEquipment(e.rowId, { quantity: ev.target.value })
+                  }
+                  placeholder="Qty"
+                />
+                <label className="flex items-center gap-2 px-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={e.onRent}
+                    onChange={(ev) =>
+                      patchEquipment(e.rowId, { onRent: ev.target.checked })
+                    }
+                  />
+                  On rent
+                </label>
+                <Input
+                  value={e.rentalCompany}
+                  onChange={(ev) =>
+                    patchEquipment(e.rowId, { rentalCompany: ev.target.value })
+                  }
+                  placeholder="Rental company"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removeEquipment(e.rowId)}
+                >
+                  Remove
+                </Button>
+                <Input
+                  value={e.notes}
+                  onChange={(ev) => patchEquipment(e.rowId, { notes: ev.target.value })}
+                  placeholder="Notes (optional)"
+                  className="sm:col-span-5"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ===== Deliveries ===== */}
+      <section className="rounded-lg border bg-card p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold">Deliveries ({deliveries.length})</h3>
+            <p className="text-xs text-muted-foreground">
+              Materials received today. Link to a PO if it&apos;s a procurement
+              order so the procurement page sees actual arrival.
+            </p>
+          </div>
+          <Button type="button" size="sm" variant="outline" onClick={addDeliveryRow}>
+            Add row
+          </Button>
+        </div>
+        {deliveries.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {deliveries.map((d) => (
+              <div
+                key={d.rowId}
+                className="grid gap-2 rounded-md border bg-background p-2 sm:grid-cols-[1fr_1fr_90px_80px_1fr_auto]"
+              >
+                <Input
+                  value={d.vendorName}
+                  onChange={(ev) =>
+                    patchDelivery(d.rowId, { vendorName: ev.target.value })
+                  }
+                  placeholder="Vendor"
+                />
+                <Input
+                  value={d.materials}
+                  onChange={(ev) =>
+                    patchDelivery(d.rowId, { materials: ev.target.value })
+                  }
+                  placeholder="Materials"
+                />
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={d.quantity}
+                  onChange={(ev) =>
+                    patchDelivery(d.rowId, { quantity: ev.target.value })
+                  }
+                  placeholder="Qty"
+                />
+                <Input
+                  value={d.unitOfMeasure}
+                  onChange={(ev) =>
+                    patchDelivery(d.rowId, { unitOfMeasure: ev.target.value })
+                  }
+                  placeholder="UoM"
+                />
+                <select
+                  value={d.procurementOrderId}
+                  onChange={(ev) =>
+                    patchDelivery(d.rowId, { procurementOrderId: ev.target.value })
+                  }
+                  className="h-9 rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  <option value="">- Link PO (optional) -</option>
+                  {procurementOrders.map((po) => (
+                    <option key={po.id} value={po.id}>
+                      {po.poNumber ? `${po.poNumber} - ` : ""}
+                      {po.vendorName}
+                      {po.description ? ` (${po.description})` : ""}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removeDelivery(d.rowId)}
+                >
+                  Remove
+                </Button>
+                <Input
+                  value={d.poNumber}
+                  onChange={(ev) =>
+                    patchDelivery(d.rowId, { poNumber: ev.target.value })
+                  }
+                  placeholder="PO # (if no link)"
+                  className="sm:col-span-2"
+                />
+                <Input
+                  value={d.notes}
+                  onChange={(ev) => patchDelivery(d.rowId, { notes: ev.target.value })}
+                  placeholder="Notes (optional)"
+                  className="sm:col-span-4"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ===== Delays ===== */}
+      <section className="rounded-lg border bg-card p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold">Delays ({delays.length})</h3>
+            <p className="text-xs text-muted-foreground">
+              Anything that cost time today. Cause code + hours lost lets us
+              report total weather/manpower/owner delay by month.
+            </p>
+          </div>
+          <Button type="button" size="sm" variant="outline" onClick={addDelayRow}>
+            Add row
+          </Button>
+        </div>
+        {delays.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {delays.map((d) => (
+              <div
+                key={d.rowId}
+                className="grid gap-2 rounded-md border bg-background p-2 sm:grid-cols-[150px_100px_1fr_auto]"
+              >
+                <select
+                  value={d.causeCode}
+                  onChange={(ev) =>
+                    patchDelay(d.rowId, { causeCode: ev.target.value })
+                  }
+                  className="h-9 rounded-md border border-input bg-background px-2 text-xs capitalize"
+                >
+                  {DELAY_CAUSE_CODES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+                <Input
+                  type="number"
+                  step="0.25"
+                  value={d.hoursLost}
+                  onChange={(ev) =>
+                    patchDelay(d.rowId, { hoursLost: ev.target.value })
+                  }
+                  placeholder="Hours lost"
+                />
+                <select
+                  value={d.impactedScheduleTaskId}
+                  onChange={(ev) =>
+                    patchDelay(d.rowId, { impactedScheduleTaskId: ev.target.value })
+                  }
+                  className="h-9 rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  <option value="">- Impacted task (optional) -</option>
+                  {tasks.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.wbsCode} {t.taskName}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removeDelay(d.rowId)}
+                >
+                  Remove
+                </Button>
+                <Input
+                  value={d.narrative}
+                  onChange={(ev) =>
+                    patchDelay(d.rowId, { narrative: ev.target.value })
+                  }
+                  placeholder="What happened"
+                  className="sm:col-span-4"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ===== Safety ===== */}
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h3 className="text-sm font-semibold">Safety</h3>
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
@@ -231,6 +836,7 @@ export function DprForm({ projectId, tasks }: Props) {
         </div>
       </section>
 
+      {/* ===== Schedule task updates (existing) ===== */}
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>

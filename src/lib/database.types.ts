@@ -351,6 +351,197 @@ export type Database = {
           },
         ]
       }
+      dpr_delays: {
+        Row: {
+          cause_code: string
+          created_at: string | null
+          dpr_id: string
+          hours_lost: number | null
+          id: string
+          impacted_schedule_task_id: string | null
+          narrative: string | null
+        }
+        Insert: {
+          cause_code: string
+          created_at?: string | null
+          dpr_id: string
+          hours_lost?: number | null
+          id?: string
+          impacted_schedule_task_id?: string | null
+          narrative?: string | null
+        }
+        Update: {
+          cause_code?: string
+          created_at?: string | null
+          dpr_id?: string
+          hours_lost?: number | null
+          id?: string
+          impacted_schedule_task_id?: string | null
+          narrative?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dpr_delays_dpr_id_fkey"
+            columns: ["dpr_id"]
+            isOneToOne: false
+            referencedRelation: "dprs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dpr_delays_impacted_schedule_task_id_fkey"
+            columns: ["impacted_schedule_task_id"]
+            isOneToOne: false
+            referencedRelation: "schedule_tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dpr_deliveries: {
+        Row: {
+          created_at: string | null
+          dpr_id: string
+          id: string
+          materials: string
+          notes: string | null
+          po_number: string | null
+          procurement_order_id: string | null
+          quantity: number | null
+          unit_of_measure: string | null
+          vendor_name: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          dpr_id: string
+          id?: string
+          materials: string
+          notes?: string | null
+          po_number?: string | null
+          procurement_order_id?: string | null
+          quantity?: number | null
+          unit_of_measure?: string | null
+          vendor_name?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          dpr_id?: string
+          id?: string
+          materials?: string
+          notes?: string | null
+          po_number?: string | null
+          procurement_order_id?: string | null
+          quantity?: number | null
+          unit_of_measure?: string | null
+          vendor_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dpr_deliveries_dpr_id_fkey"
+            columns: ["dpr_id"]
+            isOneToOne: false
+            referencedRelation: "dprs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dpr_deliveries_procurement_order_id_fkey"
+            columns: ["procurement_order_id"]
+            isOneToOne: false
+            referencedRelation: "procurement_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dpr_equipment: {
+        Row: {
+          created_at: string | null
+          dpr_id: string
+          equipment_name: string
+          id: string
+          notes: string | null
+          on_rent: boolean | null
+          quantity: number | null
+          rental_company: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          dpr_id: string
+          equipment_name: string
+          id?: string
+          notes?: string | null
+          on_rent?: boolean | null
+          quantity?: number | null
+          rental_company?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          dpr_id?: string
+          equipment_name?: string
+          id?: string
+          notes?: string | null
+          on_rent?: boolean | null
+          quantity?: number | null
+          rental_company?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dpr_equipment_dpr_id_fkey"
+            columns: ["dpr_id"]
+            isOneToOne: false
+            referencedRelation: "dprs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dpr_manpower: {
+        Row: {
+          created_at: string | null
+          dpr_id: string
+          headcount: number
+          id: string
+          notes: string | null
+          ot_hours: number
+          regular_hours: number
+          subcontractor_id: string | null
+          trade: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          dpr_id: string
+          headcount?: number
+          id?: string
+          notes?: string | null
+          ot_hours?: number
+          regular_hours?: number
+          subcontractor_id?: string | null
+          trade?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          dpr_id?: string
+          headcount?: number
+          id?: string
+          notes?: string | null
+          ot_hours?: number
+          regular_hours?: number
+          subcontractor_id?: string | null
+          trade?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dpr_manpower_dpr_id_fkey"
+            columns: ["dpr_id"]
+            isOneToOne: false
+            referencedRelation: "dprs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dpr_manpower_subcontractor_id_fkey"
+            columns: ["subcontractor_id"]
+            isOneToOne: false
+            referencedRelation: "subcontractors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dpr_quantities: {
         Row: {
           dpr_id: string | null
