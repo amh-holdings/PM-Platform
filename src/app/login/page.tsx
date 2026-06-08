@@ -13,7 +13,7 @@ export default function LoginPage() {
         <div className="space-y-1.5">
           <h1 className="text-xl font-semibold">AHC PM Platform</h1>
           <p className="text-sm text-muted-foreground">
-            Enter your email and we&apos;ll send you a magic link.
+            Sign in with a magic link or your password.
           </p>
         </div>
         <Suspense fallback={null}>
