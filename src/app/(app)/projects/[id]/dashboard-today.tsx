@@ -7,7 +7,6 @@ type Props = {
 };
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const STALE_RFI_DAYS = 7;
 const BLOCKING_LOOKAHEAD_DAYS = 14;
 
 function todayUtcMs(): number {
