@@ -11,18 +11,22 @@
 //
 // Mock project UUID: aaaaaaaa-bbbb-cccc-dddd-000000000001
 //
-// HAND-CALC REFERENCE - Vendor-only, 20/80 PO, 2 AFPs:
-//   AFP 1  bill Mar  5,000  -> Apr cash  4,750 (net 5% ret)  - covers Apr deposit
-//   AFP 2  bill May 20,000  -> Jun cash 19,000                - covers Jun delivery + margin pull
+// HAND-CALC REFERENCE - Vendor PO + Civil sub. $65k contract, 5 AFPs:
+//   AFP 1  bill Mar  5,000  -> Apr cash  4,750 (net 5% ret)  - vendor deposit
+//   AFP 2  bill May 20,000  -> Jun cash 19,000                - vendor delivery + margin
+//   AFP 3  bill Jul 13,333  -> Aug cash 12,667                - civil Jul work
+//   AFP 4  bill Aug 13,333  -> Sep cash 12,667                - civil Aug work
+//   AFP 5  bill Sep 13,334  -> Oct cash 12,667                - civil Sep work
 //
-//   Month   CashIn    CashOut   Net      Cum
-//   Mar         0          0      0         0
-//   Apr     4,750      4,000    750       750
-//   May         0          0      0       750
-//   Jun    19,000     16,000  3,000     3,750
-//   Final   1,250          0  1,250     5,000  (retainage release - deferred)
+//   Month   CashIn    CashOut   Net      Cum    Notes
+//   Apr     4,750      4,000    750       750   vendor deposit paid
+//   Jun    19,000     16,000  3,000     3,750   vendor delivery
+//   Aug    12,667      9,000  3,667     7,417   civil Jul work paid Net 30
+//   Sep    12,667      9,000  3,667    11,083   civil Aug work paid
+//   Oct    12,667      9,000  3,667    14,750   civil Sep work paid
+//   Final   3,250      3,000    250    15,000   retainage release (deferred)
 //   ----------------------------------------------------------------------
-//   Margin: 25,000 revenue - 20,000 vendor = 5,000. Always positive.
+//   Margin: 65,000 - 20,000 vendor - 30,000 civil = 15,000. Always positive.
 
 import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
@@ -68,7 +72,7 @@ async function main() {
     name: "Test Project - Cash Flow",
     client: "Test Owner LLC",
     status: "active",
-    contract_value: 25000,
+    contract_value: 65000,
     ntp_date: "2026-04-01",
     cod_date: "2026-08-31",
     zip_code: "32801",
@@ -80,7 +84,8 @@ async function main() {
   console.log("  + project");
 
   // 2. owner billing_lines + billing_entries (Net 30)
-  const { data: line, error: blErr } = await sb
+  // Two lines: Vendor supply scope (already running) + Civil scope (starts Jul).
+  const { data: vendorLine, error: blErr } = await sb
     .from("billing_lines")
     .insert({
       project_id: TEST_PROJECT_ID,
@@ -93,17 +98,33 @@ async function main() {
     .select("id")
     .single();
   if (blErr) throw blErr;
-  console.log("  + billing_lines (1)");
+  const { data: civilLine, error: blErr2 } = await sb
+    .from("billing_lines")
+    .insert({
+      project_id: TEST_PROJECT_ID,
+      item_number: "2.0",
+      description: "Civil scope",
+      scheduled_value: 40000,
+      sort_order: 2,
+      type: "Base contract",
+    })
+    .select("id")
+    .single();
+  if (blErr2) throw blErr2;
+  console.log("  + billing_lines (2)");
 
-  // Vendor-only funded schedule, 2 AFPs paired to the 2 vendor milestones.
-  // Today is 2026-06-10: both AFPs are paid (AFP 2 just cleared).
+  // AFP 1-2: vendor supply. AFP 3-5: civil monthly (bill in work month since
+  // sub Net 30 = owner Net 30, so timing matches).
   const billingEntries = [
-    { period: "2026-03-01", cashIn: "2026-04-01", planned:  5000, actual:  5000, ret:  250, afp: "AFP 1", status: "paid", paidAt: "2026-04-01" },
-    { period: "2026-05-01", cashIn: "2026-06-01", planned: 20000, actual: 20000, ret: 1000, afp: "AFP 2", status: "paid", paidAt: "2026-06-01" },
+    { line: vendorLine.id, period: "2026-03-01", cashIn: "2026-04-01", planned:  5000, actual:  5000, ret:  250, afp: "AFP 1", status: "paid",    paidAt: "2026-04-01" },
+    { line: vendorLine.id, period: "2026-05-01", cashIn: "2026-06-01", planned: 20000, actual: 20000, ret: 1000, afp: "AFP 2", status: "paid",    paidAt: "2026-06-01" },
+    { line: civilLine.id,  period: "2026-07-01", cashIn: "2026-08-01", planned: 13333, actual:     0, ret:  667, afp: "AFP 3", status: "planned", paidAt: null },
+    { line: civilLine.id,  period: "2026-08-01", cashIn: "2026-09-01", planned: 13333, actual:     0, ret:  667, afp: "AFP 4", status: "planned", paidAt: null },
+    { line: civilLine.id,  period: "2026-09-01", cashIn: "2026-10-01", planned: 13334, actual:     0, ret:  666, afp: "AFP 5", status: "planned", paidAt: null },
   ];
   for (const e of billingEntries) {
     const { error } = await sb.from("billing_entries").insert({
-      billing_line_id: line.id,
+      billing_line_id: e.line,
       period_month: e.period,
       cash_in_month: e.cashIn,
       planned_amount: e.planned,
@@ -117,11 +138,63 @@ async function main() {
   }
   console.log(`  + billing_entries (${billingEntries.length})`);
 
-  // Subcontractor scope intentionally omitted - see seed-mock-cashflow.mjs
-  // history for the sub-included variant. Removed 2026-06-10 to walk through
-  // vendor-only cash flow in isolation.
+  // 3. subcontractor + cost_code + cost_forecasts (Civil, Net 30, 10% retainage)
+  const { data: sub, error: sErr } = await sb
+    .from("subcontractors")
+    .insert({
+      project_id: TEST_PROJECT_ID,
+      company_name: "Civil",
+      trade: "Civil / earthwork",
+      contract_value: 30000,
+      payment_terms: "Net 30",
+      payment_terms_days: 30,
+      retainage_pct: 10,
+      coi_status: "current",
+      w9_status: "on_file",
+      active: true,
+      contact_name: "Mock Contact",
+      contact_email: "mock@civilsub.com",
+    })
+    .select("id")
+    .single();
+  if (sErr) throw sErr;
+  console.log("  + subcontractor (Civil)");
 
-  // 3. procurement_order + payments (3 milestones)
+  const { data: subCode, error: scErr } = await sb
+    .from("cost_codes")
+    .insert({
+      project_id: TEST_PROJECT_ID,
+      code: "CIV-01",
+      name: "Civil earthwork",
+      description: "Civil sub scope - Jul/Aug/Sep monthly",
+      estimated_cost: 30000,
+      subcontractor_id: sub.id,
+      sort_order: 2,
+    })
+    .select("id")
+    .single();
+  if (scErr) throw scErr;
+  console.log("  + cost_code (civil)");
+
+  // Sub completes 1/3 of work each month Jul/Aug/Sep, invoices end-of-month,
+  // AHC pays Net 30 -> cash out Aug/Sep/Oct (net of 10% retainage).
+  const subForecasts = [
+    { period: "2026-07-01", planned: 10000, actual: 0 },
+    { period: "2026-08-01", planned: 10000, actual: 0 },
+    { period: "2026-09-01", planned: 10000, actual: 0 },
+  ];
+  for (const f of subForecasts) {
+    const { error } = await sb.from("cost_forecasts").insert({
+      cost_code_id: subCode.id,
+      period_month: f.period,
+      planned_amount: f.planned,
+      actual_amount: f.actual,
+    });
+    if (error) throw error;
+  }
+  console.log(`  + cost_forecasts civil (${subForecasts.length})`);
+
+  // 4. procurement_order + payments (2 milestones)
   const { data: po, error: poErr } = await sb
     .from("procurement_orders")
     .insert({
