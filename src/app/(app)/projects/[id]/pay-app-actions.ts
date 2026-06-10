@@ -283,3 +283,63 @@ export async function deletePayApplication(
   revalidatePath(`/projects/${projectId}/billing`);
   return { ok: true };
 }
+
+// One-click flow: take a forecast billing_entries row and immediately wrap it
+// in a draft pay_application without making the PM fill out the new-pay-app
+// form. Period bounds default to the first and last day of the entry's
+// period_month. App number = entry.afp_number if set, else "AFP <count+1>".
+// Retainage % comes from projects.retainage_pct_default (defaults to 5).
+export async function createPayAppFromForecastEntry(
+  formData: FormData,
+): Promise<void> {
+  const entryId = String(formData.get("entryId") ?? "").trim();
+  const projectId = String(formData.get("projectId") ?? "").trim();
+  if (!entryId || !projectId) throw new Error("entryId and projectId required");
+
+  const auth = await assertAhcUser();
+  if (!auth.ok) throw new Error(auth.error);
+
+  const { data: entry, error: entryErr } = await auth.supabase
+    .from("billing_entries")
+    .select("id, period_month, afp_number, billing_lines!inner(project_id)")
+    .eq("id", entryId)
+    .maybeSingle();
+  if (entryErr || !entry) throw new Error(entryErr?.message ?? "Entry not found");
+
+  const { data: project } = await auth.supabase
+    .from("projects")
+    .select("retainage_pct_default")
+    .eq("id", projectId)
+    .maybeSingle();
+
+  // Compute first + last day of the entry's period_month.
+  const [y, m] = entry.period_month.split("-").map(Number);
+  const periodStart = `${y}-${String(m).padStart(2, "0")}-01`;
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const periodEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+  // Default app_number if entry doesn't have one.
+  let appNumber = entry.afp_number ?? "";
+  if (!appNumber.trim()) {
+    const { count } = await auth.supabase
+      .from("pay_applications")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", projectId);
+    appNumber = `AFP ${(count ?? 0) + 1}`;
+  }
+
+  const retainagePct = Number(project?.retainage_pct_default ?? 5);
+
+  const result = await createPayApplication({
+    projectId,
+    appNumber,
+    periodStart,
+    periodEnd,
+    retainagePct,
+  });
+  if (!result.ok) throw new Error(result.error);
+
+  revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}/pay-apps`);
+  revalidatePath(`/projects/${projectId}`);
+}

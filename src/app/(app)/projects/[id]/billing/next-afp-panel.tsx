@@ -1,9 +1,12 @@
 import Link from "next/link";
 
+import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import { firstOfThisMonthIso, shortMonthLabel } from "@/lib/cashflow";
+
+import { createPayAppFromForecastEntry } from "../pay-app-actions";
 
 type Props = {
   projectId: string;
@@ -19,7 +22,7 @@ export async function NextAfpPanel({ projectId, variant = "page" }: Props) {
   const { data: entries, error } = await supabase
     .from("billing_entries")
     .select(
-      "period_month, planned_amount, retainage_amount, afp_number, status, billing_lines!inner(project_id, description, item_number)",
+      "id, period_month, planned_amount, retainage_amount, afp_number, status, billing_lines!inner(project_id, description, item_number)",
     )
     .eq("billing_lines.project_id", projectId)
     .order("period_month");
@@ -45,6 +48,7 @@ export async function NextAfpPanel({ projectId, variant = "page" }: Props) {
       const gross = Number(e.planned_amount ?? 0);
       const retainage = Number(e.retainage_amount ?? 0);
       return {
+        id: e.id,
         afp: e.afp_number ?? "(no number)",
         period: e.period_month,
         scope: line?.description ?? "(unlinked)",
@@ -97,7 +101,8 @@ export async function NextAfpPanel({ projectId, variant = "page" }: Props) {
               <th className="py-1.5 pr-2 text-left font-medium">Scope</th>
               <th className="py-1.5 pr-2 text-left font-medium">Status</th>
               <th className="py-1.5 pr-2 text-right font-medium">Gross</th>
-              <th className="py-1.5 text-right font-medium">Net cash</th>
+              <th className="py-1.5 pr-2 text-right font-medium">Net cash</th>
+              <th className="py-1.5 text-right font-medium">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -121,8 +126,22 @@ export async function NextAfpPanel({ projectId, variant = "page" }: Props) {
                 <td className="py-1.5 pr-2 text-right">
                   {formatCurrency(a.gross)}
                 </td>
-                <td className="py-1.5 text-right text-emerald-700">
+                <td className="py-1.5 pr-2 text-right text-emerald-700">
                   {formatCurrency(a.netCash)}
+                </td>
+                <td className="py-1.5 text-right">
+                  <form action={createPayAppFromForecastEntry}>
+                    <input type="hidden" name="entryId" value={a.id} />
+                    <input type="hidden" name="projectId" value={projectId} />
+                    <Button
+                      type="submit"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-[11px]"
+                    >
+                      Create {a.afp}
+                    </Button>
+                  </form>
                 </td>
               </tr>
             ))}
