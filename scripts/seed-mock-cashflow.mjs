@@ -55,6 +55,11 @@ const deleteOnly = process.argv.includes("--delete");
 // ---------- main ----------
 async function main() {
   console.log(`Resetting mock project ${TEST_PROJECT_ID} ...`);
+  // Tear down in dependency order. pay_application_lines references
+  // billing_lines with NO ACTION, so we have to drop pay_applications
+  // (which cascades to their lines) before deleting the project (which
+  // cascades to billing_lines).
+  await sb.from("pay_applications").delete().eq("project_id", TEST_PROJECT_ID);
   const { error: delErr } = await sb
     .from("projects")
     .delete()
@@ -294,6 +299,43 @@ async function main() {
     if (error) throw error;
   }
   console.log(`  + cost_forecasts civil (${subForecasts.length})`);
+
+  // ----- Schedule tasks for civil work (Jul/Aug/Sep) -----
+  // Three monthly tasks, each = 1/3 of the civil scope. With civil billing_line
+  // linked to all three WBS codes, the schedule-based suggestion math becomes:
+  //   avg pct_complete across linked tasks * scheduled_value - already_billed
+  // Bump a task's pct_complete (via DPR in real life, or manually in /schedule)
+  // and the suggestion auto-refreshes.
+  const civilTasks = [
+    { wbs: "CIV-1.1", name: "Civil earthwork - July", start: "2026-07-01", end: "2026-07-31", duration: 22, sort: 1 },
+    { wbs: "CIV-1.2", name: "Civil earthwork - August", start: "2026-08-01", end: "2026-08-31", duration: 21, sort: 2 },
+    { wbs: "CIV-1.3", name: "Civil earthwork - September", start: "2026-09-01", end: "2026-09-30", duration: 22, sort: 3 },
+  ];
+  for (const t of civilTasks) {
+    const { error } = await sb.from("schedule_tasks").insert({
+      project_id: TEST_PROJECT_ID,
+      wbs_code: t.wbs,
+      task_name: t.name,
+      phase: "Civil",
+      status: "Planned",
+      duration_days: t.duration,
+      start_date: t.start,
+      end_date: t.end,
+      pct_complete: 0,
+      sort_order: t.sort,
+      level_code: 2,
+    });
+    if (error) throw error;
+  }
+  console.log(`  + schedule_tasks civil (${civilTasks.length})`);
+
+  // Link civil billing_line to those tasks so auto-suggest can target it.
+  const { error: linkErr } = await sb
+    .from("billing_lines")
+    .update({ linked_task_wbs_codes: civilTasks.map((t) => t.wbs) })
+    .eq("id", civilLine.id);
+  if (linkErr) throw linkErr;
+  console.log(`  + civil billing_line linked to ${civilTasks.length} WBS codes`);
 
   // 4. procurement_order + payments (2 milestones)
   const { data: po, error: poErr } = await sb
