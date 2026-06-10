@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import {
+  addMonthsIso,
   effectiveAmount,
   firstOfThisMonthIso,
   monthIsoFromDate,
@@ -146,6 +147,47 @@ export async function DashboardNetCash({ projectId }: Props) {
     const amount = Number(p.paid_amount ?? p.amount ?? 0);
     if (!amount) continue;
     cashOutByMonth.set(cashMonth, (cashOutByMonth.get(cashMonth) ?? 0) + amount);
+  }
+
+  // === Retainage release (CASH BASIS only - accrual already accounts for it) ===
+  // Both sides release at substantial completion. Land 1 month after the last
+  // regular cash event so cycle payments have cleared first.
+  let totalOwnerRetainage = 0;
+  for (const e of billingRes.data ?? []) {
+    totalOwnerRetainage += Number(e.retainage_amount ?? 0);
+  }
+  let totalSubRetainage = 0;
+  for (const f of costRes.data ?? []) {
+    const code = f.cost_codes as unknown as {
+      subcontractor_id: string | null;
+      procurement_order_id: string | null;
+      subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
+    } | null;
+    if (code?.procurement_order_id) continue;
+    const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
+    const gross = effectiveAmount(f.actual_amount, f.planned_amount);
+    totalSubRetainage += gross * retPct;
+  }
+  if (totalOwnerRetainage > 0 || totalSubRetainage > 0) {
+    const allCashMonthsForRelease = new Set<string>();
+    cashInByMonth.forEach((_, k) => allCashMonthsForRelease.add(k));
+    cashOutByMonth.forEach((_, k) => allCashMonthsForRelease.add(k));
+    const lastCashMonth = Array.from(allCashMonthsForRelease).sort().pop();
+    if (lastCashMonth) {
+      const releaseMonth = addMonthsIso(lastCashMonth, 1);
+      if (totalOwnerRetainage > 0) {
+        cashInByMonth.set(
+          releaseMonth,
+          (cashInByMonth.get(releaseMonth) ?? 0) + totalOwnerRetainage,
+        );
+      }
+      if (totalSubRetainage > 0) {
+        cashOutByMonth.set(
+          releaseMonth,
+          (cashOutByMonth.get(releaseMonth) ?? 0) + totalSubRetainage,
+        );
+      }
+    }
   }
 
   // === Build chart data on ACCRUAL ===

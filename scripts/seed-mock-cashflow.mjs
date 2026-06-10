@@ -113,17 +113,20 @@ async function main() {
   if (blErr2) throw blErr2;
   console.log("  + billing_lines (2)");
 
-  // AFP 1-2: vendor supply. AFP 3-5: civil monthly (bill in work month since
-  // sub Net 30 = owner Net 30, so timing matches).
+  // AFP 1-2: vendor supply (paid). AFP 3-5: civil monthly (forecast - work
+  // hasn't started yet as of 2026-06-10).
+  // Status values from migration 0009: forecast / suggested / reviewed /
+  // on_pay_app / submitted / approved / paid.
   const billingEntries = [
-    { line: vendorLine.id, period: "2026-03-01", cashIn: "2026-04-01", planned:  5000, actual:  5000, ret:  250, afp: "AFP 1", status: "paid",    paidAt: "2026-04-01" },
-    { line: vendorLine.id, period: "2026-05-01", cashIn: "2026-06-01", planned: 20000, actual: 20000, ret: 1000, afp: "AFP 2", status: "paid",    paidAt: "2026-06-01" },
-    { line: civilLine.id,  period: "2026-07-01", cashIn: "2026-08-01", planned: 13333, actual:     0, ret:  667, afp: "AFP 3", status: "planned", paidAt: null },
-    { line: civilLine.id,  period: "2026-08-01", cashIn: "2026-09-01", planned: 13333, actual:     0, ret:  667, afp: "AFP 4", status: "planned", paidAt: null },
-    { line: civilLine.id,  period: "2026-09-01", cashIn: "2026-10-01", planned: 13334, actual:     0, ret:  666, afp: "AFP 5", status: "planned", paidAt: null },
+    { line: vendorLine.id, period: "2026-03-01", cashIn: "2026-04-01", planned:  5000, actual:  5000, ret:  250, afp: "AFP 1", status: "paid",     paidAt: "2026-04-01", submittedAt: "2026-03-31", reviewedAt: "2026-04-05" },
+    { line: vendorLine.id, period: "2026-05-01", cashIn: "2026-06-01", planned: 20000, actual: 20000, ret: 1000, afp: "AFP 2", status: "paid",     paidAt: "2026-06-01", submittedAt: "2026-05-31", reviewedAt: "2026-06-05" },
+    { line: civilLine.id,  period: "2026-07-01", cashIn: "2026-08-01", planned: 13333, actual:     0, ret:  667, afp: "AFP 3", status: "forecast", paidAt: null, submittedAt: null, reviewedAt: null },
+    { line: civilLine.id,  period: "2026-08-01", cashIn: "2026-09-01", planned: 13333, actual:     0, ret:  667, afp: "AFP 4", status: "forecast", paidAt: null, submittedAt: null, reviewedAt: null },
+    { line: civilLine.id,  period: "2026-09-01", cashIn: "2026-10-01", planned: 13334, actual:     0, ret:  666, afp: "AFP 5", status: "forecast", paidAt: null, submittedAt: null, reviewedAt: null },
   ];
+  const entryIds = [];
   for (const e of billingEntries) {
-    const { error } = await sb.from("billing_entries").insert({
+    const { data: row, error } = await sb.from("billing_entries").insert({
       billing_line_id: e.line,
       period_month: e.period,
       cash_in_month: e.cashIn,
@@ -133,10 +136,108 @@ async function main() {
       afp_number: e.afp,
       status: e.status,
       paid_at: e.paidAt,
-    });
+      submitted_at: e.submittedAt,
+      reviewed_at: e.reviewedAt,
+    }).select("id").single();
     if (error) throw error;
+    entryIds.push({ id: row.id, ...e });
   }
   console.log(`  + billing_entries (${billingEntries.length})`);
+
+  // ----- Pay applications wrapping AFP 1 + AFP 2 -----
+  // Each pay_application snapshots the G702 cover totals for an AFP cycle.
+  // pay_application_lines are the G703 detail rows frozen at submission time.
+  const payApps = [
+    {
+      app_number: "AFP 1",
+      period_start: "2026-03-01",
+      period_end: "2026-03-31",
+      status: "paid",
+      total_completed: 5000,   // gross billed this period
+      total_retainage: 250,
+      previous_billings: 0,    // first AFP
+      amount_due: 4750,
+      submitted_at: "2026-03-31T17:00:00Z",
+      approved_at: "2026-04-03T12:00:00Z",
+      approved_by_owner: "Test Owner LLC",
+      paid_at: "2026-04-01T00:00:00Z",
+      entries: entryIds.filter((e) => e.afp === "AFP 1"),
+      lines: [
+        { lineId: vendorLine.id, item: "1.0", desc: "Vendor supply scope", scheduled: 25000, prev: 0, thisPeriod: 5000, total: 5000, pct: 20, balance: 20000, ret: 250 },
+      ],
+    },
+    {
+      app_number: "AFP 2",
+      period_start: "2026-05-01",
+      period_end: "2026-05-31",
+      status: "paid",
+      total_completed: 25000,  // cumulative gross billed (AFP 1 + AFP 2)
+      total_retainage: 1250,   // cumulative retainage
+      previous_billings: 5000, // AFP 1 was the prior bill
+      amount_due: 19000,       // this period less retainage = 20000 - 1000
+      submitted_at: "2026-05-31T17:00:00Z",
+      approved_at: "2026-06-03T12:00:00Z",
+      approved_by_owner: "Test Owner LLC",
+      paid_at: "2026-06-01T00:00:00Z",
+      entries: entryIds.filter((e) => e.afp === "AFP 2"),
+      lines: [
+        { lineId: vendorLine.id, item: "1.0", desc: "Vendor supply scope", scheduled: 25000, prev: 5000, thisPeriod: 20000, total: 25000, pct: 100, balance: 0, ret: 1250 },
+      ],
+    },
+  ];
+  for (const pa of payApps) {
+    const { data: paRow, error: paErr } = await sb
+      .from("pay_applications")
+      .insert({
+        project_id: TEST_PROJECT_ID,
+        app_number: pa.app_number,
+        period_start: pa.period_start,
+        period_end: pa.period_end,
+        status: pa.status,
+        total_completed: pa.total_completed,
+        total_retainage: pa.total_retainage,
+        previous_billings: pa.previous_billings,
+        amount_due: pa.amount_due,
+        submitted_at: pa.submitted_at,
+        approved_at: pa.approved_at,
+        approved_by_owner: pa.approved_by_owner,
+        paid_at: pa.paid_at,
+      })
+      .select("id")
+      .single();
+    if (paErr) throw paErr;
+
+    // Snapshot G703 lines.
+    for (let i = 0; i < pa.lines.length; i++) {
+      const ln = pa.lines[i];
+      const { error: lnErr } = await sb.from("pay_application_lines").insert({
+        pay_application_id: paRow.id,
+        billing_line_id: ln.lineId,
+        item_number: ln.item,
+        description: ln.desc,
+        scheduled_value: ln.scheduled,
+        work_completed_previous: ln.prev,
+        work_completed_this_period: ln.thisPeriod,
+        materials_stored: 0,
+        total_completed_and_stored: ln.total,
+        pct_complete: ln.pct,
+        balance_to_finish: ln.balance,
+        retainage_amount: ln.ret,
+        sort_order: i + 1,
+      });
+      if (lnErr) throw lnErr;
+    }
+
+    // Link the billing_entries to this pay_application.
+    for (const e of pa.entries) {
+      const { error: linkErr } = await sb
+        .from("billing_entries")
+        .update({ pay_application_id: paRow.id })
+        .eq("id", e.id);
+      if (linkErr) throw linkErr;
+    }
+  }
+  console.log(`  + pay_applications (${payApps.length}, with G703 lines + entry links)`);
 
   // 3. subcontractor + cost_code + cost_forecasts (Civil, Net 30, 10% retainage)
   const { data: sub, error: sErr } = await sb
