@@ -4,6 +4,7 @@ import { formatCurrency } from "@/lib/format";
 
 import { BillingLinkForm } from "../billing-link-form";
 import { BillingSuggestionsPanel } from "./billing-suggestions-panel";
+import { NextAfpPanel } from "./next-afp-panel";
 
 type Params = { id: string };
 
@@ -54,6 +55,8 @@ export default async function ProjectBillingPage({ params }: { params: Params })
           tasks per line so the dashboard can auto-suggest next-month billing.
         </p>
       </div>
+
+      <NextAfpPanel projectId={params.id} variant="page" />
 
       <BillingSuggestionsPanel projectId={params.id} />
 

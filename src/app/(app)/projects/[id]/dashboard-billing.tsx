@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
@@ -11,6 +9,7 @@ import {
 } from "@/lib/cashflow";
 
 import { DashboardBillingChart } from "./dashboard-billing-chart";
+import { NextAfpPanel } from "./billing/next-afp-panel";
 
 type Props = {
   projectId: string;
@@ -99,33 +98,6 @@ export async function DashboardBilling({ projectId }: Props) {
   const nextMonth = byMonth.get(addMonthsIso(thisMonthIso, 1));
   const monthAfter = byMonth.get(addMonthsIso(thisMonthIso, 2));
 
-  // Next AFPs to issue: forecast entries with period >= today, sorted, top 3.
-  // Each one is a future invoice that hasn't been billed to the owner yet.
-  const upcomingAfps = (entries ?? [])
-    .filter(
-      (e) =>
-        (e.status === "forecast" || e.status === "suggested" || e.status === "reviewed") &&
-        e.period_month >= thisMonthIso,
-    )
-    .sort((a, b) => a.period_month.localeCompare(b.period_month))
-    .slice(0, 3)
-    .map((e) => {
-      const line = e.billing_lines as unknown as {
-        description: string | null;
-        item_number: string | null;
-      } | null;
-      const gross = Number(e.planned_amount ?? 0);
-      const retainage = Number(e.retainage_amount ?? 0);
-      return {
-        afp: e.afp_number ?? "(no number)",
-        period: e.period_month,
-        scope: line?.description ?? "(unlinked)",
-        item: line?.item_number ?? "",
-        gross,
-        retainage,
-        netCash: Math.max(0, gross - retainage),
-      };
-    });
 
   // Header totals: gross billed = cash + retainage. Show retainage held separately.
   const totalActualCash = chartData.reduce((s, d) => s + d.actualCash, 0);
@@ -234,59 +206,7 @@ export async function DashboardBilling({ projectId }: Props) {
         </div>
       </div>
 
-      {upcomingAfps.length > 0 && (
-        <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                Next AFP to issue
-              </div>
-              <p className="text-[10px] text-muted-foreground">
-                Forecast bills coming up. Promote on the Billing page to draft
-                the AFP.
-              </p>
-            </div>
-            <Link
-              href={`/projects/${projectId}/billing`}
-              className="text-xs font-medium text-emerald-700 hover:underline"
-            >
-              Open billing &rarr;
-            </Link>
-          </div>
-          <table className="mt-2 w-full text-xs">
-            <thead className="text-muted-foreground">
-              <tr className="border-b border-emerald-500/20">
-                <th className="py-1 text-left font-medium">AFP</th>
-                <th className="py-1 text-left font-medium">Period</th>
-                <th className="py-1 text-left font-medium">Scope</th>
-                <th className="py-1 text-right font-medium">Gross</th>
-                <th className="py-1 text-right font-medium">Net cash</th>
-              </tr>
-            </thead>
-            <tbody>
-              {upcomingAfps.map((a, i) => (
-                <tr
-                  key={`${a.afp}-${a.period}`}
-                  className={cn(
-                    "border-b border-emerald-500/10 last:border-0",
-                    i === 0 && "font-semibold",
-                  )}
-                >
-                  <td className="py-1">{a.afp}</td>
-                  <td className="py-1">{shortLabel(a.period)}</td>
-                  <td className="py-1 text-muted-foreground">
-                    {a.item ? `${a.item} ` : ""}{a.scope}
-                  </td>
-                  <td className="py-1 text-right">{formatCurrency(a.gross)}</td>
-                  <td className="py-1 text-right text-emerald-700">
-                    {formatCurrency(a.netCash)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <NextAfpPanel projectId={projectId} variant="widget" />
 
       <DashboardBillingChart data={chartData} />
 
