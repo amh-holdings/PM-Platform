@@ -1,20 +1,15 @@
-import Link from "next/link";
-
-import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
-import { cn } from "@/lib/utils";
-import { formatCurrency } from "@/lib/format";
-import { firstOfThisMonthIso, shortMonthLabel } from "@/lib/cashflow";
+import { firstOfThisMonthIso } from "@/lib/cashflow";
 
-import { createPayAppFromForecastEntry } from "../pay-app-actions";
+import { NextAfpPanelClient, type UpcomingEntry } from "./next-afp-panel-client";
 
 type Props = {
   projectId: string;
   variant?: "page" | "widget";
 };
 
-// Surfaces upcoming forecast/suggested/reviewed billing_entries so the PM
-// can see what AFPs are queued up to be drafted next. Used both on the
+// Surfaces upcoming forecast/suggested/reviewed billing_entries and lets the
+// PM multi-select them into a single pay_application. Used both on the
 // /billing page and embedded in the dashboard's Billing widget.
 export async function NextAfpPanel({ projectId, variant = "page" }: Props) {
   const supabase = createClient();
@@ -30,7 +25,7 @@ export async function NextAfpPanel({ projectId, variant = "page" }: Props) {
   if (error) return null;
 
   const thisMonthIso = firstOfThisMonthIso();
-  const upcoming = (entries ?? [])
+  const upcoming: UpcomingEntry[] = (entries ?? [])
     .filter(
       (e) =>
         (e.status === "forecast" ||
@@ -39,7 +34,7 @@ export async function NextAfpPanel({ projectId, variant = "page" }: Props) {
         e.period_month >= thisMonthIso,
     )
     .sort((a, b) => a.period_month.localeCompare(b.period_month))
-    .slice(0, 5)
+    .slice(0, 10)
     .map((e) => {
       const line = e.billing_lines as unknown as {
         description: string | null;
@@ -56,98 +51,17 @@ export async function NextAfpPanel({ projectId, variant = "page" }: Props) {
         gross,
         retainage,
         netCash: Math.max(0, gross - retainage),
-        status: e.status,
+        status: e.status ?? "forecast",
       };
     });
 
   if (upcoming.length === 0) return null;
 
   return (
-    <section
-      className={cn(
-        "rounded-lg border border-emerald-500/40 bg-emerald-500/5",
-        variant === "page" ? "p-4 shadow-sm" : "p-3",
-      )}
-    >
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <h3
-            className={cn(
-              "font-semibold uppercase tracking-wide text-emerald-700",
-              variant === "page" ? "text-sm" : "text-xs",
-            )}
-          >
-            Next AFP to issue
-          </h3>
-          <p className="text-xs text-muted-foreground">
-            Forecast bills queued up. Promote on this page to draft the AFP.
-          </p>
-        </div>
-        {variant === "widget" && (
-          <Link
-            href={`/projects/${projectId}/billing`}
-            className="text-xs font-medium text-emerald-700 hover:underline"
-          >
-            Open billing &rarr;
-          </Link>
-        )}
-      </div>
-      <div className="mt-2 overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead className="text-muted-foreground">
-            <tr className="border-b border-emerald-500/20">
-              <th className="py-1.5 pr-2 text-left font-medium">AFP</th>
-              <th className="py-1.5 pr-2 text-left font-medium">Period</th>
-              <th className="py-1.5 pr-2 text-left font-medium">Scope</th>
-              <th className="py-1.5 pr-2 text-left font-medium">Status</th>
-              <th className="py-1.5 pr-2 text-right font-medium">Gross</th>
-              <th className="py-1.5 pr-2 text-right font-medium">Net cash</th>
-              <th className="py-1.5 text-right font-medium">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {upcoming.map((a, i) => (
-              <tr
-                key={`${a.afp}-${a.period}`}
-                className={cn(
-                  "border-b border-emerald-500/10 last:border-0",
-                  i === 0 && "font-semibold",
-                )}
-              >
-                <td className="py-1.5 pr-2">{a.afp}</td>
-                <td className="py-1.5 pr-2">{shortMonthLabel(a.period)}</td>
-                <td className="py-1.5 pr-2 text-muted-foreground">
-                  {a.item ? `${a.item} ` : ""}
-                  {a.scope}
-                </td>
-                <td className="py-1.5 pr-2 text-muted-foreground">
-                  {a.status}
-                </td>
-                <td className="py-1.5 pr-2 text-right">
-                  {formatCurrency(a.gross)}
-                </td>
-                <td className="py-1.5 pr-2 text-right text-emerald-700">
-                  {formatCurrency(a.netCash)}
-                </td>
-                <td className="py-1.5 text-right">
-                  <form action={createPayAppFromForecastEntry}>
-                    <input type="hidden" name="entryId" value={a.id} />
-                    <input type="hidden" name="projectId" value={projectId} />
-                    <Button
-                      type="submit"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2 text-[11px]"
-                    >
-                      Create {a.afp}
-                    </Button>
-                  </form>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
+    <NextAfpPanelClient
+      projectId={projectId}
+      upcoming={upcoming}
+      variant={variant}
+    />
   );
 }

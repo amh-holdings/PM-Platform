@@ -29,6 +29,11 @@ export type CreatePayAppInput = {
   periodEnd: string;
   retainagePct: number;
   notes?: string | null;
+  // Optional explicit entry filter. If set, only these billing_entries are
+  // rolled into the new pay app (period_start/end still bound it, but the
+  // filter further restricts which rows in that range get stamped). Useful
+  // when the PM wants to select specific items from the Next AFP panel.
+  onlyEntryIds?: string[];
 };
 
 export type CreatePayAppResult =
@@ -105,6 +110,10 @@ export async function createPayApplication(
   for (const l of lines ?? []) {
     buckets.set(l.id, { previous: 0, thisPeriodIds: [], thisPeriodAmount: 0 });
   }
+  const filterSet =
+    input.onlyEntryIds && input.onlyEntryIds.length > 0
+      ? new Set(input.onlyEntryIds)
+      : null;
   for (const e of entries ?? []) {
     const b = buckets.get(e.billing_line_id);
     if (!b) continue;
@@ -116,7 +125,8 @@ export async function createPayApplication(
     }
     if (
       e.period_month >= input.periodStart &&
-      e.period_month <= input.periodEnd
+      e.period_month <= input.periodEnd &&
+      (!filterSet || filterSet.has(e.id))
     ) {
       const amount = actual > 0 ? actual : planned;
       if (amount > 0) {
@@ -284,43 +294,49 @@ export async function deletePayApplication(
   return { ok: true };
 }
 
-// One-click flow: take a forecast billing_entries row and immediately wrap it
-// in a draft pay_application without making the PM fill out the new-pay-app
-// form. Period bounds default to the first and last day of the entry's
-// period_month. App number = entry.afp_number if set, else "AFP <count+1>".
-// Retainage % comes from projects.retainage_pct_default (defaults to 5).
-export async function createPayAppFromForecastEntry(
+// Multi-select flow: PM checks one or more forecast entries in the Next AFP
+// panel, enters an AFP number, clicks Create. We wrap exactly those entries
+// in a single pay_application - no chance of grabbing more than was checked,
+// no manual period entry. Period bounds derived from the entries themselves.
+export async function createPayAppFromSelectedEntries(
   formData: FormData,
 ): Promise<void> {
-  const entryId = String(formData.get("entryId") ?? "").trim();
   const projectId = String(formData.get("projectId") ?? "").trim();
-  if (!entryId || !projectId) throw new Error("entryId and projectId required");
+  const appNumberInput = String(formData.get("appNumber") ?? "").trim();
+  const entryIds = formData
+    .getAll("entryIds")
+    .map((v) => String(v))
+    .filter((v) => v.length > 0);
+
+  if (!projectId) throw new Error("projectId required");
+  if (entryIds.length === 0) throw new Error("Select at least one entry");
 
   const auth = await assertAhcUser();
   if (!auth.ok) throw new Error(auth.error);
 
-  const { data: entry, error: entryErr } = await auth.supabase
+  const { data: selected, error: selErr } = await auth.supabase
     .from("billing_entries")
     .select("id, period_month, afp_number, billing_lines!inner(project_id)")
-    .eq("id", entryId)
-    .maybeSingle();
-  if (entryErr || !entry) throw new Error(entryErr?.message ?? "Entry not found");
+    .in("id", entryIds);
+  if (selErr || !selected || selected.length === 0) {
+    throw new Error(selErr?.message ?? "No selected entries found");
+  }
 
-  const { data: project } = await auth.supabase
-    .from("projects")
-    .select("retainage_pct_default")
-    .eq("id", projectId)
-    .maybeSingle();
+  // Period spans the earliest to latest of the selected entries' months.
+  const months = selected.map((e) => e.period_month).sort();
+  const startMonth = months[0];
+  const endMonth = months[months.length - 1];
+  const [sy, sm] = startMonth.split("-").map(Number);
+  const [ey, em] = endMonth.split("-").map(Number);
+  const periodStart = `${sy}-${String(sm).padStart(2, "0")}-01`;
+  const lastDay = new Date(Date.UTC(ey, em, 0)).getUTCDate();
+  const periodEnd = `${ey}-${String(em).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
-  // Compute first + last day of the entry's period_month.
-  const [y, m] = entry.period_month.split("-").map(Number);
-  const periodStart = `${y}-${String(m).padStart(2, "0")}-01`;
-  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  const periodEnd = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-
-  // Default app_number if entry doesn't have one.
-  let appNumber = entry.afp_number ?? "";
-  if (!appNumber.trim()) {
+  // App number: use form input if provided, else first selected entry's
+  // afp_number, else next sequential.
+  let appNumber = appNumberInput;
+  if (!appNumber) appNumber = selected[0].afp_number ?? "";
+  if (!appNumber) {
     const { count } = await auth.supabase
       .from("pay_applications")
       .select("id", { count: "exact", head: true })
@@ -328,6 +344,11 @@ export async function createPayAppFromForecastEntry(
     appNumber = `AFP ${(count ?? 0) + 1}`;
   }
 
+  const { data: project } = await auth.supabase
+    .from("projects")
+    .select("retainage_pct_default")
+    .eq("id", projectId)
+    .maybeSingle();
   const retainagePct = Number(project?.retainage_pct_default ?? 5);
 
   const result = await createPayApplication({
@@ -336,6 +357,7 @@ export async function createPayAppFromForecastEntry(
     periodStart,
     periodEnd,
     retainagePct,
+    onlyEntryIds: entryIds,
   });
   if (!result.ok) throw new Error(result.error);
 
