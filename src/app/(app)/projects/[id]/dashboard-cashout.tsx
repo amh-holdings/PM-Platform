@@ -1,6 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
+import {
+  addMonthsIso,
+  firstOfThisMonthIso,
+  monthIsoFromDate,
+  shiftByDaysToMonth,
+  shortMonthLabel,
+} from "@/lib/cashflow";
 
 import { DashboardCashOutChart } from "./dashboard-cashout-chart";
 
@@ -8,57 +15,71 @@ type Props = {
   projectId: string;
 };
 
-const MONTH_LABELS = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-function shortLabel(iso: string): string {
-  const [y, m] = iso.split("-").map(Number);
-  return `${MONTH_LABELS[m - 1]} ${String(y).slice(2)}`;
-}
-
-function firstOfThisMonthIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
-
-function addMonthsIso(iso: string, n: number): string {
-  const [y, m] = iso.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 + n, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
-}
+type BucketRow = { actual: number; planned: number };
 
 export async function DashboardCashOut({ projectId }: Props) {
   const supabase = createClient();
 
-  const { data: forecasts, error } = await supabase
-    .from("cost_forecasts")
-    .select(
-      "period_month, planned_amount, actual_amount, cost_codes!inner(project_id)",
-    )
-    .eq("cost_codes.project_id", projectId)
-    .order("period_month");
+  const [forecastRes, payRes] = await Promise.all([
+    supabase
+      .from("cost_forecasts")
+      .select(
+        "period_month, planned_amount, actual_amount, cost_codes!inner(project_id, subcontractor_id, procurement_order_id, subcontractors(payment_terms_days, retainage_pct))",
+      )
+      .eq("cost_codes.project_id", projectId),
+    supabase
+      .from("procurement_payments")
+      .select(
+        "expected_date, paid_at, amount, paid_amount, procurement_orders!inner(project_id)",
+      )
+      .eq("procurement_orders.project_id", projectId),
+  ]);
 
-  if (error) {
+  const err = forecastRes.error?.message ?? payRes.error?.message;
+  if (err) {
     return (
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h2 className="text-sm font-semibold">Cash Out timeline</h2>
-        <p className="mt-2 text-xs text-destructive">
-          Failed to load: {error.message}
-        </p>
+        <p className="mt-2 text-xs text-destructive">Failed to load: {err}</p>
       </section>
     );
   }
 
   const thisMonthIso = firstOfThisMonthIso();
-  const byMonth = new Map<string, { actual: number; planned: number }>();
-  for (const f of forecasts ?? []) {
-    if (!byMonth.has(f.period_month))
-      byMonth.set(f.period_month, { actual: 0, planned: 0 });
-    const m = byMonth.get(f.period_month)!;
-    m.actual += Number(f.actual_amount ?? 0);
-    m.planned += Number(f.planned_amount ?? 0);
+  const byMonth = new Map<string, BucketRow>();
+  const bump = (iso: string, side: "actual" | "planned", v: number) => {
+    if (!byMonth.has(iso)) byMonth.set(iso, { actual: 0, planned: 0 });
+    byMonth.get(iso)![side] += v;
+  };
+
+  // Sub side: shift by Net X, apply retainage, skip vendor-linked codes.
+  for (const f of forecastRes.data ?? []) {
+    const code = f.cost_codes as unknown as {
+      subcontractor_id: string | null;
+      procurement_order_id: string | null;
+      subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
+    } | null;
+    if (code?.procurement_order_id) continue;
+    const subDays = Number(code?.subcontractors?.payment_terms_days ?? 0);
+    const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
+    const cashMonth =
+      subDays > 0 ? shiftByDaysToMonth(f.period_month, subDays) : f.period_month;
+    const actual = Number(f.actual_amount ?? 0) * (1 - retPct);
+    const planned = Number(f.planned_amount ?? 0) * (1 - retPct);
+    // Use effective rule: if both set, actual wins (so headers don't double).
+    if (actual > 0) bump(cashMonth, "actual", actual);
+    else if (planned > 0) bump(cashMonth, "planned", planned);
+  }
+
+  // Vendor side: payments scheduled by milestone expected_date.
+  for (const p of payRes.data ?? []) {
+    const isPaid = p.paid_at != null;
+    const date = isPaid ? p.paid_at : p.expected_date;
+    if (!date) continue;
+    const cashMonth = monthIsoFromDate(date);
+    const amount = Number(p.paid_amount ?? p.amount ?? 0);
+    if (!amount) continue;
+    bump(cashMonth, isPaid ? "actual" : "planned", amount);
   }
 
   const sortedMonths = Array.from(byMonth.keys()).sort();
@@ -66,7 +87,7 @@ export async function DashboardCashOut({ projectId }: Props) {
     const v = byMonth.get(iso)!;
     return {
       month: iso,
-      label: shortLabel(iso),
+      label: shortMonthLabel(iso),
       actual: v.actual,
       planned: v.planned,
       isFuture: iso > thisMonthIso,
@@ -88,7 +109,7 @@ export async function DashboardCashOut({ projectId }: Props) {
   }: {
     label: string;
     iso: string;
-    data: { actual: number; planned: number } | undefined;
+    data: BucketRow | undefined;
     tone: "current" | "future";
   }) {
     const spent = data?.actual ?? 0;
@@ -108,7 +129,7 @@ export async function DashboardCashOut({ projectId }: Props) {
             {label}
           </div>
           <div className="text-[10px] text-muted-foreground">
-            {shortLabel(iso)}
+            {shortMonthLabel(iso)}
           </div>
         </div>
         {isEmpty ? (
@@ -143,7 +164,8 @@ export async function DashboardCashOut({ projectId }: Props) {
         <div>
           <h2 className="text-sm font-semibold">Cash Out timeline</h2>
           <p className="text-xs text-muted-foreground">
-            Per-month spend (past) and projected spend (future) on AHC&apos;s side
+            Per-month spend (past) and projected spend (future) on AHC&apos;s side,
+            net of sub retainage, including vendor payment milestones
           </p>
         </div>
         <div className="text-xs text-muted-foreground">

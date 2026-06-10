@@ -1,6 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
+import {
+  effectiveAmount,
+  firstOfThisMonthIso,
+  monthIsoFromDate,
+  shiftByDaysToMonth,
+  shortMonthLabel,
+} from "@/lib/cashflow";
 
 import { DashboardNetCashChart } from "./dashboard-netcash-chart";
 
@@ -8,64 +15,95 @@ type Props = {
   projectId: string;
 };
 
-const MONTH_LABELS = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-function shortLabel(iso: string): string {
-  const [y, m] = iso.split("-").map(Number);
-  return `${MONTH_LABELS[m - 1]} ${String(y).slice(2)}`;
-}
-
-function firstOfThisMonthIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
-
 export async function DashboardNetCash({ projectId }: Props) {
   const supabase = createClient();
 
-  const [billingRes, costRes] = await Promise.all([
+  const [projectRes, billingRes, costRes, payRes] = await Promise.all([
+    supabase
+      .from("projects")
+      .select("owner_payment_terms_days")
+      .eq("id", projectId)
+      .maybeSingle(),
     supabase
       .from("billing_entries")
       .select(
-        "period_month, planned_amount, actual_amount, billing_lines!inner(project_id)",
+        "period_month, cash_in_month, planned_amount, actual_amount, retainage_amount, billing_lines!inner(project_id)",
       )
       .eq("billing_lines.project_id", projectId),
     supabase
       .from("cost_forecasts")
       .select(
-        "period_month, planned_amount, actual_amount, cost_codes!inner(project_id)",
+        "period_month, planned_amount, actual_amount, cost_codes!inner(project_id, subcontractor_id, procurement_order_id, subcontractors(payment_terms_days, retainage_pct))",
       )
       .eq("cost_codes.project_id", projectId),
+    supabase
+      .from("procurement_payments")
+      .select(
+        "expected_date, paid_at, amount, paid_amount, procurement_orders!inner(project_id)",
+      )
+      .eq("procurement_orders.project_id", projectId),
   ]);
 
-  if (billingRes.error || costRes.error) {
+  const err =
+    billingRes.error?.message ??
+    costRes.error?.message ??
+    payRes.error?.message ??
+    projectRes.error?.message;
+  if (err) {
     return (
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h2 className="text-sm font-semibold">Net cash position</h2>
-        <p className="mt-2 text-xs text-destructive">
-          Failed to load: {billingRes.error?.message ?? costRes.error?.message}
-        </p>
+        <p className="mt-2 text-xs text-destructive">Failed to load: {err}</p>
       </section>
     );
   }
 
   const thisMonthIso = firstOfThisMonthIso();
+  const ownerTermsDays = Number(
+    projectRes.data?.owner_payment_terms_days ?? 0,
+  );
 
-  // Cash in per month = billed actual (past) + billed planned (future)
-  // Cash out per month = spent actual (past) + spent planned (future)
-  // Net = Cash in - Cash out
+  // CASH IN: by cash_in_month (set on entry, or computed from owner Net X).
+  // Subtract retainage_amount (held back by owner).
   const inByMonth = new Map<string, number>();
   for (const e of billingRes.data ?? []) {
-    const total = Number(e.actual_amount ?? 0) + Number(e.planned_amount ?? 0);
-    inByMonth.set(e.period_month, (inByMonth.get(e.period_month) ?? 0) + total);
+    const cashMonth =
+      e.cash_in_month ??
+      (ownerTermsDays > 0
+        ? shiftByDaysToMonth(e.period_month, ownerTermsDays)
+        : e.period_month);
+    const gross = effectiveAmount(e.actual_amount, e.planned_amount);
+    const net = gross - Number(e.retainage_amount ?? 0);
+    inByMonth.set(cashMonth, (inByMonth.get(cashMonth) ?? 0) + net);
   }
+
+  // CASH OUT (sub side): shift period_month by sub Net X, apply sub retainage.
+  // Skip vendor-linked cost codes - those flow through procurement_payments.
   const outByMonth = new Map<string, number>();
   for (const f of costRes.data ?? []) {
-    const total = Number(f.actual_amount ?? 0) + Number(f.planned_amount ?? 0);
-    outByMonth.set(f.period_month, (outByMonth.get(f.period_month) ?? 0) + total);
+    const code = f.cost_codes as unknown as {
+      subcontractor_id: string | null;
+      procurement_order_id: string | null;
+      subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
+    } | null;
+    if (code?.procurement_order_id) continue; // vendor side counted via payments
+    const subDays = Number(code?.subcontractors?.payment_terms_days ?? 0);
+    const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
+    const cashMonth =
+      subDays > 0 ? shiftByDaysToMonth(f.period_month, subDays) : f.period_month;
+    const gross = effectiveAmount(f.actual_amount, f.planned_amount);
+    const net = gross * (1 - retPct);
+    outByMonth.set(cashMonth, (outByMonth.get(cashMonth) ?? 0) + net);
+  }
+
+  // CASH OUT (vendor side): each procurement_payment milestone.
+  for (const p of payRes.data ?? []) {
+    const date = p.paid_at ?? p.expected_date;
+    if (!date) continue;
+    const cashMonth = monthIsoFromDate(date);
+    const amount = Number(p.paid_amount ?? p.amount ?? 0);
+    if (!amount) continue;
+    outByMonth.set(cashMonth, (outByMonth.get(cashMonth) ?? 0) + amount);
   }
 
   const allMonths = new Set<string>();
@@ -81,7 +119,7 @@ export async function DashboardNetCash({ projectId }: Props) {
     cumulative += net;
     return {
       month: iso,
-      label: shortLabel(iso),
+      label: shortMonthLabel(iso),
       net,
       cumulative,
       isFuture: iso > thisMonthIso,
@@ -93,7 +131,6 @@ export async function DashboardNetCash({ projectId }: Props) {
   outByMonth.forEach((v) => { totalOut += v; });
   const totalNet = totalIn - totalOut;
 
-  // Snapshot up to and including current month
   let pastIn = 0, pastOut = 0;
   inByMonth.forEach((v, iso) => { if (iso <= thisMonthIso) pastIn += v; });
   outByMonth.forEach((v, iso) => { if (iso <= thisMonthIso) pastOut += v; });
@@ -158,7 +195,7 @@ export async function DashboardNetCash({ projectId }: Props) {
             {formatCurrency(cashToDate)}
           </div>
           <div className="text-[10px] text-muted-foreground">
-            Through {shortLabel(thisMonthIso)}
+            Through {shortMonthLabel(thisMonthIso)}
           </div>
         </div>
         <div className="rounded-md border border-border bg-muted/30 p-3">

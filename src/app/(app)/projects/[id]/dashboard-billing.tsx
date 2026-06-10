@@ -63,12 +63,16 @@ export async function DashboardBilling({ projectId }: Props) {
 
   const thisMonthIso = firstOfThisMonthIso();
   const byMonth = new Map<string, { actual: number; planned: number }>();
+  // Prefer actual when present so a paid entry that still has a planned
+  // forecast doesn't get counted twice in the totals header.
   for (const e of entries ?? []) {
     if (!byMonth.has(e.period_month))
       byMonth.set(e.period_month, { actual: 0, planned: 0 });
     const m = byMonth.get(e.period_month)!;
-    m.actual += Number(e.actual_amount ?? 0);
-    m.planned += Number(e.planned_amount ?? 0);
+    const actual = Number(e.actual_amount ?? 0);
+    const planned = Number(e.planned_amount ?? 0);
+    if (actual > 0) m.actual += actual;
+    else if (planned > 0) m.planned += planned;
   }
 
   const sortedMonths = Array.from(byMonth.keys()).sort();

@@ -147,15 +147,18 @@ export async function DashboardToday({ projectId }: Props) {
   const blockingRfis = blockingRfisRes.count ?? 0;
 
   // ===== This-month cash =====
+  // Prefer actual when present (don't double-count planned + actual for the same entry).
   let cashInThisMonth = 0;
   for (const e of billingRes.data ?? []) {
-    cashInThisMonth +=
-      Number(e.actual_amount ?? 0) + Number(e.planned_amount ?? 0);
+    const a = Number(e.actual_amount ?? 0);
+    const p = Number(e.planned_amount ?? 0);
+    cashInThisMonth += a > 0 ? a : p;
   }
   let cashOutThisMonth = 0;
   for (const f of costForecastRes.data ?? []) {
-    cashOutThisMonth +=
-      Number(f.actual_amount ?? 0) + Number(f.planned_amount ?? 0);
+    const a = Number(f.actual_amount ?? 0);
+    const p = Number(f.planned_amount ?? 0);
+    cashOutThisMonth += a > 0 ? a : p;
   }
   const netThisMonth = cashInThisMonth - cashOutThisMonth;
 
