@@ -4,7 +4,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   Legend,
   ResponsiveContainer,
   Tooltip,
@@ -75,16 +74,12 @@ export function DashboardCashOutChart({ data }: Props) {
             wrapperStyle={{ fontSize: 11, paddingTop: 6 }}
             formatter={(value) => (value === "actual" ? "Spent" : "Projected")}
           />
-          <Bar dataKey="actual" stackId="a" fill="hsl(0, 84%, 60%)">
-            {data.map((d, i) => (
-              <Cell key={i} fill={d.isFuture ? "transparent" : "hsl(0, 84%, 60%)"} />
-            ))}
-          </Bar>
-          <Bar dataKey="planned" stackId="a" fill="hsl(24, 95%, 53%)">
-            {data.map((d, i) => (
-              <Cell key={i} fill={d.isFuture ? "hsl(24, 95%, 53%)" : "transparent"} />
-            ))}
-          </Bar>
+          {/* Actual = paid (red). Planned = scheduled but not yet paid (orange).
+              The two are mutually exclusive per month per source row, so the
+              stack never double-counts. Both visible regardless of isFuture -
+              an overdue planned payment in the past still needs to show. */}
+          <Bar dataKey="actual" stackId="a" fill="hsl(0, 84%, 60%)" />
+          <Bar dataKey="planned" stackId="a" fill="hsl(24, 95%, 53%)" />
         </BarChart>
       </ResponsiveContainer>
     </div>

@@ -4,7 +4,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   Legend,
   ResponsiveContainer,
   Tooltip,
@@ -75,16 +74,11 @@ export function DashboardBillingChart({ data }: Props) {
             wrapperStyle={{ fontSize: 11, paddingTop: 6 }}
             formatter={(value) => (value === "actual" ? "Billed" : "Planned")}
           />
-          <Bar dataKey="actual" stackId="a" fill="hsl(142, 71%, 45%)">
-            {data.map((d, i) => (
-              <Cell key={i} fill={d.isFuture ? "transparent" : "hsl(142, 71%, 45%)"} />
-            ))}
-          </Bar>
-          <Bar dataKey="planned" stackId="a" fill="hsl(217, 91%, 60%)">
-            {data.map((d, i) => (
-              <Cell key={i} fill={d.isFuture ? "hsl(217, 91%, 60%)" : "transparent"} />
-            ))}
-          </Bar>
+          {/* Actual = billed (green). Planned = forecast not yet billed (blue).
+              The two are mutually exclusive per row, so the stack never
+              double-counts. Both visible regardless of isFuture. */}
+          <Bar dataKey="actual" stackId="a" fill="hsl(142, 71%, 45%)" />
+          <Bar dataKey="planned" stackId="a" fill="hsl(217, 91%, 60%)" />
         </BarChart>
       </ResponsiveContainer>
     </div>
