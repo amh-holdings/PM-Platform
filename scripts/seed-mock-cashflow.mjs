@@ -11,21 +11,18 @@
 //
 // Mock project UUID: aaaaaaaa-bbbb-cccc-dddd-000000000001
 //
-// HAND-CALC REFERENCE - Vendor-only scope (no sub). $25k contract, 3 AFPs:
+// HAND-CALC REFERENCE - Vendor-only, 20/80 PO, 2 AFPs:
 //   AFP 1  bill Mar  5,000  -> Apr cash  4,750 (net 5% ret)  - covers Apr deposit
-//   AFP 2  bill May 15,000  -> Jun cash 14,250                - covers Jun delivery
-//   AFP 3  bill Jul  5,000  -> Aug cash  4,750                - covers Aug commissioning + margin pull
+//   AFP 2  bill May 20,000  -> Jun cash 19,000                - covers Jun delivery + margin pull
 //
 //   Month   CashIn    CashOut   Net      Cum
 //   Mar         0          0      0         0
 //   Apr     4,750      4,000    750       750
 //   May         0          0      0       750
-//   Jun    14,250     14,000    250     1,000
-//   Jul         0          0      0     1,000
-//   Aug     4,750      2,000  2,750     3,750
+//   Jun    19,000     16,000  3,000     3,750
 //   Final   1,250          0  1,250     5,000  (retainage release - deferred)
 //   ----------------------------------------------------------------------
-//   Margin: 25,000 revenue - 20,000 vendor = 5,000. Tight but always positive.
+//   Margin: 25,000 revenue - 20,000 vendor = 5,000. Always positive.
 
 import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
@@ -98,13 +95,11 @@ async function main() {
   if (blErr) throw blErr;
   console.log("  + billing_lines (1)");
 
-  // Vendor-only funded schedule. Each AFP bills 1 cycle BEFORE the vendor
-  // milestone it funds, so owner cash (Net 30) lands the same month as the
-  // disbursement. Today is 2026-06-10: AFP 1 + AFP 2 paid, AFP 3 planned.
+  // Vendor-only funded schedule, 2 AFPs paired to the 2 vendor milestones.
+  // Today is 2026-06-10: both AFPs are paid (AFP 2 just cleared).
   const billingEntries = [
-    { period: "2026-03-01", cashIn: "2026-04-01", planned:  5000, actual:  5000, ret: 250, afp: "AFP 1", status: "paid",    paidAt: "2026-04-01" },
-    { period: "2026-05-01", cashIn: "2026-06-01", planned: 15000, actual: 15000, ret: 750, afp: "AFP 2", status: "paid",    paidAt: "2026-06-01" },
-    { period: "2026-07-01", cashIn: "2026-08-01", planned:  5000, actual:     0, ret: 250, afp: "AFP 3", status: "planned", paidAt: null },
+    { period: "2026-03-01", cashIn: "2026-04-01", planned:  5000, actual:  5000, ret:  250, afp: "AFP 1", status: "paid", paidAt: "2026-04-01" },
+    { period: "2026-05-01", cashIn: "2026-06-01", planned: 20000, actual: 20000, ret: 1000, afp: "AFP 2", status: "paid", paidAt: "2026-06-01" },
   ];
   for (const e of billingEntries) {
     const { error } = await sb.from("billing_entries").insert({
@@ -138,7 +133,7 @@ async function main() {
       ordered_date: "2026-04-01",
       expected_delivery_date: "2026-06-15",
       status: "active",
-      payment_terms_summary: "20% deposit / 70% delivery / 10% commissioning",
+      payment_terms_summary: "20% deposit / 80% delivery",
     })
     .select("id")
     .single();
@@ -162,9 +157,8 @@ async function main() {
   console.log("  + cost_code (vendor)");
 
   const milestones = [
-    { name: "Deposit",       pct: 20, amount:  4000, date: "2026-04-15", trigger: "PO release",    paidAt: "2026-04-15", paidAmt:  4000, sort: 1 },
-    { name: "Delivery",      pct: 70, amount: 14000, date: "2026-06-15", trigger: "Delivery",      paidAt: null,         paidAmt: null,  sort: 2 },
-    { name: "Commissioning", pct: 10, amount:  2000, date: "2026-08-15", trigger: "Commissioning", paidAt: null,         paidAmt: null,  sort: 3 },
+    { name: "Deposit",  pct: 20, amount:  4000, date: "2026-04-15", trigger: "PO release", paidAt: "2026-04-15", paidAmt:  4000, sort: 1 },
+    { name: "Delivery", pct: 80, amount: 16000, date: "2026-06-15", trigger: "Delivery",   paidAt: null,         paidAmt: null,  sort: 2 },
   ];
   for (const m of milestones) {
     const { error } = await sb.from("procurement_payments").insert({
