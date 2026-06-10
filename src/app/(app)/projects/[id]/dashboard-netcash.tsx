@@ -21,7 +21,7 @@ export async function DashboardNetCash({ projectId }: Props) {
   const [projectRes, billingRes, costRes, payRes] = await Promise.all([
     supabase
       .from("projects")
-      .select("owner_payment_terms_days")
+      .select("owner_payment_terms_days, retainage_pct_default")
       .eq("id", projectId)
       .maybeSingle(),
     supabase
@@ -62,6 +62,9 @@ export async function DashboardNetCash({ projectId }: Props) {
   const ownerTermsDays = Number(
     projectRes.data?.owner_payment_terms_days ?? 0,
   );
+  const ownerRetainagePct = Number(
+    projectRes.data?.retainage_pct_default ?? 0,
+  ) / 100;
 
   // CASH IN: by cash_in_month (set on entry, or computed from owner Net X).
   // Subtract retainage_amount (held back by owner).
@@ -126,6 +129,32 @@ export async function DashboardNetCash({ projectId }: Props) {
     };
   });
 
+  // FUNDING GAP DETECTION: any month with negative cumulative means AHC is
+  // financing the project that month. Recommend the AFP that should have
+  // been larger - one cycle (owner Net X) earlier - grossed up for retainage.
+  const ownerCycle = Math.max(1, Math.ceil(ownerTermsDays / 30));
+  const gaps = chartData
+    .filter((d) => d.cumulative < 0)
+    .map((d) => {
+      const shortBy = Math.abs(d.cumulative);
+      // Amount to add to billing one cycle earlier = shortBy grossed up
+      // for owner retainage (since cumulative is already net of retainage).
+      const billNeeded =
+        ownerRetainagePct > 0 && ownerRetainagePct < 1
+          ? shortBy / (1 - ownerRetainagePct)
+          : shortBy;
+      const billMonthIdx = sorted.indexOf(d.month) - ownerCycle;
+      const billMonth =
+        billMonthIdx >= 0 ? shortMonthLabel(sorted[billMonthIdx]) : "before forecast horizon";
+      return {
+        month: d.label,
+        cumulative: d.cumulative,
+        shortBy,
+        billNeeded,
+        billMonth,
+      };
+    });
+
   let totalIn = 0, totalOut = 0;
   inByMonth.forEach((v) => { totalIn += v; });
   outByMonth.forEach((v) => { totalOut += v; });
@@ -171,6 +200,49 @@ export async function DashboardNetCash({ projectId }: Props) {
           </div>
         </div>
       </div>
+
+      {gaps.length > 0 && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3">
+          <div className="flex items-baseline justify-between">
+            <div className="text-xs font-semibold uppercase tracking-wide text-destructive">
+              Funding gap detected
+            </div>
+            <div className="text-[10px] text-muted-foreground">
+              {gaps.length} month{gaps.length === 1 ? "" : "s"} project negative cash
+            </div>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Cumulative cash goes negative below - AHC would be financing the
+            project. Bill the owner earlier or larger to close the gap.
+          </p>
+          <table className="mt-2 w-full text-xs">
+            <thead className="text-muted-foreground">
+              <tr className="border-b border-destructive/20">
+                <th className="py-1 text-left font-medium">Gap month</th>
+                <th className="py-1 text-right font-medium">Short by</th>
+                <th className="py-1 text-right font-medium">Recommended bill</th>
+                <th className="py-1 text-right font-medium">Bill by</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gaps.map((g) => (
+                <tr key={g.month} className="border-b border-destructive/10 last:border-0">
+                  <td className="py-1 font-medium">{g.month}</td>
+                  <td className="py-1 text-right text-destructive">
+                    {formatCurrency(g.shortBy)}
+                  </td>
+                  <td className="py-1 text-right font-semibold">
+                    {formatCurrency(g.billNeeded)}
+                  </td>
+                  <td className="py-1 text-right text-muted-foreground">
+                    {g.billMonth}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <DashboardNetCashChart data={chartData} />
 

@@ -11,15 +11,23 @@
 //
 // Mock project UUID: aaaaaaaa-bbbb-cccc-dddd-000000000001
 //
-// HAND-CALC REFERENCE (cash basis, all terms applied):
-//   Apr 2026   in 0          out  4,000 (vendor deposit)             net  -4,000   cum  -4,000
-//   May 2026   in 23,750     out  9,000 (sub Apr work Net 30)        net  14,750   cum  10,750
-//   Jun 2026   in 33,250     out 27,500 (sub 13,500 + vendor 14,000) net   5,750   cum  16,500
-//   Jul 2026   in 19,000     out  9,000 (sub Jun work)               net  10,000   cum  26,500
-//   Aug 2026   in 19,000     out  6,500 (sub 4,500 + vendor 2,000)   net  12,500   cum  39,000
-//   Final     in  5,000 ret release  out  4,000 ret release          net   1,000   cum  40,000
+// HAND-CALC REFERENCE - Funded AFP schedule (bill 1 cycle before each cash-out):
+//   AFP 0  bill Mar 30,000  -> Apr cash 28,500 (net 5% ret) - covers Apr deposit
+//   AFP 1  bill Apr 15,000  -> May cash 14,250                - covers May sub
+//   AFP 2  bill May 30,000  -> Jun cash 28,500                - covers Jun sub+vendor
+//   AFP 3  bill Jun 15,000  -> Jul cash 14,250                - covers Jul sub
+//   AFP 4  bill Jul 10,000  -> Aug cash  9,500                - covers Aug sub+vendor
+//
+//   Month   CashIn    CashOut    Net      Cum
+//   Mar         0          0      0         0
+//   Apr    28,500      4,000  24,500    24,500
+//   May    14,250      9,000   5,250    29,750
+//   Jun    28,500     27,500   1,000    30,750
+//   Jul    14,250      9,000   5,250    36,000
+//   Aug     9,500      6,500   3,000    39,000
+//   Final   5,000      4,000   1,000    40,000  (retainage release - deferred)
 //   ----------------------------------------------------------------------
-//   Margin: 100,000 revenue - 60,000 cost = 40,000
+//   Margin: 100,000 revenue - 60,000 cost = 40,000. Never goes negative.
 
 import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
@@ -92,11 +100,15 @@ async function main() {
   if (blErr) throw blErr;
   console.log("  + billing_lines (1)");
 
+  // Funded schedule: each AFP bills 1 cycle BEFORE the cash-out it covers,
+  // so owner cash (Net 30) lands the same month as the disbursement.
+  // Today is 2026-06-10: AFP 0 + AFP 1 are paid (past), AFP 2 in flight, rest planned.
   const billingEntries = [
-    { period: "2026-04-01", cashIn: "2026-05-01", planned: 25000, actual: 25000, ret: 1250, afp: "AFP 1", status: "paid",     paidAt: "2026-05-01" },
-    { period: "2026-05-01", cashIn: "2026-06-01", planned: 35000, actual: 35000, ret: 1750, afp: "AFP 2", status: "paid",     paidAt: "2026-06-01" },
-    { period: "2026-06-01", cashIn: "2026-07-01", planned: 20000, actual:     0, ret: 1000, afp: "AFP 3", status: "planned",  paidAt: null },
-    { period: "2026-07-01", cashIn: "2026-08-01", planned: 20000, actual:     0, ret: 1000, afp: "AFP 4", status: "planned",  paidAt: null },
+    { period: "2026-03-01", cashIn: "2026-04-01", planned: 30000, actual: 30000, ret: 1500, afp: "AFP 0", status: "paid",    paidAt: "2026-04-01" },
+    { period: "2026-04-01", cashIn: "2026-05-01", planned: 15000, actual: 15000, ret:  750, afp: "AFP 1", status: "paid",    paidAt: "2026-05-01" },
+    { period: "2026-05-01", cashIn: "2026-06-01", planned: 30000, actual: 30000, ret: 1500, afp: "AFP 2", status: "paid",    paidAt: "2026-06-01" },
+    { period: "2026-06-01", cashIn: "2026-07-01", planned: 15000, actual:     0, ret:  750, afp: "AFP 3", status: "planned", paidAt: null },
+    { period: "2026-07-01", cashIn: "2026-08-01", planned: 10000, actual:     0, ret:  500, afp: "AFP 4", status: "planned", paidAt: null },
   ];
   for (const e of billingEntries) {
     const { error } = await sb.from("billing_entries").insert({
