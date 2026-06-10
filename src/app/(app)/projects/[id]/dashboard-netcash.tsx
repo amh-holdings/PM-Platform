@@ -66,9 +66,53 @@ export async function DashboardNetCash({ projectId }: Props) {
     projectRes.data?.retainage_pct_default ?? 0,
   ) / 100;
 
-  // CASH IN: by cash_in_month (set on entry, or computed from owner Net X).
-  // Subtract retainage_amount (held back by owner).
-  const inByMonth = new Map<string, number>();
+  // We compute TWO views of the project:
+  //  1. ACCRUAL (revenue by work month, cost by work month) -> drives the
+  //     chart bars + cumulative line. Answers "am I making money on this job?"
+  //  2. CASH (cash in by cash_in_month, cash out by Net-X shifted month) ->
+  //     drives the funding gap detector. Answers "will I run out of cash?"
+
+  // === ACCRUAL: revenue by period_month, GROSS billed amount ===
+  const revenueByMonth = new Map<string, number>();
+  for (const e of billingRes.data ?? []) {
+    const gross = effectiveAmount(e.actual_amount, e.planned_amount);
+    revenueByMonth.set(
+      e.period_month,
+      (revenueByMonth.get(e.period_month) ?? 0) + gross,
+    );
+  }
+
+  // === ACCRUAL: sub cost by work month (period_month), gross. Skip vendor-linked. ===
+  const costByMonth = new Map<string, number>();
+  for (const f of costRes.data ?? []) {
+    const code = f.cost_codes as unknown as {
+      subcontractor_id: string | null;
+      procurement_order_id: string | null;
+      subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
+    } | null;
+    if (code?.procurement_order_id) continue;
+    const gross = effectiveAmount(f.actual_amount, f.planned_amount);
+    costByMonth.set(
+      f.period_month,
+      (costByMonth.get(f.period_month) ?? 0) + gross,
+    );
+  }
+
+  // === ACCRUAL: vendor cost at milestone date (paid or expected). ===
+  // Treat each milestone payment as the cost incurred that month - a
+  // simplification (deposit is technically a prepaid asset, not COGS, until
+  // delivery), but matches the granularity of the rest of the model.
+  for (const p of payRes.data ?? []) {
+    const date = p.paid_at ?? p.expected_date;
+    if (!date) continue;
+    const month = monthIsoFromDate(date);
+    const amount = Number(p.paid_amount ?? p.amount ?? 0);
+    if (!amount) continue;
+    costByMonth.set(month, (costByMonth.get(month) ?? 0) + amount);
+  }
+
+  // === CASH BASIS (for funding gap detector) ===
+  const cashInByMonth = new Map<string, number>();
   for (const e of billingRes.data ?? []) {
     const cashMonth =
       e.cash_in_month ??
@@ -77,47 +121,43 @@ export async function DashboardNetCash({ projectId }: Props) {
         : e.period_month);
     const gross = effectiveAmount(e.actual_amount, e.planned_amount);
     const net = gross - Number(e.retainage_amount ?? 0);
-    inByMonth.set(cashMonth, (inByMonth.get(cashMonth) ?? 0) + net);
+    cashInByMonth.set(cashMonth, (cashInByMonth.get(cashMonth) ?? 0) + net);
   }
-
-  // CASH OUT (sub side): shift period_month by sub Net X, apply sub retainage.
-  // Skip vendor-linked cost codes - those flow through procurement_payments.
-  const outByMonth = new Map<string, number>();
+  const cashOutByMonth = new Map<string, number>();
   for (const f of costRes.data ?? []) {
     const code = f.cost_codes as unknown as {
       subcontractor_id: string | null;
       procurement_order_id: string | null;
       subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
     } | null;
-    if (code?.procurement_order_id) continue; // vendor side counted via payments
+    if (code?.procurement_order_id) continue;
     const subDays = Number(code?.subcontractors?.payment_terms_days ?? 0);
     const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
     const cashMonth =
       subDays > 0 ? shiftByDaysToMonth(f.period_month, subDays) : f.period_month;
     const gross = effectiveAmount(f.actual_amount, f.planned_amount);
     const net = gross * (1 - retPct);
-    outByMonth.set(cashMonth, (outByMonth.get(cashMonth) ?? 0) + net);
+    cashOutByMonth.set(cashMonth, (cashOutByMonth.get(cashMonth) ?? 0) + net);
   }
-
-  // CASH OUT (vendor side): each procurement_payment milestone.
   for (const p of payRes.data ?? []) {
     const date = p.paid_at ?? p.expected_date;
     if (!date) continue;
     const cashMonth = monthIsoFromDate(date);
     const amount = Number(p.paid_amount ?? p.amount ?? 0);
     if (!amount) continue;
-    outByMonth.set(cashMonth, (outByMonth.get(cashMonth) ?? 0) + amount);
+    cashOutByMonth.set(cashMonth, (cashOutByMonth.get(cashMonth) ?? 0) + amount);
   }
 
+  // === Build chart data on ACCRUAL ===
   const allMonths = new Set<string>();
-  inByMonth.forEach((_, k) => allMonths.add(k));
-  outByMonth.forEach((_, k) => allMonths.add(k));
+  revenueByMonth.forEach((_, k) => allMonths.add(k));
+  costByMonth.forEach((_, k) => allMonths.add(k));
   const sorted = Array.from(allMonths).sort();
 
   let cumulative = 0;
   const chartData = sorted.map((iso) => {
-    const inV = inByMonth.get(iso) ?? 0;
-    const outV = outByMonth.get(iso) ?? 0;
+    const inV = revenueByMonth.get(iso) ?? 0;
+    const outV = costByMonth.get(iso) ?? 0;
     const net = inV - outV;
     cumulative += net;
     return {
@@ -129,73 +169,92 @@ export async function DashboardNetCash({ projectId }: Props) {
     };
   });
 
-  // FUNDING GAP DETECTION: any month with negative cumulative means AHC is
-  // financing the project that month. Recommend the AFP that should have
-  // been larger - one cycle (owner Net X) earlier - grossed up for retainage.
+  // === Cash-basis cumulative for the funding gap detector ===
+  const allCashMonths = new Set<string>();
+  cashInByMonth.forEach((_, k) => allCashMonths.add(k));
+  cashOutByMonth.forEach((_, k) => allCashMonths.add(k));
+  const sortedCash = Array.from(allCashMonths).sort();
+  let cumCash = 0;
+  const cashData = sortedCash.map((iso) => {
+    const inV = cashInByMonth.get(iso) ?? 0;
+    const outV = cashOutByMonth.get(iso) ?? 0;
+    cumCash += inV - outV;
+    return { month: iso, label: shortMonthLabel(iso), cumCash };
+  });
+
+  // FUNDING GAP DETECTION on CASH BASIS - this is the right basis for "will
+  // we run out of money," even though the chart itself shows accrual margin.
   const ownerCycle = Math.max(1, Math.ceil(ownerTermsDays / 30));
-  const gaps = chartData
-    .filter((d) => d.cumulative < 0)
+  const gaps = cashData
+    .filter((d) => d.cumCash < 0)
     .map((d) => {
-      const shortBy = Math.abs(d.cumulative);
-      // Amount to add to billing one cycle earlier = shortBy grossed up
-      // for owner retainage (since cumulative is already net of retainage).
+      const shortBy = Math.abs(d.cumCash);
       const billNeeded =
         ownerRetainagePct > 0 && ownerRetainagePct < 1
           ? shortBy / (1 - ownerRetainagePct)
           : shortBy;
-      const billMonthIdx = sorted.indexOf(d.month) - ownerCycle;
+      const billMonthIdx = sortedCash.indexOf(d.month) - ownerCycle;
       const billMonth =
-        billMonthIdx >= 0 ? shortMonthLabel(sorted[billMonthIdx]) : "before forecast horizon";
+        billMonthIdx >= 0
+          ? shortMonthLabel(sortedCash[billMonthIdx])
+          : "before forecast horizon";
       return {
         month: d.label,
-        cumulative: d.cumulative,
+        cumulative: d.cumCash,
         shortBy,
         billNeeded,
         billMonth,
       };
     });
 
-  let totalIn = 0, totalOut = 0;
-  inByMonth.forEach((v) => { totalIn += v; });
-  outByMonth.forEach((v) => { totalOut += v; });
-  const totalNet = totalIn - totalOut;
+  // Margin totals (ACCRUAL).
+  let totalRevenue = 0, totalCost = 0;
+  revenueByMonth.forEach((v) => { totalRevenue += v; });
+  costByMonth.forEach((v) => { totalCost += v; });
+  const totalMargin = totalRevenue - totalCost;
 
-  let pastIn = 0, pastOut = 0;
-  inByMonth.forEach((v, iso) => { if (iso <= thisMonthIso) pastIn += v; });
-  outByMonth.forEach((v, iso) => { if (iso <= thisMonthIso) pastOut += v; });
-  const cashToDate = pastIn - pastOut;
+  // Margin to date (through current month, accrual).
+  let pastRevenue = 0, pastCost = 0;
+  revenueByMonth.forEach((v, iso) => { if (iso <= thisMonthIso) pastRevenue += v; });
+  costByMonth.forEach((v, iso) => { if (iso <= thisMonthIso) pastCost += v; });
+  const marginToDate = pastRevenue - pastCost;
+
+  // Current cash position (through current month, cash basis).
+  let cashToDate = 0;
+  cashData.forEach((d) => { if (d.month <= thisMonthIso) cashToDate = d.cumCash; });
 
   return (
     <section className="space-y-3 rounded-lg border bg-card p-4 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold">Net cash position</h2>
+          <h2 className="text-sm font-semibold">Project margin</h2>
           <p className="text-xs text-muted-foreground">
-            Cash in minus cash out, per month, plus running cumulative
+            Profit by work month (revenue billed - cost incurred), plus running
+            cumulative margin
           </p>
         </div>
         <div className="grid grid-cols-3 gap-3 text-xs">
           <div className="text-right">
-            <div className="text-muted-foreground">Cash in (total)</div>
+            <div className="text-muted-foreground">Revenue (total)</div>
             <div className="font-semibold text-emerald-600">
-              {formatCurrency(totalIn)}
+              {formatCurrency(totalRevenue)}
             </div>
           </div>
           <div className="text-right">
-            <div className="text-muted-foreground">Cash out (total)</div>
+            <div className="text-muted-foreground">Cost (total)</div>
             <div className="font-semibold text-destructive">
-              {formatCurrency(totalOut)}
+              {formatCurrency(totalCost)}
             </div>
           </div>
           <div className="text-right">
-            <div className="text-muted-foreground">Net (total)</div>
+            <div className="text-muted-foreground">Margin (total)</div>
             <div
               className={cn(
                 "font-semibold",
-                totalNet >= 0 ? "text-emerald-600" : "text-destructive",
+                totalMargin >= 0 ? "text-emerald-600" : "text-destructive",
               )}
             >
-              {formatCurrency(totalNet)}
+              {formatCurrency(totalMargin)}
             </div>
           </div>
         </div>
@@ -212,8 +271,9 @@ export async function DashboardNetCash({ projectId }: Props) {
             </div>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Cumulative cash goes negative below - AHC would be financing the
-            project. Bill the owner earlier or larger to close the gap.
+            Cash on hand goes negative below (separate from the margin chart
+            above) - AHC would be financing the project. Bill the owner earlier
+            or larger to close the gap.
           </p>
           <table className="mt-2 w-full text-xs">
             <thead className="text-muted-foreground">
@@ -250,29 +310,29 @@ export async function DashboardNetCash({ projectId }: Props) {
         <div
           className={cn(
             "rounded-md border p-3",
-            cashToDate >= 0
+            marginToDate >= 0
               ? "border-emerald-500/40 bg-emerald-500/5"
               : "border-destructive/40 bg-destructive/5",
           )}
         >
           <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Cash to date
+            Margin to date
           </div>
           <div
             className={cn(
               "mt-1 text-base font-semibold",
-              cashToDate >= 0 ? "text-emerald-600" : "text-destructive",
+              marginToDate >= 0 ? "text-emerald-600" : "text-destructive",
             )}
           >
-            {formatCurrency(cashToDate)}
+            {formatCurrency(marginToDate)}
           </div>
           <div className="text-[10px] text-muted-foreground">
-            Through {shortMonthLabel(thisMonthIso)}
+            Earned through {shortMonthLabel(thisMonthIso)}
           </div>
         </div>
         <div className="rounded-md border border-border bg-muted/30 p-3">
           <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Final cumulative
+            Final margin
           </div>
           <div
             className={cn(
@@ -288,31 +348,28 @@ export async function DashboardNetCash({ projectId }: Props) {
             At end of forecast horizon
           </div>
         </div>
-        <div className="rounded-md border border-border bg-muted/30 p-3">
+        <div
+          className={cn(
+            "rounded-md border p-3",
+            cashToDate >= 0
+              ? "border-border bg-muted/30"
+              : "border-destructive/40 bg-destructive/5",
+          )}
+        >
           <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Lowest cash point
+            Cash on hand
           </div>
-          {(() => {
-            const min = chartData.reduce(
-              (acc, d) => (d.cumulative < acc.cumulative ? d : acc),
-              chartData[0] ?? { cumulative: 0, label: "-", month: "" },
-            );
-            return (
-              <>
-                <div
-                  className={cn(
-                    "mt-1 text-base font-semibold",
-                    min.cumulative >= 0 ? "text-emerald-600" : "text-destructive",
-                  )}
-                >
-                  {formatCurrency(min.cumulative)}
-                </div>
-                <div className="text-[10px] text-muted-foreground">
-                  {min.label !== "-" ? `In ${min.label}` : "No data"}
-                </div>
-              </>
-            );
-          })()}
+          <div
+            className={cn(
+              "mt-1 text-base font-semibold",
+              cashToDate >= 0 ? "text-foreground" : "text-destructive",
+            )}
+          >
+            {formatCurrency(cashToDate)}
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            Bank position through {shortMonthLabel(thisMonthIso)}
+          </div>
         </div>
       </div>
     </section>

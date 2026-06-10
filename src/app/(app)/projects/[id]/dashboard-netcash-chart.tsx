@@ -69,8 +69,8 @@ export function DashboardNetCashChart({ data }: Props) {
               const num = typeof value === "number" ? value : Number(value);
               const label =
                 name === "net"
-                  ? "Net (month)"
-                  : "Cumulative cash";
+                  ? "Margin (month)"
+                  : "Cumulative margin";
               return [formatCurrency(num), label];
             }}
           />
@@ -78,7 +78,7 @@ export function DashboardNetCashChart({ data }: Props) {
             iconSize={10}
             wrapperStyle={{ fontSize: 11, paddingTop: 6 }}
             formatter={(value) =>
-              value === "net" ? "Net (month)" : "Cumulative"
+              value === "net" ? "Margin (month)" : "Cumulative margin"
             }
           />
           <Bar dataKey="net">
