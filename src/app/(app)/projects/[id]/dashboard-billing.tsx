@@ -1,6 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
+import {
+  addMonthsIso,
+  firstOfThisMonthIso,
+  monthsBetween,
+  shortMonthLabel,
+} from "@/lib/cashflow";
 
 import { DashboardBillingChart } from "./dashboard-billing-chart";
 
@@ -8,36 +14,7 @@ type Props = {
   projectId: string;
 };
 
-function firstOfThisMonthIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
-
-function addMonthsIso(iso: string, n: number): string {
-  const [y, m] = iso.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 + n, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
-}
-
-const MONTH_LABELS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-
-function shortLabel(iso: string): string {
-  const [y, m] = iso.split("-").map(Number);
-  return `${MONTH_LABELS[m - 1]} ${String(y).slice(2)}`;
-}
+const shortLabel = shortMonthLabel;
 
 export async function DashboardBilling({ projectId }: Props) {
   const supabase = createClient();
@@ -93,9 +70,21 @@ export async function DashboardBilling({ projectId }: Props) {
     }
   }
 
+  // Fill in every month between earliest and latest so empty months still
+  // appear as gaps in the timeline instead of being compressed out.
   const sortedMonths = Array.from(byMonth.keys()).sort();
-  const chartData = sortedMonths.map((iso) => {
-    const v = byMonth.get(iso)!;
+  const dataMonths =
+    sortedMonths.length > 0
+      ? monthsBetween(sortedMonths[0], sortedMonths[sortedMonths.length - 1])
+      : [];
+  const zeroBucket: Bucket = {
+    actualCash: 0,
+    actualRetainage: 0,
+    plannedCash: 0,
+    plannedRetainage: 0,
+  };
+  const chartData = dataMonths.map((iso) => {
+    const v = byMonth.get(iso) ?? zeroBucket;
     return {
       month: iso,
       label: shortLabel(iso),

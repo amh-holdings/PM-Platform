@@ -5,6 +5,7 @@ import {
   addMonthsIso,
   firstOfThisMonthIso,
   monthIsoFromDate,
+  monthsBetween,
   shiftByDaysToMonth,
   shortMonthLabel,
 } from "@/lib/cashflow";
@@ -82,9 +83,15 @@ export async function DashboardCashOut({ projectId }: Props) {
     bump(cashMonth, isPaid ? "actual" : "planned", amount);
   }
 
+  // Fill in every month between earliest and latest so idle months still
+  // appear as gaps in the timeline instead of compressing out.
   const sortedMonths = Array.from(byMonth.keys()).sort();
-  const chartData = sortedMonths.map((iso) => {
-    const v = byMonth.get(iso)!;
+  const dataMonths =
+    sortedMonths.length > 0
+      ? monthsBetween(sortedMonths[0], sortedMonths[sortedMonths.length - 1])
+      : [];
+  const chartData = dataMonths.map((iso) => {
+    const v = byMonth.get(iso) ?? { actual: 0, planned: 0 };
     return {
       month: iso,
       label: shortMonthLabel(iso),

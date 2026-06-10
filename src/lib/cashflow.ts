@@ -50,6 +50,20 @@ export function monthIsoFromDate(iso: string): string {
   return iso.slice(0, 7) + "-01";
 }
 
+// Returns every month between startIso and endIso (inclusive) as an array
+// of YYYY-MM-01 strings, so timeline charts can render zero-value bars for
+// idle months instead of compressing them out.
+export function monthsBetween(startIso: string, endIso: string): string[] {
+  if (!startIso || !endIso || startIso > endIso) return [];
+  const result: string[] = [];
+  let cur = startIso;
+  while (cur <= endIso) {
+    result.push(cur);
+    cur = addMonthsIso(cur, 1);
+  }
+  return result;
+}
+
 const MONTH_LABELS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
