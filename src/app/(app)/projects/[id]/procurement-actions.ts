@@ -241,3 +241,133 @@ export async function deleteMilestone(
   revalidatePath(`/projects/${projectId}/procurement/${poId}`);
   return { ok: true };
 }
+
+// ============ AI EXTRACTION OF PAYMENT MILESTONES FROM PO PDF ============
+
+export type ExtractedMilestone = {
+  milestone_name: string;
+  pct_of_total: number | null;
+  amount: number | null;
+  trigger_event: string;
+  expected_date: string | null;
+  notes: string;
+};
+
+export type ExtractPoTermsResult =
+  | {
+      ok: true;
+      milestones: ExtractedMilestone[];
+      total_pct: number | null;
+      payment_terms_summary: string;
+      notes: string;
+      source_document: string;
+      elapsed_ms: number;
+    }
+  | { ok: false; error: string };
+
+export async function extractPoPaymentTerms(
+  procurementOrderId: string,
+): Promise<ExtractPoTermsResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const relayUrl = process.env.RELAY_URL;
+  const relaySecret = process.env.RELAY_SHARED_SECRET;
+  if (!relayUrl || !relaySecret) {
+    return {
+      ok: false,
+      error:
+        "PO extraction is not configured on this deployment. RELAY_URL and RELAY_SHARED_SECRET must be set (relay must be running).",
+    };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${relayUrl}/extract-po-payment-terms`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${relaySecret}`,
+      },
+      body: JSON.stringify({ procurement_order_id: procurementOrderId }),
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Network error";
+    return { ok: false, error: `Could not reach the relay: ${msg}` };
+  }
+
+  if (!response.ok) {
+    let errText = `Relay returned ${response.status}`;
+    try {
+      const data = await response.json();
+      if (data?.error) errText = data.error;
+    } catch {
+      // ignore
+    }
+    return { ok: false, error: errText };
+  }
+
+  const data = await response.json();
+  return {
+    ok: true,
+    milestones: data.milestones ?? [],
+    total_pct: data.total_pct ?? null,
+    payment_terms_summary: data.payment_terms_summary ?? "",
+    notes: data.notes ?? "",
+    source_document: data.source_document ?? "",
+    elapsed_ms: data.elapsed_ms ?? 0,
+  };
+}
+
+// Bulk-insert the milestones the user confirmed. Always replaces existing
+// procurement_payments for this PO (atomically, via delete-then-insert).
+export async function applyExtractedMilestones(
+  procurementOrderId: string,
+  projectId: string,
+  milestones: ExtractedMilestone[],
+  paymentTermsSummary?: string,
+): Promise<{ ok: true; inserted: number } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  if (!Array.isArray(milestones) || milestones.length === 0) {
+    return { ok: false, error: "No milestones to apply" };
+  }
+
+  // Wipe any existing milestones for this PO first (since the user explicitly
+  // accepted the extracted set as authoritative).
+  const { error: delErr } = await auth.supabase
+    .from("procurement_payments")
+    .delete()
+    .eq("procurement_order_id", procurementOrderId);
+  if (delErr) return { ok: false, error: delErr.message };
+
+  const rows = milestones.map((m, idx) => ({
+    procurement_order_id: procurementOrderId,
+    milestone_name: (m.milestone_name ?? `Milestone ${idx + 1}`).trim() || `Milestone ${idx + 1}`,
+    pct_of_total: m.pct_of_total == null ? null : Number(m.pct_of_total),
+    amount: m.amount == null ? null : Number(m.amount),
+    trigger_event: m.trigger_event ?? null,
+    expected_date: m.expected_date || null,
+    notes: m.notes ?? null,
+    sort_order: idx + 1,
+  }));
+
+  const { error: insErr } = await auth.supabase
+    .from("procurement_payments")
+    .insert(rows);
+  if (insErr) return { ok: false, error: insErr.message };
+
+  // Also update the PO summary line if provided.
+  if (paymentTermsSummary && paymentTermsSummary.trim()) {
+    await auth.supabase
+      .from("procurement_orders")
+      .update({ payment_terms_summary: paymentTermsSummary.trim() })
+      .eq("id", procurementOrderId);
+  }
+
+  revalidatePath(`/projects/${projectId}/procurement/${procurementOrderId}`);
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, inserted: rows.length };
+}

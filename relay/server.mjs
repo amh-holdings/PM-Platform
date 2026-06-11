@@ -513,6 +513,188 @@ fastify.post("/extract-sov", async (request, reply) => {
   };
 });
 
+// POST /extract-po-payment-terms
+//   body: { procurement_order_id }
+//   Reads the document linked to this PO (procurement_orders.document_id),
+//   asks Claude to extract the payment milestone schedule, returns it for
+//   confirmation before insertion into procurement_payments.
+fastify.post("/extract-po-payment-terms", async (request, reply) => {
+  const { procurement_order_id } = request.body || {};
+  if (!procurement_order_id || typeof procurement_order_id !== "string") {
+    reply.code(400).send({ error: "procurement_order_id required" });
+    return;
+  }
+
+  // Get the PO and its linked document.
+  const { data: po, error: poErr } = await supabase
+    .from("procurement_orders")
+    .select(
+      "po_number, vendor_name, total_value, ordered_date, expected_delivery_date, document_id, project_id",
+    )
+    .eq("id", procurement_order_id)
+    .maybeSingle();
+  if (poErr || !po) {
+    reply.code(404).send({ error: poErr?.message ?? "PO not found" });
+    return;
+  }
+  if (!po.document_id) {
+    reply.code(404).send({
+      error: "This PO has no linked document. Upload the PO PDF and link it first.",
+    });
+    return;
+  }
+
+  const { data: doc, error: docErr } = await supabase
+    .from("project_documents")
+    .select("file_name, extracted_text, text_status")
+    .eq("id", po.document_id)
+    .maybeSingle();
+  if (docErr || !doc) {
+    reply.code(404).send({ error: "Linked document not found" });
+    return;
+  }
+  if (doc.text_status !== "ready" || !doc.extracted_text) {
+    reply.code(400).send({
+      error: `Linked document text is not ready (status=${doc.text_status}). Try again after text extraction completes.`,
+    });
+    return;
+  }
+
+  const MAX_CHARS = 300_000;
+  let docText = doc.extracted_text;
+  if (docText.length > MAX_CHARS) {
+    docText = docText.slice(0, MAX_CHARS) + "\n\n[... truncated]";
+  }
+
+  const systemPrompt = [
+    "You extract the payment milestone schedule from a Purchase Order (PO) document.",
+    "",
+    "The PO is for solar equipment or services (modules, inverters, racking, transformers, etc.) and typically contains a payment terms section like '20% deposit on PO release, 70% on delivery, 10% on commissioning' or specific milestone dates.",
+    "",
+    "Return ONLY a JSON object (no markdown fences, no commentary) of this exact shape:",
+    "",
+    "{",
+    '  "milestones": [',
+    "    {",
+    '      "milestone_name": string,      // e.g. "Deposit", "Delivery", "Commissioning", "Net 30 from invoice"',
+    '      "pct_of_total": number | null, // percentage of PO total (0-100). null if amount is fixed, not a percentage',
+    '      "amount": number | null,       // dollar amount; if only a pct is given compute it from PO total',
+    '      "trigger_event": string,       // what triggers the payment: "PO release", "Delivery", "Commissioning", "Net 30 from invoice", "Substantial completion", etc.',
+    '      "expected_date": string | null,// YYYY-MM-DD if a specific date is given OR computable (e.g. "Net 30 after delivery" + expected delivery date)',
+    '      "notes": string                // any caveats, conditions, or source phrasing',
+    "    }",
+    "  ],",
+    '  "total_pct": number | null,         // sum of pct_of_total across milestones (should be 100 if all percentages)',
+    '  "payment_terms_summary": string,    // human-readable summary, e.g. "20% deposit / 70% delivery / 10% commissioning"',
+    '  "notes": string                     // notes about ambiguous terms, multiple schedules, or assumptions',
+    "}",
+    "",
+    "Context about this PO:",
+    `  Vendor: ${po.vendor_name}`,
+    `  PO Number: ${po.po_number ?? "(unknown)"}`,
+    `  Total Value: $${po.total_value ?? "(unknown)"}`,
+    `  Ordered Date: ${po.ordered_date ?? "(unknown)"}`,
+    `  Expected Delivery: ${po.expected_delivery_date ?? "(unknown)"}`,
+    "",
+    "Rules:",
+    "- If the PO uses percentages, fill pct_of_total AND compute amount from the PO total value.",
+    "- If the PO uses fixed dollar amounts, fill amount and leave pct_of_total null.",
+    "- For dates given as 'Net X days after Y', compute the expected_date if Y is known (e.g. delivery date is in the PO). Otherwise leave null.",
+    "- If there's no payment milestone breakdown at all (just 'Net 30' standard terms), return a single milestone for the full value.",
+    "- Return ONLY the JSON. No prose.",
+  ].join("\n");
+
+  const userPrompt = [
+    "Purchase Order document text follows. Extract the payment milestone schedule.",
+    "",
+    `=== ${doc.file_name} ===`,
+    "",
+    docText,
+  ].join("\n");
+
+  const startedAt = Date.now();
+  let raw = "";
+
+  try {
+    const q = query({
+      prompt: userPrompt,
+      options: {
+        model: MODEL,
+        systemPrompt,
+        permissionMode: "bypassPermissions",
+        maxTurns: 1,
+      },
+    });
+
+    for await (const message of q) {
+      if (message.type === "assistant") {
+        const content = message.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === "text" && typeof block.text === "string") {
+              raw = block.text;
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    request.log.error({ err }, "PO extraction query failed");
+    reply.code(500).send({ error: err.message || "Internal error" });
+    return;
+  }
+
+  if (!raw) {
+    reply.code(500).send({ error: "Claude returned no text" });
+    return;
+  }
+
+  const firstBrace = raw.indexOf("{");
+  const lastBrace = raw.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+    reply.code(500).send({
+      error: "Claude response did not contain a JSON object",
+      raw: raw.slice(0, 2000),
+    });
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw.slice(firstBrace, lastBrace + 1));
+  } catch (err) {
+    request.log.error({ raw: raw.slice(0, 500) }, "PO JSON parse failed");
+    reply.code(500).send({
+      error: "Claude returned invalid JSON",
+      raw: raw.slice(0, 2000),
+    });
+    return;
+  }
+
+  if (!Array.isArray(parsed?.milestones)) {
+    reply.code(500).send({
+      error: "Extracted JSON has no 'milestones' array",
+      raw: raw.slice(0, 2000),
+    });
+    return;
+  }
+
+  const elapsedMs = Date.now() - startedAt;
+  request.log.info(
+    { procurement_order_id, elapsedMs, milestone_count: parsed.milestones.length },
+    "extracted PO payment terms",
+  );
+
+  return {
+    milestones: parsed.milestones,
+    total_pct: parsed.total_pct ?? null,
+    payment_terms_summary: parsed.payment_terms_summary ?? "",
+    notes: parsed.notes ?? "",
+    source_document: doc.file_name,
+    elapsed_ms: elapsedMs,
+  };
+});
+
 // ============ START ============
 
 try {

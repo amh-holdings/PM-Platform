@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 
+import { ExtractPoMilestones } from "./extract-po-milestones";
 import { MilestoneEditor } from "./milestone-editor";
 
 type Params = { id: string; poId: string };
@@ -161,6 +162,13 @@ export default async function ProcurementDetailPage({
             </div>
           </div>
         </div>
+
+        <ExtractPoMilestones
+          poId={params.poId}
+          projectId={params.id}
+          poTotalValue={poValue}
+          hasLinkedDocument={Boolean(po.document_id)}
+        />
 
         <MilestoneEditor
           projectId={params.id}
