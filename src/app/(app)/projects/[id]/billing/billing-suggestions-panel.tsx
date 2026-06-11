@@ -57,6 +57,7 @@ export async function BillingSuggestionsPanel({ projectId }: Props) {
               <tr className="border-b">
                 <th className="py-1.5 pr-2 text-left font-medium">Item</th>
                 <th className="py-1.5 pr-2 text-left font-medium">Description</th>
+                <th className="py-1.5 pr-2 text-left font-medium">Confidence</th>
                 <th className="py-1.5 pr-2 text-right font-medium">Target %</th>
                 <th className="py-1.5 pr-2 text-right font-medium">Billed</th>
                 <th className="py-1.5 pr-2 text-right font-medium">Remaining</th>
@@ -64,24 +65,46 @@ export async function BillingSuggestionsPanel({ projectId }: Props) {
               </tr>
             </thead>
             <tbody>
-              {suggestions.map((s) => (
-                <tr key={s.billingLineId} className="border-b last:border-0">
-                  <td className="py-1.5 pr-2 font-mono">{s.itemNumber}</td>
-                  <td className="py-1.5 pr-2">{s.description}</td>
-                  <td className="py-1.5 pr-2 text-right">
-                    {(s.targetPct * 100).toFixed(0)}%
-                  </td>
-                  <td className="py-1.5 pr-2 text-right">
-                    {formatCurrency(s.alreadyBilled)}
-                  </td>
-                  <td className="py-1.5 pr-2 text-right">
-                    {formatCurrency(s.remaining)}
-                  </td>
-                  <td className="py-1.5 text-right font-semibold text-emerald-600">
-                    {formatCurrency(s.suggestedAmount)}
-                  </td>
-                </tr>
-              ))}
+              {suggestions.map((s) => {
+                const confColor =
+                  s.confidence === "high"
+                    ? "text-emerald-700"
+                    : s.confidence === "medium"
+                      ? "text-amber-700"
+                      : s.confidence === "low"
+                        ? "text-orange-700"
+                        : "text-muted-foreground";
+                return (
+                  <tr
+                    key={s.billingLineId}
+                    className="border-b last:border-0"
+                    title={s.reasons.join(" | ")}
+                  >
+                    <td className="py-1.5 pr-2 font-mono">{s.itemNumber}</td>
+                    <td className="py-1.5 pr-2">{s.description}</td>
+                    <td className="py-1.5 pr-2">
+                      <span className={`text-[10px] font-semibold uppercase ${confColor}`}>
+                        {s.confidence}
+                      </span>
+                      <div className="text-[10px] text-muted-foreground">
+                        {s.sourcesSummary}
+                      </div>
+                    </td>
+                    <td className="py-1.5 pr-2 text-right">
+                      {(s.targetPct * 100).toFixed(0)}%
+                    </td>
+                    <td className="py-1.5 pr-2 text-right">
+                      {formatCurrency(s.alreadyBilled)}
+                    </td>
+                    <td className="py-1.5 pr-2 text-right">
+                      {formatCurrency(s.remaining)}
+                    </td>
+                    <td className="py-1.5 text-right font-semibold text-emerald-600">
+                      {formatCurrency(s.suggestedAmount)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -3,6 +3,12 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import {
+  aggregateConfidence,
+  estimateTaskProgress,
+  type Confidence,
+  type ProgressEstimate,
+} from "@/lib/progress";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -81,32 +87,13 @@ export async function updateLinkedTasks(
 // the suggested next-month dollar amount is target - already_billed,
 // capped at remaining_to_bill and never negative.
 
-const STATUS_PCT: Record<string, number> = {
-  Complete: 1.0,
-  Approved: 1.0,
-  "In Progress": 0.5,
-};
 
-// Returns 0..1. Reads pct_complete when set by a DPR, otherwise falls back
-// to status buckets: Complete/Approved=100%, In Progress=50%,
-// past-due-not-Complete=75%, else 0%.
-function pctForTask(
-  t: {
-    status: string | null;
-    end_date: string | null;
-    pct_complete: number | null;
-  },
-  todayIso: string,
-): number {
-  if (t.pct_complete != null && Number.isFinite(Number(t.pct_complete))) {
-    return Math.max(0, Math.min(1, Number(t.pct_complete) / 100));
-  }
-  if (t.status && STATUS_PCT[t.status] != null) return STATUS_PCT[t.status];
-  if (t.end_date && t.end_date < todayIso && t.status !== "Complete") {
-    return 0.75;
-  }
-  return 0;
-}
+// Replaced by src/lib/progress.ts which adds date interpolation +
+// confidence tracking. Kept STATUS_PCT for back-compat in case other code
+// still imports it.
+//
+// Legacy behavior is a subset of estimateTaskProgress() so old callers
+// still work the same way.
 
 export type BillingSuggestion = {
   billingLineId: string;
@@ -118,6 +105,9 @@ export type BillingSuggestion = {
   linkedTaskCount: number;
   targetPct: number;
   suggestedAmount: number;
+  confidence: "high" | "medium" | "low" | "none";
+  reasons: string[];          // one per linked task, in order
+  sourcesSummary: string;     // e.g. "2 status, 1 date_interpolation"
 };
 
 export async function computeBillingSuggestions(
@@ -138,7 +128,7 @@ export async function computeBillingSuggestions(
       .eq("project_id", projectId),
     auth.supabase
       .from("schedule_tasks")
-      .select("wbs_code, status, end_date, pct_complete")
+      .select("wbs_code, status, start_date, end_date, pct_complete")
       .eq("project_id", projectId),
     auth.supabase
       .from("v_billing_line_totals")
@@ -146,16 +136,22 @@ export async function computeBillingSuggestions(
       .eq("project_id", projectId),
   ]);
 
-  const taskByCode = new Map<
-    string,
-    { status: string | null; end_date: string | null; pct_complete: number | null }
-  >();
+  // Estimate progress for every task up-front so we have a confidence + reason
+  // alongside the pct.
+  const estimateByCode = new Map<string, ProgressEstimate>();
   for (const t of tasks ?? []) {
-    taskByCode.set(t.wbs_code, {
-      status: t.status,
-      end_date: t.end_date,
-      pct_complete: t.pct_complete == null ? null : Number(t.pct_complete),
-    });
+    estimateByCode.set(
+      t.wbs_code,
+      estimateTaskProgress(
+        {
+          status: t.status,
+          start_date: t.start_date,
+          end_date: t.end_date,
+          pct_complete: t.pct_complete,
+        },
+        todayIso,
+      ),
+    );
   }
   const totalsById = new Map<string, { billed: number; remaining: number }>();
   for (const t of totals ?? []) {
@@ -171,14 +167,18 @@ export async function computeBillingSuggestions(
     const links = line.linked_task_wbs_codes ?? [];
     if (links.length === 0) continue;
     const matched = links
-      .map((c) => taskByCode.get(c))
-      .filter(
-        (t): t is { status: string | null; end_date: string | null; pct_complete: number | null } =>
-          !!t,
-      );
+      .map((c) => estimateByCode.get(c))
+      .filter((e): e is ProgressEstimate => !!e);
     if (matched.length === 0) continue;
-    const avgPct =
-      matched.reduce((s, t) => s + pctForTask(t, todayIso), 0) / matched.length;
+    const avgPct = matched.reduce((s, e) => s + e.pct, 0) / matched.length;
+    const confidence: Confidence = aggregateConfidence(matched.map((e) => e.confidence));
+    const sourceCounts = new Map<string, number>();
+    for (const e of matched) {
+      sourceCounts.set(e.source, (sourceCounts.get(e.source) ?? 0) + 1);
+    }
+    const sourcesSummary = Array.from(sourceCounts.entries())
+      .map(([k, v]) => `${v} ${k}`)
+      .join(", ");
     const scheduledValue = Number(line.scheduled_value ?? 0);
     const target = avgPct * scheduledValue;
     const t = totalsById.get(line.id) ?? { billed: 0, remaining: scheduledValue };
@@ -195,6 +195,9 @@ export async function computeBillingSuggestions(
       linkedTaskCount: matched.length,
       targetPct: avgPct,
       suggestedAmount: Math.round(suggested * 100) / 100,
+      confidence,
+      reasons: matched.map((e) => e.reason),
+      sourcesSummary,
     });
   }
 
