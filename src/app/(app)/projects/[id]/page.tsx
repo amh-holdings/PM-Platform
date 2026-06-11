@@ -8,6 +8,7 @@ import { DashboardKpis } from "./dashboard-kpis";
 import { DashboardMilestones } from "./dashboard-milestones";
 import { DashboardNetCash } from "./dashboard-netcash";
 import { DashboardPlanActual } from "./dashboard-plan-actual";
+import { DashboardProjection } from "./dashboard-projection";
 import { DashboardSchedule } from "./dashboard-schedule";
 import { DashboardToday } from "./dashboard-today";
 import { ProjectChat } from "./project-chat";
@@ -74,6 +75,7 @@ export default function ProjectDashboardPage({ params }: { params: Params }) {
           sub="Cash position, billing, spend, cost variance"
         />
         <DashboardKpis projectId={params.id} />
+        <DashboardProjection projectId={params.id} />
         <DashboardNetCash projectId={params.id} />
         <DashboardBilling projectId={params.id} />
         <DashboardCashOut projectId={params.id} />
