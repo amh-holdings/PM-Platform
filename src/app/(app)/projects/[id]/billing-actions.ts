@@ -255,14 +255,26 @@ export type BillableRow =
       targetPct: number;
     };
 
+export type HiddenForecast = {
+  itemNumber: string;
+  description: string;
+  periodMonth: string;
+  amount: number;
+  reason: string;
+};
+
 export async function getBillThisPeriodRows(
   projectId: string,
-): Promise<{ ok: true; rows: BillableRow[] } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; rows: BillableRow[]; hidden: HiddenForecast[] }
+  | { ok: false; error: string }
+> {
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
   const today = new Date();
   const thisMonthIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
   // Tight billing window: current month + immediate next month only. Far-future
   // forecasts (esp. from bulk cash-flow imports) belong on the timeline chart,
   // not on the "Bill this period" action panel.
@@ -285,7 +297,7 @@ export async function getBillThisPeriodRows(
 
   // Fix #1: drop zero-value placeholder rows. Can't bill $0, just clutters
   // the list. They came in from the cash-flow xlsx import as placeholders.
-  const forecastRows: BillableRow[] = (entries ?? [])
+  const allForecastRows = (entries ?? [])
     .filter((e) => Number(e.planned_amount ?? 0) > 0)
     .map((e) => {
       const line = e.billing_lines as unknown as {
@@ -293,27 +305,95 @@ export async function getBillThisPeriodRows(
         description: string | null;
       } | null;
       return {
-        kind: "forecast" as const,
-        key: `f:${e.id}`,
-        entryId: e.id,
-        billingLineId: e.billing_line_id ?? "",
-        itemNumber: line?.item_number ?? "",
-        description: line?.description ?? "",
-        periodMonth: e.period_month,
-        afpNumber: e.afp_number ?? null,
-        status: e.status ?? "forecast",
-        amount: Number(e.planned_amount ?? 0),
-        retainage: Number(e.retainage_amount ?? 0),
+        e,
+        row: {
+          kind: "forecast" as const,
+          key: `f:${e.id}`,
+          entryId: e.id,
+          billingLineId: e.billing_line_id ?? "",
+          itemNumber: line?.item_number ?? "",
+          description: line?.description ?? "",
+          periodMonth: e.period_month,
+          afpNumber: e.afp_number ?? null,
+          status: e.status ?? "forecast",
+          amount: Number(e.planned_amount ?? 0),
+          retainage: Number(e.retainage_amount ?? 0),
+        } as BillableRow,
       };
     });
 
   // Now pull schedule-based suggestions for the upcoming period.
   const suggResult = await computeBillingSuggestions(projectId);
   if (!suggResult.ok) {
-    // Don't fail the whole call - just return what we have.
-    return { ok: true, rows: forecastRows };
+    return { ok: true, rows: allForecastRows.map((x) => x.row), hidden: [] };
   }
   const { suggestions, nextMonthIso } = suggResult;
+
+  // Also pull the linked tasks for each billing_line so we can run the
+  // smart estimator per forecast row (for the schedule-confirms-progress check).
+  const { data: lineInfo } = await auth.supabase
+    .from("billing_lines")
+    .select("id, linked_task_wbs_codes")
+    .eq("project_id", projectId);
+  const { data: taskInfo } = await auth.supabase
+    .from("schedule_tasks")
+    .select("wbs_code, status, start_date, end_date, pct_complete")
+    .eq("project_id", projectId);
+  const linksByLine = new Map<string, string[]>();
+  for (const l of lineInfo ?? []) {
+    linksByLine.set(l.id, l.linked_task_wbs_codes ?? []);
+  }
+  const taskEstimates = new Map<string, number>();
+  for (const t of taskInfo ?? []) {
+    taskEstimates.set(
+      t.wbs_code,
+      estimateTaskProgress(
+        {
+          status: t.status,
+          start_date: t.start_date,
+          end_date: t.end_date,
+          pct_complete: t.pct_complete,
+        },
+        todayIso,
+      ).pct,
+    );
+  }
+
+  // Filter: a forecast row appears only if (a) the line has no linked tasks
+  // - we can't validate so we trust it - or (b) the linked tasks show > 0
+  // avg progress. Items the schedule says aren't happening shouldn't appear
+  // on a "Bill this period" panel even if the import put a forecast there.
+  const forecastRows: BillableRow[] = [];
+  const hidden: HiddenForecast[] = [];
+  for (const x of allForecastRows) {
+    const links = linksByLine.get(x.row.billingLineId) ?? [];
+    if (links.length === 0) {
+      // No links - can't validate, show it.
+      forecastRows.push(x.row);
+      continue;
+    }
+    const linked = links
+      .map((c) => taskEstimates.get(c))
+      .filter((v): v is number => v != null);
+    const avgPct =
+      linked.length === 0
+        ? 0
+        : linked.reduce((s, v) => s + v, 0) / linked.length;
+    if (avgPct > 0) {
+      forecastRows.push(x.row);
+    } else if (x.row.kind === "forecast") {
+      hidden.push({
+        itemNumber: x.row.itemNumber,
+        description: x.row.description,
+        periodMonth: x.row.periodMonth,
+        amount: x.row.amount,
+        reason:
+          linked.length < links.length
+            ? `${links.length} WBS code(s) linked but ${links.length - linked.length} not found in schedule`
+            : "Linked schedule tasks show 0% progress",
+      });
+    }
+  }
 
   // Fix #2: dedup. Build a map (billingLineId -> suggestion) so we can either
   // attach the suggestion to the matching forecast (for the mismatch warning)
@@ -366,7 +446,7 @@ export async function getBillThisPeriodRows(
     return (a.itemNumber || "").localeCompare(b.itemNumber || "");
   });
 
-  return { ok: true, rows: all };
+  return { ok: true, rows: all, hidden };
 }
 
 export async function promoteSuggestionsToPlanned(

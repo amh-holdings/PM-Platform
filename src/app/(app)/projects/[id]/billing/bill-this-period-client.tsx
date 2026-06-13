@@ -10,11 +10,12 @@ import { formatCurrency } from "@/lib/format";
 import { shortMonthLabel } from "@/lib/cashflow";
 
 import { createAfpFromBillThisPeriod } from "../pay-app-actions";
-import type { BillableRow } from "../billing-actions";
+import type { BillableRow, HiddenForecast } from "../billing-actions";
 
 type Props = {
   projectId: string;
   rows: BillableRow[];
+  hidden: HiddenForecast[];
   variant: "page" | "widget";
 };
 
@@ -25,7 +26,7 @@ const CONF_STYLES: Record<string, string> = {
   none: "text-muted-foreground",
 };
 
-export function BillThisPeriodClient({ projectId, rows, variant }: Props) {
+export function BillThisPeriodClient({ projectId, rows, hidden, variant }: Props) {
   // Default selection: ALL forecast rows checked, suggestion rows unchecked
   // (so the panel acts like the old Next AFP panel by default - lower friction).
   const initialSelected = new Set(rows.filter((r) => r.kind === "forecast").map((r) => r.key));
@@ -225,6 +226,48 @@ export function BillThisPeriodClient({ projectId, rows, variant }: Props) {
             </tbody>
           </table>
         </div>
+
+        {hidden.length > 0 && (
+          <details className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+            <summary className="cursor-pointer font-medium text-amber-800">
+              {hidden.length} forecast{hidden.length === 1 ? "" : "s"} hidden - schedule shows no progress on{" "}
+              {hidden.length === 1 ? "this item" : "these items"}
+            </summary>
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              Forecast rows where the linked schedule tasks all read 0% progress.
+              If work IS happening but the schedule is stale, update the task
+              status / pct_complete on the Schedule page or via a DPR.
+            </p>
+            <table className="mt-2 w-full">
+              <thead className="text-muted-foreground">
+                <tr className="border-b border-amber-500/20">
+                  <th className="py-1 pr-2 text-left font-medium">Item</th>
+                  <th className="py-1 pr-2 text-left font-medium">Period</th>
+                  <th className="py-1 pr-2 text-right font-medium">Amount</th>
+                  <th className="py-1 pr-2 text-left font-medium">Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hidden.map((h, i) => (
+                  <tr key={i} className="border-b border-amber-500/10 last:border-0">
+                    <td className="py-1 pr-2">
+                      {h.itemNumber} {h.description}
+                    </td>
+                    <td className="py-1 pr-2">
+                      {shortMonthLabel(h.periodMonth)}
+                    </td>
+                    <td className="py-1 pr-2 text-right">
+                      {formatCurrency(h.amount)}
+                    </td>
+                    <td className="py-1 pr-2 text-muted-foreground">
+                      {h.reason}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+        )}
 
         {rows.length > 0 && (
           <div className="flex flex-wrap items-end justify-between gap-3 rounded-md border border-emerald-500/30 bg-card p-3">
