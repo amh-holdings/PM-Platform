@@ -234,6 +234,11 @@ export type BillableRow =
       status: string;
       amount: number;
       retainage: number;
+      // When a schedule-driven suggestion would have fired for the same
+      // (billing_line, period), expose the disagreement so the UI can warn.
+      scheduleSuggestedAmount?: number;
+      scheduleConfidence?: Confidence;
+      scheduleSourcesSummary?: string;
     }
   | {
       kind: "suggestion";
@@ -265,10 +270,11 @@ export async function getBillThisPeriodRows(
   const nextMonthIsoLocal = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, "0")}-01`;
 
   // Pull forecast entries within the billing window only.
+  // billing_line_id is included explicitly so dedup against suggestions works.
   const { data: entries, error: entriesErr } = await auth.supabase
     .from("billing_entries")
     .select(
-      "id, period_month, planned_amount, retainage_amount, afp_number, status, billing_lines!inner(project_id, item_number, description)",
+      "id, billing_line_id, period_month, planned_amount, retainage_amount, afp_number, status, billing_lines!inner(project_id, item_number, description)",
     )
     .eq("billing_lines.project_id", projectId)
     .in("status", ["forecast", "suggested", "reviewed"])
@@ -277,25 +283,29 @@ export async function getBillThisPeriodRows(
     .order("period_month");
   if (entriesErr) return { ok: false, error: entriesErr.message };
 
-  const forecastRows: BillableRow[] = (entries ?? []).map((e) => {
-    const line = e.billing_lines as unknown as {
-      item_number: string | null;
-      description: string | null;
-    } | null;
-    return {
-      kind: "forecast" as const,
-      key: `f:${e.id}`,
-      entryId: e.id,
-      billingLineId: (e as unknown as { billing_line_id: string }).billing_line_id ?? "",
-      itemNumber: line?.item_number ?? "",
-      description: line?.description ?? "",
-      periodMonth: e.period_month,
-      afpNumber: e.afp_number ?? null,
-      status: e.status ?? "forecast",
-      amount: Number(e.planned_amount ?? 0),
-      retainage: Number(e.retainage_amount ?? 0),
-    };
-  });
+  // Fix #1: drop zero-value placeholder rows. Can't bill $0, just clutters
+  // the list. They came in from the cash-flow xlsx import as placeholders.
+  const forecastRows: BillableRow[] = (entries ?? [])
+    .filter((e) => Number(e.planned_amount ?? 0) > 0)
+    .map((e) => {
+      const line = e.billing_lines as unknown as {
+        item_number: string | null;
+        description: string | null;
+      } | null;
+      return {
+        kind: "forecast" as const,
+        key: `f:${e.id}`,
+        entryId: e.id,
+        billingLineId: e.billing_line_id ?? "",
+        itemNumber: line?.item_number ?? "",
+        description: line?.description ?? "",
+        periodMonth: e.period_month,
+        afpNumber: e.afp_number ?? null,
+        status: e.status ?? "forecast",
+        amount: Number(e.planned_amount ?? 0),
+        retainage: Number(e.retainage_amount ?? 0),
+      };
+    });
 
   // Now pull schedule-based suggestions for the upcoming period.
   const suggResult = await computeBillingSuggestions(projectId);
@@ -305,16 +315,35 @@ export async function getBillThisPeriodRows(
   }
   const { suggestions, nextMonthIso } = suggResult;
 
-  // Build a key set of (billing_line + period) we already have as forecast
-  // so we don't duplicate. The schedule suggestion always targets nextMonthIso.
-  const forecastKey = new Set(
-    forecastRows
-      .filter((r) => r.kind === "forecast" && r.periodMonth === nextMonthIso)
-      .map((r) => (r.kind === "forecast" ? r.billingLineId : "")),
+  // Fix #2: dedup. Build a map (billingLineId -> suggestion) so we can either
+  // attach the suggestion to the matching forecast (for the mismatch warning)
+  // or surface it standalone if no forecast exists.
+  const suggestionByLineId = new Map(
+    suggestions.map((s) => [s.billingLineId, s]),
   );
+  // Track which suggestions get consumed by a forecast match so we don't
+  // double-render.
+  const consumedLineIds = new Set<string>();
+
+  // Fix #3: when a forecast row matches a schedule suggestion (same line, and
+  // forecast's period == nextMonthIso), enrich the forecast with the schedule
+  // numbers so the UI can show a mismatch warning if the values disagree.
+  const enrichedForecasts: BillableRow[] = forecastRows.map((r) => {
+    if (r.kind !== "forecast") return r;
+    if (r.periodMonth !== nextMonthIso) return r;
+    const match = suggestionByLineId.get(r.billingLineId);
+    if (!match) return r;
+    consumedLineIds.add(r.billingLineId);
+    return {
+      ...r,
+      scheduleSuggestedAmount: match.suggestedAmount,
+      scheduleConfidence: match.confidence,
+      scheduleSourcesSummary: match.sourcesSummary,
+    };
+  });
 
   const suggestionRows: BillableRow[] = suggestions
-    .filter((s) => !forecastKey.has(s.billingLineId))
+    .filter((s) => !consumedLineIds.has(s.billingLineId))
     .map((s) => ({
       kind: "suggestion" as const,
       key: `s:${s.billingLineId}:${nextMonthIso}`,
@@ -331,7 +360,7 @@ export async function getBillThisPeriodRows(
     }));
 
   // Sort: by period, then forecast before suggestion within a period
-  const all = [...forecastRows, ...suggestionRows].sort((a, b) => {
+  const all = [...enrichedForecasts, ...suggestionRows].sort((a, b) => {
     if (a.periodMonth !== b.periodMonth) return a.periodMonth.localeCompare(b.periodMonth);
     if (a.kind !== b.kind) return a.kind === "forecast" ? -1 : 1;
     return (a.itemNumber || "").localeCompare(b.itemNumber || "");

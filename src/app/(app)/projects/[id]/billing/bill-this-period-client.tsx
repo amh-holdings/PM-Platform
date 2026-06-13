@@ -171,6 +171,25 @@ export function BillThisPeriodClient({ projectId, rows, variant }: Props) {
                           {formatCurrency(r.alreadyBilled)} - {r.sourcesSummary}
                         </div>
                       )}
+                      {r.kind === "forecast" &&
+                        r.scheduleSuggestedAmount != null &&
+                        (() => {
+                          const sched = r.scheduleSuggestedAmount ?? 0;
+                          const fcst = r.amount;
+                          const ratio = sched > 0 ? fcst / sched : Infinity;
+                          const bigMismatch = ratio >= 1.5 || ratio <= 0.5;
+                          return (
+                            <div
+                              className={cn(
+                                "mt-0.5 text-[10px]",
+                                bigMismatch ? "text-amber-700 font-medium" : "text-muted-foreground",
+                              )}
+                            >
+                              {bigMismatch && "⚠ "}
+                              Schedule says {formatCurrency(sched)} ({r.scheduleConfidence} conf, {r.scheduleSourcesSummary})
+                            </div>
+                          );
+                        })()}
                     </td>
                     <td className="py-1.5 pr-2">
                       {shortMonthLabel(r.periodMonth)}
