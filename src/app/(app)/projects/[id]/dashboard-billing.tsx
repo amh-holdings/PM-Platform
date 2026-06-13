@@ -8,8 +8,8 @@ import {
   shortMonthLabel,
 } from "@/lib/cashflow";
 
+import { BillThisPeriodPanel } from "./billing/bill-this-period-panel";
 import { DashboardBillingChart } from "./dashboard-billing-chart";
-import { NextAfpPanel } from "./billing/next-afp-panel";
 
 type Props = {
   projectId: string;
@@ -206,7 +206,7 @@ export async function DashboardBilling({ projectId }: Props) {
         </div>
       </div>
 
-      <NextAfpPanel projectId={projectId} variant="widget" />
+      <BillThisPeriodPanel projectId={projectId} variant="widget" />
 
       <DashboardBillingChart data={chartData} />
 

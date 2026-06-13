@@ -3,8 +3,7 @@ import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 
 import { BillingLinkForm } from "../billing-link-form";
-import { BillingSuggestionsPanel } from "./billing-suggestions-panel";
-import { NextAfpPanel } from "./next-afp-panel";
+import { BillThisPeriodPanel } from "./bill-this-period-panel";
 
 type Params = { id: string };
 
@@ -56,9 +55,7 @@ export default async function ProjectBillingPage({ params }: { params: Params })
         </p>
       </div>
 
-      <NextAfpPanel projectId={params.id} variant="page" />
-
-      <BillingSuggestionsPanel projectId={params.id} />
+      <BillThisPeriodPanel projectId={params.id} variant="page" />
 
       <div className="overflow-x-auto rounded-lg border bg-card shadow-sm">
         <table className="w-full text-sm">

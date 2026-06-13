@@ -210,6 +210,130 @@ export type PromoteResult =
   | { ok: true; written: number; period_month: string }
   | { ok: false; error: string };
 
+// ============ UNIFIED "BILL THIS PERIOD" ============
+// Combines forecast billing_entries (existing rows) with schedule-driven
+// suggestions (computed live) into a single billable-rows list. Dedup: if
+// a billing_line already has a forecast entry for the suggestion's target
+// period, the forecast wins (we don't show both).
+//
+// The Bill This Period panel renders this list with checkboxes - user
+// picks what to bill, optionally tweaks amounts, then a single Create AFP
+// action wraps everything into a pay application (creating any missing
+// billing_entries on the fly).
+
+export type BillableRow =
+  | {
+      kind: "forecast";
+      key: string;                    // entry id
+      entryId: string;
+      billingLineId: string;
+      itemNumber: string;
+      description: string;
+      periodMonth: string;
+      afpNumber: string | null;
+      status: string;
+      amount: number;
+      retainage: number;
+    }
+  | {
+      kind: "suggestion";
+      key: string;                    // billing_line_id + period
+      billingLineId: string;
+      itemNumber: string;
+      description: string;
+      periodMonth: string;
+      amount: number;
+      confidence: Confidence;
+      sourcesSummary: string;
+      reasons: string[];
+      alreadyBilled: number;
+      targetPct: number;
+    };
+
+export async function getBillThisPeriodRows(
+  projectId: string,
+): Promise<{ ok: true; rows: BillableRow[] } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const today = new Date();
+  const thisMonthIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+
+  // Pull forecast entries (status forecast/suggested/reviewed, future periods).
+  const { data: entries, error: entriesErr } = await auth.supabase
+    .from("billing_entries")
+    .select(
+      "id, period_month, planned_amount, retainage_amount, afp_number, status, billing_lines!inner(project_id, item_number, description)",
+    )
+    .eq("billing_lines.project_id", projectId)
+    .in("status", ["forecast", "suggested", "reviewed"])
+    .gte("period_month", thisMonthIso)
+    .order("period_month");
+  if (entriesErr) return { ok: false, error: entriesErr.message };
+
+  const forecastRows: BillableRow[] = (entries ?? []).map((e) => {
+    const line = e.billing_lines as unknown as {
+      item_number: string | null;
+      description: string | null;
+    } | null;
+    return {
+      kind: "forecast" as const,
+      key: `f:${e.id}`,
+      entryId: e.id,
+      billingLineId: (e as unknown as { billing_line_id: string }).billing_line_id ?? "",
+      itemNumber: line?.item_number ?? "",
+      description: line?.description ?? "",
+      periodMonth: e.period_month,
+      afpNumber: e.afp_number ?? null,
+      status: e.status ?? "forecast",
+      amount: Number(e.planned_amount ?? 0),
+      retainage: Number(e.retainage_amount ?? 0),
+    };
+  });
+
+  // Now pull schedule-based suggestions for the upcoming period.
+  const suggResult = await computeBillingSuggestions(projectId);
+  if (!suggResult.ok) {
+    // Don't fail the whole call - just return what we have.
+    return { ok: true, rows: forecastRows };
+  }
+  const { suggestions, nextMonthIso } = suggResult;
+
+  // Build a key set of (billing_line + period) we already have as forecast
+  // so we don't duplicate. The schedule suggestion always targets nextMonthIso.
+  const forecastKey = new Set(
+    forecastRows
+      .filter((r) => r.kind === "forecast" && r.periodMonth === nextMonthIso)
+      .map((r) => (r.kind === "forecast" ? r.billingLineId : "")),
+  );
+
+  const suggestionRows: BillableRow[] = suggestions
+    .filter((s) => !forecastKey.has(s.billingLineId))
+    .map((s) => ({
+      kind: "suggestion" as const,
+      key: `s:${s.billingLineId}:${nextMonthIso}`,
+      billingLineId: s.billingLineId,
+      itemNumber: s.itemNumber,
+      description: s.description,
+      periodMonth: nextMonthIso,
+      amount: s.suggestedAmount,
+      confidence: s.confidence,
+      sourcesSummary: s.sourcesSummary,
+      reasons: s.reasons,
+      alreadyBilled: s.alreadyBilled,
+      targetPct: s.targetPct,
+    }));
+
+  // Sort: by period, then forecast before suggestion within a period
+  const all = [...forecastRows, ...suggestionRows].sort((a, b) => {
+    if (a.periodMonth !== b.periodMonth) return a.periodMonth.localeCompare(b.periodMonth);
+    if (a.kind !== b.kind) return a.kind === "forecast" ? -1 : 1;
+    return (a.itemNumber || "").localeCompare(b.itemNumber || "");
+  });
+
+  return { ok: true, rows: all };
+}
+
 export async function promoteSuggestionsToPlanned(
   projectId: string,
 ): Promise<PromoteResult> {

@@ -294,6 +294,154 @@ export async function deletePayApplication(
   return { ok: true };
 }
 
+// Unified "Bill this period" flow: the PM checks a mix of (a) existing
+// forecast billing_entries and (b) schedule-based suggestions in one panel,
+// then clicks Create AFP. For suggestions, we first create the billing_entries
+// row at the requested period+amount, then stamp it onto the new pay app
+// just like a normal forecast. For forecasts, we just stamp.
+export async function createAfpFromBillThisPeriod(
+  formData: FormData,
+): Promise<void> {
+  const projectId = String(formData.get("projectId") ?? "").trim();
+  const appNumberInput = String(formData.get("appNumber") ?? "").trim();
+  // Parallel arrays - forecast entry IDs and suggestion details. The order
+  // within each array is preserved by FormData.getAll().
+  const forecastEntryIds = formData
+    .getAll("forecastEntryIds")
+    .map((v) => String(v))
+    .filter((v) => v.length > 0);
+  const suggLineIds = formData
+    .getAll("suggestionLineIds")
+    .map((v) => String(v))
+    .filter((v) => v.length > 0);
+  const suggAmounts = formData
+    .getAll("suggestionAmounts")
+    .map((v) => Number(v));
+  const suggPeriods = formData
+    .getAll("suggestionPeriods")
+    .map((v) => String(v));
+
+  if (!projectId) throw new Error("projectId required");
+  if (forecastEntryIds.length === 0 && suggLineIds.length === 0) {
+    throw new Error("Select at least one row to bill");
+  }
+  if (
+    suggLineIds.length !== suggAmounts.length ||
+    suggLineIds.length !== suggPeriods.length
+  ) {
+    throw new Error("Suggestion arrays out of sync");
+  }
+
+  const auth = await assertAhcUser();
+  if (!auth.ok) throw new Error(auth.error);
+
+  // 1. Create billing_entries rows for the suggestions (so we can wrap them
+  //    just like any other forecast entry).
+  const newEntryIds: string[] = [];
+  for (let i = 0; i < suggLineIds.length; i++) {
+    const billingLineId = suggLineIds[i];
+    const periodMonth = suggPeriods[i];
+    const amount = suggAmounts[i];
+    if (amount <= 0 || !billingLineId || !periodMonth) continue;
+
+    // Upsert: if a row already exists at (billing_line_id, period_month),
+    // we updated planned_amount; otherwise insert.
+    const { data: existing } = await auth.supabase
+      .from("billing_entries")
+      .select("id, planned_amount")
+      .eq("billing_line_id", billingLineId)
+      .eq("period_month", periodMonth)
+      .maybeSingle();
+
+    let entryId: string;
+    if (existing) {
+      // Bump planned_amount to whatever the user submitted.
+      const { error: upErr } = await auth.supabase
+        .from("billing_entries")
+        .update({
+          planned_amount: amount,
+          status: "suggested",
+          notes: "From Bill this period (schedule-driven)",
+        })
+        .eq("id", existing.id);
+      if (upErr) throw new Error(upErr.message);
+      entryId = existing.id;
+    } else {
+      const { data: inserted, error: insErr } = await auth.supabase
+        .from("billing_entries")
+        .insert({
+          billing_line_id: billingLineId,
+          period_month: periodMonth,
+          planned_amount: amount,
+          actual_amount: 0,
+          status: "suggested",
+          notes: "From Bill this period (schedule-driven)",
+        })
+        .select("id")
+        .single();
+      if (insErr || !inserted) throw new Error(insErr?.message ?? "Insert failed");
+      entryId = inserted.id;
+    }
+    newEntryIds.push(entryId);
+  }
+
+  // 2. All entries to stamp = forecasts the user picked + newly created suggestion entries.
+  const allEntryIds = [...forecastEntryIds, ...newEntryIds];
+
+  // 3. Fetch them to compute period bounds.
+  const { data: selectedEntries, error: selErr } = await auth.supabase
+    .from("billing_entries")
+    .select("id, period_month, afp_number, billing_lines!inner(project_id)")
+    .in("id", allEntryIds);
+  if (selErr || !selectedEntries || selectedEntries.length === 0) {
+    throw new Error(selErr?.message ?? "No selected entries found");
+  }
+
+  const months = selectedEntries.map((e) => e.period_month).sort();
+  const startMonth = months[0];
+  const endMonth = months[months.length - 1];
+  const [sy, sm] = startMonth.split("-").map(Number);
+  const [ey, em] = endMonth.split("-").map(Number);
+  const periodStart = `${sy}-${String(sm).padStart(2, "0")}-01`;
+  const lastDay = new Date(Date.UTC(ey, em, 0)).getUTCDate();
+  const periodEnd = `${ey}-${String(em).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+  // 4. App number: form input, or first forecast's afp_number, or next sequential.
+  let appNumber = appNumberInput;
+  if (!appNumber) {
+    const firstWithAfp = selectedEntries.find((e) => e.afp_number);
+    if (firstWithAfp) appNumber = firstWithAfp.afp_number ?? "";
+  }
+  if (!appNumber) {
+    const { count } = await auth.supabase
+      .from("pay_applications")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", projectId);
+    appNumber = `AFP ${(count ?? 0) + 1}`;
+  }
+
+  const { data: project } = await auth.supabase
+    .from("projects")
+    .select("retainage_pct_default")
+    .eq("id", projectId)
+    .maybeSingle();
+  const retainagePct = Number(project?.retainage_pct_default ?? 5);
+
+  const result = await createPayApplication({
+    projectId,
+    appNumber,
+    periodStart,
+    periodEnd,
+    retainagePct,
+    onlyEntryIds: allEntryIds,
+  });
+  if (!result.ok) throw new Error(result.error);
+
+  revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}/pay-apps`);
+  revalidatePath(`/projects/${projectId}`);
+}
+
 // Multi-select flow: PM checks one or more forecast entries in the Next AFP
 // panel, enters an AFP number, clicks Create. We wrap exactly those entries
 // in a single pay_application - no chance of grabbing more than was checked,
