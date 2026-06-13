@@ -78,8 +78,9 @@ export function BillThisPeriodClient({ projectId, rows, variant }: Props) {
             Bill this period
           </h3>
           <p className="text-xs text-muted-foreground">
-            Existing forecast bills + schedule-driven suggestions in one list.
-            Check what you want, tweak amounts, create the AFP in one click.
+            What the schedule says is billable this month + next. Mix of
+            existing forecasts and live schedule-driven suggestions. Far-future
+            forecasts are on the Billing timeline below.
           </p>
         </div>
       </div>

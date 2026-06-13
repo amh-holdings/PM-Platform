@@ -258,8 +258,13 @@ export async function getBillThisPeriodRows(
 
   const today = new Date();
   const thisMonthIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+  // Tight billing window: current month + immediate next month only. Far-future
+  // forecasts (esp. from bulk cash-flow imports) belong on the timeline chart,
+  // not on the "Bill this period" action panel.
+  const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  const nextMonthIsoLocal = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, "0")}-01`;
 
-  // Pull forecast entries (status forecast/suggested/reviewed, future periods).
+  // Pull forecast entries within the billing window only.
   const { data: entries, error: entriesErr } = await auth.supabase
     .from("billing_entries")
     .select(
@@ -268,6 +273,7 @@ export async function getBillThisPeriodRows(
     .eq("billing_lines.project_id", projectId)
     .in("status", ["forecast", "suggested", "reviewed"])
     .gte("period_month", thisMonthIso)
+    .lte("period_month", nextMonthIsoLocal)
     .order("period_month");
   if (entriesErr) return { ok: false, error: entriesErr.message };
 
