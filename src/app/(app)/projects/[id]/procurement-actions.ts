@@ -226,6 +226,29 @@ export async function markMilestonePaid(
   return { ok: true };
 }
 
+// Attach an already-uploaded project_document to a procurement_orders row.
+// Used by the inline "Upload signed PO" button on the PO detail page so
+// the client doesn't need to re-submit the full edit form just to link
+// a freshly uploaded PDF.
+export async function linkProcurementDocument(
+  poId: string,
+  projectId: string,
+  documentId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { error } = await auth.supabase
+    .from("procurement_orders")
+    .update({ document_id: documentId })
+    .eq("id", poId)
+    .eq("project_id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  return { ok: true };
+}
+
 // Mark a PO as signed (or unsigned). Only signed POs count toward
 // procurement-driven billing suggestions, so this is the trigger that
 // unlocks billing on a procurement-scope SOV line.

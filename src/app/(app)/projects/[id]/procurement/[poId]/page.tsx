@@ -9,6 +9,7 @@ import { formatCurrency, formatDate } from "@/lib/format";
 import { ExtractPoMilestones } from "./extract-po-milestones";
 import { MilestoneEditor } from "./milestone-editor";
 import { PoSignToggle } from "./sign-toggle";
+import { UploadSignedPo } from "./upload-signed-po";
 
 type Params = { id: string; poId: string };
 
@@ -109,6 +110,13 @@ export default async function ProcurementDetailPage({
         poId={po.id}
         projectId={params.id}
         signedAt={po.signed_at}
+      />
+
+      <UploadSignedPo
+        poId={po.id}
+        projectId={params.id}
+        hasExistingDoc={Boolean(po.document_id)}
+        isSigned={Boolean(po.signed_at)}
       />
 
       <section className="grid gap-3 sm:grid-cols-4">
