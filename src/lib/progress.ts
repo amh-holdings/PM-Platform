@@ -213,6 +213,14 @@ export function estimateProcurementProgress(
       reason: "Billing line has no scheduled value",
     };
   }
+  // Pct represents "fraction of scope covered by signed POs."
+  // The suggestion engine multiplies this by scheduled_value to get target,
+  // then subtracts already_billed. That subtraction is wrong for procurement
+  // (historical billings were for unrelated scope, not these POs), so we
+  // cheat: return pct such that target = totalPoValue exactly. The engine's
+  // remaining math will then compute totalPoValue - already_billed and may
+  // hide the row, but our caller in getBillThisPeriodRows uses the SAME
+  // billable math (no subtraction) and overrides this for procurement rows.
   const pct = Math.min(1, totalPoValue / scheduledValue);
   return {
     pct,

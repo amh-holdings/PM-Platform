@@ -480,8 +480,18 @@ export async function getBillThisPeriodRows(
     const lineMeta = lineById.get(x.row.billingLineId);
 
     // PROCUREMENT LINES: signal is SIGNED PO link (drafts don't count).
-    // Forecast amount gets CAPPED by what signed POs actually justify so the
-    // panel can't show $168k billable when only $31k is signed.
+    // Billable amount = signed PO total (capped at scheduled_value).
+    //
+    // We DON'T subtract billedByLine[total_billed] here because historical
+    // billings (from cash-flow import or older AFPs) were for OTHER scope
+    // unrelated to the currently-linked POs. Subtracting them would block
+    // billing for newly-signed POs which is wrong - signing a new PO
+    // commits new cost that the owner needs to pay for.
+    //
+    // KNOWN LIMITATION: this means re-signing the same PO month after
+    // month would show the same billable amount, and the PM could create
+    // duplicate AFPs for the same PO. Tracking per-PO billed_at on
+    // procurement_orders is the next step to prevent this.
     if (lineMeta && isProcurementLine(lineMeta)) {
       const poIds = lineMeta.linked_procurement_order_ids ?? [];
       const linked = poIds.map((id) => poStateById.get(id)).filter(Boolean) as Array<{
@@ -497,40 +507,28 @@ export async function getBillThisPeriodRows(
         0,
       );
       const scheduledValue = Number(lineMeta.scheduled_value ?? 0);
-      const billed = billedByLine.get(x.row.billingLineId) ?? 0;
-      const target = Math.min(signedTotal, scheduledValue);
-      const billable = Math.max(0, target - billed);
+      const billable = Math.min(signedTotal, scheduledValue);
 
       if (billable > 0) {
-        // Cap the row's amount at what's actually billable based on signed
-        // PO coverage. Forecast says $168k? Doesn't matter, signed PO total
-        // - billed = $X is the real ceiling.
-        const cappedAmount = Math.min(x.row.amount, billable);
+        // Override forecast amount with the signed PO total (NOT the stale
+        // import value of $168k for POI etc).
         forecastRows.push({
           ...x.row,
-          amount: cappedAmount,
+          amount: billable,
         });
       } else if (x.row.kind === "forecast") {
         const draftCount = linked.filter(
           (p) => p.status !== "cancelled" && !p.signed_at,
         ).length;
-        const usd = (n: number) =>
-          "$" + Math.round(n).toLocaleString("en-US");
-        let reason: string;
-        if (signedActive.length === 0) {
-          reason =
-            draftCount > 0
-              ? `${draftCount} PO(s) linked but unsigned - mark a PO as signed to unlock billing`
-              : "Procurement line has no signed POs - submit + sign a PO to unlock billing";
-        } else {
-          reason = `Signed PO total ${usd(signedTotal)} ≤ already billed ${usd(billed)} - sign more POs to unlock additional billing`;
-        }
         hidden.push({
           itemNumber: x.row.itemNumber,
           description: x.row.description,
           periodMonth: x.row.periodMonth,
           amount: x.row.amount,
-          reason,
+          reason:
+            draftCount > 0
+              ? `${draftCount} PO(s) linked but unsigned - mark a PO as signed to unlock billing`
+              : "Procurement line has no signed POs - submit + sign a PO to unlock billing",
         });
       }
       continue;
