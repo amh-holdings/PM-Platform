@@ -5,7 +5,9 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import {
   aggregateConfidence,
+  estimateProcurementProgress,
   estimateTaskProgress,
+  isProcurementLine,
   type Confidence,
   type ProgressEstimate,
 } from "@/lib/progress";
@@ -121,10 +123,10 @@ export async function computeBillingSuggestions(
   const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1);
   const nextMonthIso = `${nextMonthStart.getFullYear()}-${String(nextMonthStart.getMonth() + 1).padStart(2, "0")}-01`;
 
-  const [{ data: lines }, { data: tasks }, { data: totals }] = await Promise.all([
+  const [{ data: lines }, { data: tasks }, { data: totals }, { data: pos }] = await Promise.all([
     auth.supabase
       .from("billing_lines")
-      .select("id, item_number, description, scheduled_value, linked_task_wbs_codes")
+      .select("id, item_number, description, type, scheduled_value, linked_task_wbs_codes, linked_procurement_order_ids")
       .eq("project_id", projectId),
     auth.supabase
       .from("schedule_tasks")
@@ -133,6 +135,10 @@ export async function computeBillingSuggestions(
     auth.supabase
       .from("v_billing_line_totals")
       .select("billing_line_id, total_billed, remaining_to_bill")
+      .eq("project_id", projectId),
+    auth.supabase
+      .from("procurement_orders")
+      .select("id, po_number, vendor_name, total_value, status")
       .eq("project_id", projectId),
   ]);
 
@@ -161,27 +167,58 @@ export async function computeBillingSuggestions(
       remaining: Number(t.remaining_to_bill ?? 0),
     });
   }
+  // Index POs by id so we can resolve linked_procurement_order_ids quickly.
+  const poById = new Map<string, { total_value: number | null; status: string | null }>();
+  for (const p of pos ?? []) {
+    poById.set(p.id, { total_value: p.total_value, status: p.status });
+  }
 
   const suggestions: BillingSuggestion[] = [];
   for (const line of lines ?? []) {
-    const links = line.linked_task_wbs_codes ?? [];
-    if (links.length === 0) continue;
-    const matched = links
-      .map((c) => estimateByCode.get(c))
-      .filter((e): e is ProgressEstimate => !!e);
-    if (matched.length === 0) continue;
-    const avgPct = matched.reduce((s, e) => s + e.pct, 0) / matched.length;
-    const confidence: Confidence = aggregateConfidence(matched.map((e) => e.confidence));
+    const scheduledValue = Number(line.scheduled_value ?? 0);
+    const t = totalsById.get(line.id) ?? { billed: 0, remaining: scheduledValue };
+
+    let estimateRecords: ProgressEstimate[] = [];
+    let linkedCount = 0;
+
+    // Procurement-scope lines: progress comes from PO state, NOT schedule date math.
+    if (isProcurementLine(line)) {
+      const poIds = (line as unknown as { linked_procurement_order_ids: string[] | null })
+        .linked_procurement_order_ids ?? [];
+      const linkedPos = poIds
+        .map((id) => poById.get(id))
+        .filter((p): p is { total_value: number | null; status: string | null } => !!p);
+      const procEst = estimateProcurementProgress(
+        { scheduled_value: scheduledValue },
+        linkedPos,
+      );
+      estimateRecords = [procEst];
+      linkedCount = linkedPos.length;
+    } else {
+      // Non-procurement lines: existing schedule-task-driven logic.
+      const links = line.linked_task_wbs_codes ?? [];
+      if (links.length === 0) continue;
+      const matched = links
+        .map((c) => estimateByCode.get(c))
+        .filter((e): e is ProgressEstimate => !!e);
+      if (matched.length === 0) continue;
+      estimateRecords = matched;
+      linkedCount = matched.length;
+    }
+
+    const avgPct =
+      estimateRecords.reduce((s, e) => s + e.pct, 0) / estimateRecords.length;
+    const confidence: Confidence = aggregateConfidence(
+      estimateRecords.map((e) => e.confidence),
+    );
     const sourceCounts = new Map<string, number>();
-    for (const e of matched) {
+    for (const e of estimateRecords) {
       sourceCounts.set(e.source, (sourceCounts.get(e.source) ?? 0) + 1);
     }
     const sourcesSummary = Array.from(sourceCounts.entries())
       .map(([k, v]) => `${v} ${k}`)
       .join(", ");
-    const scheduledValue = Number(line.scheduled_value ?? 0);
     const target = avgPct * scheduledValue;
-    const t = totalsById.get(line.id) ?? { billed: 0, remaining: scheduledValue };
     const raw = target - t.billed;
     const suggested = Math.max(0, Math.min(t.remaining, raw));
     if (suggested <= 0) continue;
@@ -192,11 +229,11 @@ export async function computeBillingSuggestions(
       scheduledValue,
       alreadyBilled: t.billed,
       remaining: t.remaining,
-      linkedTaskCount: matched.length,
+      linkedTaskCount: linkedCount,
       targetPct: avgPct,
       suggestedAmount: Math.round(suggested * 100) / 100,
       confidence,
-      reasons: matched.map((e) => e.reason),
+      reasons: estimateRecords.map((e) => e.reason),
       sourcesSummary,
     });
   }
@@ -204,6 +241,31 @@ export async function computeBillingSuggestions(
   suggestions.sort((a, b) => b.suggestedAmount - a.suggestedAmount);
 
   return { ok: true, suggestions, nextMonthIso };
+}
+
+// Save the procurement_order links for a billing_line. Used by the inline
+// PO linker on the /billing page. Pass an array of procurement_order ids
+// (or empty array to clear).
+export async function updateBillingLineProcurementLinks(
+  billingLineId: string,
+  projectId: string,
+  poIds: string[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { error } = await auth.supabase
+    .from("billing_lines")
+    .update({
+      linked_procurement_order_ids: poIds.length > 0 ? poIds : null,
+    } as never)
+    .eq("id", billingLineId)
+    .eq("project_id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
 }
 
 export type PromoteResult =
@@ -329,19 +391,37 @@ export async function getBillThisPeriodRows(
   }
   const { suggestions, nextMonthIso } = suggResult;
 
-  // Also pull the linked tasks for each billing_line so we can run the
-  // smart estimator per forecast row (for the schedule-confirms-progress check).
+  // Pull line + task info so we can decide per forecast row whether the
+  // schedule (or for procurement lines, the PO state) supports billing.
   const { data: lineInfo } = await auth.supabase
     .from("billing_lines")
-    .select("id, linked_task_wbs_codes")
+    .select("id, type, description, scheduled_value, linked_task_wbs_codes, linked_procurement_order_ids")
     .eq("project_id", projectId);
   const { data: taskInfo } = await auth.supabase
     .from("schedule_tasks")
     .select("wbs_code, status, start_date, end_date, pct_complete")
     .eq("project_id", projectId);
-  const linksByLine = new Map<string, string[]>();
+  const { data: posInfo } = await auth.supabase
+    .from("procurement_orders")
+    .select("id, total_value, status")
+    .eq("project_id", projectId);
+
+  const lineById = new Map<string, {
+    type: string | null;
+    description: string | null;
+    scheduled_value: number | null;
+    linked_task_wbs_codes: string[] | null;
+    linked_procurement_order_ids: string[] | null;
+  }>();
   for (const l of lineInfo ?? []) {
-    linksByLine.set(l.id, l.linked_task_wbs_codes ?? []);
+    lineById.set(l.id, {
+      type: l.type,
+      description: l.description,
+      scheduled_value: l.scheduled_value,
+      linked_task_wbs_codes: l.linked_task_wbs_codes,
+      linked_procurement_order_ids: (l as unknown as { linked_procurement_order_ids: string[] | null })
+        .linked_procurement_order_ids,
+    });
   }
   const taskEstimates = new Map<string, number>();
   for (const t of taskInfo ?? []) {
@@ -358,17 +438,46 @@ export async function getBillThisPeriodRows(
       ).pct,
     );
   }
+  const poStateById = new Map<string, { total_value: number | null; status: string | null }>();
+  for (const p of posInfo ?? []) {
+    poStateById.set(p.id, { total_value: p.total_value, status: p.status });
+  }
 
-  // Filter: a forecast row appears only if (a) the line has no linked tasks
-  // - we can't validate so we trust it - or (b) the linked tasks show > 0
-  // avg progress. Items the schedule says aren't happening shouldn't appear
-  // on a "Bill this period" panel even if the import put a forecast there.
+  // Filter: a forecast row appears only if the schedule (or PO state, for
+  // procurement lines) confirms work / scope is being billed. Items the
+  // signals say aren't happening shouldn't appear on a "Bill this period"
+  // panel even if the import put a forecast there.
   const forecastRows: BillableRow[] = [];
   const hidden: HiddenForecast[] = [];
   for (const x of allForecastRows) {
-    const links = linksByLine.get(x.row.billingLineId) ?? [];
+    const lineMeta = lineById.get(x.row.billingLineId);
+
+    // PROCUREMENT LINES: signal is PO link (and active status).
+    if (lineMeta && isProcurementLine(lineMeta)) {
+      const poIds = lineMeta.linked_procurement_order_ids ?? [];
+      const activePos = poIds
+        .map((id) => poStateById.get(id))
+        .filter((p): p is { total_value: number | null; status: string | null } =>
+          !!p && p.status !== "cancelled",
+        );
+      if (activePos.length > 0) {
+        forecastRows.push(x.row);
+      } else if (x.row.kind === "forecast") {
+        hidden.push({
+          itemNumber: x.row.itemNumber,
+          description: x.row.description,
+          periodMonth: x.row.periodMonth,
+          amount: x.row.amount,
+          reason:
+            "Procurement line has no active linked POs - submit a PO to unlock billing",
+        });
+      }
+      continue;
+    }
+
+    // NON-PROCUREMENT: schedule task signal.
+    const links = lineMeta?.linked_task_wbs_codes ?? [];
     if (links.length === 0) {
-      // No links - can't validate, show it.
       forecastRows.push(x.row);
       continue;
     }

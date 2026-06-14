@@ -2,7 +2,10 @@ import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 
+import { isProcurementLine } from "@/lib/progress";
+
 import { BillingLinkForm } from "../billing-link-form";
+import { BillingPoLinkForm } from "../billing-po-link-form";
 import { BillThisPeriodPanel } from "./bill-this-period-panel";
 
 type Params = { id: string };
@@ -10,11 +13,11 @@ type Params = { id: string };
 export default async function ProjectBillingPage({ params }: { params: Params }) {
   const supabase = createClient();
 
-  const [{ data: lines, error: linesErr }, { data: totals }] = await Promise.all([
+  const [{ data: lines, error: linesErr }, { data: totals }, { data: pos }] = await Promise.all([
     supabase
       .from("billing_lines")
       .select(
-        "id, item_number, type, description, scheduled_value, linked_task_wbs_codes, sort_order, change_order_id",
+        "id, item_number, type, description, scheduled_value, linked_task_wbs_codes, linked_procurement_order_ids, sort_order, change_order_id",
       )
       .eq("project_id", params.id)
       .order("sort_order", { ascending: true, nullsFirst: false })
@@ -23,7 +26,20 @@ export default async function ProjectBillingPage({ params }: { params: Params })
       .from("v_billing_line_totals")
       .select("billing_line_id, total_billed, total_planned, remaining_to_bill")
       .eq("project_id", params.id),
+    supabase
+      .from("procurement_orders")
+      .select("id, po_number, vendor_name, total_value, status")
+      .eq("project_id", params.id)
+      .order("po_number"),
   ]);
+
+  const availablePos = (pos ?? []).map((p) => ({
+    id: p.id,
+    poNumber: p.po_number,
+    vendorName: p.vendor_name,
+    totalValue: Number(p.total_value ?? 0),
+    status: p.status,
+  }));
 
   if (linesErr) {
     return (
@@ -68,7 +84,7 @@ export default async function ProjectBillingPage({ params }: { params: Params })
               <th className="px-3 py-2 text-right font-medium">Billed</th>
               <th className="px-3 py-2 text-right font-medium">Planned</th>
               <th className="px-3 py-2 text-right font-medium">Remaining</th>
-              <th className="px-3 py-2 text-left font-medium">Linked tasks</th>
+              <th className="px-3 py-2 text-left font-medium">Linked tasks / POs</th>
             </tr>
           </thead>
           <tbody>
@@ -115,13 +131,30 @@ export default async function ProjectBillingPage({ params }: { params: Params })
                     {formatCurrency(t.remaining)}
                   </td>
                   <td className="px-3 py-2">
-                    <BillingLinkForm
-                      billingLineId={r.id}
-                      projectId={params.id}
-                      itemNumber={r.item_number}
-                      description={r.description}
-                      initialCodes={links}
-                    />
+                    {isProcurementLine({
+                      type: r.type,
+                      description: r.description,
+                    }) ? (
+                      <BillingPoLinkForm
+                        billingLineId={r.id}
+                        projectId={params.id}
+                        itemNumber={r.item_number}
+                        description={r.description}
+                        initialPoIds={
+                          (r as unknown as { linked_procurement_order_ids: string[] | null })
+                            .linked_procurement_order_ids ?? []
+                        }
+                        availablePos={availablePos}
+                      />
+                    ) : (
+                      <BillingLinkForm
+                        billingLineId={r.id}
+                        projectId={params.id}
+                        itemNumber={r.item_number}
+                        description={r.description}
+                        initialCodes={links}
+                      />
+                    )}
                   </td>
                 </tr>
               );

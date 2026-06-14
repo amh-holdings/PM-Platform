@@ -152,3 +152,59 @@ export function aggregateConfidence(items: Confidence[]): Confidence {
   if (items.some((c) => c === "medium")) return "medium";
   return "high";
 }
+
+// Detect whether a billing_line is procurement-scope. Procurement billing is
+// triggered by PO submission, not by schedule date math, so the suggestion
+// engine treats these lines specially.
+export function isProcurementLine(line: {
+  type?: string | null;
+  description?: string | null;
+}): boolean {
+  if (!line) return false;
+  const t = (line.type ?? "").toLowerCase();
+  const d = (line.description ?? "").toLowerCase();
+  if (t === "procurement") return true;
+  // LNTP rows that are equipment procurement (Tracker/Racking Procurement,
+  // Pile Procurement, Transformer Procurement, etc.) - typed LNTP but
+  // described as procurement.
+  if (d.includes("procurement")) return true;
+  return false;
+}
+
+// Progress signal for procurement-scope billing lines. The signal is the
+// total value of linked procurement_orders compared to the billing line's
+// scheduled value. When no PO is linked, return 0 (no PO = no billing).
+export function estimateProcurementProgress(
+  line: { scheduled_value?: number | null },
+  linkedPos: { total_value?: number | null; status?: string | null }[],
+): ProgressEstimate {
+  const activePos = linkedPos.filter((p) => p.status !== "cancelled");
+  if (activePos.length === 0) {
+    return {
+      pct: 0,
+      confidence: "high",
+      source: "no_signal",
+      reason: "No active procurement order linked - submit a PO to bill this scope",
+    };
+  }
+  const totalPoValue = activePos.reduce(
+    (s, p) => s + Number(p.total_value ?? 0),
+    0,
+  );
+  const scheduledValue = Number(line.scheduled_value ?? 0);
+  if (scheduledValue <= 0) {
+    return {
+      pct: 0,
+      confidence: "low",
+      source: "no_signal",
+      reason: "Billing line has no scheduled value",
+    };
+  }
+  const pct = Math.min(1, totalPoValue / scheduledValue);
+  return {
+    pct,
+    confidence: "high",
+    source: "pct_complete",
+    reason: `${activePos.length} PO(s) totaling $${totalPoValue.toLocaleString("en-US")} against scope $${scheduledValue.toLocaleString("en-US")} = ${Math.round(pct * 100)}% covered`,
+  };
+}

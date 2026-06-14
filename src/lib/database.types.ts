@@ -86,6 +86,7 @@ export type Database = {
           description: string
           id: string
           item_number: string
+          linked_procurement_order_ids: string[] | null
           linked_task_wbs_codes: string[] | null
           notes: string | null
           project_id: string
@@ -99,6 +100,7 @@ export type Database = {
           description: string
           id?: string
           item_number: string
+          linked_procurement_order_ids?: string[] | null
           linked_task_wbs_codes?: string[] | null
           notes?: string | null
           project_id: string
@@ -112,6 +114,7 @@ export type Database = {
           description?: string
           id?: string
           item_number?: string
+          linked_procurement_order_ids?: string[] | null
           linked_task_wbs_codes?: string[] | null
           notes?: string | null
           project_id?: string
