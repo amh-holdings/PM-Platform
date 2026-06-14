@@ -1070,6 +1070,8 @@ export type Database = {
           payment_terms_summary: string | null
           po_number: string | null
           project_id: string
+          signed_at: string | null
+          signed_by: string | null
           status: string | null
           total_value: number | null
           vendor_name: string
@@ -1086,6 +1088,8 @@ export type Database = {
           payment_terms_summary?: string | null
           po_number?: string | null
           project_id: string
+          signed_at?: string | null
+          signed_by?: string | null
           status?: string | null
           total_value?: number | null
           vendor_name: string
@@ -1102,6 +1106,8 @@ export type Database = {
           payment_terms_summary?: string | null
           po_number?: string | null
           project_id?: string
+          signed_at?: string | null
+          signed_by?: string | null
           status?: string | null
           total_value?: number | null
           vendor_name?: string

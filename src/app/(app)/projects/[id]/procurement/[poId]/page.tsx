@@ -8,6 +8,7 @@ import { formatCurrency, formatDate } from "@/lib/format";
 
 import { ExtractPoMilestones } from "./extract-po-milestones";
 import { MilestoneEditor } from "./milestone-editor";
+import { PoSignToggle } from "./sign-toggle";
 
 type Params = { id: string; poId: string };
 
@@ -29,7 +30,7 @@ export default async function ProcurementDetailPage({
     supabase
       .from("procurement_orders")
       .select(
-        "id, project_id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, document_id, notes",
+        "id, project_id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, document_id, notes, signed_at",
       )
       .eq("id", params.poId)
       .maybeSingle(),
@@ -103,6 +104,12 @@ export default async function ProcurementDetailPage({
           </div>
         </div>
       </div>
+
+      <PoSignToggle
+        poId={po.id}
+        projectId={params.id}
+        signedAt={po.signed_at}
+      />
 
       <section className="grid gap-3 sm:grid-cols-4">
         <SmallCell label="PO #" value={po.po_number ?? "-"} mono />

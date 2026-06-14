@@ -172,22 +172,35 @@ export function isProcurementLine(line: {
 }
 
 // Progress signal for procurement-scope billing lines. The signal is the
-// total value of linked procurement_orders compared to the billing line's
-// scheduled value. When no PO is linked, return 0 (no PO = no billing).
+// total value of SIGNED + non-cancelled procurement_orders compared to the
+// billing line's scheduled value. Drafts and unsigned POs don't count -
+// they're speculative scope, not committed scope.
 export function estimateProcurementProgress(
   line: { scheduled_value?: number | null },
-  linkedPos: { total_value?: number | null; status?: string | null }[],
+  linkedPos: {
+    total_value?: number | null;
+    status?: string | null;
+    signed_at?: string | null;
+  }[],
 ): ProgressEstimate {
-  const activePos = linkedPos.filter((p) => p.status !== "cancelled");
-  if (activePos.length === 0) {
+  const eligible = linkedPos.filter(
+    (p) => p.status !== "cancelled" && !!p.signed_at,
+  );
+  if (eligible.length === 0) {
+    const draftCount = linkedPos.filter(
+      (p) => p.status !== "cancelled" && !p.signed_at,
+    ).length;
     return {
       pct: 0,
       confidence: "high",
       source: "no_signal",
-      reason: "No active procurement order linked - submit a PO to bill this scope",
+      reason:
+        draftCount > 0
+          ? `${draftCount} PO(s) linked but none signed - mark a PO as signed to unlock billing`
+          : "No signed procurement order linked - submit + sign a PO to bill this scope",
     };
   }
-  const totalPoValue = activePos.reduce(
+  const totalPoValue = eligible.reduce(
     (s, p) => s + Number(p.total_value ?? 0),
     0,
   );
@@ -205,6 +218,6 @@ export function estimateProcurementProgress(
     pct,
     confidence: "high",
     source: "pct_complete",
-    reason: `${activePos.length} PO(s) totaling $${totalPoValue.toLocaleString("en-US")} against scope $${scheduledValue.toLocaleString("en-US")} = ${Math.round(pct * 100)}% covered`,
+    reason: `${eligible.length} signed PO(s) totaling $${totalPoValue.toLocaleString("en-US")} against scope $${scheduledValue.toLocaleString("en-US")} = ${Math.round(pct * 100)}% covered`,
   };
 }

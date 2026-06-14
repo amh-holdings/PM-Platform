@@ -226,6 +226,35 @@ export async function markMilestonePaid(
   return { ok: true };
 }
 
+// Mark a PO as signed (or unsigned). Only signed POs count toward
+// procurement-driven billing suggestions, so this is the trigger that
+// unlocks billing on a procurement-scope SOV line.
+export async function setProcurementSignedStatus(
+  poId: string,
+  projectId: string,
+  signed: boolean,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const patch: { signed_at: string | null; signed_by: string | null } = signed
+    ? { signed_at: new Date().toISOString(), signed_by: auth.userId }
+    : { signed_at: null, signed_by: null };
+
+  const { error } = await auth.supabase
+    .from("procurement_orders")
+    .update(patch)
+    .eq("id", poId)
+    .eq("project_id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/procurement`);
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
+}
+
 export async function deleteMilestone(
   milestoneId: string,
   poId: string,

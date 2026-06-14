@@ -17,11 +17,15 @@ const STATUS_TONE: Record<string, string> = {
 export default async function ProjectProcurementPage({ params }: { params: Params }) {
   const supabase = createClient();
 
-  const [{ data: orders, error }, { data: payments }] = await Promise.all([
+  const [
+    { data: orders, error },
+    { data: payments },
+    { data: lineLinks },
+  ] = await Promise.all([
     supabase
       .from("procurement_orders")
       .select(
-        "id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary",
+        "id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, signed_at",
       )
       .eq("project_id", params.id)
       .order("ordered_date", { ascending: false, nullsFirst: false })
@@ -32,7 +36,23 @@ export default async function ProjectProcurementPage({ params }: { params: Param
         "procurement_order_id, amount, paid_amount, paid_at, expected_date, procurement_orders!inner(project_id)",
       )
       .eq("procurement_orders.project_id", params.id),
+    supabase
+      .from("billing_lines")
+      .select("id, item_number, description, linked_procurement_order_ids")
+      .eq("project_id", params.id),
   ]);
+
+  // Reverse-index: PO id -> array of billing_line item numbers that link it.
+  const linesByPoId = new Map<string, string[]>();
+  for (const l of lineLinks ?? []) {
+    const links =
+      (l as unknown as { linked_procurement_order_ids: string[] | null })
+        .linked_procurement_order_ids ?? [];
+    for (const poId of links) {
+      if (!linesByPoId.has(poId)) linesByPoId.set(poId, []);
+      linesByPoId.get(poId)!.push(l.item_number);
+    }
+  }
 
   if (error) {
     return (
@@ -83,12 +103,28 @@ export default async function ProjectProcurementPage({ params }: { params: Param
         </Button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-4">
         <div className="rounded-md border bg-card p-3">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
-            Active POs
+            Total POs
           </div>
           <div className="mt-1 text-2xl font-semibold">{totalOrders}</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            {rows.filter((r) => r.signed_at).length} signed,{" "}
+            {rows.filter((r) => !r.signed_at && r.status !== "cancelled").length} draft
+          </div>
+        </div>
+        <div className="rounded-md border bg-card p-3">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">
+            Signed (committed)
+          </div>
+          <div className="mt-1 text-2xl font-semibold text-emerald-700">
+            {formatCurrency(
+              rows
+                .filter((r) => r.signed_at && r.status !== "cancelled")
+                .reduce((s, r) => s + Number(r.total_value ?? 0), 0),
+            )}
+          </div>
         </div>
         <div className="rounded-md border bg-card p-3">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
@@ -116,7 +152,10 @@ export default async function ProjectProcurementPage({ params }: { params: Param
               <th className="px-3 py-2 text-left font-medium">PO #</th>
               <th className="px-3 py-2 text-right font-medium">PO value</th>
               <th className="px-3 py-2 text-right font-medium">Paid</th>
+              <th className="px-3 py-2 text-left font-medium">% Paid</th>
               <th className="px-3 py-2 text-left font-medium">Status</th>
+              <th className="px-3 py-2 text-left font-medium">Signed</th>
+              <th className="px-3 py-2 text-left font-medium">Billing line</th>
               <th className="px-3 py-2 text-left font-medium">Next milestone</th>
               <th className="px-3 py-2 text-left font-medium">Delivery</th>
             </tr>
@@ -128,10 +167,16 @@ export default async function ProjectProcurementPage({ params }: { params: Param
                 nextDue: null,
                 totalPlanned: 0,
               };
+              const poValue = Number(r.total_value ?? 0);
+              const pctPaid = poValue > 0 ? (m.totalPaid / poValue) * 100 : 0;
+              const linkedLines = linesByPoId.get(r.id) ?? [];
               return (
                 <tr
                   key={r.id}
-                  className="border-b last:border-0 hover:bg-muted/30"
+                  className={cn(
+                    "border-b last:border-0 hover:bg-muted/30",
+                    !r.signed_at && "bg-amber-50/40",
+                  )}
                 >
                   <td className="px-3 py-2">
                     <Link
@@ -150,10 +195,23 @@ export default async function ProjectProcurementPage({ params }: { params: Param
                     {r.po_number ?? "-"}
                   </td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums">
-                    {formatCurrency(Number(r.total_value ?? 0))}
+                    {formatCurrency(poValue)}
                   </td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums">
                     {formatCurrency(m.totalPaid)}
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-1">
+                      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full bg-emerald-500"
+                          style={{ width: `${Math.min(100, pctPaid)}%` }}
+                        />
+                      </div>
+                      <span className="text-[10px] text-muted-foreground">
+                        {Math.round(pctPaid)}%
+                      </span>
+                    </div>
                   </td>
                   <td className="px-3 py-2">
                     <span
@@ -164,6 +222,26 @@ export default async function ProjectProcurementPage({ params }: { params: Param
                     >
                       {r.status}
                     </span>
+                  </td>
+                  <td className="px-3 py-2 text-xs">
+                    {r.signed_at ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                        {new Date(r.signed_at).toLocaleDateString()}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                        Draft
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-xs">
+                    {linkedLines.length === 0 ? (
+                      <span className="italic text-muted-foreground">—</span>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        {linkedLines.join(", ")}
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">
                     {m.nextDue ? formatDate(m.nextDue) : "-"}
@@ -181,7 +259,7 @@ export default async function ProjectProcurementPage({ params }: { params: Param
             {rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={10}
                   className="px-3 py-6 text-center text-xs text-muted-foreground"
                 >
                   No purchase orders yet. Upload contracts to /documents, then

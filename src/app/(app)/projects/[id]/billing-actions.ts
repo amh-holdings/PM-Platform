@@ -138,7 +138,7 @@ export async function computeBillingSuggestions(
       .eq("project_id", projectId),
     auth.supabase
       .from("procurement_orders")
-      .select("id, po_number, vendor_name, total_value, status")
+      .select("id, po_number, vendor_name, total_value, status, signed_at")
       .eq("project_id", projectId),
   ]);
 
@@ -168,9 +168,16 @@ export async function computeBillingSuggestions(
     });
   }
   // Index POs by id so we can resolve linked_procurement_order_ids quickly.
-  const poById = new Map<string, { total_value: number | null; status: string | null }>();
+  const poById = new Map<
+    string,
+    { total_value: number | null; status: string | null; signed_at: string | null }
+  >();
   for (const p of pos ?? []) {
-    poById.set(p.id, { total_value: p.total_value, status: p.status });
+    poById.set(p.id, {
+      total_value: p.total_value,
+      status: p.status,
+      signed_at: p.signed_at,
+    });
   }
 
   const suggestions: BillingSuggestion[] = [];
@@ -187,7 +194,10 @@ export async function computeBillingSuggestions(
         .linked_procurement_order_ids ?? [];
       const linkedPos = poIds
         .map((id) => poById.get(id))
-        .filter((p): p is { total_value: number | null; status: string | null } => !!p);
+        .filter(
+          (p): p is { total_value: number | null; status: string | null; signed_at: string | null } =>
+            !!p,
+        );
       const procEst = estimateProcurementProgress(
         { scheduled_value: scheduledValue },
         linkedPos,
@@ -403,7 +413,7 @@ export async function getBillThisPeriodRows(
     .eq("project_id", projectId);
   const { data: posInfo } = await auth.supabase
     .from("procurement_orders")
-    .select("id, total_value, status")
+    .select("id, total_value, status, signed_at")
     .eq("project_id", projectId);
 
   const lineById = new Map<string, {
@@ -438,9 +448,16 @@ export async function getBillThisPeriodRows(
       ).pct,
     );
   }
-  const poStateById = new Map<string, { total_value: number | null; status: string | null }>();
+  const poStateById = new Map<
+    string,
+    { total_value: number | null; status: string | null; signed_at: string | null }
+  >();
   for (const p of posInfo ?? []) {
-    poStateById.set(p.id, { total_value: p.total_value, status: p.status });
+    poStateById.set(p.id, {
+      total_value: p.total_value,
+      status: p.status,
+      signed_at: p.signed_at,
+    });
   }
 
   // Filter: a forecast row appears only if the schedule (or PO state, for
@@ -452,24 +469,32 @@ export async function getBillThisPeriodRows(
   for (const x of allForecastRows) {
     const lineMeta = lineById.get(x.row.billingLineId);
 
-    // PROCUREMENT LINES: signal is PO link (and active status).
+    // PROCUREMENT LINES: signal is SIGNED PO link (drafts don't count).
     if (lineMeta && isProcurementLine(lineMeta)) {
       const poIds = lineMeta.linked_procurement_order_ids ?? [];
-      const activePos = poIds
-        .map((id) => poStateById.get(id))
-        .filter((p): p is { total_value: number | null; status: string | null } =>
-          !!p && p.status !== "cancelled",
-        );
-      if (activePos.length > 0) {
+      const linked = poIds.map((id) => poStateById.get(id)).filter(Boolean) as Array<{
+        total_value: number | null;
+        status: string | null;
+        signed_at: string | null;
+      }>;
+      const signedActive = linked.filter(
+        (p) => p.status !== "cancelled" && !!p.signed_at,
+      );
+      if (signedActive.length > 0) {
         forecastRows.push(x.row);
       } else if (x.row.kind === "forecast") {
+        const draftCount = linked.filter(
+          (p) => p.status !== "cancelled" && !p.signed_at,
+        ).length;
         hidden.push({
           itemNumber: x.row.itemNumber,
           description: x.row.description,
           periodMonth: x.row.periodMonth,
           amount: x.row.amount,
           reason:
-            "Procurement line has no active linked POs - submit a PO to unlock billing",
+            draftCount > 0
+              ? `${draftCount} PO(s) linked but unsigned - mark a PO as signed to unlock billing`
+              : "Procurement line has no signed POs - submit + sign a PO to unlock billing",
         });
       }
       continue;
