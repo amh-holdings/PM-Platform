@@ -601,6 +601,8 @@ fastify.post("/extract-po-payment-terms", async (request, reply) => {
     "- If the PO uses fixed dollar amounts, fill amount and leave pct_of_total null.",
     "- For dates given as 'Net X days after Y', compute the expected_date if Y is known (e.g. delivery date is in the PO). Otherwise leave null.",
     "- If there's no payment milestone breakdown at all (just 'Net 30' standard terms), return a single milestone for the full value.",
+    "- IMPORTANT - Net X interpretation rule for solar EPC equipment POs: When the PO is for EQUIPMENT (transformers, modules, inverters, racking, reclosers, switchgear, monitoring gear, etc.) and the payment term reads 'Net 30' / 'Net 45' / 'Net X' WITHOUT explicitly stating what it runs from, ALWAYS interpret it as 'Net X after DELIVERY' - never as 'Net X from invoice'. AHC's standard is: equipment doesn't get paid until it arrives on site. So set trigger_event = 'Net X after delivery', and include a note that the PO was ambiguous and you applied the equipment default.",
+    "- Use 'Net X from invoice' or 'Net X from PO release' only when the PO EXPLICITLY says so.",
     "- Return ONLY the JSON. No prose.",
   ].join("\n");
 
