@@ -1065,6 +1065,7 @@ export type Database = {
           document_id: string | null
           expected_delivery_date: string | null
           id: string
+          linked_delivery_task_wbs_code: string | null
           notes: string | null
           ordered_date: string | null
           payment_terms_summary: string | null
@@ -1083,6 +1084,7 @@ export type Database = {
           document_id?: string | null
           expected_delivery_date?: string | null
           id?: string
+          linked_delivery_task_wbs_code?: string | null
           notes?: string | null
           ordered_date?: string | null
           payment_terms_summary?: string | null
@@ -1101,6 +1103,7 @@ export type Database = {
           document_id?: string | null
           expected_delivery_date?: string | null
           id?: string
+          linked_delivery_task_wbs_code?: string | null
           notes?: string | null
           ordered_date?: string | null
           payment_terms_summary?: string | null

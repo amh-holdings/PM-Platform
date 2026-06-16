@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 
+import { DeliveryTaskLink, type DeliveryTaskOption } from "./delivery-task-link";
 import { ExtractPoMilestones } from "./extract-po-milestones";
 import { MilestoneEditor } from "./milestone-editor";
 import { PoSignToggle } from "./sign-toggle";
@@ -27,24 +28,59 @@ export default async function ProcurementDetailPage({
 }) {
   const supabase = createClient();
 
-  const [{ data: po, error }, { data: payments }] = await Promise.all([
+  const [{ data: po, error }, { data: payments }, { data: deliveryTasks }] = await Promise.all([
     supabase
       .from("procurement_orders")
       .select(
-        "id, project_id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, document_id, notes, signed_at",
+        "id, project_id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, document_id, notes, signed_at, linked_delivery_task_wbs_code",
       )
       .eq("id", params.poId)
       .maybeSingle(),
     supabase
       .from("procurement_payments")
       .select(
-        "id, milestone_name, pct_of_total, trigger_event, expected_date, amount, paid_at, paid_amount, sort_order, notes",
+        "id, milestone_name, pct_of_total, trigger_event, expected_date, amount, paid_amount, paid_at, sort_order, notes",
       )
       .eq("procurement_order_id", params.poId)
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("expected_date", { ascending: true, nullsFirst: false }),
+    supabase
+      .from("schedule_tasks")
+      .select("wbs_code, task_name, start_date, end_date, parent_wbs_code")
+      .eq("project_id", params.id)
+      .ilike("task_name", "%delivery%")
+      .order("wbs_code"),
   ]);
   if (error || !po) notFound();
+
+  // Build the delivery task options. Use the parent task name (e.g.
+  // "Maddox 1500kVA") as the display label since "Delivery" alone isn't
+  // useful for picking. Parent name is looked up by parent_wbs_code.
+  let deliveryOptions: DeliveryTaskOption[] = [];
+  if (deliveryTasks && deliveryTasks.length > 0) {
+    const parentCodes = Array.from(
+      new Set(deliveryTasks.map((t) => t.parent_wbs_code).filter(Boolean)),
+    ) as string[];
+    const { data: parents } = parentCodes.length
+      ? await supabase
+          .from("schedule_tasks")
+          .select("wbs_code, task_name")
+          .eq("project_id", params.id)
+          .in("wbs_code", parentCodes)
+      : { data: [] };
+    const parentByCode = new Map(
+      (parents ?? []).map((p) => [p.wbs_code, p.task_name]),
+    );
+    deliveryOptions = deliveryTasks.map((t) => ({
+      wbsCode: t.wbs_code,
+      name: t.task_name,
+      startDate: t.start_date,
+      endDate: t.end_date,
+      parentName: t.parent_wbs_code
+        ? (parentByCode.get(t.parent_wbs_code) ?? null)
+        : null,
+    }));
+  }
 
   let linkedDoc: { file_name: string } | null = null;
   if (po.document_id) {
@@ -117,6 +153,14 @@ export default async function ProcurementDetailPage({
         projectId={params.id}
         hasExistingDoc={Boolean(po.document_id)}
         isSigned={Boolean(po.signed_at)}
+      />
+
+      <DeliveryTaskLink
+        poId={po.id}
+        projectId={params.id}
+        currentWbs={po.linked_delivery_task_wbs_code}
+        currentEndDate={po.expected_delivery_date}
+        options={deliveryOptions}
       />
 
       <section className="grid gap-3 sm:grid-cols-4">

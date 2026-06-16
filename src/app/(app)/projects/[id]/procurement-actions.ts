@@ -249,6 +249,59 @@ export async function linkProcurementDocument(
   return { ok: true };
 }
 
+// Link a PO to a delivery schedule_task. If a wbs_code is provided, also
+// sync procurement_orders.expected_delivery_date to that task's end_date
+// so downstream consumers (AI extraction, cash projection) see a consistent
+// delivery anchor. Pass null to clear the link.
+export async function setProcurementDeliveryTaskLink(
+  poId: string,
+  projectId: string,
+  wbsCode: string | null,
+): Promise<{ ok: true; syncedDate: string | null } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  let syncedDate: string | null = null;
+
+  if (wbsCode) {
+    const { data: task, error: taskErr } = await auth.supabase
+      .from("schedule_tasks")
+      .select("end_date")
+      .eq("project_id", projectId)
+      .eq("wbs_code", wbsCode)
+      .maybeSingle();
+    if (taskErr) return { ok: false, error: taskErr.message };
+    if (!task) {
+      return { ok: false, error: `No schedule_task with wbs_code ${wbsCode} in this project` };
+    }
+    syncedDate = task.end_date;
+  }
+
+  const patch: {
+    linked_delivery_task_wbs_code: string | null;
+    expected_delivery_date?: string | null;
+  } = {
+    linked_delivery_task_wbs_code: wbsCode,
+  };
+  // Only set expected_delivery_date when we have a task date - don't
+  // silently clear it if the user is just unlinking.
+  if (wbsCode && syncedDate) {
+    patch.expected_delivery_date = syncedDate;
+  }
+
+  const { error } = await auth.supabase
+    .from("procurement_orders")
+    .update(patch)
+    .eq("id", poId)
+    .eq("project_id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/procurement`);
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, syncedDate };
+}
+
 // Mark a PO as signed (or unsigned). Only signed POs count toward
 // procurement-driven billing suggestions, so this is the trigger that
 // unlocks billing on a procurement-scope SOV line.

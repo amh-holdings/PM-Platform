@@ -529,7 +529,7 @@ fastify.post("/extract-po-payment-terms", async (request, reply) => {
   const { data: po, error: poErr } = await supabase
     .from("procurement_orders")
     .select(
-      "po_number, vendor_name, total_value, ordered_date, expected_delivery_date, document_id, project_id",
+      "po_number, vendor_name, total_value, ordered_date, expected_delivery_date, actual_delivery_date, signed_at, linked_delivery_task_wbs_code, document_id, project_id",
     )
     .eq("id", procurement_order_id)
     .maybeSingle();
@@ -594,7 +594,12 @@ fastify.post("/extract-po-payment-terms", async (request, reply) => {
     `  PO Number: ${po.po_number ?? "(unknown)"}`,
     `  Total Value: $${po.total_value ?? "(unknown)"}`,
     `  Ordered Date: ${po.ordered_date ?? "(unknown)"}`,
+    `  Signed Date: ${po.signed_at ? po.signed_at.slice(0, 10) : "(unknown)"}`,
     `  Expected Delivery: ${po.expected_delivery_date ?? "(unknown)"}`,
+    `  Actual Delivery: ${po.actual_delivery_date ?? "(unknown)"}`,
+    `  Linked schedule delivery task: ${po.linked_delivery_task_wbs_code ?? "(none - PO not linked to schedule)"}`,
+    "",
+    `IMPORTANT: When 'Expected Delivery' is set above, USE IT as the anchor for any Net X after delivery calculations - it comes from the project schedule and is more authoritative than any shipping estimate in the PDF text. Use the PDF shipping boilerplate (e.g. '5-7 day shipping') ONLY when Expected Delivery is unknown.`,
     "",
     "Rules:",
     "- If the PO uses percentages, fill pct_of_total AND compute amount from the PO total value.",
