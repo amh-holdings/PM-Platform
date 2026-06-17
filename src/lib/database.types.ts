@@ -1057,6 +1057,51 @@ export type Database = {
           },
         ]
       }
+      procurement_order_billing_allocations: {
+        Row: {
+          amount: number
+          billing_line_id: string
+          created_at: string | null
+          description: string | null
+          id: string
+          procurement_order_id: string
+          sort_order: number | null
+        }
+        Insert: {
+          amount?: number
+          billing_line_id: string
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          procurement_order_id: string
+          sort_order?: number | null
+        }
+        Update: {
+          amount?: number
+          billing_line_id?: string
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          procurement_order_id?: string
+          sort_order?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "procurement_order_billing_allocations_billing_line_id_fkey"
+            columns: ["billing_line_id"]
+            isOneToOne: false
+            referencedRelation: "billing_lines"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "procurement_order_billing_allocations_procurement_order_id_fkey"
+            columns: ["procurement_order_id"]
+            isOneToOne: false
+            referencedRelation: "procurement_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       procurement_orders: {
         Row: {
           actual_delivery_date: string | null

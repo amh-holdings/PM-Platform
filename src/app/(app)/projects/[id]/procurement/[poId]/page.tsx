@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 
+import { BillingAllocations } from "./billing-allocations";
 import { DeliveryTaskLink, type DeliveryTaskOption } from "./delivery-task-link";
 import { ExtractPoMilestones } from "./extract-po-milestones";
 import { MilestoneEditor } from "./milestone-editor";
@@ -28,7 +29,13 @@ export default async function ProcurementDetailPage({
 }) {
   const supabase = createClient();
 
-  const [{ data: po, error }, { data: payments }, { data: deliveryTasks }] = await Promise.all([
+  const [
+    { data: po, error },
+    { data: payments },
+    { data: deliveryTasks },
+    { data: allocations },
+    { data: billingLines },
+  ] = await Promise.all([
     supabase
       .from("procurement_orders")
       .select(
@@ -50,6 +57,17 @@ export default async function ProcurementDetailPage({
       .eq("project_id", params.id)
       .ilike("task_name", "%delivery%")
       .order("wbs_code"),
+    supabase
+      .from("procurement_order_billing_allocations")
+      .select("id, billing_line_id, amount, description, sort_order")
+      .eq("procurement_order_id", params.poId)
+      .order("sort_order", { ascending: true, nullsFirst: false }),
+    supabase
+      .from("billing_lines")
+      .select("id, item_number, description, scheduled_value, sort_order")
+      .eq("project_id", params.id)
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("item_number"),
   ]);
   if (error || !po) notFound();
 
@@ -247,6 +265,26 @@ export default async function ProcurementDetailPage({
           }))}
         />
       </section>
+
+      <BillingAllocations
+        poId={po.id}
+        projectId={params.id}
+        poTotalValue={poValue}
+        poDescription={po.description}
+        allocations={(allocations ?? []).map((a) => ({
+          id: a.id,
+          billingLineId: a.billing_line_id,
+          amount: Number(a.amount),
+          description: a.description,
+          sortOrder: a.sort_order,
+        }))}
+        billingLines={(billingLines ?? []).map((l) => ({
+          id: l.id,
+          itemNumber: l.item_number,
+          description: l.description,
+          totalValue: Number(l.scheduled_value ?? 0),
+        }))}
+      />
 
       {po.notes && (
         <section className="rounded-lg border bg-muted/30 p-3 text-sm">

@@ -476,3 +476,86 @@ export async function applyExtractedMilestones(
   revalidatePath(`/projects/${projectId}`);
   return { ok: true, inserted: rows.length };
 }
+
+// ============ PO billing-line allocations ============
+// Split a single PO's dollars across multiple SOV (billing_lines) entries.
+// Use when one signed PO bundles equipment that bills against different
+// scheduled-value lines (e.g. Recloser + Primary Metering on one PO).
+
+export type AllocationInput = {
+  billingLineId: string;
+  amount: number;
+  description?: string | null;
+  sortOrder?: number | null;
+};
+
+export async function addPoBillingAllocation(
+  procurementOrderId: string,
+  projectId: string,
+  input: AllocationInput,
+): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+  if (!input.billingLineId) return { ok: false, error: "SOV line is required" };
+  if (!(input.amount > 0)) return { ok: false, error: "Amount must be > 0" };
+
+  const { data, error } = await auth.supabase
+    .from("procurement_order_billing_allocations")
+    .insert({
+      procurement_order_id: procurementOrderId,
+      billing_line_id: input.billingLineId,
+      amount: input.amount,
+      description: input.description ?? null,
+      sort_order: input.sortOrder ?? null,
+    })
+    .select("id")
+    .single();
+  if (error || !data) return { ok: false, error: error?.message ?? "Insert failed" };
+
+  revalidatePath(`/projects/${projectId}/procurement/${procurementOrderId}`);
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, id: data.id };
+}
+
+export async function updatePoBillingAllocation(
+  allocationId: string,
+  procurementOrderId: string,
+  projectId: string,
+  patch: Partial<AllocationInput>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+  const update: TablesUpdate<"procurement_order_billing_allocations"> = {};
+  if (patch.billingLineId !== undefined) update.billing_line_id = patch.billingLineId;
+  if (patch.amount !== undefined) update.amount = patch.amount;
+  if (patch.description !== undefined) update.description = patch.description ?? null;
+  if (patch.sortOrder !== undefined) update.sort_order = patch.sortOrder ?? null;
+
+  const { error } = await auth.supabase
+    .from("procurement_order_billing_allocations")
+    .update(update)
+    .eq("id", allocationId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/procurement/${procurementOrderId}`);
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
+}
+
+export async function deletePoBillingAllocation(
+  allocationId: string,
+  procurementOrderId: string,
+  projectId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+  const { error } = await auth.supabase
+    .from("procurement_order_billing_allocations")
+    .delete()
+    .eq("id", allocationId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/procurement/${procurementOrderId}`);
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
+}
