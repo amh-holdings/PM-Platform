@@ -21,7 +21,7 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
     supabase
       .from("change_orders")
       .select(
-        "id, co_number, description, co_value, schedule_impact_days, status, submitted_at, approved_at",
+        "id, co_number, description, co_value, cost_amount, profit_pct, schedule_impact_days, status, submitted_at, approved_at",
       )
       .eq("project_id", params.id)
       .order("co_number"),
@@ -53,6 +53,8 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
 
   const rows = cos ?? [];
   const totalCoValue = rows.reduce((s, r) => s + Number(r.co_value ?? 0), 0);
+  const totalCost = rows.reduce((s, r) => s + Number(r.cost_amount ?? 0), 0);
+  const totalProfit = totalCoValue - totalCost;
   const approvedCount = rows.filter((r) => r.status === "approved").length;
 
   return (
@@ -72,7 +74,7 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
         </Button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-4">
         <div className="rounded-md border bg-card p-3">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
             Total COs
@@ -84,18 +86,26 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
         </div>
         <div className="rounded-md border bg-card p-3">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
-            Total CO value
+            Total cost (AHC)
           </div>
-          <div className="mt-1 text-2xl font-semibold text-emerald-700">
-            {formatCurrency(totalCoValue)}
+          <div className="mt-1 text-2xl font-semibold">
+            {formatCurrency(totalCost)}
           </div>
         </div>
         <div className="rounded-md border bg-card p-3">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
-            SOV lines linked
+            Total profit
           </div>
-          <div className="mt-1 text-2xl font-semibold">
-            {Array.from(linesByCo.values()).reduce((s, c) => s + c.count, 0)}
+          <div className="mt-1 text-2xl font-semibold text-emerald-700">
+            {formatCurrency(totalProfit)}
+          </div>
+        </div>
+        <div className="rounded-md border bg-card p-3">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">
+            Total billable (owner)
+          </div>
+          <div className="mt-1 text-2xl font-semibold text-emerald-700">
+            {formatCurrency(totalCoValue)}
           </div>
         </div>
       </div>
@@ -106,7 +116,9 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
             <tr className="border-b">
               <th className="px-3 py-2 text-left font-medium">CO #</th>
               <th className="px-3 py-2 text-left font-medium">Description</th>
-              <th className="px-3 py-2 text-right font-medium">Value</th>
+              <th className="px-3 py-2 text-right font-medium">Cost</th>
+              <th className="px-3 py-2 text-right font-medium">Profit %</th>
+              <th className="px-3 py-2 text-right font-medium">Billable</th>
               <th className="px-3 py-2 text-right font-medium">SOV lines</th>
               <th className="px-3 py-2 text-right font-medium">Days</th>
               <th className="px-3 py-2 text-left font-medium">Status</th>
@@ -129,7 +141,13 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
                   <td className="px-3 py-2 text-xs">
                     <span className="line-clamp-2">{r.description ?? "-"}</span>
                   </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums">
+                  <td className="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">
+                    {r.cost_amount != null ? formatCurrency(Number(r.cost_amount)) : "-"}
+                  </td>
+                  <td className="px-3 py-2 text-right text-xs text-muted-foreground">
+                    {r.profit_pct != null ? `${Number(r.profit_pct)}%` : "-"}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums font-semibold">
                     {formatCurrency(Number(r.co_value ?? 0))}
                   </td>
                   <td className="px-3 py-2 text-right text-xs">
@@ -158,7 +176,7 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-xs text-muted-foreground">
+                <td colSpan={9} className="px-3 py-6 text-center text-xs text-muted-foreground">
                   No change orders yet. Click &quot;New change order&quot; to add the first one.
                 </td>
               </tr>

@@ -28,6 +28,8 @@ export type CreateChangeOrderInput = {
   coNumber: string;
   description: string | null;
   coValue: number;
+  costAmount: number | null;
+  profitPct: number | null;
   scheduleImpactDays: number | null;
   status: string;
   submittedAt: string | null;
@@ -54,6 +56,8 @@ export async function createChangeOrder(
       co_number: input.coNumber.trim(),
       description: input.description,
       co_value: input.coValue,
+      cost_amount: input.costAmount,
+      profit_pct: input.profitPct,
       schedule_impact_days: input.scheduleImpactDays,
       status: input.status || "approved",
       submitted_at: input.submittedAt,
@@ -82,6 +86,8 @@ export async function updateChangeOrder(
   if (patch.coNumber !== undefined) update.co_number = patch.coNumber.trim();
   if (patch.description !== undefined) update.description = patch.description;
   if (patch.coValue !== undefined) update.co_value = patch.coValue;
+  if (patch.costAmount !== undefined) update.cost_amount = patch.costAmount;
+  if (patch.profitPct !== undefined) update.profit_pct = patch.profitPct;
   if (patch.scheduleImpactDays !== undefined) update.schedule_impact_days = patch.scheduleImpactDays;
   if (patch.status !== undefined) update.status = patch.status;
   if (patch.submittedAt !== undefined) update.submitted_at = patch.submittedAt;

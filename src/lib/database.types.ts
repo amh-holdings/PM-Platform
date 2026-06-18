@@ -144,10 +144,12 @@ export type Database = {
           approved_at: string | null
           co_number: string
           co_value: number | null
+          cost_amount: number | null
           created_at: string | null
           description: string | null
           id: string
           notes: string | null
+          profit_pct: number | null
           project_id: string
           schedule_impact_days: number | null
           status: string | null
@@ -157,10 +159,12 @@ export type Database = {
           approved_at?: string | null
           co_number: string
           co_value?: number | null
+          cost_amount?: number | null
           created_at?: string | null
           description?: string | null
           id?: string
           notes?: string | null
+          profit_pct?: number | null
           project_id: string
           schedule_impact_days?: number | null
           status?: string | null
@@ -170,10 +174,12 @@ export type Database = {
           approved_at?: string | null
           co_number?: string
           co_value?: number | null
+          cost_amount?: number | null
           created_at?: string | null
           description?: string | null
           id?: string
           notes?: string | null
+          profit_pct?: number | null
           project_id?: string
           schedule_impact_days?: number | null
           status?: string | null

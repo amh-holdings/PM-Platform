@@ -26,7 +26,7 @@ export default async function ChangeOrderDetailPage({
     supabase
       .from("change_orders")
       .select(
-        "id, project_id, co_number, description, co_value, schedule_impact_days, status, submitted_at, approved_at, notes",
+        "id, project_id, co_number, description, co_value, cost_amount, profit_pct, schedule_impact_days, status, submitted_at, approved_at, notes",
       )
       .eq("id", params.coId)
       .maybeSingle(),
@@ -39,11 +39,16 @@ export default async function ChangeOrderDetailPage({
   ]);
   if (error || !co) notFound();
 
+  const billable = Number(co.co_value ?? 0);
+  const cost = co.cost_amount != null ? Number(co.cost_amount) : null;
+  const profitPct = co.profit_pct != null ? Number(co.profit_pct) : null;
+  const profitDollars = cost != null ? billable - cost : null;
+
   const linesTotal = (lines ?? []).reduce(
     (s, l) => s + Number(l.scheduled_value ?? 0),
     0,
   );
-  const drift = Number(co.co_value ?? 0) - linesTotal;
+  const drift = billable - linesTotal;
 
   return (
     <div className="space-y-4">
@@ -72,8 +77,36 @@ export default async function ChangeOrderDetailPage({
         </div>
       </div>
 
-      <section className="grid gap-3 sm:grid-cols-4">
-        <SmallCell label="CO value (billable)" value={formatCurrency(Number(co.co_value ?? 0))} mono />
+      <section className="rounded-lg border bg-card p-4 shadow-sm">
+        <h3 className="text-sm font-semibold">Pricing</h3>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <PricingCell
+            label="Cost (AHC)"
+            value={cost != null ? formatCurrency(cost) : "-"}
+            sub={cost != null ? "Bare cost to deliver" : "Not tracked"}
+          />
+          <PricingCell
+            label="Profit"
+            value={
+              profitDollars != null
+                ? `${formatCurrency(profitDollars)}${profitPct != null ? ` (${profitPct}%)` : ""}`
+                : profitPct != null
+                  ? `${profitPct}%`
+                  : "-"
+            }
+            sub="Markup on cost"
+            tone="emerald"
+          />
+          <PricingCell
+            label="Billable (owner)"
+            value={formatCurrency(billable)}
+            sub="What Dimension pays AHC"
+            tone="emerald"
+          />
+        </div>
+      </section>
+
+      <section className="grid gap-3 sm:grid-cols-3">
         <SmallCell
           label="Schedule impact"
           value={
@@ -94,7 +127,7 @@ export default async function ChangeOrderDetailPage({
       <CoLineEditor
         projectId={params.id}
         changeOrderId={params.coId}
-        coValue={Number(co.co_value ?? 0)}
+        coValue={billable}
         lines={(lines ?? []).map((l) => ({
           id: l.id,
           itemNumber: l.item_number,
@@ -108,21 +141,42 @@ export default async function ChangeOrderDetailPage({
   );
 }
 
-function SmallCell({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
+function SmallCell({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border bg-card p-3">
       <div className="text-xs uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
-      <div className={cn("mt-1 text-sm", mono && "font-mono")}>{value}</div>
+      <div className="mt-1 text-sm">{value}</div>
+    </div>
+  );
+}
+
+function PricingCell({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  tone?: "emerald";
+}) {
+  return (
+    <div className="rounded-md border bg-muted/30 p-3">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "mt-0.5 text-xl font-semibold tabular-nums",
+          tone === "emerald" && "text-emerald-700",
+        )}
+      >
+        {value}
+      </div>
+      <div className="text-[10px] text-muted-foreground">{sub}</div>
     </div>
   );
 }

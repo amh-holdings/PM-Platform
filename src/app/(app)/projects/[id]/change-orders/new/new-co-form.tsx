@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -13,11 +13,22 @@ type Props = { projectId: string };
 
 const STATUSES = ["draft", "submitted", "approved", "rejected"] as const;
 
+// Last-edited tracking lets us recompute the third value when two are present.
+type LastEdited = "cost" | "profitPct" | "billable" | null;
+
+function toNumber(s: string): number | null {
+  const n = Number(s.replace(/[$,%\s]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
 export function NewChangeOrderForm({ projectId }: Props) {
   const router = useRouter();
   const [coNumber, setCoNumber] = useState("");
   const [description, setDescription] = useState("");
-  const [coValue, setCoValue] = useState("");
+  const [cost, setCost] = useState("");
+  const [profitPct, setProfitPct] = useState("10");
+  const [billable, setBillable] = useState("");
+  const [lastEdited, setLastEdited] = useState<LastEdited>("profitPct");
   const [scheduleDays, setScheduleDays] = useState("");
   const [status, setStatus] = useState<(typeof STATUSES)[number]>("approved");
   const [submittedAt, setSubmittedAt] = useState("");
@@ -27,23 +38,51 @@ export function NewChangeOrderForm({ projectId }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [, startTransition] = useTransition();
 
+  // Auto-compute: whichever field wasn't last edited gets recomputed when
+  // any of the three pricing fields changes. Cost + profit% -> billable
+  // is the most common entry pattern (default).
+  useEffect(() => {
+    const c = toNumber(cost);
+    const p = toNumber(profitPct);
+    const b = toNumber(billable);
+
+    if (lastEdited !== "billable" && c != null && p != null) {
+      const computed = c * (1 + p / 100);
+      const rounded = Math.round(computed * 100) / 100;
+      if (Math.abs(rounded - (b ?? 0)) > 0.01) setBillable(String(rounded));
+    } else if (lastEdited !== "cost" && b != null && p != null && p > -100) {
+      const computed = b / (1 + p / 100);
+      const rounded = Math.round(computed * 100) / 100;
+      if (Math.abs(rounded - (c ?? 0)) > 0.01) setCost(String(rounded));
+    } else if (lastEdited !== "profitPct" && c != null && c !== 0 && b != null) {
+      const computed = ((b - c) / c) * 100;
+      const rounded = Math.round(computed * 100) / 100;
+      if (Math.abs(rounded - (p ?? 0)) > 0.01) setProfitPct(String(rounded));
+    }
+  }, [cost, profitPct, billable, lastEdited]);
+
   async function onSubmit() {
     setError(null);
     if (!coNumber.trim()) {
       setError("CO number is required");
       return;
     }
-    const value = Number(coValue.replace(/[$,\s]/g, ""));
-    if (!Number.isFinite(value) || value < 0) {
-      setError("CO value must be a positive number");
+    const billableNum = toNumber(billable);
+    if (billableNum == null || billableNum < 0) {
+      setError("Billable value is required and must be >= 0");
       return;
     }
+    const costNum = toNumber(cost);
+    const profitPctNum = toNumber(profitPct);
+
     setSubmitting(true);
     const res = await createChangeOrder({
       projectId,
       coNumber: coNumber.trim(),
       description: description.trim() || null,
-      coValue: value,
+      coValue: billableNum,
+      costAmount: costNum,
+      profitPct: profitPctNum,
       scheduleImpactDays: scheduleDays ? Number(scheduleDays) : null,
       status,
       submittedAt: submittedAt || null,
@@ -73,29 +112,6 @@ export function NewChangeOrderForm({ projectId }: Props) {
           />
         </div>
         <div>
-          <Label htmlFor="co-value">Billable value (owner) - includes profit</Label>
-          <Input
-            id="co-value"
-            value={coValue}
-            onChange={(e) => setCoValue(e.target.value)}
-            placeholder="67458.34"
-            inputMode="decimal"
-          />
-        </div>
-        <div className="sm:col-span-2">
-          <Label htmlFor="co-description">Description</Label>
-          <textarea
-            id="co-description"
-            className={cn(
-              "h-20 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm",
-              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-            )}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Equipment Storage (Racking + Transformer) and Power Factors SCADA cost increase. $61,325.76 cost + 10% profit = $67,458.34 billable."
-          />
-        </div>
-        <div>
           <Label htmlFor="co-status">Status</Label>
           <select
             id="co-status"
@@ -110,6 +126,73 @@ export function NewChangeOrderForm({ projectId }: Props) {
             ))}
           </select>
         </div>
+        <div className="sm:col-span-2">
+          <Label htmlFor="co-description">Description</Label>
+          <textarea
+            id="co-description"
+            className={cn(
+              "h-20 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm",
+              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            )}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Equipment Storage (Racking + Transformer) and Power Factors SCADA cost increase."
+          />
+        </div>
+
+        <div className="sm:col-span-2 rounded-md border bg-muted/30 p-3">
+          <div className="mb-2 flex items-baseline justify-between">
+            <h3 className="text-sm font-semibold">Pricing</h3>
+            <p className="text-[10px] text-muted-foreground">
+              Enter any two - the third auto-computes
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div>
+              <Label htmlFor="co-cost">Cost (AHC)</Label>
+              <Input
+                id="co-cost"
+                value={cost}
+                onChange={(e) => {
+                  setCost(e.target.value);
+                  setLastEdited("cost");
+                }}
+                placeholder="e.g. 61325.76"
+                inputMode="decimal"
+                className="text-right"
+              />
+            </div>
+            <div>
+              <Label htmlFor="co-profit">Profit %</Label>
+              <Input
+                id="co-profit"
+                value={profitPct}
+                onChange={(e) => {
+                  setProfitPct(e.target.value);
+                  setLastEdited("profitPct");
+                }}
+                placeholder="e.g. 10"
+                inputMode="decimal"
+                className="text-right"
+              />
+            </div>
+            <div>
+              <Label htmlFor="co-billable">Billable (owner)</Label>
+              <Input
+                id="co-billable"
+                value={billable}
+                onChange={(e) => {
+                  setBillable(e.target.value);
+                  setLastEdited("billable");
+                }}
+                placeholder="auto"
+                inputMode="decimal"
+                className="text-right"
+              />
+            </div>
+          </div>
+        </div>
+
         <div>
           <Label htmlFor="schedule-days">Schedule impact (days)</Label>
           <Input
@@ -162,6 +245,12 @@ export function NewChangeOrderForm({ projectId }: Props) {
         <Button type="button" disabled={submitting} onClick={onSubmit}>
           {submitting ? "Saving..." : "Save change order"}
         </Button>
+      </div>
+
+      <div className="mt-4 rounded-md border border-dashed bg-background/40 p-3 text-xs text-muted-foreground">
+        Tip: after saving, the detail page lets you add multiple SOV
+        sub-lines (e.g. one line for storage, one for equipment cost
+        increase). Each appears separately on the AFP G703.
       </div>
     </div>
   );
