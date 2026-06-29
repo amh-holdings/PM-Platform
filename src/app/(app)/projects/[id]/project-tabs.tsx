@@ -16,6 +16,7 @@ export function ProjectTabs({ projectId }: Props) {
   const tabs: { href: string; label: string }[] = [
     { href: base, label: "Dashboard" },
     { href: `${base}/dprs`, label: "DPRs" },
+    { href: `${base}/inspections`, label: "QA/QC" },
     { href: `${base}/billing`, label: "Billing" },
     { href: `${base}/pay-apps`, label: "Pay apps" },
     { href: `${base}/change-orders`, label: "Change orders" },

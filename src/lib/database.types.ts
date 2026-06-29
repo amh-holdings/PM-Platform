@@ -14,6 +14,174 @@ export type Database = {
   }
   public: {
     Tables: {
+      inspections: {
+        Row: {
+          ahc_notes: string | null
+          basemap_key: string
+          created_at: string | null
+          decided_at: string | null
+          decided_by: string | null
+          decision_notes: string | null
+          gps_lat: number | null
+          gps_lng: number | null
+          id: string
+          inspection_type: string | null
+          inspector_name: string | null
+          notes: string | null
+          pin_x: number | null
+          pin_y: number | null
+          project_id: string
+          quantity: number | null
+          resubmission_count: number
+          review_started_at: string | null
+          reviewed_by: string | null
+          status: string
+          sub_acknowledged_at: string | null
+          subcontractor_id: string | null
+          submitted_at: string | null
+          submitted_by: string | null
+          submitted_via_link: string | null
+          title: string
+          unit_of_measure: string | null
+        }
+        Insert: {
+          ahc_notes?: string | null
+          basemap_key?: string
+          created_at?: string | null
+          decided_at?: string | null
+          decided_by?: string | null
+          decision_notes?: string | null
+          gps_lat?: number | null
+          gps_lng?: number | null
+          id?: string
+          inspection_type?: string | null
+          inspector_name?: string | null
+          notes?: string | null
+          pin_x?: number | null
+          pin_y?: number | null
+          project_id: string
+          quantity?: number | null
+          resubmission_count?: number
+          review_started_at?: string | null
+          reviewed_by?: string | null
+          status?: string
+          sub_acknowledged_at?: string | null
+          subcontractor_id?: string | null
+          submitted_at?: string | null
+          submitted_by?: string | null
+          submitted_via_link?: string | null
+          title: string
+          unit_of_measure?: string | null
+        }
+        Update: {
+          ahc_notes?: string | null
+          basemap_key?: string
+          created_at?: string | null
+          decided_at?: string | null
+          decided_by?: string | null
+          decision_notes?: string | null
+          gps_lat?: number | null
+          gps_lng?: number | null
+          id?: string
+          inspection_type?: string | null
+          inspector_name?: string | null
+          notes?: string | null
+          pin_x?: number | null
+          pin_y?: number | null
+          project_id?: string
+          quantity?: number | null
+          resubmission_count?: number
+          review_started_at?: string | null
+          reviewed_by?: string | null
+          status?: string
+          sub_acknowledged_at?: string | null
+          subcontractor_id?: string | null
+          submitted_at?: string | null
+          submitted_by?: string | null
+          submitted_via_link?: string | null
+          title?: string
+          unit_of_measure?: string | null
+        }
+        Relationships: []
+      }
+      inspection_photos: {
+        Row: {
+          caption: string | null
+          created_at: string | null
+          gps_lat: number | null
+          gps_lng: number | null
+          id: string
+          inspection_id: string
+          side: string
+          storage_path: string
+          taken_at: string | null
+          uploaded_by: string | null
+        }
+        Insert: {
+          caption?: string | null
+          created_at?: string | null
+          gps_lat?: number | null
+          gps_lng?: number | null
+          id?: string
+          inspection_id: string
+          side: string
+          storage_path: string
+          taken_at?: string | null
+          uploaded_by?: string | null
+        }
+        Update: {
+          caption?: string | null
+          created_at?: string | null
+          gps_lat?: number | null
+          gps_lng?: number | null
+          id?: string
+          inspection_id?: string
+          side?: string
+          storage_path?: string
+          taken_at?: string | null
+          uploaded_by?: string | null
+        }
+        Relationships: []
+      }
+      inspection_secure_links: {
+        Row: {
+          active: boolean
+          created_at: string | null
+          created_by: string | null
+          expires_at: string | null
+          id: string
+          label: string | null
+          last_used_at: string | null
+          project_id: string
+          subcontractor_id: string
+          token: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string | null
+          created_by?: string | null
+          expires_at?: string | null
+          id?: string
+          label?: string | null
+          last_used_at?: string | null
+          project_id: string
+          subcontractor_id: string
+          token: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string | null
+          created_by?: string | null
+          expires_at?: string | null
+          id?: string
+          label?: string | null
+          last_used_at?: string | null
+          project_id?: string
+          subcontractor_id?: string
+          token?: string
+        }
+        Relationships: []
+      }
       billing_entries: {
         Row: {
           actual_amount: number | null

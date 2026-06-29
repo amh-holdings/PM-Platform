@@ -1,0 +1,456 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+
+import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { generateInspectionToken, isLinkUsable } from "@/lib/inspection-token";
+import {
+  canReview,
+  canTransition,
+  isInspectionApprover,
+  isLocked,
+  type InspectionStatus,
+} from "@/lib/inspection-status";
+
+// ============ AUTH HELPERS ============
+
+type Authed = {
+  ok: true;
+  supabase: ReturnType<typeof createClient>;
+  userId: string;
+  role: string;
+};
+type AuthFail = { ok: false; error: string };
+
+async function getProfile(): Promise<Authed | AuthFail> {
+  const supabase = createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+  if (userError || !user) return { ok: false, error: "Not signed in" };
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (!profile) return { ok: false, error: "Profile not found" };
+  return { ok: true, supabase, userId: user.id, role: profile.role };
+}
+
+async function assertReviewer(): Promise<Authed | AuthFail> {
+  const auth = await getProfile();
+  if (!auth.ok) return auth;
+  if (!canReview(auth.role)) {
+    return { ok: false, error: "Restricted to AHC team members" };
+  }
+  return auth;
+}
+
+// ============ RESULT TYPES ============
+
+export type InspectionResult =
+  | { ok: true; inspectionId: string }
+  | { ok: false; error: string };
+
+export type InspectionPhotoInput = {
+  storagePath: string;
+  caption?: string | null;
+  gpsLat?: number | null;
+  gpsLng?: number | null;
+  takenAt?: string | null;
+};
+
+export type SubmitInspectionInput = {
+  projectId: string;
+  subcontractorId: string;
+  inspectionType?: string | null;
+  title: string;
+  notes?: string | null;
+  quantity?: number | null;
+  unitOfMeasure?: string | null;
+  basemapKey?: string;
+  pinX?: number | null;
+  pinY?: number | null;
+  gpsLat?: number | null;
+  gpsLng?: number | null;
+  inspectorName?: string | null;
+  photos?: InspectionPhotoInput[];
+};
+
+// ============ 1. SUBMIT (sub or AHC, signed-in) ============
+
+export async function submitInspection(
+  input: SubmitInspectionInput,
+): Promise<InspectionResult> {
+  const auth = await getProfile();
+  if (!auth.ok) return auth;
+
+  if (!input.title?.trim()) return { ok: false, error: "Title is required" };
+  if (!input.subcontractorId)
+    return { ok: false, error: "Subcontractor is required" };
+
+  const { data: inspection, error } = await auth.supabase
+    .from("inspections")
+    .insert({
+      project_id: input.projectId,
+      subcontractor_id: input.subcontractorId,
+      inspection_type: input.inspectionType ?? null,
+      title: input.title.trim(),
+      notes: input.notes ?? null,
+      quantity: input.quantity ?? null,
+      unit_of_measure: input.unitOfMeasure ?? null,
+      basemap_key: input.basemapKey ?? "C2-01",
+      pin_x: input.pinX ?? null,
+      pin_y: input.pinY ?? null,
+      gps_lat: input.gpsLat ?? null,
+      gps_lng: input.gpsLng ?? null,
+      inspector_name: input.inspectorName ?? null,
+      submitted_by: auth.userId,
+      status: "submitted",
+      submitted_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+  if (error || !inspection) {
+    return { ok: false, error: error?.message ?? "Failed to create inspection" };
+  }
+
+  if (input.photos?.length) {
+    const rows = input.photos.map((p) => ({
+      inspection_id: inspection.id,
+      side: "sub" as const,
+      storage_path: p.storagePath,
+      caption: p.caption ?? null,
+      gps_lat: p.gpsLat ?? null,
+      gps_lng: p.gpsLng ?? null,
+      taken_at: p.takenAt ?? new Date().toISOString(),
+      uploaded_by: auth.userId,
+    }));
+    const { error: photoErr } = await auth.supabase
+      .from("inspection_photos")
+      .insert(rows);
+    if (photoErr) return { ok: false, error: `Photos failed: ${photoErr.message}` };
+  }
+
+  revalidatePath(`/projects/${input.projectId}/inspections`);
+  return { ok: true, inspectionId: inspection.id };
+}
+
+// ============ 2. START REVIEW (AHC) submitted -> under_review ============
+
+export async function startReview(
+  inspectionId: string,
+  projectId: string,
+): Promise<{ ok: true } | AuthFail> {
+  const auth = await assertReviewer();
+  if (!auth.ok) return auth;
+
+  const guard = await guardTransition(auth, inspectionId, projectId, "under_review");
+  if (!guard.ok) return guard;
+
+  const { error } = await auth.supabase
+    .from("inspections")
+    .update({
+      status: "under_review",
+      review_started_at: new Date().toISOString(),
+      reviewed_by: auth.userId,
+    })
+    .eq("id", inspectionId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/inspections`);
+  revalidatePath(`/projects/${projectId}/inspections/${inspectionId}`);
+  return { ok: true };
+}
+
+// ============ 3. ATTACH AHC VERIFICATION (AHC) ============
+// Adds AHC-side photos/notes at the same locations. Allowed while under_review.
+
+export async function attachAhcVerification(input: {
+  inspectionId: string;
+  projectId: string;
+  ahcNotes?: string | null;
+  photos?: InspectionPhotoInput[];
+}): Promise<{ ok: true } | AuthFail> {
+  const auth = await assertReviewer();
+  if (!auth.ok) return auth;
+
+  const { data: insp, error: readErr } = await auth.supabase
+    .from("inspections")
+    .select("id, project_id, status")
+    .eq("id", input.inspectionId)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+  if (!insp) return { ok: false, error: "Inspection not found" };
+  if (insp.project_id !== input.projectId)
+    return { ok: false, error: "Inspection does not belong to this project" };
+  if (isLocked(insp.status as InspectionStatus))
+    return { ok: false, error: "Inspection is approved and locked" };
+
+  if (input.ahcNotes != null) {
+    const { error } = await auth.supabase
+      .from("inspections")
+      .update({ ahc_notes: input.ahcNotes })
+      .eq("id", input.inspectionId);
+    if (error) return { ok: false, error: error.message };
+  }
+
+  if (input.photos?.length) {
+    const rows = input.photos.map((p) => ({
+      inspection_id: input.inspectionId,
+      side: "ahc" as const,
+      storage_path: p.storagePath,
+      caption: p.caption ?? null,
+      gps_lat: p.gpsLat ?? null,
+      gps_lng: p.gpsLng ?? null,
+      taken_at: p.takenAt ?? new Date().toISOString(),
+      uploaded_by: auth.userId,
+    }));
+    const { error } = await auth.supabase
+      .from("inspection_photos")
+      .insert(rows);
+    if (error) return { ok: false, error: `AHC photos failed: ${error.message}` };
+  }
+
+  revalidatePath(`/projects/${input.projectId}/inspections/${input.inspectionId}`);
+  return { ok: true };
+}
+
+// ============ 4. DECIDE (Mark Wooley only) ============
+// under_review -> approved (locks) | rejected (returns to sub with reason).
+
+export async function decideInspection(input: {
+  inspectionId: string;
+  projectId: string;
+  decision: "approved" | "rejected";
+  decisionNotes?: string | null;
+}): Promise<{ ok: true } | AuthFail> {
+  const auth = await getProfile();
+  if (!auth.ok) return auth;
+
+  // Single internal gate: Mark Wooley (ahc_super). Phil/zarina cannot decide.
+  if (!isInspectionApprover({ role: auth.role, profileId: auth.userId })) {
+    return { ok: false, error: "Only the QA/QC approver may approve or reject" };
+  }
+  if (input.decision === "rejected" && !input.decisionNotes?.trim()) {
+    return { ok: false, error: "A reason is required to reject" };
+  }
+
+  const guard = await guardTransition(
+    auth,
+    input.inspectionId,
+    input.projectId,
+    input.decision,
+  );
+  if (!guard.ok) return guard;
+
+  const { error } = await auth.supabase
+    .from("inspections")
+    .update({
+      status: input.decision,
+      decided_by: auth.userId,
+      decided_at: new Date().toISOString(),
+      decision_notes: input.decisionNotes?.trim() || null,
+    })
+    .eq("id", input.inspectionId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${input.projectId}/inspections`);
+  revalidatePath(`/projects/${input.projectId}/inspections/${input.inspectionId}`);
+  return { ok: true };
+}
+
+// Shared transition guard: load current status, verify project ownership and
+// that from->to is a legal edge in the state machine.
+async function guardTransition(
+  auth: Authed,
+  inspectionId: string,
+  projectId: string,
+  to: InspectionStatus,
+): Promise<{ ok: true } | AuthFail> {
+  const { data: insp, error } = await auth.supabase
+    .from("inspections")
+    .select("id, project_id, status")
+    .eq("id", inspectionId)
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!insp) return { ok: false, error: "Inspection not found" };
+  if (insp.project_id !== projectId)
+    return { ok: false, error: "Inspection does not belong to this project" };
+  const from = insp.status as InspectionStatus;
+  if (!canTransition(from, to)) {
+    return {
+      ok: false,
+      error: `Cannot move an inspection from ${from} to ${to}`,
+    };
+  }
+  return { ok: true };
+}
+
+// ============ 5. SECURE LINK MANAGEMENT (AHC) ============
+
+export async function createSecureLink(input: {
+  projectId: string;
+  subcontractorId: string;
+  label?: string | null;
+  expiresAt?: string | null;
+}): Promise<{ ok: true; token: string } | AuthFail> {
+  const auth = await assertReviewer();
+  if (!auth.ok) return auth;
+
+  const token = generateInspectionToken();
+  const { error } = await auth.supabase.from("inspection_secure_links").insert({
+    project_id: input.projectId,
+    subcontractor_id: input.subcontractorId,
+    token,
+    label: input.label ?? null,
+    expires_at: input.expiresAt ?? null,
+    active: true,
+    created_by: auth.userId,
+  });
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${input.projectId}/inspections`);
+  return { ok: true, token };
+}
+
+export async function revokeSecureLink(
+  linkId: string,
+  projectId: string,
+): Promise<{ ok: true } | AuthFail> {
+  const auth = await assertReviewer();
+  if (!auth.ok) return auth;
+  const { error } = await auth.supabase
+    .from("inspection_secure_links")
+    .update({ active: false })
+    .eq("id", linkId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/projects/${projectId}/inspections`);
+  return { ok: true };
+}
+
+// ============ 6. SECURE-LINK SUBMISSION (no login) ============
+// Called from the public /inspect/[token] route. There is NO authenticated
+// session: the token is the credential. We validate it via the service role,
+// then constrain the insert to the token's project_id + subcontractor_id. A
+// caller cannot submit outside their scope because we never read project or
+// subcontractor ids from the request body.
+
+export type SecureLinkSubmitInput = {
+  token: string;
+  title: string;
+  inspectionType?: string | null;
+  notes?: string | null;
+  quantity?: number | null;
+  unitOfMeasure?: string | null;
+  basemapKey?: string;
+  pinX?: number | null;
+  pinY?: number | null;
+  gpsLat?: number | null;
+  gpsLng?: number | null;
+  inspectorName: string;
+  photos?: InspectionPhotoInput[];
+};
+
+export async function submitViaSecureLink(
+  input: SecureLinkSubmitInput,
+): Promise<InspectionResult> {
+  if (!input.token) return { ok: false, error: "Missing link token" };
+  if (!input.title?.trim()) return { ok: false, error: "Title is required" };
+  if (!input.inspectorName?.trim())
+    return { ok: false, error: "Your name is required" };
+
+  const admin = createAdminClient();
+
+  // Validate the token. Scope comes ONLY from the stored link, never the body.
+  const { data: link, error: linkErr } = await admin
+    .from("inspection_secure_links")
+    .select("id, project_id, subcontractor_id, active, expires_at")
+    .eq("token", input.token)
+    .maybeSingle();
+  if (linkErr) return { ok: false, error: linkErr.message };
+  if (!link) return { ok: false, error: "Invalid link" };
+  if (!isLinkUsable(link)) return { ok: false, error: "This link has expired" };
+
+  const { data: inspection, error } = await admin
+    .from("inspections")
+    .insert({
+      project_id: link.project_id,
+      subcontractor_id: link.subcontractor_id,
+      inspection_type: input.inspectionType ?? null,
+      title: input.title.trim(),
+      notes: input.notes ?? null,
+      quantity: input.quantity ?? null,
+      unit_of_measure: input.unitOfMeasure ?? null,
+      basemap_key: input.basemapKey ?? "C2-01",
+      pin_x: input.pinX ?? null,
+      pin_y: input.pinY ?? null,
+      gps_lat: input.gpsLat ?? null,
+      gps_lng: input.gpsLng ?? null,
+      inspector_name: input.inspectorName.trim(),
+      submitted_via_link: link.id,
+      status: "submitted",
+      submitted_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+  if (error || !inspection) {
+    return { ok: false, error: error?.message ?? "Failed to submit" };
+  }
+
+  if (input.photos?.length) {
+    const rows = input.photos.map((p) => ({
+      inspection_id: inspection.id,
+      side: "sub" as const,
+      storage_path: p.storagePath,
+      caption: p.caption ?? null,
+      gps_lat: p.gpsLat ?? null,
+      gps_lng: p.gpsLng ?? null,
+      taken_at: p.takenAt ?? new Date().toISOString(),
+    }));
+    await admin.from("inspection_photos").insert(rows);
+  }
+
+  await admin
+    .from("inspection_secure_links")
+    .update({ last_used_at: new Date().toISOString() })
+    .eq("id", link.id);
+
+  revalidatePath(`/projects/${link.project_id}/inspections`);
+  return { ok: true, inspectionId: inspection.id };
+}
+
+// ============ 7. SUB ACKNOWLEDGEMENT (dispute protection) ============
+// The sub confirms the verified record. This is the accountability trail.
+
+export async function acknowledgeViaSecureLink(input: {
+  token: string;
+  inspectionId: string;
+}): Promise<{ ok: true } | AuthFail> {
+  const admin = createAdminClient();
+  const { data: link } = await admin
+    .from("inspection_secure_links")
+    .select("id, subcontractor_id, active, expires_at")
+    .eq("token", input.token)
+    .maybeSingle();
+  if (!link || !isLinkUsable(link)) return { ok: false, error: "Invalid link" };
+
+  // The inspection must belong to this token's subcontractor.
+  const { data: insp } = await admin
+    .from("inspections")
+    .select("id, subcontractor_id")
+    .eq("id", input.inspectionId)
+    .maybeSingle();
+  if (!insp || insp.subcontractor_id !== link.subcontractor_id) {
+    return { ok: false, error: "Not authorized for this record" };
+  }
+
+  const { error } = await admin
+    .from("inspections")
+    .update({ sub_acknowledged_at: new Date().toISOString() })
+    .eq("id", input.inspectionId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}

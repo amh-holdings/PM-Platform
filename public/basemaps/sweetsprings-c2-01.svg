@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800" role="img" aria-label="C2.01 Site Improvement Plan (placeholder)">
+  <rect width="1200" height="800" fill="#f8fafc"/>
+  <!-- grid -->
+  <g stroke="#e2e8f0" stroke-width="1">
+    <line x1="0" y1="100" x2="1200" y2="100"/><line x1="0" y1="200" x2="1200" y2="200"/>
+    <line x1="0" y1="300" x2="1200" y2="300"/><line x1="0" y1="400" x2="1200" y2="400"/>
+    <line x1="0" y1="500" x2="1200" y2="500"/><line x1="0" y1="600" x2="1200" y2="600"/>
+    <line x1="0" y1="700" x2="1200" y2="700"/>
+    <line x1="100" y1="0" x2="100" y2="800"/><line x1="200" y1="0" x2="200" y2="800"/>
+    <line x1="300" y1="0" x2="300" y2="800"/><line x1="400" y1="0" x2="400" y2="800"/>
+    <line x1="500" y1="0" x2="500" y2="800"/><line x1="600" y1="0" x2="600" y2="800"/>
+    <line x1="700" y1="0" x2="700" y2="800"/><line x1="800" y1="0" x2="800" y2="800"/>
+    <line x1="900" y1="0" x2="900" y2="800"/><line x1="1000" y1="0" x2="1000" y2="800"/>
+    <line x1="1100" y1="0" x2="1100" y2="800"/>
+  </g>
+  <!-- mock site features -->
+  <rect x="120" y="140" width="360" height="220" fill="none" stroke="#94a3b8" stroke-width="2"/>
+  <text x="135" y="165" font-family="monospace" font-size="16" fill="#64748b">ARRAY BLOCK A</text>
+  <rect x="540" y="140" width="360" height="220" fill="none" stroke="#94a3b8" stroke-width="2"/>
+  <text x="555" y="165" font-family="monospace" font-size="16" fill="#64748b">ARRAY BLOCK B</text>
+  <rect x="120" y="430" width="780" height="180" fill="none" stroke="#94a3b8" stroke-width="2"/>
+  <text x="135" y="455" font-family="monospace" font-size="16" fill="#64748b">INVERTER PAD / ACCESS ROAD</text>
+  <path d="M 960 120 L 1080 120 L 1080 660 L 960 660" fill="none" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="970" y="690" font-family="monospace" font-size="14" fill="#94a3b8">PERIMETER FENCE</text>
+  <text x="40" y="50" font-family="monospace" font-size="22" fill="#475569">C2.01 SITE IMPROVEMENT PLAN</text>
+  <text x="40" y="75" font-family="monospace" font-size="13" fill="#94a3b8">PLACEHOLDER - replace public/basemaps/sweetsprings-c2-01.svg with the real cropped C2.01 (SweetSprings_Basemap_C2-01.png)</text>
+</svg>

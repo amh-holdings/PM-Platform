@@ -11,7 +11,8 @@
     "verify-setup": "node scripts/verify-setup.mjs",
     "import:scan": "node scripts/bulk-import.mjs scan",
     "import:apply": "node scripts/bulk-import.mjs apply",
-    "backfill-text": "node scripts/backfill-text.mjs"
+    "backfill-text": "node scripts/backfill-text.mjs",
+    "test:inspections": "tsx scripts/qaqc/run-tests.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
@@ -33,6 +34,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.3",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
@@ -40,6 +42,7 @@
     "eslint-config-next": "14.2.35",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
+    "tsx": "^4.22.4",
     "typescript": "^5"
   }
 }
