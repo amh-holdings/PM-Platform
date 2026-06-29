@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { BASEMAPS, type BasemapKey } from "@/lib/inspection-map";
 import type { NormalizedPin } from "@/lib/inspection-map";
 import { InspectionMap } from "../inspection-map";
+import { PhotoUploader, type UploadedPhoto } from "../photo-uploader";
 import { submitInspection } from "../inspection-actions";
 
 type Sub = { id: string; company_name: string };
@@ -32,6 +33,7 @@ export function NewInspectionForm({
   const [unit, setUnit] = useState("");
   const [sheet, setSheet] = useState<BasemapKey>("C2-01");
   const [pin, setPin] = useState<NormalizedPin | null>(null);
+  const [photos, setPhotos] = useState<UploadedPhoto[]>([]);
 
   // Best-effort GPS backup, captured on submit (non-blocking).
   function captureGps(): Promise<{ lat: number | null; lng: number | null }> {
@@ -68,6 +70,7 @@ export function NewInspectionForm({
         pinY: pin?.y ?? null,
         gpsLat: gps.lat,
         gpsLng: gps.lng,
+        photos,
       });
       if (!res.ok) return setError(res.error);
       router.push(`/projects/${projectId}/inspections/${res.inspectionId}`);
@@ -168,6 +171,10 @@ export function NewInspectionForm({
             className="w-full rounded-md border bg-background p-2 text-sm"
             placeholder="What was inspected, conditions, anything notable."
           />
+        </div>
+        <div className="space-y-1">
+          <Label>Photos</Label>
+          <PhotoUploader projectId={projectId} side="sub" onChange={setPhotos} />
         </div>
 
         {error && <p className="text-xs text-destructive">{error}</p>}

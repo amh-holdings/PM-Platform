@@ -46,14 +46,14 @@ export function isLocked(status: InspectionStatus): boolean {
 }
 
 // ---- Approver gate ----
-// Mark Wooley is the single internal gate. He is the AHC field super
-// (role = ahc_super). Phil is digest-only and intentionally cannot decide,
-// even though phil/zarina can run the review and attach verification.
+// Per the Build Spec, Mark Wooley (role = ahc_super) is the single internal
+// gate. Phil is included here as well at his request so he can exercise the
+// full approve/reject flow while testing the live app.
 //
-// If more than one ahc_super ever exists, narrow this to Mark's profile id by
-// setting INSPECTION_APPROVER_PROFILE_ID and switching isInspectionApprover to
-// compare ids. Kept as a role check for now so the mock seeds cleanly.
-export const INSPECTION_APPROVER_ROLE = "ahc_super" as const;
+// To return to the spec's strict single-gate (Mark only): remove "phil" from
+// INSPECTION_APPROVER_ROLES. To narrow to a specific person when more than one
+// ahc_super exists, set INSPECTION_APPROVER_PROFILE_ID and the id check wins.
+export const INSPECTION_APPROVER_ROLES: readonly string[] = ["ahc_super", "phil"];
 export const INSPECTION_APPROVER_PROFILE_ID: string | null = null;
 
 export type ApproverContext = { role: string; profileId?: string | null };
@@ -62,7 +62,7 @@ export function isInspectionApprover(ctx: ApproverContext): boolean {
   if (INSPECTION_APPROVER_PROFILE_ID) {
     return ctx.profileId === INSPECTION_APPROVER_PROFILE_ID;
   }
-  return ctx.role === INSPECTION_APPROVER_ROLE;
+  return INSPECTION_APPROVER_ROLES.includes(ctx.role);
 }
 
 // Roles allowed to run the AHC-side review (open map, attach verification).

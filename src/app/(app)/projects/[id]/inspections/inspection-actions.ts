@@ -2,9 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 
+import { randomUUID } from "node:crypto";
+
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateInspectionToken, isLinkUsable } from "@/lib/inspection-token";
+import { INSPECTION_BUCKET, sanitizeFileName } from "./inspection-constants";
 import {
   canReview,
   canTransition,
@@ -420,6 +423,37 @@ export async function submitViaSecureLink(
 
   revalidatePath(`/projects/${link.project_id}/inspections`);
   return { ok: true, inspectionId: inspection.id };
+}
+
+// ============ 6b. SIGNED UPLOAD URL FOR THE NO-LOGIN PATH ============
+// The secure-link sub has no auth session, so they cannot upload to storage
+// under RLS. We validate the token server-side and mint a one-time signed
+// upload URL scoped to a path inside the project's draft prefix. The client
+// then PUTs the file directly to storage via uploadToSignedUrl.
+
+export async function createSecureLinkUploadUrl(input: {
+  token: string;
+  fileName: string;
+}): Promise<
+  { ok: true; path: string; signedToken: string } | { ok: false; error: string }
+> {
+  if (!input.token) return { ok: false, error: "Missing link token" };
+  const admin = createAdminClient();
+  const { data: link } = await admin
+    .from("inspection_secure_links")
+    .select("id, project_id, active, expires_at")
+    .eq("token", input.token)
+    .maybeSingle();
+  if (!link || !isLinkUsable(link)) return { ok: false, error: "Invalid link" };
+
+  const path = `${link.project_id}/_drafts/sub/${randomUUID()}-${sanitizeFileName(input.fileName)}`;
+  const { data, error } = await admin.storage
+    .from(INSPECTION_BUCKET)
+    .createSignedUploadUrl(path);
+  if (error || !data) {
+    return { ok: false, error: error?.message ?? "Could not create upload URL" };
+  }
+  return { ok: true, path, signedToken: data.token };
 }
 
 // ============ 7. SUB ACKNOWLEDGEMENT (dispute protection) ============

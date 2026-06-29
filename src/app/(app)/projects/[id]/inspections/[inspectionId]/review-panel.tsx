@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
 import { nextStatuses, type InspectionStatus } from "@/lib/inspection-status";
+import { PhotoUploader, type UploadedPhoto } from "../photo-uploader";
 import {
   startReview,
   attachAhcVerification,
@@ -26,6 +27,7 @@ export function ReviewPanel({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [ahcNotes, setAhcNotes] = useState("");
+  const [ahcPhotos, setAhcPhotos] = useState<UploadedPhoto[]>([]);
   const [decisionNotes, setDecisionNotes] = useState("");
 
   const allowed = nextStatuses(status);
@@ -71,21 +73,28 @@ export function ReviewPanel({
               className="w-full rounded-md border bg-background p-2 text-sm"
               placeholder="AHC field verification notes."
             />
+            <PhotoUploader
+              projectId={projectId}
+              side="ahc"
+              inspectionId={inspectionId}
+              onChange={setAhcPhotos}
+            />
             <Button
               variant="outline"
               size="sm"
-              disabled={pending || !ahcNotes.trim()}
+              disabled={pending || (!ahcNotes.trim() && ahcPhotos.length === 0)}
               onClick={() =>
                 run(() =>
                   attachAhcVerification({
                     inspectionId,
                     projectId,
-                    ahcNotes: ahcNotes.trim(),
+                    ahcNotes: ahcNotes.trim() || null,
+                    photos: ahcPhotos,
                   }),
                 )
               }
             >
-              Save verification notes
+              Save verification
             </Button>
           </div>
 

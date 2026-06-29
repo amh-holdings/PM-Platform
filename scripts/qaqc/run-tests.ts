@@ -366,7 +366,7 @@ async function main() {
   // ============ UNIT: approver gate ============
   console.log("\n  -- unit: approver gate --");
   check("U-09 Mark (ahc_super) IS the approver", isInspectionApprover({ role: "ahc_super" }));
-  check("U-10 Phil is NOT the approver (digest only)", !isInspectionApprover({ role: "phil" }));
+  check("U-10 Phil IS an approver (included for live testing)", isInspectionApprover({ role: "phil" }));
   check("U-11 Zarina is NOT the approver", !isInspectionApprover({ role: "zarina" }));
   check("U-12 a sub is NOT the approver", !isInspectionApprover({ role: "sub_foreman" }));
   check("U-13 Phil/Zarina/AHC-super can run review", canReview("phil") && canReview("zarina") && canReview("ahc_super"));

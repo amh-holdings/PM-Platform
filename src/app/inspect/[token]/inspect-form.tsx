@@ -9,6 +9,10 @@ import { Label } from "@/components/ui/label";
 import { BASEMAPS, type BasemapKey } from "@/lib/inspection-map";
 import type { NormalizedPin } from "@/lib/inspection-map";
 import { InspectionMap } from "@/app/(app)/projects/[id]/inspections/inspection-map";
+import {
+  PhotoUploader,
+  type UploadedPhoto,
+} from "@/app/(app)/projects/[id]/inspections/photo-uploader";
 import { submitViaSecureLink } from "@/app/(app)/projects/[id]/inspections/inspection-actions";
 
 export function SecureLinkSubmit({ token }: { token: string }) {
@@ -25,6 +29,7 @@ export function SecureLinkSubmit({ token }: { token: string }) {
   const [unit, setUnit] = useState("");
   const [sheet, setSheet] = useState<BasemapKey>("C2-01");
   const [pin, setPin] = useState<NormalizedPin | null>(null);
+  const [photos, setPhotos] = useState<UploadedPhoto[]>([]);
 
   function captureGps(): Promise<{ lat: number | null; lng: number | null }> {
     return new Promise((resolve) => {
@@ -59,6 +64,7 @@ export function SecureLinkSubmit({ token }: { token: string }) {
         pinY: pin?.y ?? null,
         gpsLat: gps.lat,
         gpsLng: gps.lng,
+        photos,
       });
       if (!res.ok) return setError(res.error);
       setDone(true);
@@ -68,6 +74,7 @@ export function SecureLinkSubmit({ token }: { token: string }) {
       setQuantity("");
       setUnit("");
       setPin(null);
+      setPhotos([]);
       router.refresh();
     });
   }
@@ -146,6 +153,10 @@ export function SecureLinkSubmit({ token }: { token: string }) {
           rows={3}
           className="w-full rounded-md border bg-background p-2 text-sm"
         />
+      </div>
+      <div className="space-y-1">
+        <Label>Photos</Label>
+        <PhotoUploader side="sub" token={token} onChange={setPhotos} />
       </div>
 
       {error && <p className="text-xs text-destructive">{error}</p>}
