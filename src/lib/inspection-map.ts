@@ -48,13 +48,29 @@ export function parsePin(
   return { x, y };
 }
 
-// Available basemap sheets. C2-01 is the default site plan; C4-51 is reserved
-// for the erosion & sediment overlay used by E&S inspections.
+// Available basemap sheets from the Sweet Springs civil set. C2-01 is the
+// default site plan; the E&S sheets (C4-01 / C4-51) drive erosion & sediment
+// inspections. Ordered to match the drawing set.
 export const BASEMAPS = {
+  "C1-01": {
+    key: "C1-01",
+    label: "C1.01 Existing Condition & Demolition",
+    src: "/basemaps/sweetsprings-c1-01.png",
+  },
   "C2-01": {
     key: "C2-01",
     label: "C2.01 Site Improvement Plan",
     src: "/basemaps/sweetsprings-c2-01.png",
+  },
+  "C2-51": {
+    key: "C2-51",
+    label: "C2.51 Vegetation Management",
+    src: "/basemaps/sweetsprings-c2-51.png",
+  },
+  "C4-01": {
+    key: "C4-01",
+    label: "C4.01 Phase I E&S Control",
+    src: "/basemaps/sweetsprings-c4-01.png",
   },
   "C4-51": {
     key: "C4-51",
