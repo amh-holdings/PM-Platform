@@ -54,12 +54,12 @@ export const BASEMAPS = {
   "C2-01": {
     key: "C2-01",
     label: "C2.01 Site Improvement Plan",
-    src: "/basemaps/sweetsprings-c2-01.svg",
+    src: "/basemaps/sweetsprings-c2-01.png",
   },
   "C4-51": {
     key: "C4-51",
     label: "C4.51 Phase II E&S Control",
-    src: "/basemaps/sweetsprings-c4-51.svg",
+    src: "/basemaps/sweetsprings-c4-51.png",
   },
 } as const;
 
