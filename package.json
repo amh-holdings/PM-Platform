@@ -27,6 +27,7 @@
     "pdf-to-img": "^6.1.0",
     "react": "^18",
     "react-dom": "^18",
+    "react-zoom-pan-pinch": "^3.7.0",
     "recharts": "^3.8.1",
     "tailwind-merge": "^3.6.0",
     "tailwindcss-animate": "^1.0.7",
