@@ -107,10 +107,10 @@ export async function DashboardFieldStatus({ projectId }: Props) {
           </p>
         </div>
         <Link
-          href={`/projects/${projectId}/dprs`}
+          href={`/projects/${projectId}/field-reports`}
           className="text-xs text-muted-foreground hover:text-foreground"
         >
-          DPRs &rarr;
+          Field Reports &rarr;
         </Link>
       </div>
 

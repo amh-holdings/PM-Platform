@@ -17,16 +17,14 @@ export function ProjectTabs({ projectId, role }: Props) {
 
   // Each tab lists the effective roles that may see it. Subs see only Field
   // Reports; the CM sees the operational + financial tabs; Phil (full) sees
-  // everything, including the legacy DPRs / QA-QC tabs during transition.
+  // everything. The legacy DPRs / QA-QC tabs are retired - Field Reports
+  // supersedes them.
   const ALL: EffectiveRole[] = ["full", "cm", "sub"];
   const CM: EffectiveRole[] = ["full", "cm"];
-  const FULL: EffectiveRole[] = ["full"];
 
   const allTabs: { href: string; label: string; roles: EffectiveRole[] }[] = [
     { href: base, label: "Dashboard", roles: CM },
     { href: `${base}/field-reports`, label: "Field Reports", roles: ALL },
-    { href: `${base}/dprs`, label: "DPRs", roles: FULL },
-    { href: `${base}/inspections`, label: "QA/QC", roles: FULL },
     { href: `${base}/billing`, label: "Billing", roles: CM },
     { href: `${base}/pay-apps`, label: "Pay apps", roles: CM },
     { href: `${base}/change-orders`, label: "Change orders", roles: CM },
