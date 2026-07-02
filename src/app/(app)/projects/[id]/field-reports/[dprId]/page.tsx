@@ -51,11 +51,11 @@ export default async function FieldReportDetailPage({
 
   if (!dpr) notFound();
 
-  const [{ data: pins }, { data: sub }] = await Promise.all([
+  const [{ data: pins }, { data: sub }, { data: tasks }] = await Promise.all([
     supabase
       .from("inspections")
       .select(
-        "id, title, status, origin, basemap_key, pin_x, pin_y, inspection_type, notes",
+        "id, title, status, origin, basemap_key, pin_x, pin_y, inspection_type, notes, schedule_task_id",
       )
       .eq("dpr_id", dpr.id)
       .order("origin")
@@ -67,7 +67,22 @@ export default async function FieldReportDetailPage({
           .eq("id", dpr.subcontractor_id)
           .maybeSingle()
       : Promise.resolve({ data: null }),
+    supabase
+      .from("schedule_tasks")
+      .select("id, wbs_code, task_name")
+      .eq("project_id", params.id)
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("wbs_code", { ascending: true }),
   ]);
+
+  const taskList = (tasks ?? []).map((t) => ({
+    id: t.id,
+    wbsCode: t.wbs_code,
+    taskName: t.task_name,
+  }));
+  const taskLabel = new Map(
+    taskList.map((t) => [t.id, `${t.wbsCode} ${t.taskName}`]),
+  );
 
   const reviewPins: ReviewPin[] = (pins ?? []).map((p) => ({
     id: p.id,
@@ -79,6 +94,9 @@ export default async function FieldReportDetailPage({
     pinY: p.pin_y,
     inspectionType: p.inspection_type,
     notes: p.notes,
+    wbsLabel: p.schedule_task_id
+      ? taskLabel.get(p.schedule_task_id) ?? null
+      : null,
   }));
 
   return (
@@ -141,6 +159,7 @@ export default async function FieldReportDetailPage({
           dprId={dpr.id}
           subcontractorId={dpr.subcontractor_id}
           pins={reviewPins}
+          tasks={taskList}
           canReview={canReview(role)}
           canDecide={isInspectionApprover({ role })}
         />

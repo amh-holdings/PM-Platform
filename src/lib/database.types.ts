@@ -37,6 +37,7 @@ export type Database = {
           resubmission_count: number
           review_started_at: string | null
           reviewed_by: string | null
+          schedule_task_id: string | null
           status: string
           sub_acknowledged_at: string | null
           subcontractor_id: string | null
@@ -68,6 +69,7 @@ export type Database = {
           resubmission_count?: number
           review_started_at?: string | null
           reviewed_by?: string | null
+          schedule_task_id?: string | null
           status?: string
           sub_acknowledged_at?: string | null
           subcontractor_id?: string | null
@@ -99,6 +101,7 @@ export type Database = {
           resubmission_count?: number
           review_started_at?: string | null
           reviewed_by?: string | null
+          schedule_task_id?: string | null
           status?: string
           sub_acknowledged_at?: string | null
           subcontractor_id?: string | null

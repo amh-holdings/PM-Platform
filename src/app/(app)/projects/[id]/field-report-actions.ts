@@ -13,6 +13,7 @@ import type { InspectionPhotoInput } from "./inspections/inspection-actions";
 export type WorkPinInput = {
   title: string;
   inspectionType?: string | null;
+  scheduleTaskId?: string | null; // WBS link to a schedule task
   notes?: string | null;
   basemapKey: string;
   pinX: number | null;
@@ -87,6 +88,7 @@ export async function submitFieldReport(
         origin: "sub",
         title: p.title.trim(),
         inspection_type: p.inspectionType?.trim() || null,
+        schedule_task_id: p.scheduleTaskId || null,
         notes: p.notes?.trim() || null,
         basemap_key: p.basemapKey,
         pin_x: p.pinX,
@@ -140,6 +142,7 @@ export type CmCheckInput = {
   subcontractorId: string | null;
   title: string;
   inspectionType?: string | null;
+  scheduleTaskId?: string | null;
   notes?: string | null;
   basemapKey: string;
   pinX: number | null;
@@ -178,6 +181,7 @@ export async function submitCmCheck(
       origin: "cm",
       title: input.title.trim(),
       inspection_type: input.inspectionType?.trim() || null,
+      schedule_task_id: input.scheduleTaskId || null,
       notes: input.notes?.trim() || null,
       basemap_key: input.basemapKey,
       pin_x: input.pinX,

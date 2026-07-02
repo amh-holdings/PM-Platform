@@ -35,13 +35,17 @@ export type ReviewPin = {
   pinY: number | null;
   inspectionType: string | null;
   notes: string | null;
+  wbsLabel: string | null;
 };
+
+type TaskOption = { id: string; wbsCode: string; taskName: string };
 
 type Props = {
   projectId: string;
   dprId: string;
   subcontractorId: string | null;
   pins: ReviewPin[];
+  tasks: TaskOption[];
   canReview: boolean;
   canDecide: boolean;
 };
@@ -51,6 +55,7 @@ export function FieldReportReview({
   dprId,
   subcontractorId,
   pins,
+  tasks,
   canReview,
   canDecide,
 }: Props) {
@@ -69,6 +74,7 @@ export function FieldReportReview({
   const [draft, setDraft] = useState<NormalizedPin | null>(null);
   const [title, setTitle] = useState("");
   const [type, setType] = useState("");
+  const [wbsTaskId, setWbsTaskId] = useState("");
   const [notes, setNotes] = useState("");
   const [photos, setPhotos] = useState<UploadedPhoto[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -101,6 +107,7 @@ export function FieldReportReview({
         subcontractorId,
         title: title.trim(),
         inspectionType: type.trim() || null,
+        scheduleTaskId: wbsTaskId || null,
         notes: notes.trim() || null,
         basemapKey: sheet,
         pinX: draft.x,
@@ -112,6 +119,7 @@ export function FieldReportReview({
       setDraft(null);
       setTitle("");
       setType("");
+      setWbsTaskId("");
       setNotes("");
       setPhotos([]);
       router.refresh();
@@ -179,6 +187,18 @@ export function FieldReportReview({
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="What you checked (e.g. Verified pile torque row 12)"
                 />
+                <select
+                  value={wbsTaskId}
+                  onChange={(e) => setWbsTaskId(e.target.value)}
+                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  <option value="">- WBS / schedule item -</option>
+                  {tasks.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.wbsCode} {t.taskName}
+                    </option>
+                  ))}
+                </select>
                 <Input
                   value={type}
                   onChange={(e) => setType(e.target.value)}
@@ -259,6 +279,12 @@ export function FieldReportReview({
                 {statusLabel(active.status)}
               </span>
             </div>
+            {active.wbsLabel && (
+              <p className="text-xs">
+                <span className="font-medium text-muted-foreground">WBS:</span>{" "}
+                {active.wbsLabel}
+              </p>
+            )}
             {active.inspectionType && (
               <p className="text-xs text-muted-foreground">
                 {active.inspectionType}

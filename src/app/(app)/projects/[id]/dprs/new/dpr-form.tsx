@@ -19,13 +19,16 @@ import {
 import { DprPhotoUploader, type StagedPhoto } from "./dpr-photo-uploader";
 
 // A work-done pin the sub drops on the site map in a Field Report. Becomes an
-// inspection (origin='sub') on submit.
+// inspection (origin='sub') on submit. Each pin remembers which sheet it was
+// placed on and links to a WBS/schedule task.
 type WorkPin = {
   rowId: string;
+  basemapKey: BasemapKey;
   x: number;
   y: number;
   title: string;
   type: string;
+  wbsTaskId: string;
   notes: string;
   photos: UploadedPhoto[];
 };
@@ -334,10 +337,12 @@ export function DprForm({
       ...prev,
       {
         rowId: newRowId(),
+        basemapKey: sheet,
         x: pin.x,
         y: pin.y,
         title: "",
         type: "",
+        wbsTaskId: "",
         notes: "",
         photos: [],
       },
@@ -507,8 +512,9 @@ export function DprForm({
       workPins: workPins.map((p) => ({
         title: p.title.trim(),
         inspectionType: p.type.trim() || null,
+        scheduleTaskId: p.wbsTaskId || null,
         notes: p.notes.trim() || null,
-        basemapKey: sheet,
+        basemapKey: p.basemapKey,
         pinX: p.x,
         pinY: p.y,
         photos: p.photos,
@@ -643,91 +649,133 @@ export function DprForm({
           </div>
 
           <div className="mt-3 space-y-2">
-            <div className="flex gap-1">
-              {(Object.keys(BASEMAPS) as BasemapKey[]).map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => setSheet(k)}
-                  className={cn(
-                    "rounded-md border px-2.5 py-1 text-xs font-medium",
-                    k === sheet
-                      ? "border-foreground bg-foreground text-background"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {BASEMAPS[k].key}
-                </button>
-              ))}
+            <div className="flex flex-wrap gap-1">
+              {(Object.keys(BASEMAPS) as BasemapKey[]).map((k) => {
+                const count = workPins.filter(
+                  (p) => p.basemapKey === k,
+                ).length;
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setSheet(k)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium",
+                      k === sheet
+                        ? "border-foreground bg-foreground text-background"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {BASEMAPS[k].key}
+                    {count > 0 && (
+                      <span
+                        className={cn(
+                          "inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px]",
+                          k === sheet
+                            ? "bg-background/20"
+                            : "bg-muted text-foreground",
+                        )}
+                      >
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
             <InspectionMap
               basemapKey={sheet}
-              pins={workPins.map((p) => ({
-                id: p.rowId,
-                pinX: p.x,
-                pinY: p.y,
-                status: "submitted" as const,
-                title: p.title || "Work item",
-              }))}
+              pins={workPins
+                .filter((p) => p.basemapKey === sheet)
+                .map((p) => ({
+                  id: p.rowId,
+                  pinX: p.x,
+                  pinY: p.y,
+                  status: "submitted" as const,
+                  title: p.title || "Work item",
+                }))}
               onPlace={addWorkPin}
             />
             <p className="text-xs text-muted-foreground">
-              {BASEMAPS[sheet].label}. Tap to drop a pin, then describe the work
-              below.
+              {BASEMAPS[sheet].label}. Each sheet keeps its own pins - switch
+              sheets to log work on a different plan.
             </p>
           </div>
 
-          {workPins.length > 0 && (
+          {workPins.filter((p) => p.basemapKey === sheet).length > 0 && (
             <div className="mt-3 space-y-3">
-              {workPins.map((p, i) => (
-                <div key={p.rowId} className="rounded-md border bg-background p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold">
-                      Pin {i + 1}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => removeWorkPin(p.rowId)}
+              {workPins
+                .filter((p) => p.basemapKey === sheet)
+                .map((p) => {
+                  const idx = workPins.findIndex((w) => w.rowId === p.rowId);
+                  return (
+                    <div
+                      key={p.rowId}
+                      className="rounded-md border bg-background p-3"
                     >
-                      Remove
-                    </Button>
-                  </div>
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    <Input
-                      value={p.title}
-                      onChange={(e) =>
-                        patchWorkPin(p.rowId, { title: e.target.value })
-                      }
-                      placeholder="What was done (e.g. Set piles row 12)"
-                    />
-                    <Input
-                      value={p.type}
-                      onChange={(e) =>
-                        patchWorkPin(p.rowId, { type: e.target.value })
-                      }
-                      placeholder="Type (e.g. pile driving)"
-                    />
-                    <Input
-                      value={p.notes}
-                      onChange={(e) =>
-                        patchWorkPin(p.rowId, { notes: e.target.value })
-                      }
-                      placeholder="Notes (optional)"
-                      className="sm:col-span-2"
-                    />
-                  </div>
-                  <div className="mt-2">
-                    <Label className="text-[10px]">Photos</Label>
-                    <PhotoUploader
-                      projectId={projectId}
-                      side="sub"
-                      onChange={(ph) => patchWorkPin(p.rowId, { photos: ph })}
-                    />
-                  </div>
-                </div>
-              ))}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold">
+                          {BASEMAPS[p.basemapKey].key} · Pin {idx + 1}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeWorkPin(p.rowId)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <Input
+                          value={p.title}
+                          onChange={(e) =>
+                            patchWorkPin(p.rowId, { title: e.target.value })
+                          }
+                          placeholder="What was done (e.g. Set piles row 12)"
+                        />
+                        <select
+                          value={p.wbsTaskId}
+                          onChange={(e) =>
+                            patchWorkPin(p.rowId, { wbsTaskId: e.target.value })
+                          }
+                          className="h-9 rounded-md border border-input bg-background px-2 text-xs"
+                        >
+                          <option value="">- WBS / schedule item -</option>
+                          {tasks.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.wbsCode} {t.taskName}
+                            </option>
+                          ))}
+                        </select>
+                        <Input
+                          value={p.type}
+                          onChange={(e) =>
+                            patchWorkPin(p.rowId, { type: e.target.value })
+                          }
+                          placeholder="Type (e.g. pile driving)"
+                        />
+                        <Input
+                          value={p.notes}
+                          onChange={(e) =>
+                            patchWorkPin(p.rowId, { notes: e.target.value })
+                          }
+                          placeholder="Notes (optional)"
+                        />
+                      </div>
+                      <div className="mt-2">
+                        <Label className="text-[10px]">Photos</Label>
+                        <PhotoUploader
+                          projectId={projectId}
+                          side="sub"
+                          onChange={(ph) =>
+                            patchWorkPin(p.rowId, { photos: ph })
+                          }
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
           )}
         </section>
