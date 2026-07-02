@@ -926,24 +926,28 @@ export function DprForm({
         </section>
       )}
 
-      {/* ===== Photos ===== */}
-      <section className="rounded-lg border bg-card p-4 shadow-sm">
-        <h3 className="text-sm font-semibold">Photos ({photos.length})</h3>
-        <p className="text-xs text-muted-foreground">
-          Progress, safety, deliveries, issues, end-of-day. Foreman pics are
-          the proof behind any status change.
-        </p>
-        <div className="mt-3">
-          <DprPhotoUploader
-            projectId={projectId}
-            draftId={draftId}
-            photos={photos}
-            onChange={setPhotos}
-          />
-        </div>
-      </section>
+      {/* ===== Photos (classic DPR only - Field Report photos live on each pin) ===== */}
+      {!isFieldReport && (
+        <section className="rounded-lg border bg-card p-4 shadow-sm">
+          <h3 className="text-sm font-semibold">Photos ({photos.length})</h3>
+          <p className="text-xs text-muted-foreground">
+            Progress, safety, deliveries, issues, end-of-day. Foreman pics are
+            the proof behind any status change.
+          </p>
+          <div className="mt-3">
+            <DprPhotoUploader
+              projectId={projectId}
+              draftId={draftId}
+              photos={photos}
+              onChange={setPhotos}
+            />
+          </div>
+        </section>
+      )}
 
-      {/* ===== Manpower ===== */}
+      {/* ===== Manpower (classic DPR only - Field Report uses crew count +
+           total man-hours in Day details) ===== */}
+      {!isFieldReport && (
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -1031,6 +1035,7 @@ export function DprForm({
           </div>
         )}
       </section>
+      )}
 
       {/* ===== Equipment ===== */}
       <section className="rounded-lg border bg-card p-4 shadow-sm">
@@ -1110,8 +1115,9 @@ export function DprForm({
           <div>
             <h3 className="text-sm font-semibold">Deliveries ({deliveries.length})</h3>
             <p className="text-xs text-muted-foreground">
-              Materials received today. Link to a PO if it&apos;s a procurement
-              order so the procurement page sees actual arrival.
+              Materials received today.
+              {!isFieldReport &&
+                " Link to a PO so the procurement page sees actual arrival."}
             </p>
           </div>
           <Button type="button" size="sm" variant="outline" onClick={addDeliveryRow}>
@@ -1123,7 +1129,12 @@ export function DprForm({
             {deliveries.map((d) => (
               <div
                 key={d.rowId}
-                className="grid gap-2 rounded-md border bg-background p-2 sm:grid-cols-[1fr_1fr_90px_80px_1fr_auto]"
+                className={cn(
+                  "grid gap-2 rounded-md border bg-background p-2",
+                  isFieldReport
+                    ? "sm:grid-cols-[1fr_1fr_90px_80px_auto]"
+                    : "sm:grid-cols-[1fr_1fr_90px_80px_1fr_auto]",
+                )}
               >
                 <Input
                   value={d.vendorName}
@@ -1155,22 +1166,26 @@ export function DprForm({
                   }
                   placeholder="UoM"
                 />
-                <select
-                  value={d.procurementOrderId}
-                  onChange={(ev) =>
-                    patchDelivery(d.rowId, { procurementOrderId: ev.target.value })
-                  }
-                  className="h-9 rounded-md border border-input bg-background px-2 text-xs"
-                >
-                  <option value="">- Link PO (optional) -</option>
-                  {procurementOrders.map((po) => (
-                    <option key={po.id} value={po.id}>
-                      {po.poNumber ? `${po.poNumber} - ` : ""}
-                      {po.vendorName}
-                      {po.description ? ` (${po.description})` : ""}
-                    </option>
-                  ))}
-                </select>
+                {!isFieldReport && (
+                  <select
+                    value={d.procurementOrderId}
+                    onChange={(ev) =>
+                      patchDelivery(d.rowId, {
+                        procurementOrderId: ev.target.value,
+                      })
+                    }
+                    className="h-9 rounded-md border border-input bg-background px-2 text-xs"
+                  >
+                    <option value="">- Link PO (optional) -</option>
+                    {procurementOrders.map((po) => (
+                      <option key={po.id} value={po.id}>
+                        {po.poNumber ? `${po.poNumber} - ` : ""}
+                        {po.vendorName}
+                        {po.description ? ` (${po.description})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <Button
                   type="button"
                   variant="ghost"
@@ -1179,19 +1194,21 @@ export function DprForm({
                 >
                   Remove
                 </Button>
-                <Input
-                  value={d.poNumber}
-                  onChange={(ev) =>
-                    patchDelivery(d.rowId, { poNumber: ev.target.value })
-                  }
-                  placeholder="PO # (if no link)"
-                  className="sm:col-span-2"
-                />
+                {!isFieldReport && (
+                  <Input
+                    value={d.poNumber}
+                    onChange={(ev) =>
+                      patchDelivery(d.rowId, { poNumber: ev.target.value })
+                    }
+                    placeholder="PO # (if no link)"
+                    className="sm:col-span-2"
+                  />
+                )}
                 <Input
                   value={d.notes}
                   onChange={(ev) => patchDelivery(d.rowId, { notes: ev.target.value })}
                   placeholder="Notes (optional)"
-                  className="sm:col-span-4"
+                  className={isFieldReport ? "sm:col-span-5" : "sm:col-span-4"}
                 />
               </div>
             ))}
