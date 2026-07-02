@@ -34,6 +34,9 @@ type WorkPin = {
   installedQty: string;
   notes: string;
   photos: UploadedPhoto[];
+  // A pin must be saved (all required fields filled) before the report can go.
+  confirmed: boolean;
+  rowError: string | null;
 };
 
 const STATUS_OPTIONS = [
@@ -358,6 +361,8 @@ export function DprForm({
         installedQty: "",
         notes: "",
         photos: [],
+        confirmed: false,
+        rowError: null,
       },
     ]);
   }
@@ -368,6 +373,30 @@ export function DprForm({
   }
   function removeWorkPin(rowId: string) {
     setWorkPins((prev) => prev.filter((r) => r.rowId !== rowId));
+  }
+
+  // Every pin must have a WBS, status, % complete, installed qty, and a photo.
+  function pinIncompleteReason(p: WorkPin): string | null {
+    if (!p.wbsTaskId) return "Pick a WBS item";
+    if (!p.newStatus) return "Pick a status";
+    if (p.newPct.trim() === "") return "Enter % complete";
+    if (p.installedQty.trim() === "") return "Enter installed quantity";
+    if (p.photos.length === 0) return "Add at least one photo";
+    return null;
+  }
+  function savePin(rowId: string) {
+    setWorkPins((prev) =>
+      prev.map((r) => {
+        if (r.rowId !== rowId) return r;
+        const reason = pinIncompleteReason(r);
+        return reason
+          ? { ...r, rowError: reason, confirmed: false }
+          : { ...r, rowError: null, confirmed: true };
+      }),
+    );
+  }
+  function editPin(rowId: string) {
+    patchWorkPin(rowId, { confirmed: false });
   }
 
   async function onSubmit() {
@@ -385,8 +414,10 @@ export function DprForm({
         setError("Mark at least one work item on the map");
         return;
       }
-      if (workPins.some((p) => !p.wbsTaskId)) {
-        setError("Pick a WBS item for every pin");
+      if (workPins.some((p) => !p.confirmed)) {
+        setError(
+          "Save every pin first - each needs a WBS, status, % complete, installed quantity, and a photo.",
+        );
         return;
       }
       await submitAsFieldReport();
@@ -727,11 +758,21 @@ export function DprForm({
                   return (
                     <div
                       key={p.rowId}
-                      className="rounded-md border bg-background p-3"
+                      className={cn(
+                        "rounded-md border p-3",
+                        p.confirmed
+                          ? "border-emerald-300 bg-emerald-50/50"
+                          : "bg-background",
+                      )}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-semibold">
                           {BASEMAPS[p.basemapKey].key} · Pin {idx + 1}
+                          {p.confirmed && (
+                            <span className="ml-2 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
+                              Saved
+                            </span>
+                          )}
                         </span>
                         <Button
                           type="button"
@@ -742,91 +783,141 @@ export function DprForm({
                           Remove
                         </Button>
                       </div>
-                      <div className="mt-2">
-                        <Label className="text-[10px]">WBS / schedule item</Label>
-                        <select
-                          value={p.wbsTaskId}
-                          onChange={(e) =>
-                            patchWorkPin(p.rowId, { wbsTaskId: e.target.value })
-                          }
-                          className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
-                        >
-                          <option value="">- Select the work item -</option>
-                          {tasks.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.wbsCode} {t.taskName}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
 
-                      {/* Progress on the WBS task - applied to the schedule
-                          when the CM approves this pin. */}
-                      <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                        <div>
-                          <Label className="text-[10px]">Status</Label>
-                          <select
-                            value={p.newStatus}
-                            onChange={(e) =>
-                              patchWorkPin(p.rowId, { newStatus: e.target.value })
-                            }
-                            className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                      {p.confirmed ? (
+                        <div className="mt-1 space-y-1">
+                          <div className="text-sm font-medium">
+                            {pinLabel(p)}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {p.newStatus} · {p.newPct}% · {p.installedQty}{" "}
+                            installed · {p.photos.length} photo
+                            {p.photos.length === 1 ? "" : "s"}
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => editPin(p.rowId)}
                           >
-                            {STATUS_OPTIONS.map((s) => (
-                              <option key={s} value={s}>
-                                {s}
-                              </option>
-                            ))}
-                          </select>
+                            Edit
+                          </Button>
                         </div>
-                        <div>
-                          <Label className="text-[10px]">% complete</Label>
-                          <Input
-                            type="number"
-                            min="0"
-                            max="100"
-                            value={p.newPct}
-                            onChange={(e) =>
-                              patchWorkPin(p.rowId, { newPct: e.target.value })
-                            }
-                            placeholder="0-100"
-                          />
-                        </div>
-                        <div>
-                          <Label className="text-[10px]">Installed qty</Label>
-                          <Input
-                            type="number"
-                            step="0.001"
-                            value={p.installedQty}
-                            onChange={(e) =>
-                              patchWorkPin(p.rowId, {
-                                installedQty: e.target.value,
-                              })
-                            }
-                            placeholder="(optional)"
-                          />
-                        </div>
-                      </div>
+                      ) : (
+                        <>
+                          <div className="mt-2">
+                            <Label className="text-[10px]">
+                              WBS / schedule item *
+                            </Label>
+                            <select
+                              value={p.wbsTaskId}
+                              onChange={(e) =>
+                                patchWorkPin(p.rowId, {
+                                  wbsTaskId: e.target.value,
+                                })
+                              }
+                              className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                            >
+                              <option value="">- Select the work item -</option>
+                              {tasks.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.wbsCode} {t.taskName}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
 
-                      <Input
-                        value={p.notes}
-                        onChange={(e) =>
-                          patchWorkPin(p.rowId, { notes: e.target.value })
-                        }
-                        placeholder="Notes (optional)"
-                        className="mt-2"
-                      />
+                          {/* Progress on the WBS task - applied to the schedule
+                              when the CM approves this pin. */}
+                          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                            <div>
+                              <Label className="text-[10px]">Status *</Label>
+                              <select
+                                value={p.newStatus}
+                                onChange={(e) =>
+                                  patchWorkPin(p.rowId, {
+                                    newStatus: e.target.value,
+                                  })
+                                }
+                                className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                              >
+                                {STATUS_OPTIONS.map((s) => (
+                                  <option key={s} value={s}>
+                                    {s}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <Label className="text-[10px]">% complete *</Label>
+                              <Input
+                                type="number"
+                                min="0"
+                                max="100"
+                                value={p.newPct}
+                                onChange={(e) =>
+                                  patchWorkPin(p.rowId, {
+                                    newPct: e.target.value,
+                                  })
+                                }
+                                placeholder="0-100"
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-[10px]">
+                                Installed qty *
+                              </Label>
+                              <Input
+                                type="number"
+                                step="0.001"
+                                value={p.installedQty}
+                                onChange={(e) =>
+                                  patchWorkPin(p.rowId, {
+                                    installedQty: e.target.value,
+                                  })
+                                }
+                                placeholder="required"
+                              />
+                            </div>
+                          </div>
 
-                      <div className="mt-2">
-                        <Label className="text-[10px]">Photos</Label>
-                        <PhotoUploader
-                          projectId={projectId}
-                          side="sub"
-                          onChange={(ph) =>
-                            patchWorkPin(p.rowId, { photos: ph })
-                          }
-                        />
-                      </div>
+                          <Input
+                            value={p.notes}
+                            onChange={(e) =>
+                              patchWorkPin(p.rowId, { notes: e.target.value })
+                            }
+                            placeholder="Notes (optional)"
+                            className="mt-2"
+                          />
+
+                          <div className="mt-2">
+                            <Label className="text-[10px]">
+                              Photos * ({p.photos.length})
+                            </Label>
+                            <PhotoUploader
+                              projectId={projectId}
+                              side="sub"
+                              onChange={(ph) =>
+                                patchWorkPin(p.rowId, { photos: ph })
+                              }
+                            />
+                          </div>
+
+                          {p.rowError && (
+                            <p className="mt-2 text-xs text-destructive">
+                              {p.rowError}
+                            </p>
+                          )}
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="mt-2"
+                            onClick={() => savePin(p.rowId)}
+                          >
+                            Save pin
+                          </Button>
+                        </>
+                      )}
                     </div>
                   );
                 })}
