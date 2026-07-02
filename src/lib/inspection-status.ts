@@ -102,3 +102,22 @@ export const STATUS_STYLE: Record<InspectionStatus, StatusStyle> = {
 export function statusLabel(status: InspectionStatus): string {
   return STATUS_STYLE[status].label;
 }
+
+// ---- Field Report origin (migration 0022) ----
+// A pin is either the subcontractor's work-done item ('sub') or the
+// Construction Manager's own independent check ('cm'). Legacy inspections
+// default to 'sub'.
+export const INSPECTION_ORIGINS = ["sub", "cm"] as const;
+export type InspectionOrigin = (typeof INSPECTION_ORIGINS)[number];
+
+export function isInspectionOrigin(v: string): v is InspectionOrigin {
+  return (INSPECTION_ORIGINS as readonly string[]).includes(v);
+}
+
+// ---- Photo side convention (inspection_photos.side) ----
+// 'sub' = authored by the subcontractor (their submission photos).
+// 'ahc' = authored internally by the CM/AHC team - both the verification
+// photos attached to a sub's pin AND the photos on a CM own-check ('cm' origin)
+// pin. So `side` always means "who took it", independent of `origin`.
+export const PHOTO_SIDE_SUB = "sub" as const;
+export const PHOTO_SIDE_CM = "ahc" as const;

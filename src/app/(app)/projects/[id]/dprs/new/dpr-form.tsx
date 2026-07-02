@@ -7,9 +7,28 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { BASEMAPS, type BasemapKey, type NormalizedPin } from "@/lib/inspection-map";
 import { submitDpr } from "../../dpr-actions";
+import { submitFieldReport } from "../../field-report-actions";
+import { InspectionMap } from "../../inspections/inspection-map";
+import {
+  PhotoUploader,
+  type UploadedPhoto,
+} from "../../inspections/photo-uploader";
 
 import { DprPhotoUploader, type StagedPhoto } from "./dpr-photo-uploader";
+
+// A work-done pin the sub drops on the site map in a Field Report. Becomes an
+// inspection (origin='sub') on submit.
+type WorkPin = {
+  rowId: string;
+  x: number;
+  y: number;
+  title: string;
+  type: string;
+  notes: string;
+  photos: UploadedPhoto[];
+};
 
 const STATUS_OPTIONS = [
   "Not Started",
@@ -57,6 +76,10 @@ type Props = {
   tasks: Task[];
   subs: Sub[];
   procurementOrders: Po[];
+  // "dpr" (default) = the classic Daily Progress Report. "fieldReport" = the
+  // combined daily Field Report: DPR fields PLUS work-done pins on the site map,
+  // reviewed by the Construction Manager the next day.
+  variant?: "dpr" | "fieldReport";
 };
 
 type TaskUpdate = {
@@ -114,8 +137,15 @@ function newRowId(): string {
   return crypto.randomUUID();
 }
 
-export function DprForm({ projectId, tasks, subs, procurementOrders }: Props) {
+export function DprForm({
+  projectId,
+  tasks,
+  subs,
+  procurementOrders,
+  variant = "dpr",
+}: Props) {
   const router = useRouter();
+  const isFieldReport = variant === "fieldReport";
   const [draftId] = useState(() => crypto.randomUUID());
 
   const [reportDate, setReportDate] = useState(todayIso());
@@ -123,6 +153,11 @@ export function DprForm({ projectId, tasks, subs, procurementOrders }: Props) {
   const [weather, setWeather] = useState("");
   const [crewOverride, setCrewOverride] = useState("");
   const [hoursOverride, setHoursOverride] = useState("");
+
+  // Field Report only: which sub is filing, which sheet, and the work-done pins.
+  const [reportSubId, setReportSubId] = useState("");
+  const [sheet, setSheet] = useState<BasemapKey>("C2-01");
+  const [workPins, setWorkPins] = useState<WorkPin[]>([]);
 
   const [safetyIncident, setSafetyIncident] = useState(false);
   const [nearMiss, setNearMiss] = useState(false);
@@ -292,10 +327,51 @@ export function DprForm({ projectId, tasks, subs, procurementOrders }: Props) {
     setDelays((prev) => prev.filter((r) => r.rowId !== rowId));
   }
 
+  // ===== work-done pins (Field Report) =====
+  // Tapping the map drops a new work item at that spot; fill in its row below.
+  function addWorkPin(pin: NormalizedPin) {
+    setWorkPins((prev) => [
+      ...prev,
+      {
+        rowId: newRowId(),
+        x: pin.x,
+        y: pin.y,
+        title: "",
+        type: "",
+        notes: "",
+        photos: [],
+      },
+    ]);
+  }
+  function patchWorkPin(rowId: string, patch: Partial<WorkPin>) {
+    setWorkPins((prev) =>
+      prev.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)),
+    );
+  }
+  function removeWorkPin(rowId: string) {
+    setWorkPins((prev) => prev.filter((r) => r.rowId !== rowId));
+  }
+
   async function onSubmit() {
     setError(null);
     if (!narrative.trim()) {
       setError("Work narrative is required");
+      return;
+    }
+    if (isFieldReport) {
+      if (!reportSubId) {
+        setError("Select which subcontractor this report is for");
+        return;
+      }
+      if (workPins.length === 0) {
+        setError("Mark at least one work item on the map");
+        return;
+      }
+      if (workPins.some((p) => !p.title.trim())) {
+        setError("Give every work item a short title");
+        return;
+      }
+      await submitAsFieldReport();
       return;
     }
     if (updates.size === 0) {
@@ -366,6 +442,85 @@ export function DprForm({ projectId, tasks, subs, procurementOrders }: Props) {
     }
     startTransition(() => {
       router.push(`/projects/${projectId}/dprs/${res.dprId}`);
+    });
+  }
+
+  // Field Report submit: DPR fields + subcontractor + work-done map pins.
+  async function submitAsFieldReport() {
+    setSubmitting(true);
+    const res = await submitFieldReport({
+      projectId,
+      subcontractorId: reportSubId,
+      reportDate,
+      workNarrative: narrative,
+      crewCount: effectiveCrewCount || null,
+      totalManHours: effectiveHours || null,
+      weatherConditions: weather || null,
+      safetyIncident,
+      nearMiss,
+      safetyNarrative: safetyNarrative || null,
+      taskUpdates: Array.from(updates.values()).map((u) => ({
+        scheduleTaskId: u.taskId,
+        newStatus: u.newStatus || null,
+        newPctComplete: u.newPct ? Number(u.newPct) : null,
+        installedQuantity: u.installed ? Number(u.installed) : null,
+        notes: u.notes || null,
+      })),
+      manpower: manpower
+        .filter((m) => Number(m.headcount) > 0 || Number(m.regularHours) > 0)
+        .map((m) => ({
+          subcontractorId: m.subcontractorId || null,
+          trade: m.trade.trim() || null,
+          headcount: Number(m.headcount) || 0,
+          regularHours: Number(m.regularHours) || 0,
+          otHours: Number(m.otHours) || 0,
+          notes: m.notes.trim() || null,
+        })),
+      equipment: equipment.map((e) => ({
+        equipmentName: e.equipmentName,
+        quantity: Number(e.quantity) || 1,
+        onRent: e.onRent,
+        rentalCompany: e.rentalCompany.trim() || null,
+        notes: e.notes.trim() || null,
+      })),
+      deliveries: deliveries.map((d) => ({
+        vendorName: d.vendorName.trim() || null,
+        materials: d.materials,
+        quantity: d.quantity ? Number(d.quantity) : null,
+        unitOfMeasure: d.unitOfMeasure.trim() || null,
+        poNumber: d.poNumber.trim() || null,
+        procurementOrderId: d.procurementOrderId || null,
+        notes: d.notes.trim() || null,
+      })),
+      delays: delays.map((d) => ({
+        causeCode: d.causeCode,
+        hoursLost: d.hoursLost ? Number(d.hoursLost) : null,
+        impactedScheduleTaskId: d.impactedScheduleTaskId || null,
+        narrative: d.narrative.trim() || null,
+      })),
+      photos: photos.map((p) => ({
+        photoId: p.photoId,
+        storagePath: p.storagePath,
+        caption: p.caption.trim() || null,
+        photoType: p.photoType,
+      })),
+      workPins: workPins.map((p) => ({
+        title: p.title.trim(),
+        inspectionType: p.type.trim() || null,
+        notes: p.notes.trim() || null,
+        basemapKey: sheet,
+        pinX: p.x,
+        pinY: p.y,
+        photos: p.photos,
+      })),
+    });
+    setSubmitting(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    startTransition(() => {
+      router.push(`/projects/${projectId}/field-reports/${res.dprId}`);
     });
   }
 
@@ -451,6 +606,132 @@ export function DprForm({ projectId, tasks, subs, procurementOrders }: Props) {
           </div>
         </div>
       </section>
+
+      {/* ===== Work done on the map (Field Report) ===== */}
+      {isFieldReport && (
+        <section className="rounded-lg border bg-card p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">
+                Work done - mark it on the map ({workPins.length})
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Tap the site plan wherever you worked today. Each pin becomes an
+                item the Construction Manager reviews and approves.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="fr-sub">Subcontractor filing this report</Label>
+              <select
+                id="fr-sub"
+                value={reportSubId}
+                onChange={(e) => setReportSubId(e.target.value)}
+                className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="">- Select sub -</option>
+                {subs.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.companyName}
+                    {s.trade ? ` (${s.trade})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            <div className="flex gap-1">
+              {(Object.keys(BASEMAPS) as BasemapKey[]).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setSheet(k)}
+                  className={cn(
+                    "rounded-md border px-2.5 py-1 text-xs font-medium",
+                    k === sheet
+                      ? "border-foreground bg-foreground text-background"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {BASEMAPS[k].key}
+                </button>
+              ))}
+            </div>
+            <InspectionMap
+              basemapKey={sheet}
+              pins={workPins.map((p) => ({
+                id: p.rowId,
+                pinX: p.x,
+                pinY: p.y,
+                status: "submitted" as const,
+                title: p.title || "Work item",
+              }))}
+              onPlace={addWorkPin}
+            />
+            <p className="text-xs text-muted-foreground">
+              {BASEMAPS[sheet].label}. Tap to drop a pin, then describe the work
+              below.
+            </p>
+          </div>
+
+          {workPins.length > 0 && (
+            <div className="mt-3 space-y-3">
+              {workPins.map((p, i) => (
+                <div key={p.rowId} className="rounded-md border bg-background p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold">
+                      Pin {i + 1}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeWorkPin(p.rowId)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <Input
+                      value={p.title}
+                      onChange={(e) =>
+                        patchWorkPin(p.rowId, { title: e.target.value })
+                      }
+                      placeholder="What was done (e.g. Set piles row 12)"
+                    />
+                    <Input
+                      value={p.type}
+                      onChange={(e) =>
+                        patchWorkPin(p.rowId, { type: e.target.value })
+                      }
+                      placeholder="Type (e.g. pile driving)"
+                    />
+                    <Input
+                      value={p.notes}
+                      onChange={(e) =>
+                        patchWorkPin(p.rowId, { notes: e.target.value })
+                      }
+                      placeholder="Notes (optional)"
+                      className="sm:col-span-2"
+                    />
+                  </div>
+                  <div className="mt-2">
+                    <Label className="text-[10px]">Photos</Label>
+                    <PhotoUploader
+                      projectId={projectId}
+                      side="sub"
+                      onChange={(ph) => patchWorkPin(p.rowId, { photos: ph })}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* ===== Photos ===== */}
       <section className="rounded-lg border bg-card p-4 shadow-sm">
@@ -1020,7 +1301,11 @@ export function DprForm({ projectId, tasks, subs, procurementOrders }: Props) {
           Cancel
         </Button>
         <Button type="button" disabled={submitting} onClick={onSubmit}>
-          {submitting ? "Submitting..." : "Submit DPR"}
+          {submitting
+            ? "Submitting..."
+            : isFieldReport
+              ? "Submit Field Report"
+              : "Submit DPR"}
         </Button>
       </div>
     </div>

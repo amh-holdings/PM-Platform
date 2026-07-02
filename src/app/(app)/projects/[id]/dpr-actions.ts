@@ -88,6 +88,9 @@ export type DprDelayInput = {
 export type DprSubmitInput = {
   projectId: string;
   reportDate: string; // YYYY-MM-DD
+  // The subcontractor this report is for. Legacy DPRs left this null; the Field
+  // Report flow sets it so map pins can be scoped per sub.
+  subcontractorId?: string | null;
   workNarrative: string;
   crewCount?: number | null;
   totalManHours?: number | null;
@@ -127,6 +130,7 @@ export async function submitDpr(input: DprSubmitInput): Promise<DprActionResult>
     .insert({
       project_id: input.projectId,
       foreman_id: auth.userId,
+      subcontractor_id: input.subcontractorId ?? null,
       report_date: input.reportDate,
       work_narrative: input.workNarrative.trim(),
       crew_count: input.crewCount ?? null,

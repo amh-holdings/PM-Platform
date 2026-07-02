@@ -3,8 +3,10 @@ import { notFound } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
+import { can, getEffectiveRole } from "@/lib/roles";
 
 import { ProjectTabs } from "./project-tabs";
+import { ViewAsSwitcher } from "./view-as-switcher";
 
 type Params = { id: string };
 
@@ -36,6 +38,8 @@ export default async function ProjectLayout({
 
   if (!project) notFound();
 
+  const { effective, actual } = await getEffectiveRole();
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -52,12 +56,17 @@ export default async function ProjectLayout({
             {project.status ? ` - ${project.status}` : ""}
           </p>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link href={`/projects/${params.id}/edit`}>Edit project</Link>
-        </Button>
+        <div className="flex items-center gap-3">
+          {can(actual, "viewAsToggle") && (
+            <ViewAsSwitcher effective={effective} />
+          )}
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/projects/${params.id}/edit`}>Edit project</Link>
+          </Button>
+        </div>
       </div>
 
-      <ProjectTabs projectId={params.id} />
+      <ProjectTabs projectId={params.id} role={effective} />
 
       <div>{children}</div>
     </div>

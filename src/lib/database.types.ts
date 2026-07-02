@@ -22,12 +22,14 @@ export type Database = {
           decided_at: string | null
           decided_by: string | null
           decision_notes: string | null
+          dpr_id: string | null
           gps_lat: number | null
           gps_lng: number | null
           id: string
           inspection_type: string | null
           inspector_name: string | null
           notes: string | null
+          origin: string
           pin_x: number | null
           pin_y: number | null
           project_id: string
@@ -51,12 +53,14 @@ export type Database = {
           decided_at?: string | null
           decided_by?: string | null
           decision_notes?: string | null
+          dpr_id?: string | null
           gps_lat?: number | null
           gps_lng?: number | null
           id?: string
           inspection_type?: string | null
           inspector_name?: string | null
           notes?: string | null
+          origin?: string
           pin_x?: number | null
           pin_y?: number | null
           project_id: string
@@ -80,12 +84,14 @@ export type Database = {
           decided_at?: string | null
           decided_by?: string | null
           decision_notes?: string | null
+          dpr_id?: string | null
           gps_lat?: number | null
           gps_lng?: number | null
           id?: string
           inspection_type?: string | null
           inspector_name?: string | null
           notes?: string | null
+          origin?: string
           pin_x?: number | null
           pin_y?: number | null
           project_id?: string

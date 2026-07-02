@@ -23,6 +23,9 @@ export type MapPin = {
   pinY: number | null;
   status: InspectionStatus;
   title?: string | null;
+  // 'cm' pins (Construction Manager own-checks) render square to stand apart
+  // from the round subcontractor pins. Defaults to round when omitted.
+  origin?: string;
 };
 
 type Props = {
@@ -188,6 +191,7 @@ function renderPins(
         const pos = normalizedToPercent(pin);
         const color = STATUS_STYLE[p.status].pin;
         const active = activeId === p.id;
+        const isCm = p.origin === "cm";
         return (
           <button
             key={p.id}
@@ -199,10 +203,12 @@ function renderPins(
             }}
             style={{ left: pos.left, top: pos.top, backgroundColor: color }}
             className={cn(
-              "absolute z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow",
+              "absolute z-10 -translate-x-1/2 -translate-y-1/2 border-2 border-white shadow",
+              // CM own-checks are square; subcontractor pins are round.
+              isCm ? "rounded-sm" : "rounded-full",
               active ? "h-5 w-5 ring-2 ring-offset-1 ring-foreground" : "h-4 w-4",
             )}
-            aria-label={`Inspection ${p.title ?? p.id} (${STATUS_STYLE[p.status].label})`}
+            aria-label={`${isCm ? "CM check" : "Inspection"} ${p.title ?? p.id} (${STATUS_STYLE[p.status].label})`}
           />
         );
       })}

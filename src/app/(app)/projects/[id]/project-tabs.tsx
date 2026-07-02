@@ -4,28 +4,40 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
+import type { EffectiveRole } from "@/lib/roles";
 
 type Props = {
   projectId: string;
+  role: EffectiveRole;
 };
 
-export function ProjectTabs({ projectId }: Props) {
+export function ProjectTabs({ projectId, role }: Props) {
   const pathname = usePathname() ?? "";
   const base = `/projects/${projectId}`;
 
-  const tabs: { href: string; label: string }[] = [
-    { href: base, label: "Dashboard" },
-    { href: `${base}/dprs`, label: "DPRs" },
-    { href: `${base}/inspections`, label: "QA/QC" },
-    { href: `${base}/billing`, label: "Billing" },
-    { href: `${base}/pay-apps`, label: "Pay apps" },
-    { href: `${base}/change-orders`, label: "Change orders" },
-    { href: `${base}/schedule`, label: "Schedule" },
-    { href: `${base}/subs`, label: "Subs" },
-    { href: `${base}/procurement`, label: "Procurement" },
-    { href: `${base}/costs`, label: "Costs" },
-    { href: `${base}/documents`, label: "Documents" },
+  // Each tab lists the effective roles that may see it. Subs see only Field
+  // Reports; the CM sees the operational + financial tabs; Phil (full) sees
+  // everything, including the legacy DPRs / QA-QC tabs during transition.
+  const ALL: EffectiveRole[] = ["full", "cm", "sub"];
+  const CM: EffectiveRole[] = ["full", "cm"];
+  const FULL: EffectiveRole[] = ["full"];
+
+  const allTabs: { href: string; label: string; roles: EffectiveRole[] }[] = [
+    { href: base, label: "Dashboard", roles: CM },
+    { href: `${base}/field-reports`, label: "Field Reports", roles: ALL },
+    { href: `${base}/dprs`, label: "DPRs", roles: FULL },
+    { href: `${base}/inspections`, label: "QA/QC", roles: FULL },
+    { href: `${base}/billing`, label: "Billing", roles: CM },
+    { href: `${base}/pay-apps`, label: "Pay apps", roles: CM },
+    { href: `${base}/change-orders`, label: "Change orders", roles: CM },
+    { href: `${base}/schedule`, label: "Schedule", roles: CM },
+    { href: `${base}/subs`, label: "Subs", roles: CM },
+    { href: `${base}/procurement`, label: "Procurement", roles: CM },
+    { href: `${base}/costs`, label: "Costs", roles: CM },
+    { href: `${base}/documents`, label: "Documents", roles: CM },
   ];
+
+  const tabs = allTabs.filter((t) => t.roles.includes(role));
 
   function isActive(href: string) {
     if (href === base) return pathname === base;
