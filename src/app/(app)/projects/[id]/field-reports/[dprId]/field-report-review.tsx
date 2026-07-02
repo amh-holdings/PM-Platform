@@ -73,12 +73,15 @@ export function FieldReportReview({
   // CM own-check placement state.
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<NormalizedPin | null>(null);
-  const [title, setTitle] = useState("");
-  const [type, setType] = useState("");
   const [wbsTaskId, setWbsTaskId] = useState("");
   const [notes, setNotes] = useState("");
   const [photos, setPhotos] = useState<UploadedPhoto[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  const taskLabel = useMemo(
+    () => new Map(tasks.map((t) => [t.id, `${t.wbsCode} ${t.taskName}`])),
+    [tasks],
+  );
 
   const onSheet = useMemo(
     () => pins.filter((p) => p.basemapKey === sheet),
@@ -99,16 +102,16 @@ export function FieldReportReview({
 
   function saveCheck() {
     setError(null);
-    if (!title.trim()) return setError("Give the check a short title");
+    if (!wbsTaskId) return setError("Pick the WBS item you checked");
     if (!draft) return setError("Tap the map to place your check");
     startTransition(async () => {
       const res = await submitCmCheck({
         projectId,
         dprId,
         subcontractorId,
-        title: title.trim(),
-        inspectionType: type.trim() || null,
-        scheduleTaskId: wbsTaskId || null,
+        title: taskLabel.get(wbsTaskId) ?? "CM check",
+        inspectionType: null,
+        scheduleTaskId: wbsTaskId,
         notes: notes.trim() || null,
         basemapKey: sheet,
         pinX: draft.x,
@@ -118,8 +121,6 @@ export function FieldReportReview({
       if (!res.ok) return setError(res.error);
       setAdding(false);
       setDraft(null);
-      setTitle("");
-      setType("");
       setWbsTaskId("");
       setNotes("");
       setPhotos([]);
@@ -183,28 +184,21 @@ export function FieldReportReview({
             {adding ? (
               <div className="space-y-2 rounded-lg border bg-card p-3">
                 <h4 className="text-sm font-semibold">Add my own check</h4>
-                <Input
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="What you checked (e.g. Verified pile torque row 12)"
-                />
-                <select
-                  value={wbsTaskId}
-                  onChange={(e) => setWbsTaskId(e.target.value)}
-                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
-                >
-                  <option value="">- WBS / schedule item -</option>
-                  {tasks.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.wbsCode} {t.taskName}
-                    </option>
-                  ))}
-                </select>
-                <Input
-                  value={type}
-                  onChange={(e) => setType(e.target.value)}
-                  placeholder="Type (optional)"
-                />
+                <div>
+                  <Label className="text-[10px]">WBS / schedule item</Label>
+                  <select
+                    value={wbsTaskId}
+                    onChange={(e) => setWbsTaskId(e.target.value)}
+                    className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                  >
+                    <option value="">- Select the work item -</option>
+                    {tasks.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.wbsCode} {t.taskName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <Input
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
@@ -280,12 +274,6 @@ export function FieldReportReview({
                 {statusLabel(active.status)}
               </span>
             </div>
-            {active.wbsLabel && (
-              <p className="text-xs">
-                <span className="font-medium text-muted-foreground">WBS:</span>{" "}
-                {active.wbsLabel}
-              </p>
-            )}
             {active.progress && active.origin !== "cm" && (
               <p className="rounded-md bg-muted/60 px-2 py-1 text-xs">
                 <span className="font-medium">Approving applies:</span>{" "}
