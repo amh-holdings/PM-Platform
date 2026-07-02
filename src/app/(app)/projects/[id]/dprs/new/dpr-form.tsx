@@ -26,8 +26,7 @@ type WorkPin = {
   basemapKey: BasemapKey;
   x: number;
   y: number;
-  title: string;
-  type: string;
+  // The pin IS the work on a WBS task; its title/type derive from that task.
   wbsTaskId: string;
   // Progress for the linked WBS task, applied to the schedule on CM approval.
   newStatus: string;
@@ -335,6 +334,15 @@ export function DprForm({
   }
 
   // ===== work-done pins (Field Report) =====
+  // The pin's identity is its WBS task; label comes from the schedule item.
+  const taskLabel = useMemo(
+    () => new Map(tasks.map((t) => [t.id, `${t.wbsCode} ${t.taskName}`])),
+    [tasks],
+  );
+  function pinLabel(p: WorkPin): string {
+    return taskLabel.get(p.wbsTaskId) ?? "Work item";
+  }
+
   // Tapping the map drops a new work item at that spot; fill in its row below.
   function addWorkPin(pin: NormalizedPin) {
     setWorkPins((prev) => [
@@ -344,8 +352,6 @@ export function DprForm({
         basemapKey: sheet,
         x: pin.x,
         y: pin.y,
-        title: "",
-        type: "",
         wbsTaskId: "",
         newStatus: "In Progress",
         newPct: "",
@@ -379,8 +385,8 @@ export function DprForm({
         setError("Mark at least one work item on the map");
         return;
       }
-      if (workPins.some((p) => !p.title.trim())) {
-        setError("Give every work item a short title");
+      if (workPins.some((p) => !p.wbsTaskId)) {
+        setError("Pick a WBS item for every pin");
         return;
       }
       await submitAsFieldReport();
@@ -517,8 +523,8 @@ export function DprForm({
         photoType: p.photoType,
       })),
       workPins: workPins.map((p) => ({
-        title: p.title.trim(),
-        inspectionType: p.type.trim() || null,
+        title: pinLabel(p),
+        inspectionType: null,
         scheduleTaskId: p.wbsTaskId || null,
         taskNewStatus: p.wbsTaskId ? p.newStatus || null : null,
         taskNewPct: p.wbsTaskId && p.newPct ? Number(p.newPct) : null,
@@ -702,7 +708,7 @@ export function DprForm({
                   pinX: p.x,
                   pinY: p.y,
                   status: "submitted" as const,
-                  title: p.title || "Work item",
+                  title: pinLabel(p),
                 }))}
               onPlace={addWorkPin}
             />
@@ -736,95 +742,81 @@ export function DprForm({
                           Remove
                         </Button>
                       </div>
-                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                        <Input
-                          value={p.title}
-                          onChange={(e) =>
-                            patchWorkPin(p.rowId, { title: e.target.value })
-                          }
-                          placeholder="What was done (e.g. Set piles row 12)"
-                        />
+                      <div className="mt-2">
+                        <Label className="text-[10px]">WBS / schedule item</Label>
                         <select
                           value={p.wbsTaskId}
                           onChange={(e) =>
                             patchWorkPin(p.rowId, { wbsTaskId: e.target.value })
                           }
-                          className="h-9 rounded-md border border-input bg-background px-2 text-xs"
+                          className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
                         >
-                          <option value="">- WBS / schedule item -</option>
+                          <option value="">- Select the work item -</option>
                           {tasks.map((t) => (
                             <option key={t.id} value={t.id}>
                               {t.wbsCode} {t.taskName}
                             </option>
                           ))}
                         </select>
-                        <Input
-                          value={p.type}
-                          onChange={(e) =>
-                            patchWorkPin(p.rowId, { type: e.target.value })
-                          }
-                          placeholder="Type (e.g. pile driving)"
-                        />
-                        <Input
-                          value={p.notes}
-                          onChange={(e) =>
-                            patchWorkPin(p.rowId, { notes: e.target.value })
-                          }
-                          placeholder="Notes (optional)"
-                        />
                       </div>
 
-                      {/* WBS progress - applied to the schedule when the CM
-                          approves this pin. Only meaningful with a WBS linked. */}
-                      {p.wbsTaskId && (
-                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                          <div>
-                            <Label className="text-[10px]">New status</Label>
-                            <select
-                              value={p.newStatus}
-                              onChange={(e) =>
-                                patchWorkPin(p.rowId, {
-                                  newStatus: e.target.value,
-                                })
-                              }
-                              className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
-                            >
-                              {STATUS_OPTIONS.map((s) => (
-                                <option key={s} value={s}>
-                                  {s}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <div>
-                            <Label className="text-[10px]">% complete</Label>
-                            <Input
-                              type="number"
-                              min="0"
-                              max="100"
-                              value={p.newPct}
-                              onChange={(e) =>
-                                patchWorkPin(p.rowId, { newPct: e.target.value })
-                              }
-                              placeholder="0-100"
-                            />
-                          </div>
-                          <div>
-                            <Label className="text-[10px]">Installed qty</Label>
-                            <Input
-                              type="number"
-                              step="0.001"
-                              value={p.installedQty}
-                              onChange={(e) =>
-                                patchWorkPin(p.rowId, {
-                                  installedQty: e.target.value,
-                                })
-                              }
-                              placeholder="(optional)"
-                            />
-                          </div>
+                      {/* Progress on the WBS task - applied to the schedule
+                          when the CM approves this pin. */}
+                      <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                        <div>
+                          <Label className="text-[10px]">Status</Label>
+                          <select
+                            value={p.newStatus}
+                            onChange={(e) =>
+                              patchWorkPin(p.rowId, { newStatus: e.target.value })
+                            }
+                            className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                          >
+                            {STATUS_OPTIONS.map((s) => (
+                              <option key={s} value={s}>
+                                {s}
+                              </option>
+                            ))}
+                          </select>
                         </div>
-                      )}
+                        <div>
+                          <Label className="text-[10px]">% complete</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={p.newPct}
+                            onChange={(e) =>
+                              patchWorkPin(p.rowId, { newPct: e.target.value })
+                            }
+                            placeholder="0-100"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-[10px]">Installed qty</Label>
+                          <Input
+                            type="number"
+                            step="0.001"
+                            value={p.installedQty}
+                            onChange={(e) =>
+                              patchWorkPin(p.rowId, {
+                                installedQty: e.target.value,
+                              })
+                            }
+                            placeholder="(optional)"
+                          />
+                        </div>
+                      </div>
+
+                      <Input
+                        value={p.notes}
+                        onChange={(e) =>
+                          patchWorkPin(p.rowId, { notes: e.target.value })
+                        }
+                        placeholder="Notes (optional)"
+                        className="mt-2"
+                      />
+
                       <div className="mt-2">
                         <Label className="text-[10px]">Photos</Label>
                         <PhotoUploader
