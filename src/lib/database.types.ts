@@ -644,6 +644,7 @@ export type Database = {
       }
       dpr_equipment: {
         Row: {
+          active: boolean
           created_at: string | null
           dpr_id: string
           equipment_name: string
@@ -654,6 +655,7 @@ export type Database = {
           rental_company: string | null
         }
         Insert: {
+          active?: boolean
           created_at?: string | null
           dpr_id: string
           equipment_name: string
@@ -664,6 +666,7 @@ export type Database = {
           rental_company?: string | null
         }
         Update: {
+          active?: boolean
           created_at?: string | null
           dpr_id?: string
           equipment_name?: string

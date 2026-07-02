@@ -115,6 +115,7 @@ type EquipmentRow = {
   quantity: string;
   onRent: boolean;
   rentalCompany: string;
+  active: boolean;
   notes: string;
 };
 
@@ -162,6 +163,8 @@ export function DprForm({
   const [weather, setWeather] = useState("");
   const [crewOverride, setCrewOverride] = useState("");
   const [hoursOverride, setHoursOverride] = useState("");
+  // Field Report: total man-hours = crew count x hours per day.
+  const [hoursPerDay, setHoursPerDay] = useState("");
 
   // Field Report only: which sub is filing, which sheet, and the work-done pins.
   const [reportSubId, setReportSubId] = useState("");
@@ -201,6 +204,10 @@ export function DprForm({
   const effectiveHours = hoursOverride
     ? Number(hoursOverride)
     : manpowerTotals.hours;
+
+  // Field Report: total man-hours is derived from crew count x hours per day.
+  const fieldReportHours =
+    (Number(crewOverride) || 0) * (Number(hoursPerDay) || 0);
 
   // ===== task updates =====
   const filteredTasks = useMemo(() => {
@@ -276,6 +283,7 @@ export function DprForm({
         quantity: "1",
         onRent: false,
         rentalCompany: "",
+        active: true,
         notes: "",
       },
     ]);
@@ -460,6 +468,7 @@ export function DprForm({
         quantity: Number(e.quantity) || 1,
         onRent: e.onRent,
         rentalCompany: e.rentalCompany.trim() || null,
+        active: e.active,
         notes: e.notes.trim() || null,
       })),
       deliveries: deliveries.map((d) => ({
@@ -503,7 +512,7 @@ export function DprForm({
       reportDate,
       workNarrative: narrative,
       crewCount: effectiveCrewCount || null,
-      totalManHours: effectiveHours || null,
+      totalManHours: fieldReportHours || null,
       weatherConditions: weather || null,
       safetyIncident,
       nearMiss,
@@ -530,6 +539,7 @@ export function DprForm({
         quantity: Number(e.quantity) || 1,
         onRent: e.onRent,
         rentalCompany: e.rentalCompany.trim() || null,
+        active: e.active,
         notes: e.notes.trim() || null,
       })),
       deliveries: deliveries.map((d) => ({
@@ -613,28 +623,53 @@ export function DprForm({
               }
             />
           </div>
-          <div>
-            <Label htmlFor="dpr-hours">
-              Total man-hours
-              {!hoursOverride && manpowerTotals.hours > 0 && (
-                <span className="ml-1 text-[10px] text-muted-foreground">
-                  (auto: {manpowerTotals.hours})
-                </span>
-              )}
-            </Label>
-            <Input
-              id="dpr-hours"
-              type="number"
-              step="0.25"
-              value={hoursOverride}
-              onChange={(e) => setHoursOverride(e.target.value)}
-              placeholder={
-                manpowerTotals.hours > 0
-                  ? `auto ${manpowerTotals.hours}`
-                  : "e.g. 64"
-              }
-            />
-          </div>
+          {isFieldReport ? (
+            <>
+              <div>
+                <Label htmlFor="dpr-hpd">Hours per day</Label>
+                <Input
+                  id="dpr-hpd"
+                  type="number"
+                  step="0.25"
+                  value={hoursPerDay}
+                  onChange={(e) => setHoursPerDay(e.target.value)}
+                  placeholder="e.g. 8"
+                />
+              </div>
+              <div>
+                <Label>Total man-hours</Label>
+                <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-2 text-sm tabular-nums">
+                  {fieldReportHours || 0}
+                  <span className="ml-1 text-[10px] text-muted-foreground">
+                    (crew x hours/day)
+                  </span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div>
+              <Label htmlFor="dpr-hours">
+                Total man-hours
+                {!hoursOverride && manpowerTotals.hours > 0 && (
+                  <span className="ml-1 text-[10px] text-muted-foreground">
+                    (auto: {manpowerTotals.hours})
+                  </span>
+                )}
+              </Label>
+              <Input
+                id="dpr-hours"
+                type="number"
+                step="0.25"
+                value={hoursOverride}
+                onChange={(e) => setHoursOverride(e.target.value)}
+                placeholder={
+                  manpowerTotals.hours > 0
+                    ? `auto ${manpowerTotals.hours}`
+                    : "e.g. 64"
+                }
+              />
+            </div>
+          )}
           <div className="sm:col-span-3">
             <Label htmlFor="dpr-weather">Weather</Label>
             <Input
@@ -1043,7 +1078,9 @@ export function DprForm({
           <div>
             <h3 className="text-sm font-semibold">Equipment on site ({equipment.length})</h3>
             <p className="text-xs text-muted-foreground">
-              Owned or rented. Flag on-rent so we can track standby vs idle days.
+              {isFieldReport
+                ? "Equipment on site today. Mark each active or inactive."
+                : "Owned or rented. Flag on-rent so we can track standby vs idle days."}
             </p>
           </div>
           <Button type="button" size="sm" variant="outline" onClick={addEquipmentRow}>
@@ -1055,7 +1092,12 @@ export function DprForm({
             {equipment.map((e) => (
               <div
                 key={e.rowId}
-                className="grid gap-2 rounded-md border bg-background p-2 sm:grid-cols-[1fr_80px_auto_1fr_auto]"
+                className={cn(
+                  "grid gap-2 rounded-md border bg-background p-2",
+                  isFieldReport
+                    ? "sm:grid-cols-[1fr_80px_120px_auto]"
+                    : "sm:grid-cols-[1fr_80px_auto_1fr_auto]",
+                )}
               >
                 <Input
                   value={e.equipmentName}
@@ -1072,23 +1114,42 @@ export function DprForm({
                   }
                   placeholder="Qty"
                 />
-                <label className="flex items-center gap-2 px-2 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={e.onRent}
+                {isFieldReport ? (
+                  <select
+                    value={e.active ? "active" : "inactive"}
                     onChange={(ev) =>
-                      patchEquipment(e.rowId, { onRent: ev.target.checked })
+                      patchEquipment(e.rowId, {
+                        active: ev.target.value === "active",
+                      })
                     }
-                  />
-                  On rent
-                </label>
-                <Input
-                  value={e.rentalCompany}
-                  onChange={(ev) =>
-                    patchEquipment(e.rowId, { rentalCompany: ev.target.value })
-                  }
-                  placeholder="Rental company"
-                />
+                    className="h-9 rounded-md border border-input bg-background px-2 text-xs"
+                  >
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                ) : (
+                  <>
+                    <label className="flex items-center gap-2 px-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={e.onRent}
+                        onChange={(ev) =>
+                          patchEquipment(e.rowId, { onRent: ev.target.checked })
+                        }
+                      />
+                      On rent
+                    </label>
+                    <Input
+                      value={e.rentalCompany}
+                      onChange={(ev) =>
+                        patchEquipment(e.rowId, {
+                          rentalCompany: ev.target.value,
+                        })
+                      }
+                      placeholder="Rental company"
+                    />
+                  </>
+                )}
                 <Button
                   type="button"
                   variant="ghost"
@@ -1101,7 +1162,7 @@ export function DprForm({
                   value={e.notes}
                   onChange={(ev) => patchEquipment(e.rowId, { notes: ev.target.value })}
                   placeholder="Notes (optional)"
-                  className="sm:col-span-5"
+                  className={isFieldReport ? "sm:col-span-4" : "sm:col-span-5"}
                 />
               </div>
             ))}

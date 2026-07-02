@@ -65,6 +65,7 @@ export type DprEquipmentInput = {
   quantity: number;
   onRent: boolean;
   rentalCompany: string | null;
+  active?: boolean;
   notes: string | null;
 };
 
@@ -216,6 +217,7 @@ export async function submitDpr(input: DprSubmitInput): Promise<DprActionResult>
         quantity: e.quantity,
         on_rent: e.onRent,
         rental_company: e.rentalCompany,
+        active: e.active ?? true,
         notes: e.notes,
       }));
     if (rows.length > 0) {
