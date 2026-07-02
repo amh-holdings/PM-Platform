@@ -29,6 +29,10 @@ type WorkPin = {
   title: string;
   type: string;
   wbsTaskId: string;
+  // Progress for the linked WBS task, applied to the schedule on CM approval.
+  newStatus: string;
+  newPct: string;
+  installedQty: string;
   notes: string;
   photos: UploadedPhoto[];
 };
@@ -343,6 +347,9 @@ export function DprForm({
         title: "",
         type: "",
         wbsTaskId: "",
+        newStatus: "In Progress",
+        newPct: "",
+        installedQty: "",
         notes: "",
         photos: [],
       },
@@ -513,6 +520,9 @@ export function DprForm({
         title: p.title.trim(),
         inspectionType: p.type.trim() || null,
         scheduleTaskId: p.wbsTaskId || null,
+        taskNewStatus: p.wbsTaskId ? p.newStatus || null : null,
+        taskNewPct: p.wbsTaskId && p.newPct ? Number(p.newPct) : null,
+        installedQuantity: p.installedQty ? Number(p.installedQty) : null,
         notes: p.notes.trim() || null,
         basemapKey: p.basemapKey,
         pinX: p.x,
@@ -763,6 +773,58 @@ export function DprForm({
                           placeholder="Notes (optional)"
                         />
                       </div>
+
+                      {/* WBS progress - applied to the schedule when the CM
+                          approves this pin. Only meaningful with a WBS linked. */}
+                      {p.wbsTaskId && (
+                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                          <div>
+                            <Label className="text-[10px]">New status</Label>
+                            <select
+                              value={p.newStatus}
+                              onChange={(e) =>
+                                patchWorkPin(p.rowId, {
+                                  newStatus: e.target.value,
+                                })
+                              }
+                              className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                            >
+                              {STATUS_OPTIONS.map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <Label className="text-[10px]">% complete</Label>
+                            <Input
+                              type="number"
+                              min="0"
+                              max="100"
+                              value={p.newPct}
+                              onChange={(e) =>
+                                patchWorkPin(p.rowId, { newPct: e.target.value })
+                              }
+                              placeholder="0-100"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-[10px]">Installed qty</Label>
+                            <Input
+                              type="number"
+                              step="0.001"
+                              value={p.installedQty}
+                              onChange={(e) =>
+                                patchWorkPin(p.rowId, {
+                                  installedQty: e.target.value,
+                                })
+                              }
+                              placeholder="(optional)"
+                            />
+                          </div>
+                        </div>
+                      )}
                       <div className="mt-2">
                         <Label className="text-[10px]">Photos</Label>
                         <PhotoUploader
@@ -1165,7 +1227,11 @@ export function DprForm({
         </div>
       </section>
 
-      {/* ===== Schedule task updates (existing) ===== */}
+      {/* ===== Schedule task updates (classic DPR only) ===== */}
+      {/* In a Field Report the WBS + progress live on each map pin instead, so
+          this section is hidden and the schedule updates when the CM approves a
+          pin. */}
+      {!isFieldReport && (
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -1332,6 +1398,7 @@ export function DprForm({
           )}
         </div>
       </section>
+      )}
 
       {error && (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">

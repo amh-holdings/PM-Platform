@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { TablesUpdate } from "@/lib/database.types";
 import { generateInspectionToken, isLinkUsable } from "@/lib/inspection-token";
 import { INSPECTION_BUCKET, sanitizeFileName } from "./inspection-constants";
 import {
@@ -260,9 +261,45 @@ export async function decideInspection(input: {
     .eq("id", input.inspectionId);
   if (error) return { ok: false, error: error.message };
 
+  // Verified work drives the schedule: on approval, apply this pin's progress
+  // (status / % complete / installed quantity) to its linked WBS task.
+  if (input.decision === "approved") {
+    await applyPinProgressToSchedule(auth, input.inspectionId);
+  }
+
   revalidatePath(`/projects/${input.projectId}/inspections`);
   revalidatePath(`/projects/${input.projectId}/inspections/${input.inspectionId}`);
+  revalidatePath(`/projects/${input.projectId}/field-reports`);
+  revalidatePath(`/projects/${input.projectId}/schedule`);
   return { ok: true };
+}
+
+// Push an approved pin's captured progress onto its WBS schedule task. Best
+// effort: a schedule-write failure does not roll back the approval (the
+// decision already stands); it just isn't reflected on the schedule.
+async function applyPinProgressToSchedule(
+  auth: Authed,
+  inspectionId: string,
+): Promise<void> {
+  const { data: pin } = await auth.supabase
+    .from("inspections")
+    .select("schedule_task_id, task_new_status, task_new_pct, quantity")
+    .eq("id", inspectionId)
+    .maybeSingle();
+  if (!pin?.schedule_task_id) return;
+
+  const patch: TablesUpdate<"schedule_tasks"> = {
+    status_source: "dpr",
+    last_dpr_at: new Date().toISOString(),
+  };
+  if (pin.task_new_status) patch.status = pin.task_new_status;
+  if (pin.task_new_pct != null) patch.pct_complete = pin.task_new_pct;
+  if (pin.quantity != null) patch.installed_quantity = pin.quantity;
+
+  await auth.supabase
+    .from("schedule_tasks")
+    .update(patch)
+    .eq("id", pin.schedule_task_id);
 }
 
 // Shared transition guard: load current status, verify project ownership and

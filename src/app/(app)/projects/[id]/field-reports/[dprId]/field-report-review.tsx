@@ -36,6 +36,7 @@ export type ReviewPin = {
   inspectionType: string | null;
   notes: string | null;
   wbsLabel: string | null;
+  progress: string | null;
 };
 
 type TaskOption = { id: string; wbsCode: string; taskName: string };
@@ -283,6 +284,12 @@ export function FieldReportReview({
               <p className="text-xs">
                 <span className="font-medium text-muted-foreground">WBS:</span>{" "}
                 {active.wbsLabel}
+              </p>
+            )}
+            {active.progress && active.origin !== "cm" && (
+              <p className="rounded-md bg-muted/60 px-2 py-1 text-xs">
+                <span className="font-medium">Approving applies:</span>{" "}
+                {active.progress}
               </p>
             )}
             {active.inspectionType && (

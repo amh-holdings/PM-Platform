@@ -55,7 +55,7 @@ export default async function FieldReportDetailPage({
     supabase
       .from("inspections")
       .select(
-        "id, title, status, origin, basemap_key, pin_x, pin_y, inspection_type, notes, schedule_task_id",
+        "id, title, status, origin, basemap_key, pin_x, pin_y, inspection_type, notes, schedule_task_id, task_new_status, task_new_pct, quantity, unit_of_measure",
       )
       .eq("dpr_id", dpr.id)
       .order("origin")
@@ -96,6 +96,17 @@ export default async function FieldReportDetailPage({
     notes: p.notes,
     wbsLabel: p.schedule_task_id
       ? taskLabel.get(p.schedule_task_id) ?? null
+      : null,
+    progress: p.schedule_task_id
+      ? [
+          p.task_new_status,
+          p.task_new_pct != null ? `${p.task_new_pct}%` : null,
+          p.quantity != null
+            ? `${p.quantity} ${p.unit_of_measure ?? ""}`.trim()
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · ") || null
       : null,
   }));
 

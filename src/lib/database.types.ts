@@ -44,6 +44,8 @@ export type Database = {
           submitted_at: string | null
           submitted_by: string | null
           submitted_via_link: string | null
+          task_new_pct: number | null
+          task_new_status: string | null
           title: string
           unit_of_measure: string | null
         }
@@ -76,6 +78,8 @@ export type Database = {
           submitted_at?: string | null
           submitted_by?: string | null
           submitted_via_link?: string | null
+          task_new_pct?: number | null
+          task_new_status?: string | null
           title: string
           unit_of_measure?: string | null
         }
@@ -108,6 +112,8 @@ export type Database = {
           submitted_at?: string | null
           submitted_by?: string | null
           submitted_via_link?: string | null
+          task_new_pct?: number | null
+          task_new_status?: string | null
           title?: string
           unit_of_measure?: string | null
         }

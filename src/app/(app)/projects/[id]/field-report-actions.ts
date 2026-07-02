@@ -14,6 +14,12 @@ export type WorkPinInput = {
   title: string;
   inspectionType?: string | null;
   scheduleTaskId?: string | null; // WBS link to a schedule task
+  // Progress for that WBS task, applied to the schedule when the CM approves
+  // this pin. installedQuantity reuses inspections.quantity.
+  taskNewStatus?: string | null;
+  taskNewPct?: number | null;
+  installedQuantity?: number | null;
+  unitOfMeasure?: string | null;
   notes?: string | null;
   basemapKey: string;
   pinX: number | null;
@@ -89,6 +95,10 @@ export async function submitFieldReport(
         title: p.title.trim(),
         inspection_type: p.inspectionType?.trim() || null,
         schedule_task_id: p.scheduleTaskId || null,
+        task_new_status: p.taskNewStatus || null,
+        task_new_pct: p.taskNewPct ?? null,
+        quantity: p.installedQuantity ?? null,
+        unit_of_measure: p.unitOfMeasure || null,
         notes: p.notes?.trim() || null,
         basemap_key: p.basemapKey,
         pin_x: p.pinX,
