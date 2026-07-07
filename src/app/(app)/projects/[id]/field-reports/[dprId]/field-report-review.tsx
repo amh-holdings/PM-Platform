@@ -25,6 +25,12 @@ import {
 import { ReviewPanel } from "../../inspections/[inspectionId]/review-panel";
 import { submitCmCheck } from "../../field-report-actions";
 
+export type ReviewPhoto = {
+  url: string;
+  side: string; // 'sub' = subcontractor submission, 'ahc' = CM verification
+  caption: string | null;
+};
+
 export type ReviewPin = {
   id: string;
   title: string;
@@ -37,6 +43,7 @@ export type ReviewPin = {
   notes: string | null;
   wbsLabel: string | null;
   progress: string | null;
+  photos: ReviewPhoto[];
 };
 
 type TaskOption = { id: string; wbsCode: string; taskName: string };
@@ -288,6 +295,14 @@ export function FieldReportReview({
             {active.notes && (
               <p className="whitespace-pre-wrap text-sm">{active.notes}</p>
             )}
+            <PhotoStrip
+              label={active.origin === "cm" ? "Check photos" : "Submitted photos"}
+              photos={active.photos.filter((p) => p.side !== "ahc")}
+            />
+            <PhotoStrip
+              label="CM verification photos"
+              photos={active.photos.filter((p) => p.side === "ahc")}
+            />
             {active.origin !== "cm" && canReview ? (
               <ReviewPanel
                 projectId={projectId}
@@ -302,6 +317,45 @@ export function FieldReportReview({
             ) : null}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Thumbnails of a pin's uploaded photos. URLs are short-lived signed links
+// minted server-side (the inspection-photos bucket is private). Tap to open
+// full size in a new tab.
+function PhotoStrip({
+  label,
+  photos,
+}: {
+  label: string;
+  photos: ReviewPhoto[];
+}) {
+  if (photos.length === 0) return null;
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label} ({photos.length})
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {photos.map((p, i) => (
+          <a
+            key={`${p.url}-${i}`}
+            href={p.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={p.caption ?? "Open full size"}
+            className="block h-20 w-20 overflow-hidden rounded-md border bg-muted"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={p.url}
+              alt={p.caption ?? label}
+              className="h-full w-full object-cover"
+            />
+          </a>
+        ))}
       </div>
     </div>
   );

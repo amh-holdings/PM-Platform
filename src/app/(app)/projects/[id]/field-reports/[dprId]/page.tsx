@@ -10,6 +10,7 @@ import {
 } from "@/lib/inspection-status";
 import { finalizeGate } from "@/lib/field-report-status";
 import { cn } from "@/lib/utils";
+import { INSPECTION_BUCKET } from "../../inspections/inspection-constants";
 
 import { FieldReportReview, type ReviewPin } from "./field-report-review";
 import { FinalizeReport } from "./finalize-report";
@@ -78,6 +79,38 @@ export default async function FieldReportDetailPage({
       .order("wbs_code", { ascending: true }),
   ]);
 
+  // Load every pin's photos and sign short-lived URLs so the reviewer can see
+  // the picture for each QC check. The bucket is private, so a signed URL is
+  // the only way to render the image in the browser.
+  const pinIds = (pins ?? []).map((p) => p.id);
+  const photosByPin = new Map<
+    string,
+    Array<{ url: string; side: string; caption: string | null }>
+  >();
+  if (pinIds.length > 0) {
+    const { data: photoRows } = await supabase
+      .from("inspection_photos")
+      .select("inspection_id, side, storage_path, caption")
+      .in("inspection_id", pinIds)
+      .order("created_at");
+    const paths = (photoRows ?? []).map((r) => r.storage_path);
+    const { data: signed } = paths.length
+      ? await supabase.storage.from(INSPECTION_BUCKET).createSignedUrls(paths, 3600)
+      : { data: [] };
+    const urlByPath = new Map(
+      (signed ?? [])
+        .filter((s) => s.signedUrl && !s.error)
+        .map((s) => [s.path, s.signedUrl]),
+    );
+    for (const r of photoRows ?? []) {
+      const url = urlByPath.get(r.storage_path);
+      if (!url) continue;
+      const arr = photosByPin.get(r.inspection_id) ?? [];
+      arr.push({ url, side: r.side, caption: r.caption });
+      photosByPin.set(r.inspection_id, arr);
+    }
+  }
+
   const taskList = (tasks ?? []).map((t) => ({
     id: t.id,
     wbsCode: t.wbs_code,
@@ -111,6 +144,7 @@ export default async function FieldReportDetailPage({
           .filter(Boolean)
           .join(" · ") || null
       : null,
+    photos: photosByPin.get(p.id) ?? [],
   }));
 
   // Report-level finalize gate is driven only by the sub's own work pins;
