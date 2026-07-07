@@ -1,7 +1,6 @@
 "use client";
 
 import { useTransition } from "react";
-import { useRouter } from "next/navigation";
 
 import { cn } from "@/lib/utils";
 import type { EffectiveRole } from "@/lib/roles";
@@ -17,7 +16,6 @@ export function ViewAsSwitcher({
   effective: EffectiveRole;
   projectId: string;
 }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
 
   const options: { value: "self" | "cm" | "sub"; label: string; role: EffectiveRole }[] =
@@ -28,16 +26,10 @@ export function ViewAsSwitcher({
     ];
 
   function choose(value: "self" | "cm" | "sub") {
-    startTransition(async () => {
-      await setViewAs(value);
-      // Navigate to a landing the new role can actually see. Subs have no
-      // dashboard, so send them to Field Reports; otherwise land on the
-      // project root. We push (not just refresh) so a role switch that
-      // invalidates the current page follows the server-side guard instead of
-      // leaving a stale, now-forbidden view on screen.
-      const base = `/projects/${projectId}`;
-      router.push(value === "sub" ? `${base}/field-reports` : base);
-      router.refresh();
+    // setViewAs sets the cookie and redirects server-side to a landing the new
+    // role can see, so no client-side navigation is needed here.
+    startTransition(() => {
+      void setViewAs(value, projectId);
     });
   }
 
