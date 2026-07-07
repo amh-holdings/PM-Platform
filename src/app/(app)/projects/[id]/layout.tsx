@@ -58,7 +58,7 @@ export default async function ProjectLayout({
         </div>
         <div className="flex items-center gap-3">
           {can(actual, "viewAsToggle") && (
-            <ViewAsSwitcher effective={effective} />
+            <ViewAsSwitcher effective={effective} projectId={params.id} />
           )}
           <Button asChild variant="outline" size="sm">
             <Link href={`/projects/${params.id}/edit`}>Edit project</Link>

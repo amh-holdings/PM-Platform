@@ -10,7 +10,13 @@ import { setViewAs } from "./view-as-actions";
 // Phil-only preview control. Switches the rendered view between full access,
 // Construction Manager, and Subcontractor. Purely presentational - it never
 // changes what the server will authorize.
-export function ViewAsSwitcher({ effective }: { effective: EffectiveRole }) {
+export function ViewAsSwitcher({
+  effective,
+  projectId,
+}: {
+  effective: EffectiveRole;
+  projectId: string;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
@@ -24,6 +30,13 @@ export function ViewAsSwitcher({ effective }: { effective: EffectiveRole }) {
   function choose(value: "self" | "cm" | "sub") {
     startTransition(async () => {
       await setViewAs(value);
+      // Navigate to a landing the new role can actually see. Subs have no
+      // dashboard, so send them to Field Reports; otherwise land on the
+      // project root. We push (not just refresh) so a role switch that
+      // invalidates the current page follows the server-side guard instead of
+      // leaving a stale, now-forbidden view on screen.
+      const base = `/projects/${projectId}`;
+      router.push(value === "sub" ? `${base}/field-reports` : base);
       router.refresh();
     });
   }
