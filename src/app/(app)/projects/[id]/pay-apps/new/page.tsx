@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { createClient } from "@/lib/supabase/server";
-import { guardCapability } from "@/lib/roles";
+import { guardCapability } from "@/lib/roles-server";
 
 import { NewPayAppForm } from "./new-pay-app-form";
 

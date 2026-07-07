@@ -3,7 +3,8 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { VIEW_AS_COOKIE, readDbRole, toEffectiveRole } from "@/lib/roles";
+import { VIEW_AS_COOKIE, toEffectiveRole } from "@/lib/roles";
+import { readDbRole } from "@/lib/roles-server";
 
 // Sets the presentational "view as" cookie, then redirects to a landing the
 // chosen role can actually see. This ONLY affects which nav/views render; it

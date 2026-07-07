@@ -4,7 +4,8 @@ import { notFound } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
-import { can, getEffectiveRole } from "@/lib/roles";
+import { can } from "@/lib/roles";
+import { getEffectiveRole } from "@/lib/roles-server";
 
 import { CoLineEditor } from "./co-line-editor";
 

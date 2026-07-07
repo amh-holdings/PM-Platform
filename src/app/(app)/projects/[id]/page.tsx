@@ -14,7 +14,8 @@ import { redirect } from "next/navigation";
 
 import { DashboardToday } from "./dashboard-today";
 import { ProjectChat } from "./project-chat";
-import { can, getEffectiveRole } from "@/lib/roles";
+import { can } from "@/lib/roles";
+import { getEffectiveRole } from "@/lib/roles-server";
 
 type Params = { id: string };
 

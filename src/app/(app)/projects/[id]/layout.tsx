@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
-import { can, getEffectiveRole } from "@/lib/roles";
+import { can } from "@/lib/roles";
+import { getEffectiveRole } from "@/lib/roles-server";
 
 import { ProjectTabs } from "./project-tabs";
 import { ViewAsSwitcher } from "./view-as-switcher";

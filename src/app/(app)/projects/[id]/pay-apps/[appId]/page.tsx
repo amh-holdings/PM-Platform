@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
-import { guardCapability } from "@/lib/roles";
+import { guardCapability } from "@/lib/roles-server";
 
 import { PayAppStatusActions } from "./pay-app-status-actions";
 

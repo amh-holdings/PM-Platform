@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
-import { guardCapability } from "@/lib/roles";
+import { guardCapability } from "@/lib/roles-server";
 
 type Params = { id: string };
 

@@ -1,4 +1,4 @@
-import { guardCapability } from "@/lib/roles";
+import { guardCapability } from "@/lib/roles-server";
 
 import { CostCodesSection } from "../cost-section";
 import { CostSuggestionsPanel } from "./cost-suggestions-panel";

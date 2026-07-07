@@ -10,11 +10,10 @@
 // server-action authorization - those still read the true DB role. The
 // view-as cookie is honored only for a true `full` user, so it can only ever
 // DE-SCOPE the view, never escalate privileges.
-
-import { cookies } from "next/headers";
-import { notFound } from "next/navigation";
-
-import { createClient } from "@/lib/supabase/server";
+//
+// This module is intentionally free of server-only imports (next/headers,
+// Supabase) so client components can import `can` / types. The cookie- and
+// DB-backed helpers live in `roles-server.ts`.
 
 export type EffectiveRole = "full" | "cm" | "sub";
 
@@ -101,43 +100,4 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
 
 export function can(role: EffectiveRole, cap: Capability): boolean {
   return MATRIX[role].has(cap);
-}
-
-// Read the current user's true DB role (server-side).
-export async function readDbRole(): Promise<string> {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return "";
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle();
-  return profile?.role ?? "";
-}
-
-// The role the UI should render for. For a true `full` user we honor the
-// view-as cookie (preview mode); everyone else always gets their real role.
-export async function getEffectiveRole(): Promise<{
-  effective: EffectiveRole;
-  actual: EffectiveRole;
-}> {
-  const actual = toEffectiveRole(await readDbRole());
-  if (actual !== "full") return { effective: actual, actual };
-  const viewAs = cookies().get(VIEW_AS_COOKIE)?.value;
-  if (viewAs === "cm" || viewAs === "sub") {
-    return { effective: viewAs, actual };
-  }
-  return { effective: "full", actual };
-}
-
-// Server-side page guard. Use at the top of a page/server component to block
-// direct URL access to a view the effective role isn't allowed to see. Tab
-// hiding alone is cosmetic - this is the real enforcement. Renders a 404 so we
-// don't reveal that the resource exists.
-export async function guardCapability(cap: Capability): Promise<void> {
-  const { effective } = await getEffectiveRole();
-  if (!can(effective, cap)) notFound();
 }

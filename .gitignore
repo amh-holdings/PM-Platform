@@ -56,3 +56,4 @@ scripts/_*.ts
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.env*
