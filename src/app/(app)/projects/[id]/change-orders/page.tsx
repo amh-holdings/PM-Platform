@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { can } from "@/lib/roles";
-import { getEffectiveRole } from "@/lib/roles-server";
+import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
 
 type Params = { id: string };
 
@@ -17,10 +17,10 @@ const STATUS_TONE: Record<string, string> = {
 };
 
 export default async function ChangeOrdersPage({ params }: { params: Params }) {
+  await guardCapability("viewChangeOrders");
   const supabase = createClient();
 
-  // The CM sees change orders but not AHC's internal cost / profit margin -
-  // only the owner-facing billable value. Phil (viewCosts) sees everything.
+  // Cost / profit margin columns are Phil-only (viewCosts).
   const { effective } = await getEffectiveRole();
   const showCosts = can(effective, "viewCosts");
 

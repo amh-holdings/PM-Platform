@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { can } from "@/lib/roles";
-import { getEffectiveRole } from "@/lib/roles-server";
+import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
 
 import { CoLineEditor } from "./co-line-editor";
 
@@ -23,6 +23,7 @@ export default async function ChangeOrderDetailPage({
 }: {
   params: Params;
 }) {
+  await guardCapability("viewChangeOrders");
   const supabase = createClient();
   const [{ data: co, error }, { data: lines }] = await Promise.all([
     supabase

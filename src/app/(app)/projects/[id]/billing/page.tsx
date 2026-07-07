@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 
 import { isProcurementLine } from "@/lib/progress";
+import { guardCapability } from "@/lib/roles-server";
 
 import { BillingLinkForm } from "../billing-link-form";
 import { BillingPoLinkForm } from "../billing-po-link-form";
@@ -11,6 +12,7 @@ import { BillThisPeriodPanel } from "./bill-this-period-panel";
 type Params = { id: string };
 
 export default async function ProjectBillingPage({ params }: { params: Params }) {
+  await guardCapability("viewBilling");
   const supabase = createClient();
 
   const [{ data: lines, error: linesErr }, { data: totals }, { data: pos }] = await Promise.all([

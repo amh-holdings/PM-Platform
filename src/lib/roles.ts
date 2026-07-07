@@ -77,8 +77,9 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewDocuments",
     "viewAsToggle",
   ]),
-  // Construction Manager: full operational + billing visibility, but NOT
-  // internal costs/margin (viewCosts) or subcontractor pay apps (viewPayApps).
+  // Construction Manager: operational visibility (schedule, subs, procurement,
+  // documents, field reports) but NO financials - no dashboard Financial
+  // section, no Billing, no Change orders, no Costs/margin, no Pay apps.
   cm: new Set<Capability>([
     "viewAllReports",
     "submitFieldReport",
@@ -87,8 +88,6 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "addCmChecks",
     "viewDashboard",
     "viewFieldReports",
-    "viewBilling",
-    "viewChangeOrders",
     "viewSchedule",
     "viewSubs",
     "viewProcurement",

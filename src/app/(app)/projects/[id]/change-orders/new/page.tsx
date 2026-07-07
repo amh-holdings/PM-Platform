@@ -1,10 +1,13 @@
 import Link from "next/link";
 
+import { guardCapability } from "@/lib/roles-server";
+
 import { NewChangeOrderForm } from "./new-co-form";
 
 type Params = { id: string };
 
-export default function NewChangeOrderPage({ params }: { params: Params }) {
+export default async function NewChangeOrderPage({ params }: { params: Params }) {
+  await guardCapability("viewChangeOrders");
   return (
     <div className="space-y-4">
       <div>

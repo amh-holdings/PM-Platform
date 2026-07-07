@@ -33,14 +33,16 @@ export default async function ProjectDashboardPage({ params }: { params: Params 
     process.env.RELAY_URL && process.env.RELAY_SHARED_SECRET,
   );
 
-  // Construction Manager sees the operational + billing picture, but not AHC's
-  // internal cost variance or profit projection (margin stays Phil-only).
   const { effective } = await getEffectiveRole();
   // Subs have no dashboard - send them to their field reports so the project
   // root never exposes the financial dashboard to them.
   if (!can(effective, "viewDashboard")) {
     redirect(`/projects/${params.id}/field-reports`);
   }
+  // Construction Manager sees Operations + Compliance only - the entire
+  // Financial section (billing, cash, spend, cost variance) is Phil-only.
+  const showFinancials = can(effective, "viewBilling");
+  // Within the Financial section, cost/profit margin is a further Phil-only cut.
   const showCosts = can(effective, "viewCosts");
 
   return (
@@ -54,12 +56,14 @@ export default async function ProjectDashboardPage({ params }: { params: Params 
         >
           Operations
         </a>
-        <a
-          href="#financial"
-          className="whitespace-nowrap rounded px-2 py-1 font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          Financial
-        </a>
+        {showFinancials && (
+          <a
+            href="#financial"
+            className="whitespace-nowrap rounded px-2 py-1 font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            Financial
+          </a>
+        )}
         <a
           href="#compliance"
           className="whitespace-nowrap rounded px-2 py-1 font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -82,22 +86,24 @@ export default async function ProjectDashboardPage({ params }: { params: Params 
         <DashboardMilestones projectId={params.id} />
       </section>
 
-      <section className="space-y-4">
-        <SectionHeader
-          id="financial"
-          title="Financial"
-          sub="Cash position, billing, spend, cost variance"
-        />
-        <DashboardKpis projectId={params.id} showCosts={showCosts} />
-        {showCosts && <DashboardProjection projectId={params.id} />}
-        <DashboardNetCash projectId={params.id} />
-        <DashboardBilling projectId={params.id} />
-        <DashboardCashOut projectId={params.id} />
-        <div className={showCosts ? "grid gap-4 md:grid-cols-2" : ""}>
-          <DashboardFinancial projectId={params.id} />
-          {showCosts && <DashboardCost projectId={params.id} />}
-        </div>
-      </section>
+      {showFinancials && (
+        <section className="space-y-4">
+          <SectionHeader
+            id="financial"
+            title="Financial"
+            sub="Cash position, billing, spend, cost variance"
+          />
+          <DashboardKpis projectId={params.id} showCosts={showCosts} />
+          {showCosts && <DashboardProjection projectId={params.id} />}
+          <DashboardNetCash projectId={params.id} />
+          <DashboardBilling projectId={params.id} />
+          <DashboardCashOut projectId={params.id} />
+          <div className={showCosts ? "grid gap-4 md:grid-cols-2" : ""}>
+            <DashboardFinancial projectId={params.id} />
+            {showCosts && <DashboardCost projectId={params.id} />}
+          </div>
+        </section>
+      )}
 
       <section className="space-y-4">
         <SectionHeader
