@@ -8,9 +8,12 @@ import {
   isInspectionApprover,
   type InspectionStatus,
 } from "@/lib/inspection-status";
+import { finalizeGate } from "@/lib/field-report-status";
 import { cn } from "@/lib/utils";
 
 import { FieldReportReview, type ReviewPin } from "./field-report-review";
+import { FinalizeReport } from "./finalize-report";
+import { ResubmitBanner } from "./resubmit-banner";
 
 type Params = { id: string; dprId: string };
 
@@ -34,7 +37,7 @@ export default async function FieldReportDetailPage({
   const { data: profile } = user
     ? await supabase
         .from("profiles")
-        .select("role")
+        .select("role, subcontractor_id")
         .eq("id", user.id)
         .maybeSingle()
     : { data: null };
@@ -43,7 +46,7 @@ export default async function FieldReportDetailPage({
   const { data: dpr } = await supabase
     .from("dprs")
     .select(
-      "id, project_id, report_date, status, submitted_at, work_narrative, crew_count, total_man_hours, weather_conditions, safety_incident, near_miss, safety_narrative, subcontractor_id",
+      "id, project_id, report_date, status, submitted_at, work_narrative, crew_count, total_man_hours, weather_conditions, safety_incident, near_miss, safety_narrative, subcontractor_id, review_notes",
     )
     .eq("id", params.dprId)
     .eq("project_id", params.id)
@@ -110,6 +113,22 @@ export default async function FieldReportDetailPage({
       : null,
   }));
 
+  // Report-level finalize gate is driven only by the sub's own work pins;
+  // the CM's own-check pins (origin='cm') are independent records.
+  const subPinStatuses = reviewPins
+    .filter((p) => p.origin !== "cm")
+    .map((p) => p.status);
+  const gate = finalizeGate(dpr.status, subPinStatuses);
+  const rejectedCount = subPinStatuses.filter((s) => s === "rejected").length;
+
+  const isApprover = isInspectionApprover({ role });
+  const reportOpen = dpr.status !== "approved" && dpr.status !== "returned";
+  const canResubmit =
+    dpr.status === "returned" &&
+    (canReview(role) ||
+      (profile?.subcontractor_id != null &&
+        dpr.subcontractor_id === profile.subcontractor_id));
+
   return (
     <div className="space-y-5">
       <div>
@@ -137,6 +156,21 @@ export default async function FieldReportDetailPage({
           {dpr.submitted_at ? formatDate(dpr.submitted_at) : "-"}
         </p>
       </div>
+
+      {canResubmit && (
+        <ResubmitBanner
+          projectId={params.id}
+          dprId={dpr.id}
+          reviewNotes={dpr.review_notes}
+          rejectedCount={rejectedCount}
+        />
+      )}
+
+      {dpr.status === "approved" && dpr.review_notes && (
+        <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+          <span className="font-medium">Approved.</span> {dpr.review_notes}
+        </p>
+      )}
 
       {/* Daily report summary */}
       <div className="rounded-lg border bg-card p-4 text-sm">
@@ -172,9 +206,13 @@ export default async function FieldReportDetailPage({
           pins={reviewPins}
           tasks={taskList}
           canReview={canReview(role)}
-          canDecide={isInspectionApprover({ role })}
+          canDecide={isApprover}
         />
       </div>
+
+      {isApprover && reportOpen && gate.totalSubPins > 0 && (
+        <FinalizeReport projectId={params.id} dprId={dpr.id} gate={gate} />
+      )}
     </div>
   );
 }

@@ -3,7 +3,15 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
-import { canReview, PHOTO_SIDE_CM, PHOTO_SIDE_SUB } from "@/lib/inspection-status";
+import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  canReview,
+  isInspectionApprover,
+  PHOTO_SIDE_CM,
+  PHOTO_SIDE_SUB,
+  type InspectionStatus,
+} from "@/lib/inspection-status";
+import { finalizeGate } from "@/lib/field-report-status";
 import { submitDpr, type DprSubmitInput } from "./dpr-actions";
 import type { InspectionPhotoInput } from "./inspections/inspection-actions";
 
@@ -226,4 +234,243 @@ export async function submitCmCheck(
   revalidatePath(`/projects/${input.projectId}/field-reports/${input.dprId}`);
   revalidatePath(`/projects/${input.projectId}/inspections`);
   return { ok: true, dprId: input.dprId };
+}
+
+// ===== Report-level finalize (Construction Manager) =====
+// After the CM has decided each sub work pin, they finalize the whole report:
+//   finalizeFieldReport -> approve (all pins approved)   -> dprs.status='approved'
+//   returnFieldReport    -> return  (>=1 pin rejected)   -> dprs.status='returned'
+// Approve/return are gated to the QA/QC approver (Mark Wooley / Phil), the same
+// gate that decides individual pins. Pin progress is already pushed onto the
+// schedule when each pin is approved, so finalize does NOT re-apply it.
+
+type FinalizeAuth =
+  | {
+      ok: true;
+      supabase: ReturnType<typeof createClient>;
+      userId: string;
+      role: string;
+      subcontractorId: string | null;
+    }
+  | { ok: false; error: string };
+
+async function getReportProfile(): Promise<FinalizeAuth> {
+  const supabase = createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+  if (userError || !user) return { ok: false, error: "Not signed in" };
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role, subcontractor_id")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (!profile) return { ok: false, error: "Profile not found" };
+  return {
+    ok: true,
+    supabase,
+    userId: user.id,
+    role: profile.role,
+    subcontractorId: profile.subcontractor_id ?? null,
+  };
+}
+
+// Load the report + the statuses of its subcontractor work pins (origin='sub').
+async function loadReportGate(
+  supabase: ReturnType<typeof createClient>,
+  dprId: string,
+  projectId: string,
+): Promise<
+  | { ok: true; status: string; gate: ReturnType<typeof finalizeGate> }
+  | { ok: false; error: string }
+> {
+  const { data: dpr, error: dprErr } = await supabase
+    .from("dprs")
+    .select("id, project_id, status")
+    .eq("id", dprId)
+    .maybeSingle();
+  if (dprErr) return { ok: false, error: dprErr.message };
+  if (!dpr) return { ok: false, error: "Report not found" };
+  if (dpr.project_id !== projectId)
+    return { ok: false, error: "Report does not belong to this project" };
+
+  const { data: pins, error: pinErr } = await supabase
+    .from("inspections")
+    .select("status")
+    .eq("dpr_id", dprId)
+    .eq("origin", "sub");
+  if (pinErr) return { ok: false, error: pinErr.message };
+
+  const gate = finalizeGate(
+    dpr.status,
+    (pins ?? []).map((p) => p.status as InspectionStatus),
+  );
+  return { ok: true, status: dpr.status ?? "", gate };
+}
+
+function revalidateReport(projectId: string, dprId: string) {
+  revalidatePath(`/projects/${projectId}/review-board`);
+  revalidatePath(`/projects/${projectId}/field-reports`);
+  revalidatePath(`/projects/${projectId}/field-reports/${dprId}`);
+}
+
+export async function finalizeFieldReport(
+  dprId: string,
+  projectId: string,
+  notes?: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await getReportProfile();
+  if (!auth.ok) return auth;
+  if (!isInspectionApprover({ role: auth.role, profileId: auth.userId })) {
+    return { ok: false, error: "Only the QA/QC approver may finalize a report" };
+  }
+
+  const loaded = await loadReportGate(auth.supabase, dprId, projectId);
+  if (!loaded.ok) return loaded;
+  if (loaded.status === "approved")
+    return { ok: false, error: "Report is already approved" };
+  if (!loaded.gate.canApprove) {
+    return {
+      ok: false,
+      error:
+        loaded.gate.rejectedSubPins > 0
+          ? "Some work pins are rejected - use Return instead."
+          : "Every work pin must be approved before the report can be finalized.",
+    };
+  }
+
+  const { error } = await auth.supabase
+    .from("dprs")
+    .update({
+      status: "approved",
+      reviewed_by: auth.userId,
+      reviewed_at: new Date().toISOString(),
+      review_notes: notes?.trim() || null,
+    })
+    .eq("id", dprId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidateReport(projectId, dprId);
+  revalidatePath(`/projects/${projectId}/schedule`);
+  return { ok: true };
+}
+
+export async function returnFieldReport(
+  dprId: string,
+  projectId: string,
+  notes: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await getReportProfile();
+  if (!auth.ok) return auth;
+  if (!isInspectionApprover({ role: auth.role, profileId: auth.userId })) {
+    return { ok: false, error: "Only the QA/QC approver may return a report" };
+  }
+  if (!notes?.trim())
+    return { ok: false, error: "A reason is required to return a report" };
+
+  const loaded = await loadReportGate(auth.supabase, dprId, projectId);
+  if (!loaded.ok) return loaded;
+  if (loaded.status === "approved")
+    return { ok: false, error: "An approved report cannot be returned" };
+  if (loaded.status === "returned")
+    return { ok: false, error: "Report is already returned" };
+  if (!loaded.gate.allDecided) {
+    return {
+      ok: false,
+      error: "Decide every work pin (approve or reject) before returning the report.",
+    };
+  }
+  if (loaded.gate.rejectedSubPins === 0) {
+    return {
+      ok: false,
+      error: "No pins are rejected - approve the report instead.",
+    };
+  }
+
+  const { error } = await auth.supabase
+    .from("dprs")
+    .update({
+      status: "returned",
+      reviewed_by: auth.userId,
+      reviewed_at: new Date().toISOString(),
+      review_notes: notes.trim(),
+    })
+    .eq("id", dprId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidateReport(projectId, dprId);
+  return { ok: true };
+}
+
+// ===== Resubmit (subcontractor) =====
+// A returned report is fixed in place: the sub's rejected pins go back to
+// 'submitted' and the report re-enters the CM's queue. Signed-in subs have no
+// UPDATE grant on inspections/dprs (RLS is insert-only for them), so - like the
+// no-login secure-link path - this runs through the service-role client after
+// an explicit ownership check. Only the owning sub (or an AHC user) may call it.
+
+export async function resubmitFieldReport(
+  dprId: string,
+  projectId: string,
+): Promise<{ ok: true; resubmittedPins: number } | { ok: false; error: string }> {
+  const auth = await getReportProfile();
+  if (!auth.ok) return auth;
+
+  const admin = createAdminClient();
+  const { data: dpr, error: dprErr } = await admin
+    .from("dprs")
+    .select("id, project_id, status, subcontractor_id")
+    .eq("id", dprId)
+    .maybeSingle();
+  if (dprErr) return { ok: false, error: dprErr.message };
+  if (!dpr || dpr.project_id !== projectId)
+    return { ok: false, error: "Report not found" };
+
+  const isAhc = canReview(auth.role);
+  const isOwner =
+    auth.subcontractorId != null &&
+    dpr.subcontractor_id === auth.subcontractorId;
+  if (!isAhc && !isOwner) {
+    return { ok: false, error: "Not authorized to resubmit this report" };
+  }
+  if (dpr.status !== "returned") {
+    return { ok: false, error: "Only a returned report can be resubmitted" };
+  }
+
+  // Rejected sub pins -> submitted, clearing the prior decision and bumping the
+  // resubmission counter (the dispute-protection trail).
+  const { data: rejected, error: rejErr } = await admin
+    .from("inspections")
+    .select("id, resubmission_count")
+    .eq("dpr_id", dprId)
+    .eq("origin", "sub")
+    .eq("status", "rejected");
+  if (rejErr) return { ok: false, error: rejErr.message };
+
+  const now = new Date().toISOString();
+  for (const p of rejected ?? []) {
+    const { error } = await admin
+      .from("inspections")
+      .update({
+        status: "submitted",
+        resubmission_count: (p.resubmission_count ?? 0) + 1,
+        submitted_at: now,
+        review_started_at: null,
+        decided_by: null,
+        decided_at: null,
+        decision_notes: null,
+      })
+      .eq("id", p.id);
+    if (error) return { ok: false, error: error.message };
+  }
+
+  const { error: dprUpdErr } = await admin
+    .from("dprs")
+    .update({ status: "submitted", submitted_at: now })
+    .eq("id", dprId);
+  if (dprUpdErr) return { ok: false, error: dprUpdErr.message };
+
+  revalidateReport(projectId, dprId);
+  return { ok: true, resubmittedPins: (rejected ?? []).length };
 }
