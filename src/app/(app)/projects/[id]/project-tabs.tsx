@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
-import type { EffectiveRole } from "@/lib/roles";
+import { can, type Capability, type EffectiveRole } from "@/lib/roles";
 
 type Props = {
   projectId: string;
@@ -15,27 +15,24 @@ export function ProjectTabs({ projectId, role }: Props) {
   const pathname = usePathname() ?? "";
   const base = `/projects/${projectId}`;
 
-  // Each tab lists the effective roles that may see it. Subs see only Field
-  // Reports; the CM sees the operational + financial tabs; Phil (full) sees
-  // everything. The legacy DPRs / QA-QC tabs are retired - Field Reports
-  // supersedes them.
-  const ALL: EffectiveRole[] = ["full", "cm", "sub"];
-  const CM: EffectiveRole[] = ["full", "cm"];
-
-  const allTabs: { href: string; label: string; roles: EffectiveRole[] }[] = [
-    { href: base, label: "Dashboard", roles: CM },
-    { href: `${base}/field-reports`, label: "Field Reports", roles: ALL },
-    { href: `${base}/billing`, label: "Billing", roles: CM },
-    { href: `${base}/pay-apps`, label: "Pay apps", roles: CM },
-    { href: `${base}/change-orders`, label: "Change orders", roles: CM },
-    { href: `${base}/schedule`, label: "Schedule", roles: CM },
-    { href: `${base}/subs`, label: "Subs", roles: CM },
-    { href: `${base}/procurement`, label: "Procurement", roles: CM },
-    { href: `${base}/costs`, label: "Costs", roles: CM },
-    { href: `${base}/documents`, label: "Documents", roles: CM },
+  // Each tab is gated by the capability that governs its view (see the matrix
+  // in lib/roles.ts). Subs see only Field Reports; the CM sees the operational
+  // + billing tabs but not Costs or Pay apps; Phil (full) sees everything. The
+  // legacy DPRs / QA-QC tabs are retired - Field Reports supersedes them.
+  const allTabs: { href: string; label: string; cap: Capability }[] = [
+    { href: base, label: "Dashboard", cap: "viewDashboard" },
+    { href: `${base}/field-reports`, label: "Field Reports", cap: "viewFieldReports" },
+    { href: `${base}/billing`, label: "Billing", cap: "viewBilling" },
+    { href: `${base}/pay-apps`, label: "Pay apps", cap: "viewPayApps" },
+    { href: `${base}/change-orders`, label: "Change orders", cap: "viewChangeOrders" },
+    { href: `${base}/schedule`, label: "Schedule", cap: "viewSchedule" },
+    { href: `${base}/subs`, label: "Subs", cap: "viewSubs" },
+    { href: `${base}/procurement`, label: "Procurement", cap: "viewProcurement" },
+    { href: `${base}/costs`, label: "Costs", cap: "viewCosts" },
+    { href: `${base}/documents`, label: "Documents", cap: "viewDocuments" },
   ];
 
-  const tabs = allTabs.filter((t) => t.roles.includes(role));
+  const tabs = allTabs.filter((t) => can(role, t.cap));
 
   function isActive(href: string) {
     if (href === base) return pathname === base;

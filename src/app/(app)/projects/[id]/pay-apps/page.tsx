@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { guardCapability } from "@/lib/roles";
 
 type Params = { id: string };
 
@@ -15,6 +16,7 @@ const STATUS_TONE: Record<string, string> = {
 };
 
 export default async function ProjectPayAppsPage({ params }: { params: Params }) {
+  await guardCapability("viewPayApps");
   const supabase = createClient();
 
   const { data: apps, error } = await supabase

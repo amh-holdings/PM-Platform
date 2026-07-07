@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { guardCapability } from "@/lib/roles";
 
 import { PayAppStatusActions } from "./pay-app-status-actions";
 
@@ -17,6 +18,7 @@ const STATUS_TONE: Record<string, string> = {
 };
 
 export default async function PayAppDetailPage({ params }: { params: Params }) {
+  await guardCapability("viewPayApps");
   const supabase = createClient();
 
   const [{ data: app, error }, { data: lines }, { data: project }] = await Promise.all([

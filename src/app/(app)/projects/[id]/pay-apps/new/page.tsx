@@ -1,12 +1,14 @@
 import Link from "next/link";
 
 import { createClient } from "@/lib/supabase/server";
+import { guardCapability } from "@/lib/roles";
 
 import { NewPayAppForm } from "./new-pay-app-form";
 
 type Params = { id: string };
 
 export default async function NewPayAppPage({ params }: { params: Params }) {
+  await guardCapability("viewPayApps");
   const supabase = createClient();
 
   const [{ data: project }, { data: lastApp }] = await Promise.all([

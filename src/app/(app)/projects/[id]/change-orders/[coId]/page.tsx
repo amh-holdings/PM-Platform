@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { can, getEffectiveRole } from "@/lib/roles";
 
 import { CoLineEditor } from "./co-line-editor";
 
@@ -38,6 +39,10 @@ export default async function ChangeOrderDetailPage({
       .order("item_number"),
   ]);
   if (error || !co) notFound();
+
+  // CM sees the change order but not AHC's internal cost / profit margin.
+  const { effective } = await getEffectiveRole();
+  const showCosts = can(effective, "viewCosts");
 
   const billable = Number(co.co_value ?? 0);
   const cost = co.cost_amount != null ? Number(co.cost_amount) : null;
@@ -79,24 +84,28 @@ export default async function ChangeOrderDetailPage({
 
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h3 className="text-sm font-semibold">Pricing</h3>
-        <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          <PricingCell
-            label="Cost (AHC)"
-            value={cost != null ? formatCurrency(cost) : "-"}
-            sub={cost != null ? "Bare cost to deliver" : "Not tracked"}
-          />
-          <PricingCell
-            label="Profit"
-            value={
-              profitDollars != null
-                ? `${formatCurrency(profitDollars)}${profitPct != null ? ` (${profitPct}%)` : ""}`
-                : profitPct != null
-                  ? `${profitPct}%`
-                  : "-"
-            }
-            sub="Markup on cost"
-            tone="emerald"
-          />
+        <div className={cn("mt-3 grid gap-3", showCosts ? "sm:grid-cols-3" : "sm:grid-cols-1")}>
+          {showCosts && (
+            <PricingCell
+              label="Cost (AHC)"
+              value={cost != null ? formatCurrency(cost) : "-"}
+              sub={cost != null ? "Bare cost to deliver" : "Not tracked"}
+            />
+          )}
+          {showCosts && (
+            <PricingCell
+              label="Profit"
+              value={
+                profitDollars != null
+                  ? `${formatCurrency(profitDollars)}${profitPct != null ? ` (${profitPct}%)` : ""}`
+                  : profitPct != null
+                    ? `${profitPct}%`
+                    : "-"
+              }
+              sub="Markup on cost"
+              tone="emerald"
+            />
+          )}
           <PricingCell
             label="Billable (owner)"
             value={formatCurrency(billable)}

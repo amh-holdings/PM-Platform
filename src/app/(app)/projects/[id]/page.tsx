@@ -10,8 +10,11 @@ import { DashboardNetCash } from "./dashboard-netcash";
 import { DashboardPlanActual } from "./dashboard-plan-actual";
 import { DashboardProjection } from "./dashboard-projection";
 import { DashboardSchedule } from "./dashboard-schedule";
+import { redirect } from "next/navigation";
+
 import { DashboardToday } from "./dashboard-today";
 import { ProjectChat } from "./project-chat";
+import { can, getEffectiveRole } from "@/lib/roles";
 
 type Params = { id: string };
 
@@ -24,10 +27,20 @@ function SectionHeader({ id, title, sub }: { id: string; title: string; sub: str
   );
 }
 
-export default function ProjectDashboardPage({ params }: { params: Params }) {
+export default async function ProjectDashboardPage({ params }: { params: Params }) {
   const aiEnabled = Boolean(
     process.env.RELAY_URL && process.env.RELAY_SHARED_SECRET,
   );
+
+  // Construction Manager sees the operational + billing picture, but not AHC's
+  // internal cost variance or profit projection (margin stays Phil-only).
+  const { effective } = await getEffectiveRole();
+  // Subs have no dashboard - send them to their field reports so the project
+  // root never exposes the financial dashboard to them.
+  if (!can(effective, "viewDashboard")) {
+    redirect(`/projects/${params.id}/field-reports`);
+  }
+  const showCosts = can(effective, "viewCosts");
 
   return (
     <div className="space-y-8">
@@ -74,14 +87,14 @@ export default function ProjectDashboardPage({ params }: { params: Params }) {
           title="Financial"
           sub="Cash position, billing, spend, cost variance"
         />
-        <DashboardKpis projectId={params.id} />
-        <DashboardProjection projectId={params.id} />
+        <DashboardKpis projectId={params.id} showCosts={showCosts} />
+        {showCosts && <DashboardProjection projectId={params.id} />}
         <DashboardNetCash projectId={params.id} />
         <DashboardBilling projectId={params.id} />
         <DashboardCashOut projectId={params.id} />
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className={showCosts ? "grid gap-4 md:grid-cols-2" : ""}>
           <DashboardFinancial projectId={params.id} />
-          <DashboardCost projectId={params.id} />
+          {showCosts && <DashboardCost projectId={params.id} />}
         </div>
       </section>
 

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { can, getEffectiveRole } from "@/lib/roles";
 
 type Params = { id: string };
 
@@ -16,6 +17,11 @@ const STATUS_TONE: Record<string, string> = {
 
 export default async function ChangeOrdersPage({ params }: { params: Params }) {
   const supabase = createClient();
+
+  // The CM sees change orders but not AHC's internal cost / profit margin -
+  // only the owner-facing billable value. Phil (viewCosts) sees everything.
+  const { effective } = await getEffectiveRole();
+  const showCosts = can(effective, "viewCosts");
 
   const [{ data: cos, error }, { data: lines }] = await Promise.all([
     supabase
@@ -74,7 +80,7 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
         </Button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-4">
+      <div className={cn("grid gap-3", showCosts ? "sm:grid-cols-4" : "sm:grid-cols-2")}>
         <div className="rounded-md border bg-card p-3">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
             Total COs
@@ -84,22 +90,26 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
             {approvedCount} approved
           </div>
         </div>
-        <div className="rounded-md border bg-card p-3">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground">
-            Total cost (AHC)
+        {showCosts && (
+          <div className="rounded-md border bg-card p-3">
+            <div className="text-xs uppercase tracking-wide text-muted-foreground">
+              Total cost (AHC)
+            </div>
+            <div className="mt-1 text-2xl font-semibold">
+              {formatCurrency(totalCost)}
+            </div>
           </div>
-          <div className="mt-1 text-2xl font-semibold">
-            {formatCurrency(totalCost)}
+        )}
+        {showCosts && (
+          <div className="rounded-md border bg-card p-3">
+            <div className="text-xs uppercase tracking-wide text-muted-foreground">
+              Total profit
+            </div>
+            <div className="mt-1 text-2xl font-semibold text-emerald-700">
+              {formatCurrency(totalProfit)}
+            </div>
           </div>
-        </div>
-        <div className="rounded-md border bg-card p-3">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground">
-            Total profit
-          </div>
-          <div className="mt-1 text-2xl font-semibold text-emerald-700">
-            {formatCurrency(totalProfit)}
-          </div>
-        </div>
+        )}
         <div className="rounded-md border bg-card p-3">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
             Total billable (owner)
@@ -116,8 +126,12 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
             <tr className="border-b">
               <th className="px-3 py-2 text-left font-medium">CO #</th>
               <th className="px-3 py-2 text-left font-medium">Description</th>
-              <th className="px-3 py-2 text-right font-medium">Cost</th>
-              <th className="px-3 py-2 text-right font-medium">Profit %</th>
+              {showCosts && (
+                <th className="px-3 py-2 text-right font-medium">Cost</th>
+              )}
+              {showCosts && (
+                <th className="px-3 py-2 text-right font-medium">Profit %</th>
+              )}
               <th className="px-3 py-2 text-right font-medium">Billable</th>
               <th className="px-3 py-2 text-right font-medium">SOV lines</th>
               <th className="px-3 py-2 text-right font-medium">Days</th>
@@ -141,12 +155,16 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
                   <td className="px-3 py-2 text-xs">
                     <span className="line-clamp-2">{r.description ?? "-"}</span>
                   </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">
-                    {r.cost_amount != null ? formatCurrency(Number(r.cost_amount)) : "-"}
-                  </td>
-                  <td className="px-3 py-2 text-right text-xs text-muted-foreground">
-                    {r.profit_pct != null ? `${Number(r.profit_pct)}%` : "-"}
-                  </td>
+                  {showCosts && (
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">
+                      {r.cost_amount != null ? formatCurrency(Number(r.cost_amount)) : "-"}
+                    </td>
+                  )}
+                  {showCosts && (
+                    <td className="px-3 py-2 text-right text-xs text-muted-foreground">
+                      {r.profit_pct != null ? `${Number(r.profit_pct)}%` : "-"}
+                    </td>
+                  )}
                   <td className="px-3 py-2 text-right font-mono tabular-nums font-semibold">
                     {formatCurrency(Number(r.co_value ?? 0))}
                   </td>
@@ -176,7 +194,7 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-3 py-6 text-center text-xs text-muted-foreground">
+                <td colSpan={showCosts ? 9 : 7} className="px-3 py-6 text-center text-xs text-muted-foreground">
                   No change orders yet. Click &quot;New change order&quot; to add the first one.
                 </td>
               </tr>

@@ -12,6 +12,7 @@
 // DE-SCOPE the view, never escalate privileges.
 
 import { cookies } from "next/headers";
+import { notFound } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
 
@@ -35,13 +36,27 @@ export const ROLE_LABEL: Record<EffectiveRole, string> = {
 };
 
 // ---- Capability matrix: the one place features ask "can this role do X". ----
+// Financials are split into granular capabilities so the Construction Manager
+// can be given operational + billing visibility while internal costs, profit
+// margin, and subcontractor pay applications stay Phil-only.
 export type Capability =
+  // --- operational / field ---
   | "viewAllReports" // see every sub's field reports, not just own
   | "submitFieldReport" // file a daily field report
   | "reviewPins" // open/verify sub work pins
   | "decidePins" // approve/reject (also gated server-side by the approver rule)
   | "addCmChecks" // drop CM own-check pins
-  | "viewFinancials" // billing / pay-apps / change-orders / costs
+  // --- per-tab / per-view visibility ---
+  | "viewDashboard" // project dashboard landing
+  | "viewFieldReports" // Field Reports tab
+  | "viewBilling" // Billing tab
+  | "viewPayApps" // Pay apps tab + pages (Phil-only)
+  | "viewChangeOrders" // Change orders tab
+  | "viewSchedule" // Schedule tab
+  | "viewSubs" // Subs tab
+  | "viewProcurement" // Procurement tab
+  | "viewCosts" // Costs tab + all internal cost/profit/margin figures (Phil-only)
+  | "viewDocuments" // Documents tab
   | "viewAsToggle"; // the Phil-only "view as" switcher
 
 const MATRIX: Record<EffectiveRole, Set<Capability>> = {
@@ -51,18 +66,37 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "reviewPins",
     "decidePins",
     "addCmChecks",
-    "viewFinancials",
+    "viewDashboard",
+    "viewFieldReports",
+    "viewBilling",
+    "viewPayApps",
+    "viewChangeOrders",
+    "viewSchedule",
+    "viewSubs",
+    "viewProcurement",
+    "viewCosts",
+    "viewDocuments",
     "viewAsToggle",
   ]),
+  // Construction Manager: full operational + billing visibility, but NOT
+  // internal costs/margin (viewCosts) or subcontractor pay apps (viewPayApps).
   cm: new Set<Capability>([
     "viewAllReports",
     "submitFieldReport",
     "reviewPins",
     "decidePins",
     "addCmChecks",
-    "viewFinancials",
+    "viewDashboard",
+    "viewFieldReports",
+    "viewBilling",
+    "viewChangeOrders",
+    "viewSchedule",
+    "viewSubs",
+    "viewProcurement",
+    "viewDocuments",
   ]),
-  sub: new Set<Capability>(["submitFieldReport"]),
+  // Subcontractor: files field reports only.
+  sub: new Set<Capability>(["viewFieldReports", "submitFieldReport"]),
 };
 
 export function can(role: EffectiveRole, cap: Capability): boolean {
@@ -97,4 +131,13 @@ export async function getEffectiveRole(): Promise<{
     return { effective: viewAs, actual };
   }
   return { effective: "full", actual };
+}
+
+// Server-side page guard. Use at the top of a page/server component to block
+// direct URL access to a view the effective role isn't allowed to see. Tab
+// hiding alone is cosmetic - this is the real enforcement. Renders a 404 so we
+// don't reveal that the resource exists.
+export async function guardCapability(cap: Capability): Promise<void> {
+  const { effective } = await getEffectiveRole();
+  if (!can(effective, cap)) notFound();
 }

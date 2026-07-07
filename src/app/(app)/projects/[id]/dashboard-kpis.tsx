@@ -4,6 +4,9 @@ import { formatCurrency } from "@/lib/format";
 
 type Props = {
   projectId: string;
+  // When false (Construction Manager), the internal Cost variance tile is
+  // omitted so AHC's cost/margin position stays Phil-only.
+  showCosts?: boolean;
 };
 
 type Kpi = {
@@ -13,7 +16,7 @@ type Kpi = {
   tone?: "default" | "warn" | "good" | "bad";
 };
 
-export async function DashboardKpis({ projectId }: Props) {
+export async function DashboardKpis({ projectId, showCosts = true }: Props) {
   const supabase = createClient();
 
   const [projectRes, billingSumRes, tasksRes, costsRes, costForecastsRes] =
@@ -96,18 +99,22 @@ export async function DashboardKpis({ projectId }: Props) {
       sub: atRisk === 0 ? "All on track" : "Tasks flagged at risk",
       tone: atRisk > 0 ? "warn" : "good",
     },
-    {
-      label: "Cost variance",
-      value:
-        variance === 0
-          ? "$0"
-          : `${variance > 0 ? "+" : "-"}${formatCurrency(Math.abs(variance))}`,
-      sub:
-        estTotal > 0
-          ? `vs ${formatCurrency(estTotal)} estimated`
-          : "No estimates set",
-      tone: variance > 0 ? "bad" : variance < 0 ? "good" : "default",
-    },
+    ...(showCosts
+      ? [
+          {
+            label: "Cost variance",
+            value:
+              variance === 0
+                ? "$0"
+                : `${variance > 0 ? "+" : "-"}${formatCurrency(Math.abs(variance))}`,
+            sub:
+              estTotal > 0
+                ? `vs ${formatCurrency(estTotal)} estimated`
+                : "No estimates set",
+            tone: (variance > 0 ? "bad" : variance < 0 ? "good" : "default") as Kpi["tone"],
+          },
+        ]
+      : []),
   ];
 
   return (
