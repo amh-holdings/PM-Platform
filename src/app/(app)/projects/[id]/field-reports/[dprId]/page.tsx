@@ -57,7 +57,7 @@ export default async function FieldReportDetailPage({
     supabase
       .from("inspections")
       .select(
-        "id, title, status, origin, basemap_key, pin_x, pin_y, inspection_type, notes, schedule_task_id, task_new_status, task_new_pct, quantity, unit_of_measure",
+        "id, title, status, origin, basemap_key, pin_x, pin_y, inspection_type, notes, decision_notes, sub_acknowledged_at, schedule_task_id, task_new_status, task_new_pct, quantity, unit_of_measure",
       )
       .eq("dpr_id", dpr.id)
       .order("origin")
@@ -128,6 +128,8 @@ export default async function FieldReportDetailPage({
     pinY: p.pin_y,
     inspectionType: p.inspection_type,
     notes: p.notes,
+    decisionNotes: p.decision_notes,
+    subAcknowledgedAt: p.sub_acknowledged_at,
     wbsLabel: p.schedule_task_id
       ? taskLabel.get(p.schedule_task_id) ?? null
       : null,
@@ -159,12 +161,20 @@ export default async function FieldReportDetailPage({
   return (
     <div className="space-y-5">
       <div>
-        <Link
-          href={`/projects/${params.id}/field-reports`}
-          className="text-xs text-muted-foreground hover:underline"
-        >
-          &larr; Field Reports
-        </Link>
+        <div className="flex items-center justify-between gap-2">
+          <Link
+            href={`/projects/${params.id}/field-reports`}
+            className="text-xs text-muted-foreground hover:underline"
+          >
+            &larr; Field Reports
+          </Link>
+          <Link
+            href={`/projects/${params.id}/field-reports/${dpr.id}/print`}
+            className="rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+          >
+            Print / PDF
+          </Link>
+        </div>
         <div className="mt-1 flex flex-wrap items-center gap-3">
           <h2 className="text-lg font-semibold">
             {formatDate(dpr.report_date)}
@@ -206,11 +216,15 @@ export default async function FieldReportDetailPage({
           <Field label="Man-hours">{dpr.total_man_hours ?? "-"}</Field>
           <Field label="Weather">{dpr.weather_conditions ?? "-"}</Field>
           <Field label="Safety">
-            {dpr.safety_incident
-              ? "Incident"
-              : dpr.near_miss
-                ? "Near miss"
-                : "OK"}
+            {dpr.safety_incident ? (
+              <span className="inline-flex items-center gap-1 rounded-md bg-red-600 px-1.5 py-0.5 text-xs font-semibold text-white">
+                ⚠ Incident
+              </span>
+            ) : dpr.near_miss ? (
+              <span className="font-medium text-amber-700">Near miss</span>
+            ) : (
+              "OK"
+            )}
           </Field>
         </div>
         {dpr.work_narrative && (

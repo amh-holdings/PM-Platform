@@ -288,10 +288,11 @@ async function rollupReportStatus(
 ): Promise<void> {
   const { data: pins } = await auth.supabase
     .from("inspections")
-    .select("status")
+    .select("status, title, decision_notes")
     .eq("dpr_id", dprId)
     .eq("origin", "sub");
-  const statuses = (pins ?? []).map((p) => p.status as InspectionStatus);
+  const rows = pins ?? [];
+  const statuses = rows.map((p) => p.status as InspectionStatus);
   const total = statuses.length;
   const rejected = statuses.some((s) => s === "rejected");
   const allApproved = total > 0 && statuses.every((s) => s === "approved");
@@ -305,6 +306,20 @@ async function rollupReportStatus(
   if (nextStatus === "approved") {
     patch.reviewed_by = auth.userId;
     patch.reviewed_at = new Date().toISOString();
+    // Clear any stale return reason so a report that was returned and later
+    // approved doesn't show the old rejection note in the "Approved" banner.
+    patch.review_notes = null;
+  } else if (nextStatus === "returned") {
+    // Roll the rejected pins' reasons up into a single report-level note so the
+    // sub's "Returned" banner explains what to fix (the per-pin reasons are also
+    // shown on each red pin).
+    const reasons = rows
+      .filter((p) => (p.status as InspectionStatus) === "rejected")
+      .map((p) => {
+        const reason = p.decision_notes?.trim();
+        return reason ? `${p.title}: ${reason}` : p.title;
+      });
+    patch.review_notes = reasons.length ? reasons.join("\n") : null;
   }
   await auth.supabase.from("dprs").update(patch).eq("id", dprId);
 

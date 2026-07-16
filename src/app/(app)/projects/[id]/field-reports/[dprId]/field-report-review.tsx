@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { formatDate } from "@/lib/format";
 import { BASEMAPS, type BasemapKey } from "@/lib/inspection-map";
 import {
   STATUS_STYLE,
@@ -37,6 +38,8 @@ export type ReviewPin = {
   pinY: number | null;
   inspectionType: string | null;
   notes: string | null;
+  decisionNotes: string | null; // CM's reason when this item was rejected
+  subAcknowledgedAt: string | null; // set when the sub confirms the record
   wbsLabel: string | null;
   progress: string | null;
   photos: ReviewPhoto[];
@@ -79,6 +82,19 @@ export function FieldReportReview({
     [subPins, sheet],
   );
   const active = subPins.find((p) => p.id === activeId) ?? null;
+
+  // Report progress: how far the CM has gotten through this report's items.
+  const progress = useMemo(() => {
+    const total = subPins.length;
+    let approved = 0;
+    let rejected = 0;
+    for (const p of subPins) {
+      if (p.status === "approved") approved += 1;
+      else if (p.status === "rejected") rejected += 1;
+    }
+    const pending = total - approved - rejected;
+    return { total, approved, rejected, pending };
+  }, [subPins]);
 
   const mapPins = onSheet.map((p) => ({
     id: p.id,
@@ -125,6 +141,42 @@ export function FieldReportReview({
       </div>
 
       <div className="space-y-3">
+        {progress.total > 0 && (
+          <div className="rounded-lg border bg-card px-3 py-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-medium">Review progress</span>
+              <span className="tabular-nums text-muted-foreground">
+                {progress.approved} of {progress.total} approved
+              </span>
+            </div>
+            <div className="mt-1.5 flex h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              {progress.approved > 0 && (
+                <div
+                  className="bg-emerald-500"
+                  style={{
+                    width: `${(progress.approved / progress.total) * 100}%`,
+                  }}
+                />
+              )}
+              {progress.rejected > 0 && (
+                <div
+                  className="bg-red-500"
+                  style={{
+                    width: `${(progress.rejected / progress.total) * 100}%`,
+                  }}
+                />
+              )}
+            </div>
+            {(progress.pending > 0 || progress.rejected > 0) && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {progress.pending > 0 && `${progress.pending} pending`}
+                {progress.pending > 0 && progress.rejected > 0 && " · "}
+                {progress.rejected > 0 && `${progress.rejected} rejected`}
+              </p>
+            )}
+          </div>
+        )}
+
         <PinList
           heading={`Subcontractor work (${subPins.length})`}
           pins={subPins}
@@ -232,14 +284,26 @@ function PinReview({
       <PhotoStrip label="CM verification photos" photos={cmPhotos} />
 
       {view === "approved" && (
-        <p className="rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
-          Approved and locked.
-        </p>
+        <div className="space-y-1 rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
+          <p>Approved and locked.</p>
+          {pin.subAcknowledgedAt && (
+            <p className="text-emerald-700">
+              Sub confirmed {formatDate(pin.subAcknowledgedAt)}.
+            </p>
+          )}
+        </div>
       )}
       {view === "rejected" && (
-        <p className="rounded-md bg-red-50 px-2 py-1 text-xs text-red-800">
-          Rejected - returned to the sub to fix and resubmit.
-        </p>
+        <div className="space-y-1 rounded-md bg-red-50 px-2 py-1.5 text-xs text-red-800">
+          <p className="font-medium">
+            Rejected - returned to the sub to fix and resubmit.
+          </p>
+          {pin.decisionNotes && (
+            <p className="whitespace-pre-wrap">
+              <span className="font-medium">Reason:</span> {pin.decisionNotes}
+            </p>
+          )}
+        </div>
       )}
 
       {/* Approver review surface, only while the item is pending. */}

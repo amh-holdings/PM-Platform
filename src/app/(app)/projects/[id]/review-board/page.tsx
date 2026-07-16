@@ -1,6 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
 import { guardCapability } from "@/lib/roles-server";
-import { finalizeGate } from "@/lib/field-report-status";
 import type { InspectionStatus } from "@/lib/inspection-status";
 
 import {
@@ -26,7 +25,9 @@ export default async function ReviewBoardPage({ params }: { params: Params }) {
   const [dprsRes, pinsRes, subsRes] = await Promise.all([
     supabase
       .from("dprs")
-      .select("id, report_date, status, submitted_at, subcontractor_id")
+      .select(
+        "id, report_date, status, submitted_at, subcontractor_id, safety_incident, near_miss",
+      )
       .eq("project_id", params.id)
       .order("report_date", { ascending: false })
       .order("submitted_at", { ascending: false }),
@@ -66,18 +67,14 @@ export default async function ReviewBoardPage({ params }: { params: Params }) {
       title: p.title,
     }));
 
-  // Per-report tallies (all pins) and sub-pin statuses (gate the state).
+  // Per-report tallies (all pins). The report's bucket (pending/rejected/
+  // approved) is rolled up client-side from these pins so the queue column and
+  // the map dot always agree.
   const tallyByDpr = new Map<string, Record<InspectionStatus, number>>();
-  const subStatusesByDpr = new Map<string, InspectionStatus[]>();
   for (const p of pins) {
     const t = tallyByDpr.get(p.dprId) ?? EMPTY_TALLY();
     t[p.status] += 1;
     tallyByDpr.set(p.dprId, t);
-    if (p.origin !== "cm") {
-      const arr = subStatusesByDpr.get(p.dprId) ?? [];
-      arr.push(p.status);
-      subStatusesByDpr.set(p.dprId, arr);
-    }
   }
 
   const reports: BoardReport[] = (dprsRes.data ?? []).map((d) => ({
@@ -87,7 +84,8 @@ export default async function ReviewBoardPage({ params }: { params: Params }) {
       : "Unassigned sub",
     reportDate: d.report_date,
     submittedAt: d.submitted_at,
-    state: finalizeGate(d.status, subStatusesByDpr.get(d.id) ?? []).state,
+    safetyIncident: Boolean(d.safety_incident),
+    nearMiss: Boolean(d.near_miss),
     tally: tallyByDpr.get(d.id) ?? EMPTY_TALLY(),
   }));
 

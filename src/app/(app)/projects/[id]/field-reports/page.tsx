@@ -26,7 +26,7 @@ export default async function FieldReportsPage({
     supabase
       .from("dprs")
       .select(
-        "id, report_date, status, submitted_at, work_narrative, subcontractor_id",
+        "id, report_date, status, submitted_at, work_narrative, subcontractor_id, safety_incident, near_miss",
       )
       .eq("project_id", params.id)
       .order("report_date", { ascending: false })
@@ -100,10 +100,7 @@ export default async function FieldReportsPage({
             {rows.map((d) => {
               const tally = pinsByDpr.get(d.id);
               const totalPins = tally
-                ? tally.submitted +
-                  tally.under_review +
-                  tally.approved +
-                  tally.rejected
+                ? tally.submitted + tally.approved + tally.rejected
                 : 0;
               return (
                 <tr
@@ -124,14 +121,25 @@ export default async function FieldReportsPage({
                       : "-"}
                   </td>
                   <td className="px-3 py-2">
-                    <span
-                      className={cn(
-                        "inline-flex rounded-full px-2 py-0.5 text-xs font-medium capitalize",
-                        DPR_TONE[d.status ?? ""] ?? "bg-muted",
-                      )}
-                    >
-                      {d.status}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={cn(
+                          "inline-flex rounded-full px-2 py-0.5 text-xs font-medium capitalize",
+                          DPR_TONE[d.status ?? ""] ?? "bg-muted",
+                        )}
+                      >
+                        {d.status}
+                      </span>
+                      {d.safety_incident ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2 py-0.5 text-xs font-semibold text-white">
+                          ⚠ Safety incident
+                        </span>
+                      ) : d.near_miss ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">
+                          Near miss
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="px-3 py-2">
                     {totalPins === 0 ? (
@@ -141,7 +149,6 @@ export default async function FieldReportsPage({
                         {(
                           [
                             "submitted",
-                            "under_review",
                             "approved",
                             "rejected",
                           ] as InspectionStatus[]

@@ -11,11 +11,6 @@ import {
   STATUS_STYLE,
   type InspectionStatus,
 } from "@/lib/inspection-status";
-import {
-  REPORT_STATE_LABEL,
-  REPORT_STATE_TONE,
-  type ReportReviewState,
-} from "@/lib/field-report-status";
 import { InspectionMap, type MapPin } from "../inspections/inspection-map";
 
 // One work pin plotted on the board map. dprId lets a click jump to its report.
@@ -35,7 +30,8 @@ export type BoardReport = {
   subName: string;
   reportDate: string;
   submittedAt: string | null;
-  state: ReportReviewState;
+  safetyIncident: boolean;
+  nearMiss: boolean;
   tally: Record<InspectionStatus, number>;
 };
 
@@ -45,19 +41,14 @@ type Props = {
   reports: BoardReport[];
 };
 
-const STATE_ORDER: ReportReviewState[] = [
-  "needs_review",
-  "in_review",
-  "ready_to_finalize",
-  "returned",
-  "approved",
-];
+// The three buckets Phil asked for: a report is Approved, Rejected (any item
+// rejected), or otherwise Pending review. Computed as a strict rollup of the
+// report's own work items so both the map dot AND the queue column can NEVER
+// disagree with the pins inside the report.
+type ReportBucket = "pending" | "rejected" | "approved";
 
-// The three buckets Phil asked for on the map: a report is Approved, Rejected
-// (any item rejected), or otherwise Pending review. Computed as a strict rollup
-// of the report's own work items so the dot color can NEVER disagree with the
-// pins inside the report.
-type ReportBucket = "approved" | "pending" | "rejected";
+// Queue column order: things needing attention first, finished reports last.
+const BUCKET_ORDER: ReportBucket[] = ["pending", "rejected", "approved"];
 
 function rollupBucket(statuses: InspectionStatus[]): ReportBucket {
   if (statuses.some((s) => s === "rejected")) return "rejected";
@@ -77,6 +68,13 @@ const BUCKET_LABEL: Record<ReportBucket, string> = {
   approved: "Approved",
   pending: "Pending",
   rejected: "Rejected",
+};
+
+// Column header tone per bucket, aligned with the pin palette.
+const BUCKET_TONE: Record<ReportBucket, string> = {
+  pending: "bg-amber-100 text-amber-900 border-amber-200",
+  rejected: "bg-red-100 text-red-900 border-red-200",
+  approved: "bg-emerald-100 text-emerald-900 border-emerald-200",
 };
 
 export function ReviewBoard({ projectId, pins, reports }: Props) {
@@ -165,20 +163,21 @@ export function ReviewBoard({ projectId, pins, reports }: Props) {
     return c;
   }, [reports, rollupByReport]);
 
-  // Reports grouped by review state, in workflow order (things needing the CM
-  // first, finished reports last).
+  // Reports grouped by the same rollup bucket that colors the dots, in workflow
+  // order (pending first, approved last), so the queue and the map agree.
   const grouped = useMemo(() => {
-    const byState = new Map<ReportReviewState, BoardReport[]>();
+    const byBucket = new Map<ReportBucket, BoardReport[]>();
     for (const r of reports) {
-      const arr = byState.get(r.state) ?? [];
+      const bucket = rollupByReport.get(r.id) ?? "pending";
+      const arr = byBucket.get(bucket) ?? [];
       arr.push(r);
-      byState.set(r.state, arr);
+      byBucket.set(bucket, arr);
     }
-    return STATE_ORDER.map((state) => ({
-      state,
-      items: byState.get(state) ?? [],
+    return BUCKET_ORDER.map((bucket) => ({
+      bucket,
+      items: byBucket.get(bucket) ?? [],
     })).filter((g) => g.items.length > 0);
-  }, [reports]);
+  }, [reports, rollupByReport]);
 
   function openReport(dprId: string) {
     router.push(`/projects/${projectId}/field-reports/${dprId}`);
@@ -246,15 +245,15 @@ export function ReviewBoard({ projectId, pins, reports }: Props) {
             </div>
           ) : (
             grouped.map((g) => (
-              <div key={g.state} className="rounded-lg border bg-card">
+              <div key={g.bucket} className="rounded-lg border bg-card">
                 <div className="flex items-center justify-between border-b px-3 py-2">
                   <span
                     className={cn(
                       "inline-flex rounded-full border px-2 py-0.5 text-xs font-medium",
-                      REPORT_STATE_TONE[g.state],
+                      BUCKET_TONE[g.bucket],
                     )}
                   >
-                    {REPORT_STATE_LABEL[g.state]}
+                    {BUCKET_LABEL[g.bucket]}
                   </span>
                   <span className="text-xs text-muted-foreground">
                     {g.items.length}
@@ -268,8 +267,18 @@ export function ReviewBoard({ projectId, pins, reports }: Props) {
                         className="block border-b px-3 py-2 last:border-0 hover:bg-muted/40"
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-sm font-medium">
-                            {r.subName}
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            {r.safetyIncident && (
+                              <span
+                                title="Safety incident reported"
+                                className="shrink-0 rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+                              >
+                                ⚠ Safety
+                              </span>
+                            )}
+                            <span className="truncate text-sm font-medium">
+                              {r.subName}
+                            </span>
                           </span>
                           <span className="shrink-0 text-xs text-muted-foreground">
                             {formatDate(r.reportDate)}
@@ -317,12 +326,9 @@ function ReportLegend() {
 }
 
 function PinTally({ tally }: { tally: Record<InspectionStatus, number> }) {
-  const order: InspectionStatus[] = [
-    "submitted",
-    "under_review",
-    "approved",
-    "rejected",
-  ];
+  // The field-report flow only ever produces these three; the legacy blue
+  // "under review" state is never shown here.
+  const order: InspectionStatus[] = ["submitted", "approved", "rejected"];
   const chips = order.filter((s) => tally[s] > 0);
   if (chips.length === 0) {
     return <p className="mt-1 text-xs text-muted-foreground">No work pins</p>;
