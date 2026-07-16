@@ -26,6 +26,11 @@ export type MapPin = {
   // 'cm' pins (Construction Manager own-checks) render square to stand apart
   // from the round subcontractor pins. Defaults to round when omitted.
   origin?: string;
+  // Larger dots read as report-level markers (one per Field Report) vs the
+  // small per-inspection pins. Defaults to the small pin when omitted.
+  size?: "sm" | "lg";
+  // Optional count badge (e.g. how many work pins a report rolls up).
+  badge?: number;
 };
 
 type Props = {
@@ -192,6 +197,16 @@ function renderPins(
         const color = STATUS_STYLE[p.status].pin;
         const active = activeId === p.id;
         const isCm = p.origin === "cm";
+        const isLarge = p.size === "lg";
+        // Large (report) markers sit a size up from the small per-pin dots so
+        // they read as roll-ups; the active ring adds one more step.
+        const sizeClass = active
+          ? isLarge
+            ? "h-7 w-7 ring-2 ring-offset-1 ring-foreground"
+            : "h-5 w-5 ring-2 ring-offset-1 ring-foreground"
+          : isLarge
+            ? "h-6 w-6"
+            : "h-4 w-4";
         return (
           <button
             key={p.id}
@@ -203,13 +218,15 @@ function renderPins(
             }}
             style={{ left: pos.left, top: pos.top, backgroundColor: color }}
             className={cn(
-              "absolute z-10 -translate-x-1/2 -translate-y-1/2 border-2 border-white shadow",
+              "absolute z-10 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-white text-[10px] font-semibold leading-none text-white shadow",
               // CM own-checks are square; subcontractor pins are round.
               isCm ? "rounded-sm" : "rounded-full",
-              active ? "h-5 w-5 ring-2 ring-offset-1 ring-foreground" : "h-4 w-4",
+              sizeClass,
             )}
             aria-label={`${isCm ? "CM check" : "Inspection"} ${p.title ?? p.id} (${STATUS_STYLE[p.status].label})`}
-          />
+          >
+            {isLarge && p.badge && p.badge > 1 ? p.badge : null}
+          </button>
         );
       })}
     </>

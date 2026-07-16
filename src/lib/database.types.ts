@@ -543,6 +543,105 @@ export type Database = {
           },
         ]
       }
+      cm_daily_logs: {
+        Row: {
+          author_id: string | null
+          created_at: string | null
+          id: string
+          log_date: string
+          progress_summary: string | null
+          project_id: string
+          safety_notes: string | null
+          site_conditions: string | null
+          temp_high: number | null
+          temp_low: number | null
+          weather_conditions: string | null
+        }
+        Insert: {
+          author_id?: string | null
+          created_at?: string | null
+          id?: string
+          log_date: string
+          progress_summary?: string | null
+          project_id: string
+          safety_notes?: string | null
+          site_conditions?: string | null
+          temp_high?: number | null
+          temp_low?: number | null
+          weather_conditions?: string | null
+        }
+        Update: {
+          author_id?: string | null
+          created_at?: string | null
+          id?: string
+          log_date?: string
+          progress_summary?: string | null
+          project_id?: string
+          safety_notes?: string | null
+          site_conditions?: string | null
+          temp_high?: number | null
+          temp_low?: number | null
+          weather_conditions?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cm_daily_logs_author_id_fkey"
+            columns: ["author_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cm_daily_logs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      cm_daily_log_photos: {
+        Row: {
+          caption: string | null
+          cm_daily_log_id: string
+          created_at: string | null
+          id: string
+          storage_path: string
+          uploaded_by: string | null
+        }
+        Insert: {
+          caption?: string | null
+          cm_daily_log_id: string
+          created_at?: string | null
+          id?: string
+          storage_path: string
+          uploaded_by?: string | null
+        }
+        Update: {
+          caption?: string | null
+          cm_daily_log_id?: string
+          created_at?: string | null
+          id?: string
+          storage_path?: string
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cm_daily_log_photos_cm_daily_log_id_fkey"
+            columns: ["cm_daily_log_id"]
+            isOneToOne: false
+            referencedRelation: "cm_daily_logs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cm_daily_log_photos_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dpr_delays: {
         Row: {
           cause_code: string

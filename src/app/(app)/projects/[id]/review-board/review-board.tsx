@@ -16,7 +16,7 @@ import {
   REPORT_STATE_TONE,
   type ReportReviewState,
 } from "@/lib/field-report-status";
-import { InspectionMap, StatusLegend } from "../inspections/inspection-map";
+import { InspectionMap, type MapPin } from "../inspections/inspection-map";
 
 // One work pin plotted on the board map. dprId lets a click jump to its report.
 export type BoardPin = {
@@ -53,6 +53,30 @@ const STATE_ORDER: ReportReviewState[] = [
   "approved",
 ];
 
+// The three buckets Phil asked for on the map: a report is Approved, Rejected
+// (returned to the sub), or otherwise Pending review. Each maps to the shared
+// QA/QC dot palette so the colors match everywhere else in the app.
+type ReportBucket = "approved" | "pending" | "rejected";
+
+function reportBucket(state: ReportReviewState): ReportBucket {
+  if (state === "approved") return "approved";
+  if (state === "returned") return "rejected";
+  return "pending";
+}
+
+// Bucket -> an InspectionStatus so InspectionMap paints the right dot color.
+const BUCKET_STATUS: Record<ReportBucket, InspectionStatus> = {
+  approved: "approved", // green
+  pending: "submitted", // amber
+  rejected: "rejected", // red
+};
+
+const BUCKET_LABEL: Record<ReportBucket, string> = {
+  approved: "Approved",
+  pending: "Pending",
+  rejected: "Rejected",
+};
+
 export function ReviewBoard({ projectId, pins, reports }: Props) {
   const router = useRouter();
 
@@ -72,33 +96,57 @@ export function ReviewBoard({ projectId, pins, reports }: Props) {
   const [sheet, setSheet] = useState<BasemapKey>(sheets[0]);
   const activeSheet = sheets.includes(sheet) ? sheet : sheets[0];
 
-  const pinByDpr = useMemo(() => new Map(pins.map((p) => [p.id, p.dprId])), [pins]);
-
-  const onSheet = useMemo(
-    () => pins.filter((p) => p.basemapKey === activeSheet),
-    [pins, activeSheet],
+  const reportById = useMemo(
+    () => new Map(reports.map((r) => [r.id, r])),
+    [reports],
   );
 
-  const mapPins = onSheet.map((p) => ({
-    id: p.id,
-    pinX: p.pinX,
-    pinY: p.pinY,
-    status: p.status,
-    title: p.title,
-    origin: p.origin,
-  }));
+  // One dot per report on the active sheet, placed at the centroid of that
+  // report's subcontractor work pins on the sheet and colored by the report's
+  // approval state. CM own-check pins don't define a report location.
+  const reportDots = useMemo<MapPin[]>(() => {
+    const byReport = new Map<string, { xs: number; ys: number; n: number }>();
+    for (const p of pins) {
+      if (p.basemapKey !== activeSheet) continue;
+      if (p.origin === "cm") continue;
+      if (p.pinX == null || p.pinY == null) continue;
+      const acc = byReport.get(p.dprId) ?? { xs: 0, ys: 0, n: 0 };
+      acc.xs += p.pinX;
+      acc.ys += p.pinY;
+      acc.n += 1;
+      byReport.set(p.dprId, acc);
+    }
+    const dots: MapPin[] = [];
+    byReport.forEach((acc, dprId) => {
+      if (acc.n === 0) return;
+      const report = reportById.get(dprId);
+      if (!report) return;
+      const bucket = reportBucket(report.state);
+      dots.push({
+        id: dprId,
+        pinX: acc.xs / acc.n,
+        pinY: acc.ys / acc.n,
+        status: BUCKET_STATUS[bucket],
+        title: `${report.subName} · ${formatDate(report.reportDate)} · ${
+          REPORT_STATE_LABEL[report.state]
+        }`,
+        size: "lg",
+        badge: acc.n,
+      });
+    });
+    return dots;
+  }, [pins, activeSheet, reportById]);
 
-  // Project-wide pin counts for the header strip.
+  // Project-wide report counts for the header strip (all sheets, all reports).
   const counts = useMemo(() => {
-    const c: Record<InspectionStatus, number> = {
-      submitted: 0,
-      under_review: 0,
+    const c: Record<ReportBucket, number> = {
       approved: 0,
+      pending: 0,
       rejected: 0,
     };
-    for (const p of pins) c[p.status] += 1;
+    for (const r of reports) c[reportBucket(r.state)] += 1;
     return c;
-  }, [pins]);
+  }, [reports]);
 
   // Reports grouped by review state, in workflow order (things needing the CM
   // first, finished reports last).
@@ -125,15 +173,15 @@ export function ReviewBoard({ projectId, pins, reports }: Props) {
         <div>
           <h2 className="text-lg font-semibold">Review Board</h2>
           <p className="text-xs text-muted-foreground">
-            Every subcontractor work pin across the project, color-coded by
-            status. Amber is new, red is rejected (waiting on the sub), green is
-            approved. Click a pin to open its report and review.
+            Every field report across the project as a dot on the site map,
+            color-coded by approval state. Green is approved, amber is pending
+            review, red is rejected (waiting on the sub). Click a dot to open the
+            report and review it.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <Count label="New" n={counts.submitted} tone="text-amber-700" />
-          <Count label="Under review" n={counts.under_review} tone="text-blue-700" />
           <Count label="Approved" n={counts.approved} tone="text-emerald-700" />
+          <Count label="Pending" n={counts.pending} tone="text-amber-700" />
           <Count label="Rejected" n={counts.rejected} tone="text-red-700" />
         </div>
       </div>
@@ -159,19 +207,17 @@ export function ReviewBoard({ projectId, pins, reports }: Props) {
                 </button>
               ))}
             </div>
-            <StatusLegend />
+            <ReportLegend />
           </div>
 
           <InspectionMap
             basemapKey={activeSheet}
-            pins={mapPins}
-            onSelect={(pinId) => {
-              const dprId = pinByDpr.get(pinId);
-              if (dprId) openReport(dprId);
-            }}
+            pins={reportDots}
+            onSelect={(dprId) => openReport(dprId)}
           />
           <p className="text-xs text-muted-foreground">
-            {BASEMAPS[activeSheet].label}. Round = sub work, square = CM check.
+            {BASEMAPS[activeSheet].label}. Each dot is one field report; the
+            number is how many work items it covers on this sheet.
           </p>
         </div>
 
@@ -232,6 +278,24 @@ function Count({ label, n, tone }: { label: string; n: number; tone: string }) {
       <span className={cn("font-semibold tabular-nums", tone)}>{n}</span>
       {label}
     </span>
+  );
+}
+
+// Three-color key for the report dots (matches BUCKET_STATUS above).
+function ReportLegend() {
+  const buckets: ReportBucket[] = ["approved", "pending", "rejected"];
+  return (
+    <div className="flex flex-wrap gap-3 text-xs">
+      {buckets.map((b) => (
+        <span key={b} className="inline-flex items-center gap-1.5">
+          <span
+            className="inline-block h-3 w-3 rounded-full border border-white shadow"
+            style={{ backgroundColor: STATUS_STYLE[BUCKET_STATUS[b]].pin }}
+          />
+          {BUCKET_LABEL[b]}
+        </span>
+      ))}
+    </div>
   );
 }
 

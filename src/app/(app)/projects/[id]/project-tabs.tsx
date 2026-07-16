@@ -23,6 +23,7 @@ export function ProjectTabs({ projectId, role }: Props) {
     { href: base, label: "Dashboard", cap: "viewDashboard" },
     { href: `${base}/field-reports`, label: "Field Reports", cap: "viewFieldReports" },
     { href: `${base}/review-board`, label: "Review Board", cap: "viewAllReports" },
+    { href: `${base}/cm-log`, label: "My Daily Log", cap: "viewAllReports" },
     { href: `${base}/billing`, label: "Billing", cap: "viewBilling" },
     { href: `${base}/pay-apps`, label: "Pay apps", cap: "viewPayApps" },
     { href: `${base}/change-orders`, label: "Change orders", cap: "viewChangeOrders" },
