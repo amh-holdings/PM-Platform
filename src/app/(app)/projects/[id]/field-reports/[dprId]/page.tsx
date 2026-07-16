@@ -8,12 +8,10 @@ import {
   isInspectionApprover,
   type InspectionStatus,
 } from "@/lib/inspection-status";
-import { finalizeGate } from "@/lib/field-report-status";
 import { cn } from "@/lib/utils";
 import { INSPECTION_BUCKET } from "../../inspections/inspection-constants";
 
 import { FieldReportReview, type ReviewPin } from "./field-report-review";
-import { FinalizeReport } from "./finalize-report";
 import { ResubmitBanner } from "./resubmit-banner";
 
 type Params = { id: string; dprId: string };
@@ -147,16 +145,11 @@ export default async function FieldReportDetailPage({
     photos: photosByPin.get(p.id) ?? [],
   }));
 
-  // Report-level finalize gate is driven only by the sub's own work pins;
-  // the CM's own-check pins (origin='cm') are independent records.
-  const subPinStatuses = reviewPins
+  // Rejected sub-pin count drives the resubmit banner on a returned report.
+  const rejectedCount = reviewPins
     .filter((p) => p.origin !== "cm")
-    .map((p) => p.status);
-  const gate = finalizeGate(dpr.status, subPinStatuses);
-  const rejectedCount = subPinStatuses.filter((s) => s === "rejected").length;
+    .filter((p) => p.status === "rejected").length;
 
-  const isApprover = isInspectionApprover({ role });
-  const reportOpen = dpr.status !== "approved" && dpr.status !== "returned";
   const canResubmit =
     dpr.status === "returned" &&
     (canReview(role) ||
@@ -235,18 +228,11 @@ export default async function FieldReportDetailPage({
         <h3 className="mb-2 text-sm font-semibold">Work on the map</h3>
         <FieldReportReview
           projectId={params.id}
-          dprId={dpr.id}
-          subcontractorId={dpr.subcontractor_id}
           pins={reviewPins}
-          tasks={taskList}
           canReview={canReview(role)}
-          canDecide={isApprover}
+          canDecide={isInspectionApprover({ role })}
         />
       </div>
-
-      {isApprover && reportOpen && gate.totalSubPins > 0 && (
-        <FinalizeReport projectId={params.id} dprId={dpr.id} gate={gate} />
-      )}
     </div>
   );
 }

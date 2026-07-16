@@ -54,13 +54,15 @@ const STATE_ORDER: ReportReviewState[] = [
 ];
 
 // The three buckets Phil asked for on the map: a report is Approved, Rejected
-// (returned to the sub), or otherwise Pending review. Each maps to the shared
-// QA/QC dot palette so the colors match everywhere else in the app.
+// (any item rejected), or otherwise Pending review. Computed as a strict rollup
+// of the report's own work items so the dot color can NEVER disagree with the
+// pins inside the report.
 type ReportBucket = "approved" | "pending" | "rejected";
 
-function reportBucket(state: ReportReviewState): ReportBucket {
-  if (state === "approved") return "approved";
-  if (state === "returned") return "rejected";
+function rollupBucket(statuses: InspectionStatus[]): ReportBucket {
+  if (statuses.some((s) => s === "rejected")) return "rejected";
+  if (statuses.length > 0 && statuses.every((s) => s === "approved"))
+    return "approved";
   return "pending";
 }
 
@@ -101,6 +103,21 @@ export function ReviewBoard({ projectId, pins, reports }: Props) {
     [reports],
   );
 
+  // Rollup bucket per report from its subcontractor work items across ALL
+  // sheets, so a report's dot color reflects its true overall status.
+  const rollupByReport = useMemo(() => {
+    const byReport = new Map<string, InspectionStatus[]>();
+    for (const p of pins) {
+      if (p.origin === "cm") continue;
+      const arr = byReport.get(p.dprId) ?? [];
+      arr.push(p.status);
+      byReport.set(p.dprId, arr);
+    }
+    const out = new Map<string, ReportBucket>();
+    byReport.forEach((statuses, dprId) => out.set(dprId, rollupBucket(statuses)));
+    return out;
+  }, [pins]);
+
   // One dot per report on the active sheet, placed at the centroid of that
   // report's subcontractor work pins on the sheet and colored by the report's
   // approval state. CM own-check pins don't define a report location.
@@ -121,21 +138,21 @@ export function ReviewBoard({ projectId, pins, reports }: Props) {
       if (acc.n === 0) return;
       const report = reportById.get(dprId);
       if (!report) return;
-      const bucket = reportBucket(report.state);
+      const bucket = rollupByReport.get(dprId) ?? "pending";
       dots.push({
         id: dprId,
         pinX: acc.xs / acc.n,
         pinY: acc.ys / acc.n,
         status: BUCKET_STATUS[bucket],
         title: `${report.subName} · ${formatDate(report.reportDate)} · ${
-          REPORT_STATE_LABEL[report.state]
+          BUCKET_LABEL[bucket]
         }`,
         size: "lg",
         badge: acc.n,
       });
     });
     return dots;
-  }, [pins, activeSheet, reportById]);
+  }, [pins, activeSheet, reportById, rollupByReport]);
 
   // Project-wide report counts for the header strip (all sheets, all reports).
   const counts = useMemo(() => {
@@ -144,9 +161,9 @@ export function ReviewBoard({ projectId, pins, reports }: Props) {
       pending: 0,
       rejected: 0,
     };
-    for (const r of reports) c[reportBucket(r.state)] += 1;
+    for (const r of reports) c[rollupByReport.get(r.id) ?? "pending"] += 1;
     return c;
-  }, [reports]);
+  }, [reports, rollupByReport]);
 
   // Reports grouped by review state, in workflow order (things needing the CM
   // first, finished reports last).

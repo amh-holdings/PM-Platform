@@ -274,6 +274,173 @@ export async function decideInspection(input: {
   return { ok: true };
 }
 
+// ============ 4b. FIELD REPORT REVIEW (streamlined per-item decide) ============
+// The Field Report flow collapses the QA/QC steps: the CM decides a submitted
+// work item in one action. Approving REQUIRES the CM's own verification photo
+// (Phil's rule: "the CM needs to add his own picture if he is approving it").
+// Both actions then roll the parent report's status up from its items, so the
+// report status can never disagree with the pins on the map.
+
+async function rollupReportStatus(
+  auth: Authed,
+  projectId: string,
+  dprId: string,
+): Promise<void> {
+  const { data: pins } = await auth.supabase
+    .from("inspections")
+    .select("status")
+    .eq("dpr_id", dprId)
+    .eq("origin", "sub");
+  const statuses = (pins ?? []).map((p) => p.status as InspectionStatus);
+  const total = statuses.length;
+  const rejected = statuses.some((s) => s === "rejected");
+  const allApproved = total > 0 && statuses.every((s) => s === "approved");
+  const nextStatus = rejected
+    ? "returned"
+    : allApproved
+      ? "approved"
+      : "submitted";
+
+  const patch: TablesUpdate<"dprs"> = { status: nextStatus };
+  if (nextStatus === "approved") {
+    patch.reviewed_by = auth.userId;
+    patch.reviewed_at = new Date().toISOString();
+  }
+  await auth.supabase.from("dprs").update(patch).eq("id", dprId);
+
+  revalidatePath(`/projects/${projectId}/review-board`);
+  revalidatePath(`/projects/${projectId}/field-reports`);
+  revalidatePath(`/projects/${projectId}/field-reports/${dprId}`);
+  revalidatePath(`/projects/${projectId}/schedule`);
+}
+
+// Load a work item, verifying it belongs to the project and is decidable.
+async function loadDecidablePin(
+  auth: Authed,
+  inspectionId: string,
+  projectId: string,
+): Promise<
+  | { ok: true; dprId: string | null; status: InspectionStatus }
+  | AuthFail
+> {
+  const { data: insp, error } = await auth.supabase
+    .from("inspections")
+    .select("id, project_id, status, dpr_id")
+    .eq("id", inspectionId)
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!insp) return { ok: false, error: "Work item not found" };
+  if (insp.project_id !== projectId)
+    return { ok: false, error: "Work item does not belong to this project" };
+  const status = insp.status as InspectionStatus;
+  if (isLocked(status))
+    return { ok: false, error: "This item is approved and locked" };
+  return { ok: true, dprId: insp.dpr_id, status };
+}
+
+export async function reviewApproveInspection(input: {
+  inspectionId: string;
+  projectId: string;
+  ahcNotes?: string | null;
+  photos?: InspectionPhotoInput[];
+}): Promise<{ ok: true } | AuthFail> {
+  const auth = await getProfile();
+  if (!auth.ok) return auth;
+  if (!isInspectionApprover({ role: auth.role, profileId: auth.userId })) {
+    return { ok: false, error: "Only the QA/QC approver may approve or reject" };
+  }
+
+  const pin = await loadDecidablePin(auth, input.inspectionId, input.projectId);
+  if (!pin.ok) return pin;
+
+  // Save the CM's verification photos/notes first (side='ahc').
+  if (input.photos?.length) {
+    const rows = input.photos.map((p) => ({
+      inspection_id: input.inspectionId,
+      side: "ahc" as const,
+      storage_path: p.storagePath,
+      caption: p.caption ?? null,
+      gps_lat: p.gpsLat ?? null,
+      gps_lng: p.gpsLng ?? null,
+      taken_at: p.takenAt ?? new Date().toISOString(),
+      uploaded_by: auth.userId,
+    }));
+    const { error } = await auth.supabase
+      .from("inspection_photos")
+      .insert(rows);
+    if (error) return { ok: false, error: `Photos failed: ${error.message}` };
+  }
+
+  // The CM must have his own photo on the item to approve it.
+  const { count } = await auth.supabase
+    .from("inspection_photos")
+    .select("id", { count: "exact", head: true })
+    .eq("inspection_id", input.inspectionId)
+    .eq("side", "ahc");
+  if (!count || count === 0) {
+    return { ok: false, error: "Add your photo before approving." };
+  }
+
+  const { error } = await auth.supabase
+    .from("inspections")
+    .update({
+      status: "approved",
+      ahc_notes: input.ahcNotes?.trim() || null,
+      reviewed_by: auth.userId,
+      decided_by: auth.userId,
+      decided_at: new Date().toISOString(),
+    })
+    .eq("id", input.inspectionId);
+  if (error) return { ok: false, error: error.message };
+
+  await applyPinProgressToSchedule(auth, input.inspectionId);
+  if (pin.dprId) await rollupReportStatus(auth, input.projectId, pin.dprId);
+
+  revalidatePath(`/projects/${input.projectId}/inspections`);
+  revalidatePath(
+    `/projects/${input.projectId}/inspections/${input.inspectionId}`,
+  );
+  return { ok: true };
+}
+
+export async function reviewRejectInspection(input: {
+  inspectionId: string;
+  projectId: string;
+  reason: string;
+}): Promise<{ ok: true } | AuthFail> {
+  const auth = await getProfile();
+  if (!auth.ok) return auth;
+  if (!isInspectionApprover({ role: auth.role, profileId: auth.userId })) {
+    return { ok: false, error: "Only the QA/QC approver may approve or reject" };
+  }
+  if (!input.reason?.trim()) {
+    return { ok: false, error: "A reason is required to reject" };
+  }
+
+  const pin = await loadDecidablePin(auth, input.inspectionId, input.projectId);
+  if (!pin.ok) return pin;
+
+  const { error } = await auth.supabase
+    .from("inspections")
+    .update({
+      status: "rejected",
+      reviewed_by: auth.userId,
+      decided_by: auth.userId,
+      decided_at: new Date().toISOString(),
+      decision_notes: input.reason.trim(),
+    })
+    .eq("id", input.inspectionId);
+  if (error) return { ok: false, error: error.message };
+
+  if (pin.dprId) await rollupReportStatus(auth, input.projectId, pin.dprId);
+
+  revalidatePath(`/projects/${input.projectId}/inspections`);
+  revalidatePath(
+    `/projects/${input.projectId}/inspections/${input.inspectionId}`,
+  );
+  return { ok: true };
+}
+
 // Push an approved pin's captured progress onto its WBS schedule task. Best
 // effort: a schedule-write failure does not roll back the approval (the
 // decision already stands); it just isn't reflected on the schedule.

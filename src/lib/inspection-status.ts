@@ -18,8 +18,11 @@ export const INSPECTION_STATUSES = [
 export type InspectionStatus = (typeof INSPECTION_STATUSES)[number];
 
 // Allowed transitions. Anything not listed is rejected.
+// The Field Report flow lets the CM decide a submitted item directly (approve
+// with his photo, or reject with a reason) - no separate "under review" step.
+// The `under_review` edges remain for the legacy standalone inspection page.
 const TRANSITIONS: Record<InspectionStatus, InspectionStatus[]> = {
-  submitted: ["under_review"],
+  submitted: ["under_review", "approved", "rejected"],
   under_review: ["approved", "rejected"],
   rejected: ["submitted"], // resubmission
   approved: [], // locked, terminal

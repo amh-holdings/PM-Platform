@@ -4,14 +4,8 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-import {
-  BASEMAPS,
-  type BasemapKey,
-  type NormalizedPin,
-} from "@/lib/inspection-map";
+import { BASEMAPS, type BasemapKey } from "@/lib/inspection-map";
 import {
   STATUS_STYLE,
   statusLabel,
@@ -22,8 +16,10 @@ import {
   PhotoUploader,
   type UploadedPhoto,
 } from "../../inspections/photo-uploader";
-import { ReviewPanel } from "../../inspections/[inspectionId]/review-panel";
-import { submitCmCheck } from "../../field-report-actions";
+import {
+  reviewApproveInspection,
+  reviewRejectInspection,
+} from "../../inspections/inspection-actions";
 
 export type ReviewPhoto = {
   url: string;
@@ -35,7 +31,7 @@ export type ReviewPin = {
   id: string;
   title: string;
   status: InspectionStatus;
-  origin: string; // 'sub' | 'cm'
+  origin: string; // 'sub' | 'cm' (cm is legacy and filtered out here)
   basemapKey: string;
   pinX: number | null;
   pinY: number | null;
@@ -46,57 +42,43 @@ export type ReviewPin = {
   photos: ReviewPhoto[];
 };
 
-type TaskOption = { id: string; wbsCode: string; taskName: string };
-
 type Props = {
   projectId: string;
-  dprId: string;
-  subcontractorId: string | null;
   pins: ReviewPin[];
-  tasks: TaskOption[];
   canReview: boolean;
   canDecide: boolean;
 };
 
+// Collapse the 4-value status enum to the 3 states the CM sees: submitted work
+// is "Pending" (yellow), plus Approved (green) and Rejected (red). The legacy
+// blue "under review" is treated as pending.
+function displayStatus(s: InspectionStatus): "pending" | "approved" | "rejected" {
+  if (s === "approved") return "approved";
+  if (s === "rejected") return "rejected";
+  return "pending";
+}
+
 export function FieldReportReview({
   projectId,
-  dprId,
-  subcontractorId,
   pins,
-  tasks,
   canReview,
   canDecide,
 }: Props) {
-  const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  // Only the subcontractor's work items are reviewed on the map. Legacy CM
+  // own-check pins ('cm') are no longer created and are hidden here.
+  const subPins = useMemo(() => pins.filter((p) => p.origin !== "cm"), [pins]);
 
-  // Default to the sheet most of the pins live on, else the first basemap.
-  const firstSheet = (pins[0]?.basemapKey as BasemapKey) ?? "C2-01";
+  const firstSheet = (subPins[0]?.basemapKey as BasemapKey) ?? "C2-01";
   const [sheet, setSheet] = useState<BasemapKey>(
     firstSheet in BASEMAPS ? firstSheet : "C2-01",
   );
   const [activeId, setActiveId] = useState<string | null>(null);
 
-  // CM own-check placement state.
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState<NormalizedPin | null>(null);
-  const [wbsTaskId, setWbsTaskId] = useState("");
-  const [notes, setNotes] = useState("");
-  const [photos, setPhotos] = useState<UploadedPhoto[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  const taskLabel = useMemo(
-    () => new Map(tasks.map((t) => [t.id, `${t.wbsCode} ${t.taskName}`])),
-    [tasks],
-  );
-
   const onSheet = useMemo(
-    () => pins.filter((p) => p.basemapKey === sheet),
-    [pins, sheet],
+    () => subPins.filter((p) => p.basemapKey === sheet),
+    [subPins, sheet],
   );
-  const active = pins.find((p) => p.id === activeId) ?? null;
-  const subPins = onSheet.filter((p) => p.origin !== "cm");
-  const cmPins = onSheet.filter((p) => p.origin === "cm");
+  const active = subPins.find((p) => p.id === activeId) ?? null;
 
   const mapPins = onSheet.map((p) => ({
     id: p.id,
@@ -107,34 +89,6 @@ export function FieldReportReview({
     origin: p.origin,
   }));
 
-  function saveCheck() {
-    setError(null);
-    if (!wbsTaskId) return setError("Pick the WBS item you checked");
-    if (!draft) return setError("Tap the map to place your check");
-    startTransition(async () => {
-      const res = await submitCmCheck({
-        projectId,
-        dprId,
-        subcontractorId,
-        title: taskLabel.get(wbsTaskId) ?? "CM check",
-        inspectionType: null,
-        scheduleTaskId: wbsTaskId,
-        notes: notes.trim() || null,
-        basemapKey: sheet,
-        pinX: draft.x,
-        pinY: draft.y,
-        photos,
-      });
-      if (!res.ok) return setError(res.error);
-      setAdding(false);
-      setDraft(null);
-      setWbsTaskId("");
-      setNotes("");
-      setPhotos([]);
-      router.refresh();
-    });
-  }
-
   return (
     <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
       <div className="space-y-2">
@@ -144,10 +98,7 @@ export function FieldReportReview({
               <button
                 key={k}
                 type="button"
-                onClick={() => {
-                  setSheet(k);
-                  setDraft(null);
-                }}
+                onClick={() => setSheet(k)}
                 className={cn(
                   "rounded-md border px-2.5 py-1 text-xs font-medium",
                   k === sheet
@@ -159,99 +110,18 @@ export function FieldReportReview({
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span className="inline-flex items-center gap-1">
-              <span className="inline-block h-3 w-3 rounded-full border border-white bg-amber-500 shadow" />
-              Sub
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="inline-block h-3 w-3 rounded-sm border border-white bg-amber-500 shadow" />
-              CM check
-            </span>
-          </div>
+          <ThreeStateLegend />
         </div>
 
         <InspectionMap
           basemapKey={sheet}
           pins={mapPins}
           activeId={activeId}
-          onSelect={adding ? undefined : setActiveId}
-          onPlace={adding ? setDraft : undefined}
-          draftPin={adding ? draft : null}
+          onSelect={setActiveId}
         />
         <p className="text-xs text-muted-foreground">
-          {BASEMAPS[sheet].label}.{" "}
-          {adding
-            ? "Tap where you inspected, then fill in the check."
-            : "Round = sub work, square = your checks. Click a pin to review."}
+          {BASEMAPS[sheet].label}. Click a work item to review it.
         </p>
-
-        {canReview && (
-          <div>
-            {adding ? (
-              <div className="space-y-2 rounded-lg border bg-card p-3">
-                <h4 className="text-sm font-semibold">Add my own check</h4>
-                <div>
-                  <Label className="text-[10px]">WBS / schedule item</Label>
-                  <select
-                    value={wbsTaskId}
-                    onChange={(e) => setWbsTaskId(e.target.value)}
-                    className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
-                  >
-                    <option value="">- Select the work item -</option>
-                    {tasks.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.wbsCode} {t.taskName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <Input
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Notes (optional)"
-                />
-                <div>
-                  <Label className="text-[10px]">Photos</Label>
-                  <PhotoUploader
-                    projectId={projectId}
-                    side="ahc"
-                    onChange={setPhotos}
-                  />
-                </div>
-                {error && <p className="text-xs text-destructive">{error}</p>}
-                <div className="flex gap-2">
-                  <Button size="sm" disabled={pending} onClick={saveCheck}>
-                    {pending ? "Saving…" : "Save check"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={pending}
-                    onClick={() => {
-                      setAdding(false);
-                      setDraft(null);
-                      setError(null);
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setAdding(true);
-                  setActiveId(null);
-                }}
-              >
-                Add my own check
-              </Button>
-            )}
-          </div>
-        )}
       </div>
 
       <div className="space-y-3">
@@ -261,70 +131,211 @@ export function FieldReportReview({
           activeId={activeId}
           onSelect={setActiveId}
         />
-        <PinList
-          heading={`My checks (${cmPins.length})`}
-          pins={cmPins}
-          activeId={activeId}
-          onSelect={setActiveId}
-        />
 
         {active && (
-          <div className="space-y-2 rounded-lg border bg-card p-3">
-            <div className="flex items-center justify-between gap-2">
-              <h4 className="text-sm font-semibold">{active.title}</h4>
-              <span
-                className={cn(
-                  "inline-flex rounded-full border px-2 py-0.5 text-xs font-medium",
-                  STATUS_STYLE[active.status].chip,
-                )}
-              >
-                {statusLabel(active.status)}
-              </span>
-            </div>
-            {active.progress && active.origin !== "cm" && (
-              <p className="rounded-md bg-muted/60 px-2 py-1 text-xs">
-                <span className="font-medium">Approving applies:</span>{" "}
-                {active.progress}
-              </p>
-            )}
-            {active.inspectionType && (
-              <p className="text-xs text-muted-foreground">
-                {active.inspectionType}
-              </p>
-            )}
-            {active.notes && (
-              <p className="whitespace-pre-wrap text-sm">{active.notes}</p>
-            )}
-            <PhotoStrip
-              label={active.origin === "cm" ? "Check photos" : "Submitted photos"}
-              photos={active.photos.filter((p) => p.side !== "ahc")}
-            />
-            <PhotoStrip
-              label="CM verification photos"
-              photos={active.photos.filter((p) => p.side === "ahc")}
-            />
-            {active.origin !== "cm" && canReview ? (
-              <ReviewPanel
-                projectId={projectId}
-                inspectionId={active.id}
-                status={active.status}
-                canDecide={canDecide}
-              />
-            ) : active.origin === "cm" ? (
-              <p className="text-xs text-muted-foreground">
-                Your own check. It stands as an independent record.
-              </p>
-            ) : null}
-          </div>
+          <PinReview
+            key={active.id}
+            projectId={projectId}
+            pin={active}
+            canReview={canReview}
+            canDecide={canDecide}
+          />
         )}
       </div>
     </div>
   );
 }
 
+// The single review surface for one work item: photos, and (for the approver)
+// approve-with-photo / reject-with-reason.
+function PinReview({
+  projectId,
+  pin,
+  canReview,
+  canDecide,
+}: {
+  projectId: string;
+  pin: ReviewPin;
+  canReview: boolean;
+  canDecide: boolean;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [notes, setNotes] = useState("");
+  const [photos, setPhotos] = useState<UploadedPhoto[]>([]);
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState("");
+
+  const view = displayStatus(pin.status);
+  const subPhotos = pin.photos.filter((p) => p.side !== "ahc");
+  const cmPhotos = pin.photos.filter((p) => p.side === "ahc");
+  const hasCmPhoto = cmPhotos.length > 0 || photos.length > 0;
+
+  function approve() {
+    setError(null);
+    if (!hasCmPhoto) return setError("Add your photo before approving.");
+    startTransition(async () => {
+      const res = await reviewApproveInspection({
+        inspectionId: pin.id,
+        projectId,
+        ahcNotes: notes.trim() || null,
+        photos,
+      });
+      if (!res.ok) return setError(res.error);
+      router.refresh();
+    });
+  }
+
+  function reject() {
+    setError(null);
+    if (!reason.trim()) return setError("A reason is required to reject.");
+    startTransition(async () => {
+      const res = await reviewRejectInspection({
+        inspectionId: pin.id,
+        projectId,
+        reason: reason.trim(),
+      });
+      if (!res.ok) return setError(res.error);
+      router.refresh();
+    });
+  }
+
+  return (
+    <div className="space-y-3 rounded-lg border bg-card p-3">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold">{pin.title}</h4>
+        <span
+          className={cn(
+            "inline-flex rounded-full border px-2 py-0.5 text-xs font-medium",
+            STATUS_STYLE[pin.status].chip,
+          )}
+        >
+          {statusLabel(pin.status)}
+        </span>
+      </div>
+
+      {pin.wbsLabel && (
+        <p className="text-xs text-muted-foreground">{pin.wbsLabel}</p>
+      )}
+      {pin.progress && (
+        <p className="rounded-md bg-muted/60 px-2 py-1 text-xs">
+          <span className="font-medium">Approving applies:</span> {pin.progress}
+        </p>
+      )}
+      {pin.inspectionType && (
+        <p className="text-xs text-muted-foreground">{pin.inspectionType}</p>
+      )}
+      {pin.notes && <p className="whitespace-pre-wrap text-sm">{pin.notes}</p>}
+
+      <PhotoStrip label="Submitted photos" photos={subPhotos} />
+      <PhotoStrip label="CM verification photos" photos={cmPhotos} />
+
+      {view === "approved" && (
+        <p className="rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
+          Approved and locked.
+        </p>
+      )}
+      {view === "rejected" && (
+        <p className="rounded-md bg-red-50 px-2 py-1 text-xs text-red-800">
+          Rejected - returned to the sub to fix and resubmit.
+        </p>
+      )}
+
+      {/* Approver review surface, only while the item is pending. */}
+      {view === "pending" && canReview && (
+        <div className="space-y-2 border-t pt-3">
+          {!canDecide ? (
+            <p className="text-xs text-muted-foreground">
+              Awaiting the QA/QC approver. Only the approver can approve or
+              reject.
+            </p>
+          ) : rejecting ? (
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground">
+                Reason for rejection (sent to the sub)
+              </label>
+              <textarea
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                rows={2}
+                className="w-full rounded-md border bg-background p-2 text-sm"
+                placeholder="What needs to be fixed?"
+              />
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={pending}
+                  onClick={reject}
+                >
+                  {pending ? "Rejecting…" : "Confirm reject"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={pending}
+                  onClick={() => {
+                    setRejecting(false);
+                    setReason("");
+                    setError(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground">
+                Your verification photo (required to approve)
+              </label>
+              <PhotoUploader
+                projectId={projectId}
+                side="ahc"
+                inspectionId={pin.id}
+                onChange={setPhotos}
+              />
+              <input
+                type="text"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Note (optional)"
+                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              />
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  disabled={pending || !hasCmPhoto}
+                  onClick={approve}
+                  title={hasCmPhoto ? undefined : "Add your photo first"}
+                >
+                  {pending ? "Approving…" : "Approve"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => {
+                    setRejecting(true);
+                    setError(null);
+                  }}
+                >
+                  Reject
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
 // Thumbnails of a pin's uploaded photos. URLs are short-lived signed links
-// minted server-side (the inspection-photos bucket is private). Tap to open
-// full size in a new tab.
+// minted server-side (the inspection-photos bucket is private).
 function PhotoStrip({
   label,
   photos,
@@ -401,6 +412,28 @@ function PinList({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+// Three-state key: Pending (yellow) / Approved (green) / Rejected (red).
+function ThreeStateLegend() {
+  const items: Array<{ label: string; color: string }> = [
+    { label: "Pending", color: STATUS_STYLE.submitted.pin },
+    { label: "Approved", color: STATUS_STYLE.approved.pin },
+    { label: "Rejected", color: STATUS_STYLE.rejected.pin },
+  ];
+  return (
+    <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+      {items.map((i) => (
+        <span key={i.label} className="inline-flex items-center gap-1.5">
+          <span
+            className="inline-block h-3 w-3 rounded-full border border-white shadow"
+            style={{ backgroundColor: i.color }}
+          />
+          {i.label}
+        </span>
+      ))}
     </div>
   );
 }
