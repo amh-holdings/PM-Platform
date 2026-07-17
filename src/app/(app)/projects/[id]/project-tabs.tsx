@@ -21,8 +21,9 @@ export function ProjectTabs({ projectId, role }: Props) {
   // legacy DPRs / QA-QC tabs are retired - Field Reports supersedes them.
   const allTabs: { href: string; label: string; cap: Capability }[] = [
     { href: base, label: "Dashboard", cap: "viewDashboard" },
+    // The Review Board map now lives inside Field Reports (top of the page for
+    // reviewers), so there is no separate tab for it.
     { href: `${base}/field-reports`, label: "Field Reports", cap: "viewFieldReports" },
-    { href: `${base}/review-board`, label: "Review Board", cap: "viewAllReports" },
     { href: `${base}/cm-log`, label: "My Daily Log", cap: "viewAllReports" },
     { href: `${base}/billing`, label: "Billing", cap: "viewBilling" },
     { href: `${base}/pay-apps`, label: "Pay apps", cap: "viewPayApps" },

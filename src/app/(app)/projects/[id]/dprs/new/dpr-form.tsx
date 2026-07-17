@@ -32,6 +32,7 @@ type WorkPin = {
   newStatus: string;
   newPct: string;
   installedQty: string;
+  unitOfMeasure: string;
   notes: string;
   photos: UploadedPhoto[];
   // A pin must be saved (all required fields filled) before the report can go.
@@ -46,6 +47,21 @@ const STATUS_OPTIONS = [
   "Awaiting",
   "Approved",
   "Rejected",
+];
+
+// Units a work item's installed quantity can be reported in.
+const UNIT_OPTIONS = [
+  "EA",
+  "LF",
+  "SF",
+  "SY",
+  "CY",
+  "LB",
+  "TON",
+  "GAL",
+  "HR",
+  "KW",
+  "LS",
 ];
 
 const DELAY_CAUSE_CODES = [
@@ -367,6 +383,7 @@ export function DprForm({
         newStatus: "In Progress",
         newPct: "",
         installedQty: "",
+        unitOfMeasure: "EA",
         notes: "",
         photos: [],
         confirmed: false,
@@ -389,6 +406,7 @@ export function DprForm({
     if (!p.newStatus) return "Pick a status";
     if (p.newPct.trim() === "") return "Enter % complete";
     if (p.installedQty.trim() === "") return "Enter installed quantity";
+    if (!p.unitOfMeasure) return "Pick a unit";
     if (p.photos.length === 0) return "Add at least one photo";
     return null;
   }
@@ -570,6 +588,7 @@ export function DprForm({
         taskNewStatus: p.wbsTaskId ? p.newStatus || null : null,
         taskNewPct: p.wbsTaskId && p.newPct ? Number(p.newPct) : null,
         installedQuantity: p.installedQty ? Number(p.installedQty) : null,
+        unitOfMeasure: p.installedQty ? p.unitOfMeasure || null : null,
         notes: p.notes.trim() || null,
         basemapKey: p.basemapKey,
         pinX: p.x,
@@ -826,7 +845,7 @@ export function DprForm({
                           </div>
                           <div className="text-xs text-muted-foreground">
                             {p.newStatus} · {p.newPct}% · {p.installedQty}{" "}
-                            installed · {p.photos.length} photo
+                            {p.unitOfMeasure} installed · {p.photos.length} photo
                             {p.photos.length === 1 ? "" : "s"}
                           </div>
                           <Button
@@ -902,17 +921,36 @@ export function DprForm({
                               <Label className="text-[10px]">
                                 Installed qty *
                               </Label>
-                              <Input
-                                type="number"
-                                step="0.001"
-                                value={p.installedQty}
-                                onChange={(e) =>
-                                  patchWorkPin(p.rowId, {
-                                    installedQty: e.target.value,
-                                  })
-                                }
-                                placeholder="required"
-                              />
+                              <div className="flex gap-1">
+                                <Input
+                                  type="number"
+                                  step="0.001"
+                                  value={p.installedQty}
+                                  onChange={(e) =>
+                                    patchWorkPin(p.rowId, {
+                                      installedQty: e.target.value,
+                                    })
+                                  }
+                                  placeholder="required"
+                                  className="min-w-0 flex-1"
+                                />
+                                <select
+                                  aria-label="Unit"
+                                  value={p.unitOfMeasure}
+                                  onChange={(e) =>
+                                    patchWorkPin(p.rowId, {
+                                      unitOfMeasure: e.target.value,
+                                    })
+                                  }
+                                  className="h-9 rounded-md border border-input bg-background px-1 text-xs"
+                                >
+                                  {UNIT_OPTIONS.map((u) => (
+                                    <option key={u} value={u}>
+                                      {u}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
                             </div>
                           </div>
 

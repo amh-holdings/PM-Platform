@@ -4,7 +4,12 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatDate } from "@/lib/format";
-import { STATUS_STYLE, type InspectionStatus } from "@/lib/inspection-status";
+import {
+  STATUS_STYLE,
+  canReview,
+  type InspectionStatus,
+} from "@/lib/inspection-status";
+import { ReviewBoard } from "../review-board/review-board";
 
 type Params = { id: string };
 
@@ -15,12 +20,34 @@ const DPR_TONE: Record<string, string> = {
   returned: "bg-destructive/10 text-destructive",
 };
 
+const EMPTY_TALLY = (): Record<InspectionStatus, number> => ({
+  submitted: 0,
+  under_review: 0,
+  approved: 0,
+  rejected: 0,
+});
+
 export default async function FieldReportsPage({
   params,
 }: {
   params: Params;
 }) {
   const supabase = createClient();
+
+  // The CM/approver gets the cross-report map overview (formerly its own Review
+  // Board tab) embedded right here, so they have one place to work from. Subs
+  // only see their own reports in the table below.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const { data: profile } = user
+    ? await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle()
+    : { data: null };
+  const isReviewer = canReview(profile?.role ?? "");
 
   const [dprsRes, pinsRes, subsRes] = await Promise.all([
     supabase
@@ -33,7 +60,7 @@ export default async function FieldReportsPage({
       .order("submitted_at", { ascending: false }),
     supabase
       .from("inspections")
-      .select("id, dpr_id, status, origin")
+      .select("id, dpr_id, status, origin, basemap_key, pin_x, pin_y, title")
       .eq("project_id", params.id)
       .not("dpr_id", "is", null),
     supabase
@@ -55,18 +82,41 @@ export default async function FieldReportsPage({
     (subsRes.data ?? []).map((s) => [s.id, s.company_name]),
   );
 
-  // Tally work pins per report by inspection status.
-  type Tally = Record<InspectionStatus, number>;
-  const pinsByDpr = new Map<string, Tally>();
+  // Tally work pins per report by inspection status (all four states).
+  const tallyByDpr = new Map<string, Record<InspectionStatus, number>>();
   for (const p of pinsRes.data ?? []) {
     if (!p.dpr_id) continue;
-    const t =
-      pinsByDpr.get(p.dpr_id) ??
-      ({ submitted: 0, under_review: 0, approved: 0, rejected: 0 } as Tally);
+    const t = tallyByDpr.get(p.dpr_id) ?? EMPTY_TALLY();
     const s = p.status as InspectionStatus;
     if (s in t) t[s] += 1;
-    pinsByDpr.set(p.dpr_id, t);
+    tallyByDpr.set(p.dpr_id, t);
   }
+
+  // Board inputs (reviewers only): every dpr-linked pin plotted on the map, and
+  // one row per report for the grouped queue.
+  const boardPins = (pinsRes.data ?? [])
+    .filter((p) => p.dpr_id)
+    .map((p) => ({
+      id: p.id,
+      dprId: p.dpr_id as string,
+      status: p.status as InspectionStatus,
+      origin: p.origin ?? "sub",
+      basemapKey: p.basemap_key ?? "C2-01",
+      pinX: p.pin_x != null ? Number(p.pin_x) : null,
+      pinY: p.pin_y != null ? Number(p.pin_y) : null,
+      title: p.title,
+    }));
+  const boardReports = rows.map((d) => ({
+    id: d.id,
+    subName: d.subcontractor_id
+      ? subName.get(d.subcontractor_id) ?? "Unassigned sub"
+      : "Unassigned sub",
+    reportDate: d.report_date,
+    submittedAt: d.submitted_at,
+    safetyIncident: Boolean(d.safety_incident),
+    nearMiss: Boolean(d.near_miss),
+    tally: tallyByDpr.get(d.id) ?? EMPTY_TALLY(),
+  }));
 
   return (
     <div className="space-y-6">
@@ -85,6 +135,14 @@ export default async function FieldReportsPage({
         </Button>
       </div>
 
+      {isReviewer && boardPins.length > 0 && (
+        <ReviewBoard
+          projectId={params.id}
+          pins={boardPins}
+          reports={boardReports}
+        />
+      )}
+
       <div className="overflow-x-auto rounded-lg border bg-card shadow-sm">
         <table className="w-full text-sm">
           <thead className="text-xs uppercase tracking-wide text-muted-foreground">
@@ -98,7 +156,7 @@ export default async function FieldReportsPage({
           </thead>
           <tbody>
             {rows.map((d) => {
-              const tally = pinsByDpr.get(d.id);
+              const tally = tallyByDpr.get(d.id);
               const totalPins = tally
                 ? tally.submitted + tally.approved + tally.rejected
                 : 0;
