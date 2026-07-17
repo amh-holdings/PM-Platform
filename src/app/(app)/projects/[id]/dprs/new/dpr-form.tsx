@@ -50,8 +50,16 @@ const STATUS_OPTIONS = [
   "Rejected",
 ];
 
-// Units a work item's installed quantity can be reported in.
+// Units a work item's installed quantity can be reported in. Solar-first units
+// (piles, modules, rows, strings, MW) lead so field crews reach them quickly;
+// MODULE counts roll up into MW installed on the dashboard.
 const UNIT_OPTIONS = [
+  "PILE",
+  "MODULE",
+  "ROW",
+  "STRING",
+  "MW",
+  "MWDC",
   "EA",
   "LF",
   "SF",

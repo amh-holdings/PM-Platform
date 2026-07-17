@@ -1522,9 +1522,11 @@ export type Database = {
           cod_date: string | null
           contract_value: number | null
           created_at: string | null
+          dc_capacity_mw: number | null
           id: string
           latitude: number | null
           longitude: number | null
+          module_watts: number | null
           name: string
           ntp_date: string | null
           owner_payment_terms_days: number | null
@@ -1541,9 +1543,11 @@ export type Database = {
           cod_date?: string | null
           contract_value?: number | null
           created_at?: string | null
+          dc_capacity_mw?: number | null
           id?: string
           latitude?: number | null
           longitude?: number | null
+          module_watts?: number | null
           name: string
           ntp_date?: string | null
           owner_payment_terms_days?: number | null
@@ -1560,9 +1564,11 @@ export type Database = {
           cod_date?: string | null
           contract_value?: number | null
           created_at?: string | null
+          dc_capacity_mw?: number | null
           id?: string
           latitude?: number | null
           longitude?: number | null
+          module_watts?: number | null
           name?: string
           ntp_date?: string | null
           owner_payment_terms_days?: number | null

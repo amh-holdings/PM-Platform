@@ -127,6 +127,8 @@ export async function updateProject(
       latitude: parseFloatField(formData.get("latitude")),
       longitude: parseFloatField(formData.get("longitude")),
       timezone: parseEnumField(formData.get("timezone")),
+      dc_capacity_mw: parseFloatField(formData.get("dc_capacity_mw")),
+      module_watts: parseFloatField(formData.get("module_watts")),
       owner_payment_terms_days: parseIntField(formData.get("owner_payment_terms_days")),
       retainage_pct_default: parseFloatField(formData.get("retainage_pct_default")),
       retainage_release_event: parseEnumField(formData.get("retainage_release_event")),

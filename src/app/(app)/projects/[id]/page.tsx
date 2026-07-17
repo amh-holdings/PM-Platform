@@ -8,6 +8,7 @@ import { DashboardKpis } from "./dashboard-kpis";
 import { DashboardMilestones } from "./dashboard-milestones";
 import { DashboardNetCash } from "./dashboard-netcash";
 import { DashboardPlanActual } from "./dashboard-plan-actual";
+import { DashboardProduction } from "./dashboard-production";
 import { DashboardProjection } from "./dashboard-projection";
 import { DashboardSchedule } from "./dashboard-schedule";
 import { redirect } from "next/navigation";
@@ -78,6 +79,7 @@ export default async function ProjectDashboardPage({ params }: { params: Params 
           title="Operations"
           sub="Schedule, field activity, blockers"
         />
+        <DashboardProduction projectId={params.id} />
         <DashboardPlanActual projectId={params.id} />
         <div className="grid gap-4 md:grid-cols-2">
           <DashboardFieldStatus projectId={params.id} />

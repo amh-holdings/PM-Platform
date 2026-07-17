@@ -48,6 +48,8 @@ create table public.projects (
   latitude numeric(9,6),
   longitude numeric(9,6),
   timezone text,
+  dc_capacity_mw numeric(10,3),
+  module_watts numeric(8,2),
   status text default 'active',
   created_at timestamptz default now()
 );

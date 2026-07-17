@@ -32,6 +32,8 @@ export type ProjectEditValues = {
   latitude: number | null;
   longitude: number | null;
   timezone: string | null;
+  dc_capacity_mw: number | null;
+  module_watts: number | null;
   owner_payment_terms_days: number | null;
   retainage_pct_default: number | null;
   retainage_release_event: string | null;
@@ -182,6 +184,38 @@ export function ProjectEditForm({ project }: { project: ProjectEditValues }) {
               name="timezone"
               defaultValue={project.timezone ?? ""}
               placeholder="America/New_York"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-md border bg-muted/30 p-4">
+        <h3 className="text-sm font-semibold">Solar system</h3>
+        <p className="text-xs text-muted-foreground">
+          Nameplate and module wattage. Installed module counts on daily reports
+          roll up into MW-installed-to-date and are shown against this nameplate.
+        </p>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="dc_capacity_mw">DC nameplate (MW)</Label>
+            <Input
+              id="dc_capacity_mw"
+              name="dc_capacity_mw"
+              type="text"
+              inputMode="decimal"
+              defaultValue={project.dc_capacity_mw ?? ""}
+              placeholder="5.0"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="module_watts">Module wattage (W)</Label>
+            <Input
+              id="module_watts"
+              name="module_watts"
+              type="text"
+              inputMode="decimal"
+              defaultValue={project.module_watts ?? ""}
+              placeholder="550"
             />
           </div>
         </div>
