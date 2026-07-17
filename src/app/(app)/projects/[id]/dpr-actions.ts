@@ -367,6 +367,91 @@ export async function approveDpr(
   return { ok: true, appliedTaskCount: applied };
 }
 
+// Copy-previous-day scaffold. Returns the most recent prior report's equipment
+// fleet and crew roster so a new report can carry them forward instead of being
+// re-typed every day. Manpower headcounts and hours come back blank on purpose -
+// the roster (who/what) carries, the daily numbers get re-verified. For a Field
+// Report we scope to the same sub when one is already chosen; otherwise we take
+// the latest report on the project (and hand back its sub so the form can
+// pre-select it). Reads run on the user's client, so RLS still applies.
+export type PreviousReportScaffold = {
+  fromDate: string;
+  reportSubId: string | null;
+  equipment: Array<{
+    equipmentName: string;
+    quantity: string;
+    onRent: boolean;
+    rentalCompany: string;
+    active: boolean;
+    notes: string;
+  }>;
+  manpower: Array<{
+    subcontractorId: string;
+    trade: string;
+    headcount: string;
+    regularHours: string;
+    otHours: string;
+    notes: string;
+  }>;
+};
+
+export async function getPreviousReportScaffold(input: {
+  projectId: string;
+  subcontractorId?: string | null;
+}): Promise<PreviousReportScaffold | null> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  let query = supabase
+    .from("dprs")
+    .select("id, report_date, subcontractor_id")
+    .eq("project_id", input.projectId)
+    .order("report_date", { ascending: false })
+    .order("submitted_at", { ascending: false })
+    .limit(1);
+  if (input.subcontractorId) {
+    query = query.eq("subcontractor_id", input.subcontractorId);
+  }
+  const { data: dpr } = await query.maybeSingle();
+  if (!dpr) return null;
+
+  const [{ data: equip }, { data: manp }] = await Promise.all([
+    supabase
+      .from("dpr_equipment")
+      .select("equipment_name, quantity, on_rent, rental_company, active, notes")
+      .eq("dpr_id", dpr.id),
+    supabase
+      .from("dpr_manpower")
+      .select("subcontractor_id, trade, headcount, regular_hours, ot_hours, notes")
+      .eq("dpr_id", dpr.id),
+  ]);
+
+  return {
+    fromDate: dpr.report_date,
+    reportSubId: dpr.subcontractor_id ?? null,
+    equipment: (equip ?? []).map((e) => ({
+      equipmentName: e.equipment_name ?? "",
+      quantity: e.quantity != null ? String(e.quantity) : "1",
+      onRent: Boolean(e.on_rent),
+      rentalCompany: e.rental_company ?? "",
+      active: e.active ?? true,
+      notes: e.notes ?? "",
+    })),
+    // Roster only - counts blanked so today's numbers are entered fresh.
+    manpower: (manp ?? []).map((m) => ({
+      subcontractorId: m.subcontractor_id ?? "",
+      trade: m.trade ?? "",
+      headcount: "",
+      regularHours: "",
+      otHours: "",
+      notes: m.notes ?? "",
+    })),
+  };
+}
+
 export async function returnDpr(
   dprId: string,
   projectId: string,

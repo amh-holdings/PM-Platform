@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { formatDate } from "@/lib/format";
 import { BASEMAPS, type BasemapKey, type NormalizedPin } from "@/lib/inspection-map";
-import { submitDpr } from "../../dpr-actions";
+import { submitDpr, getPreviousReportScaffold } from "../../dpr-actions";
 import { submitFieldReport } from "../../field-report-actions";
 import { InspectionMap } from "../../inspections/inspection-map";
 import {
@@ -214,7 +215,41 @@ export function DprForm({
   const [updates, setUpdates] = useState<Map<string, TaskUpdate>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [copyNote, setCopyNote] = useState<string | null>(null);
   const [, startTransition] = useTransition();
+
+  // Copy-previous-day: pull the last report's equipment fleet (and, for a
+  // classic DPR, the crew roster) so they are not re-typed every morning. Counts
+  // come back blank to force a fresh entry.
+  async function copyPrevious() {
+    setCopying(true);
+    setCopyNote(null);
+    setError(null);
+    const res = await getPreviousReportScaffold({
+      projectId,
+      subcontractorId: isFieldReport ? reportSubId || null : null,
+    });
+    setCopying(false);
+    if (!res) {
+      setCopyNote("No previous report to copy from.");
+      return;
+    }
+    if (res.equipment.length > 0) {
+      setEquipment(res.equipment.map((e) => ({ rowId: newRowId(), ...e })));
+    }
+    if (isFieldReport && !reportSubId && res.reportSubId) {
+      setReportSubId(res.reportSubId);
+    }
+    if (!isFieldReport && res.manpower.length > 0) {
+      setManpower(res.manpower.map((m) => ({ rowId: newRowId(), ...m })));
+    }
+    setCopyNote(
+      `Copied equipment${isFieldReport ? "" : " and crew roster"} from ${formatDate(
+        res.fromDate,
+      )}. Re-enter today's counts and hours.`,
+    );
+  }
 
   // Hydrate once from any saved draft. Runs client-only (localStorage is
   // undefined during SSR), so it lives in an effect rather than a lazy state
@@ -848,7 +883,22 @@ export function DprForm({
 
       {/* ===== Day details ===== */}
       <section className="rounded-lg border bg-card p-4 shadow-sm">
-        <h3 className="text-sm font-semibold">Day details</h3>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">Day details</h3>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={copying}
+            onClick={copyPrevious}
+            title="Bring forward equipment and crew from the last report"
+          >
+            {copying ? "Copying..." : "Copy last report"}
+          </Button>
+        </div>
+        {copyNote && (
+          <p className="mt-1 text-[11px] text-muted-foreground">{copyNote}</p>
+        )}
         <div className="mt-3 grid gap-4 sm:grid-cols-3">
           <div>
             <Label htmlFor="dpr-date">Report date</Label>
