@@ -748,8 +748,10 @@ export type Database = {
           dpr_id: string
           equipment_name: string
           id: string
+          idle_hours: number | null
           notes: string | null
           on_rent: boolean | null
+          operating_hours: number | null
           quantity: number | null
           rental_company: string | null
         }
@@ -759,8 +761,10 @@ export type Database = {
           dpr_id: string
           equipment_name: string
           id?: string
+          idle_hours?: number | null
           notes?: string | null
           on_rent?: boolean | null
+          operating_hours?: number | null
           quantity?: number | null
           rental_company?: string | null
         }
@@ -770,8 +774,10 @@ export type Database = {
           dpr_id?: string
           equipment_name?: string
           id?: string
+          idle_hours?: number | null
           notes?: string | null
           on_rent?: boolean | null
+          operating_hours?: number | null
           quantity?: number | null
           rental_company?: string | null
         }

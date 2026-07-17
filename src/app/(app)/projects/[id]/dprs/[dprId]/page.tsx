@@ -23,7 +23,7 @@ export default async function DprDetailPage({ params }: { params: Params }) {
   const { data: dpr, error } = await supabase
     .from("dprs")
     .select(
-      "id, project_id, report_date, status, work_narrative, crew_count, total_man_hours, weather_conditions, safety_incident, near_miss, safety_narrative, submitted_at, reviewed_at, review_notes",
+      "id, project_id, report_date, status, work_narrative, crew_count, total_man_hours, weather_conditions, safety_incident, near_miss, safety_narrative, toolbox_topic, toolbox_attendees, submitted_at, reviewed_at, review_notes",
     )
     .eq("id", params.dprId)
     .maybeSingle();
@@ -49,7 +49,7 @@ export default async function DprDetailPage({ params }: { params: Params }) {
       .eq("dpr_id", params.dprId),
     supabase
       .from("dpr_equipment")
-      .select("id, equipment_name, quantity, on_rent, rental_company, notes")
+      .select("id, equipment_name, quantity, on_rent, rental_company, operating_hours, idle_hours, notes")
       .eq("dpr_id", params.dprId),
     supabase
       .from("dpr_deliveries")
@@ -293,6 +293,8 @@ export default async function DprDetailPage({ params }: { params: Params }) {
                 <tr className="border-b">
                   <th className="py-1.5 pr-2 text-left font-medium">Equipment</th>
                   <th className="py-1.5 pr-2 text-right font-medium">Qty</th>
+                  <th className="py-1.5 pr-2 text-right font-medium">Op hrs</th>
+                  <th className="py-1.5 pr-2 text-right font-medium">Idle hrs</th>
                   <th className="py-1.5 pr-2 text-left font-medium">On rent</th>
                   <th className="py-1.5 pr-2 text-left font-medium">Rental</th>
                   <th className="py-1.5 text-left font-medium">Notes</th>
@@ -303,6 +305,12 @@ export default async function DprDetailPage({ params }: { params: Params }) {
                   <tr key={e.id} className="border-b last:border-0">
                     <td className="py-1.5 pr-2 font-medium">{e.equipment_name}</td>
                     <td className="py-1.5 pr-2 text-right">{e.quantity}</td>
+                    <td className="py-1.5 pr-2 text-right">
+                      {e.operating_hours ?? "-"}
+                    </td>
+                    <td className="py-1.5 pr-2 text-right">
+                      {e.idle_hours ?? "-"}
+                    </td>
                     <td className="py-1.5 pr-2">{e.on_rent ? "Yes" : "No"}</td>
                     <td className="py-1.5 pr-2">{e.rental_company ?? "-"}</td>
                     <td className="py-1.5 text-muted-foreground">
@@ -406,7 +414,10 @@ export default async function DprDetailPage({ params }: { params: Params }) {
       )}
 
       {/* ===== Safety ===== */}
-      {(dpr.safety_incident || dpr.near_miss || dpr.safety_narrative) && (
+      {(dpr.safety_incident ||
+        dpr.near_miss ||
+        dpr.safety_narrative ||
+        dpr.toolbox_topic) && (
         <section className="rounded-lg border border-amber-500/40 bg-amber-50/30 p-4 shadow-sm">
           <h3 className="text-sm font-semibold">Safety</h3>
           <div className="mt-2 flex flex-wrap gap-3 text-xs">
@@ -421,6 +432,15 @@ export default async function DprDetailPage({ params }: { params: Params }) {
               </span>
             )}
           </div>
+          {dpr.toolbox_topic && (
+            <p className="mt-2 text-sm">
+              <span className="font-medium">Toolbox talk:</span>{" "}
+              {dpr.toolbox_topic}
+              {dpr.toolbox_attendees != null
+                ? ` (${dpr.toolbox_attendees} attended)`
+                : ""}
+            </p>
+          )}
           {dpr.safety_narrative && (
             <p className="mt-2 whitespace-pre-wrap text-sm">
               {dpr.safety_narrative}

@@ -44,7 +44,7 @@ export default async function FieldReportDetailPage({
   const { data: dpr } = await supabase
     .from("dprs")
     .select(
-      "id, project_id, report_date, status, submitted_at, work_narrative, crew_count, total_man_hours, weather_conditions, safety_incident, near_miss, safety_narrative, subcontractor_id, review_notes",
+      "id, project_id, report_date, status, submitted_at, work_narrative, crew_count, total_man_hours, weather_conditions, safety_incident, near_miss, safety_narrative, toolbox_topic, toolbox_attendees, subcontractor_id, review_notes",
     )
     .eq("id", params.dprId)
     .eq("project_id", params.id)
@@ -225,6 +225,14 @@ export default async function FieldReportDetailPage({
         </div>
         {dpr.work_narrative && (
           <p className="mt-3 whitespace-pre-wrap">{dpr.work_narrative}</p>
+        )}
+        {dpr.toolbox_topic && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Toolbox talk: {dpr.toolbox_topic}
+            {dpr.toolbox_attendees != null
+              ? ` (${dpr.toolbox_attendees} attended)`
+              : ""}
+          </p>
         )}
         {dpr.safety_narrative && (
           <p className="mt-2 text-xs text-muted-foreground">

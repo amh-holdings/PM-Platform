@@ -66,6 +66,8 @@ export type DprEquipmentInput = {
   onRent: boolean;
   rentalCompany: string | null;
   active?: boolean;
+  operatingHours?: number | null;
+  idleHours?: number | null;
   notes: string | null;
 };
 
@@ -99,6 +101,8 @@ export type DprSubmitInput = {
   safetyIncident?: boolean;
   nearMiss?: boolean;
   safetyNarrative?: string | null;
+  toolboxTopic?: string | null;
+  toolboxAttendees?: number | null;
   taskUpdates: Array<{
     scheduleTaskId: string;
     newStatus?: string | null;
@@ -140,6 +144,8 @@ export async function submitDpr(input: DprSubmitInput): Promise<DprActionResult>
       safety_incident: input.safetyIncident ?? false,
       near_miss: input.nearMiss ?? false,
       safety_narrative: input.safetyNarrative ?? null,
+      toolbox_topic: input.toolboxTopic ?? null,
+      toolbox_attendees: input.toolboxAttendees ?? null,
       status: "submitted",
       submitted_at: new Date().toISOString(),
     })
@@ -218,6 +224,8 @@ export async function submitDpr(input: DprSubmitInput): Promise<DprActionResult>
         on_rent: e.onRent,
         rental_company: e.rentalCompany,
         active: e.active ?? true,
+        operating_hours: e.operatingHours ?? null,
+        idle_hours: e.idleHours ?? null,
         notes: e.notes,
       }));
     if (rows.length > 0) {
@@ -383,6 +391,8 @@ export type PreviousReportScaffold = {
     onRent: boolean;
     rentalCompany: string;
     active: boolean;
+    operatingHours: string;
+    idleHours: string;
     notes: string;
   }>;
   manpower: Array<{
@@ -438,6 +448,9 @@ export async function getPreviousReportScaffold(input: {
       onRent: Boolean(e.on_rent),
       rentalCompany: e.rental_company ?? "",
       active: e.active ?? true,
+      // Hours are daily - carry the fleet, not yesterday's hours.
+      operatingHours: "",
+      idleHours: "",
       notes: e.notes ?? "",
     })),
     // Roster only - counts blanked so today's numbers are entered fresh.

@@ -30,7 +30,7 @@ export default async function FieldReportPrintPage({
   const { data: dpr } = await supabase
     .from("dprs")
     .select(
-      "id, project_id, report_date, status, submitted_at, work_narrative, crew_count, total_man_hours, weather_conditions, safety_incident, near_miss, safety_narrative, subcontractor_id, review_notes",
+      "id, project_id, report_date, status, submitted_at, work_narrative, crew_count, total_man_hours, weather_conditions, safety_incident, near_miss, safety_narrative, toolbox_topic, toolbox_attendees, subcontractor_id, review_notes",
     )
     .eq("id", params.dprId)
     .eq("project_id", params.id)
@@ -185,14 +185,25 @@ export default async function FieldReportPrintPage({
         </section>
       )}
 
-      {dpr.safety_narrative && (
+      {(dpr.safety_narrative || dpr.toolbox_topic) && (
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
             Safety
           </h2>
-          <p className="mt-1 whitespace-pre-wrap text-sm">
-            {dpr.safety_narrative}
-          </p>
+          {dpr.toolbox_topic && (
+            <p className="mt-1 text-sm">
+              <span className="font-medium">Toolbox talk:</span>{" "}
+              {dpr.toolbox_topic}
+              {dpr.toolbox_attendees != null
+                ? ` (${dpr.toolbox_attendees} attended)`
+                : ""}
+            </p>
+          )}
+          {dpr.safety_narrative && (
+            <p className="mt-1 whitespace-pre-wrap text-sm">
+              {dpr.safety_narrative}
+            </p>
+          )}
         </section>
       )}
 

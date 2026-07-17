@@ -145,6 +145,8 @@ type EquipmentRow = {
   onRent: boolean;
   rentalCompany: string;
   active: boolean;
+  operatingHours: string;
+  idleHours: string;
   notes: string;
 };
 
@@ -212,6 +214,8 @@ export function DprForm({
   const [safetyIncident, setSafetyIncident] = useState(false);
   const [nearMiss, setNearMiss] = useState(false);
   const [safetyNarrative, setSafetyNarrative] = useState("");
+  const [toolboxTopic, setToolboxTopic] = useState("");
+  const [toolboxAttendees, setToolboxAttendees] = useState("");
 
   const [photos, setPhotos] = useState<StagedPhoto[]>([]);
   const [manpower, setManpower] = useState<ManpowerRow[]>([]);
@@ -283,6 +287,9 @@ export function DprForm({
         if (typeof d.nearMiss === "boolean") setNearMiss(d.nearMiss);
         if (typeof d.safetyNarrative === "string")
           setSafetyNarrative(d.safetyNarrative);
+        if (typeof d.toolboxTopic === "string") setToolboxTopic(d.toolboxTopic);
+        if (typeof d.toolboxAttendees === "string")
+          setToolboxAttendees(d.toolboxAttendees);
         if (Array.isArray(d.photos))
           // The blob: previewUrl does not survive a reload; blank it so the
           // uploader shows a "Saved" placeholder instead of a broken image. The
@@ -335,6 +342,8 @@ export function DprForm({
             safetyIncident,
             nearMiss,
             safetyNarrative,
+            toolboxTopic,
+            toolboxAttendees,
             photos,
             manpower,
             equipment,
@@ -362,6 +371,8 @@ export function DprForm({
     safetyIncident,
     nearMiss,
     safetyNarrative,
+    toolboxTopic,
+    toolboxAttendees,
     photos,
     manpower,
     equipment,
@@ -393,6 +404,8 @@ export function DprForm({
     setSafetyIncident(false);
     setNearMiss(false);
     setSafetyNarrative("");
+    setToolboxTopic("");
+    setToolboxAttendees("");
     setPhotos([]);
     setManpower([]);
     setEquipment([]);
@@ -450,6 +463,7 @@ export function DprForm({
       nonNeg(crewOverride, "Crew count") ??
       nonNeg(hoursPerDay, "Hours per day") ??
       nonNeg(hoursOverride, "Total man-hours") ??
+      nonNeg(toolboxAttendees, "Toolbox attendees") ??
       manpower.reduce<string | null>(
         (err, m) =>
           err ??
@@ -459,7 +473,11 @@ export function DprForm({
         null,
       ) ??
       equipment.reduce<string | null>(
-        (err, e) => err ?? nonNeg(e.quantity, "Equipment quantity"),
+        (err, e) =>
+          err ??
+          nonNeg(e.quantity, "Equipment quantity") ??
+          nonNeg(e.operatingHours, "Equipment operating hours") ??
+          nonNeg(e.idleHours, "Equipment idle hours"),
         null,
       ) ??
       deliveries.reduce<string | null>(
@@ -557,6 +575,8 @@ export function DprForm({
         onRent: false,
         rentalCompany: "",
         active: true,
+        operatingHours: "",
+        idleHours: "",
         notes: "",
       },
     ]);
@@ -726,6 +746,8 @@ export function DprForm({
       safetyIncident,
       nearMiss,
       safetyNarrative: safetyNarrative || null,
+      toolboxTopic: toolboxTopic.trim() || null,
+      toolboxAttendees: toolboxAttendees ? Number(toolboxAttendees) : null,
       taskUpdates: Array.from(updates.values()).map((u) => ({
         scheduleTaskId: u.taskId,
         newStatus: u.newStatus || null,
@@ -749,6 +771,8 @@ export function DprForm({
         onRent: e.onRent,
         rentalCompany: e.rentalCompany.trim() || null,
         active: e.active,
+        operatingHours: e.operatingHours ? Number(e.operatingHours) : null,
+        idleHours: e.idleHours ? Number(e.idleHours) : null,
         notes: e.notes.trim() || null,
       })),
       deliveries: deliveries.map((d) => ({
@@ -798,6 +822,8 @@ export function DprForm({
       safetyIncident,
       nearMiss,
       safetyNarrative: safetyNarrative || null,
+      toolboxTopic: toolboxTopic.trim() || null,
+      toolboxAttendees: toolboxAttendees ? Number(toolboxAttendees) : null,
       taskUpdates: Array.from(updates.values()).map((u) => ({
         scheduleTaskId: u.taskId,
         newStatus: u.newStatus || null,
@@ -821,6 +847,8 @@ export function DprForm({
         onRent: e.onRent,
         rentalCompany: e.rentalCompany.trim() || null,
         active: e.active,
+        operatingHours: e.operatingHours ? Number(e.operatingHours) : null,
+        idleHours: e.idleHours ? Number(e.idleHours) : null,
         notes: e.notes.trim() || null,
       })),
       deliveries: deliveries.map((d) => ({
@@ -1437,8 +1465,8 @@ export function DprForm({
                 className={cn(
                   "grid gap-2 rounded-md border bg-background p-2",
                   isFieldReport
-                    ? "sm:grid-cols-[1fr_80px_120px_auto]"
-                    : "sm:grid-cols-[1fr_80px_auto_1fr_auto]",
+                    ? "sm:grid-cols-[1fr_70px_110px_70px_70px_auto]"
+                    : "sm:grid-cols-[1fr_70px_auto_1fr_70px_70px_auto]",
                 )}
               >
                 <Input
@@ -1492,6 +1520,28 @@ export function DprForm({
                     />
                   </>
                 )}
+                <Input
+                  type="number"
+                  step="0.25"
+                  min="0"
+                  value={e.operatingHours}
+                  onChange={(ev) =>
+                    patchEquipment(e.rowId, { operatingHours: ev.target.value })
+                  }
+                  placeholder="Op hrs"
+                  title="Operating hours"
+                />
+                <Input
+                  type="number"
+                  step="0.25"
+                  min="0"
+                  value={e.idleHours}
+                  onChange={(ev) =>
+                    patchEquipment(e.rowId, { idleHours: ev.target.value })
+                  }
+                  placeholder="Idle hrs"
+                  title="Idle / standby hours"
+                />
                 <Button
                   type="button"
                   variant="ghost"
@@ -1504,7 +1554,7 @@ export function DprForm({
                   value={e.notes}
                   onChange={(ev) => patchEquipment(e.rowId, { notes: ev.target.value })}
                   placeholder="Notes (optional)"
-                  className={isFieldReport ? "sm:col-span-4" : "sm:col-span-5"}
+                  className={isFieldReport ? "sm:col-span-6" : "sm:col-span-7"}
                 />
               </div>
             ))}
@@ -1710,6 +1760,26 @@ export function DprForm({
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h3 className="text-sm font-semibold">Safety</h3>
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <div className="sm:col-span-2">
+            <Label htmlFor="dpr-toolbox">Toolbox talk topic</Label>
+            <Input
+              id="dpr-toolbox"
+              value={toolboxTopic}
+              onChange={(e) => setToolboxTopic(e.target.value)}
+              placeholder="e.g. Heat illness prevention, hydration, buddy checks"
+            />
+          </div>
+          <div>
+            <Label htmlFor="dpr-toolbox-att">Attendees</Label>
+            <Input
+              id="dpr-toolbox-att"
+              type="number"
+              min="0"
+              value={toolboxAttendees}
+              onChange={(e) => setToolboxAttendees(e.target.value)}
+              placeholder="e.g. 8"
+            />
+          </div>
           <label className="flex items-center gap-2 text-xs">
             <input
               type="checkbox"
@@ -1728,11 +1798,15 @@ export function DprForm({
           </label>
           <div className="sm:col-span-3">
             <Label htmlFor="dpr-safety">Safety narrative</Label>
-            <Input
+            <textarea
               id="dpr-safety"
+              className={cn(
+                "h-20 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              )}
               value={safetyNarrative}
               onChange={(e) => setSafetyNarrative(e.target.value)}
-              placeholder="Describe any incidents or hazards observed"
+              placeholder="Incidents, near misses, hazards observed, PPE notes, corrective actions"
             />
           </div>
         </div>
