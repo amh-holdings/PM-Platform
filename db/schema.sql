@@ -45,6 +45,9 @@ create table public.projects (
   cod_date date,
   contract_value numeric(14,2),
   zip_code text,
+  latitude numeric(9,6),
+  longitude numeric(9,6),
+  timezone text,
   status text default 'active',
   created_at timestamptz default now()
 );

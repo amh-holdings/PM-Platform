@@ -240,12 +240,21 @@ export function DprPhotoUploader({ projectId, draftId, photos, onChange }: Props
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {photos.map((p) => (
             <div key={p.photoId} className="space-y-1 rounded-md border bg-background p-2">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={p.previewUrl}
-                alt={p.fileName}
-                className="aspect-square w-full rounded object-cover"
-              />
+              {p.previewUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={p.previewUrl}
+                  alt={p.fileName}
+                  className="aspect-square w-full rounded object-cover"
+                />
+              ) : (
+                // Restored from a saved draft: the in-memory preview is gone but
+                // the upload is safe on the server.
+                <div className="flex aspect-square w-full flex-col items-center justify-center rounded border border-dashed bg-muted/40 text-center text-[10px] text-muted-foreground">
+                  <span className="font-medium">Saved photo</span>
+                  <span className="truncate px-1">{p.fileName}</span>
+                </div>
+              )}
               <select
                 value={p.photoType}
                 onChange={(e) => patchPhoto(p.photoId, { photoType: e.target.value as PhotoType })}

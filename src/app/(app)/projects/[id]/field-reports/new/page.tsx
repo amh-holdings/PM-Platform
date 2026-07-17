@@ -13,7 +13,7 @@ export default async function NewFieldReportPage({
 }) {
   const supabase = createClient();
 
-  const [tasksRes, subsRes, posRes] = await Promise.all([
+  const [tasksRes, subsRes, posRes, reportsRes] = await Promise.all([
     supabase
       .from("schedule_tasks")
       .select("id, wbs_code, task_name, phase, status, pct_complete, end_date")
@@ -31,6 +31,10 @@ export default async function NewFieldReportPage({
       .select("id, vendor_name, po_number, description")
       .eq("project_id", params.id)
       .order("ordered_date", { ascending: false, nullsFirst: false }),
+    supabase
+      .from("dprs")
+      .select("report_date, subcontractor_id")
+      .eq("project_id", params.id),
   ]);
 
   if (tasksRes.error) {
@@ -64,6 +68,11 @@ export default async function NewFieldReportPage({
     description: p.description,
   }));
 
+  const existingReports = (reportsRes.data ?? []).map((r) => ({
+    reportDate: r.report_date,
+    subcontractorId: r.subcontractor_id ?? null,
+  }));
+
   return (
     <div className="space-y-4">
       <div>
@@ -87,6 +96,7 @@ export default async function NewFieldReportPage({
         subs={subs}
         procurementOrders={procurementOrders}
         variant="fieldReport"
+        existingReports={existingReports}
       />
     </div>
   );

@@ -14,7 +14,7 @@ export default async function ProjectEditPage({ params }: { params: Params }) {
   );
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name, client, status, contract_value, ntp_date, cod_date, zip_code, owner_payment_terms_days, retainage_pct_default, retainage_release_event")
+    .select("id, name, client, status, contract_value, ntp_date, cod_date, zip_code, latitude, longitude, timezone, owner_payment_terms_days, retainage_pct_default, retainage_release_event")
     .eq("id", params.id)
     .maybeSingle();
 

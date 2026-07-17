@@ -1523,12 +1523,15 @@ export type Database = {
           contract_value: number | null
           created_at: string | null
           id: string
+          latitude: number | null
+          longitude: number | null
           name: string
           ntp_date: string | null
           owner_payment_terms_days: number | null
           retainage_pct_default: number | null
           retainage_release_event: string | null
           status: string | null
+          timezone: string | null
           zip_code: string | null
         }
         Insert: {
@@ -1539,12 +1542,15 @@ export type Database = {
           contract_value?: number | null
           created_at?: string | null
           id?: string
+          latitude?: number | null
+          longitude?: number | null
           name: string
           ntp_date?: string | null
           owner_payment_terms_days?: number | null
           retainage_pct_default?: number | null
           retainage_release_event?: string | null
           status?: string | null
+          timezone?: string | null
           zip_code?: string | null
         }
         Update: {
@@ -1555,12 +1561,15 @@ export type Database = {
           contract_value?: number | null
           created_at?: string | null
           id?: string
+          latitude?: number | null
+          longitude?: number | null
           name?: string
           ntp_date?: string | null
           owner_payment_terms_days?: number | null
           retainage_pct_default?: number | null
           retainage_release_event?: string | null
           status?: string | null
+          timezone?: string | null
           zip_code?: string | null
         }
         Relationships: [

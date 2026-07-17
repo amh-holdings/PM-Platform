@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -105,6 +105,10 @@ type Props = {
   // combined daily Field Report: DPR fields PLUS work-done pins on the site map,
   // reviewed by the Construction Manager the next day.
   variant?: "dpr" | "fieldReport";
+  // Already-filed reports for this project, used to warn (not block) when the
+  // user picks a date/sub that already has a report - a likely accidental
+  // duplicate, though a same-day correction is legitimate.
+  existingReports?: Array<{ reportDate: string; subcontractorId: string | null }>;
 };
 
 type TaskUpdate = {
@@ -169,10 +173,19 @@ export function DprForm({
   subs,
   procurementOrders,
   variant = "dpr",
+  existingReports = [],
 }: Props) {
   const router = useRouter();
   const isFieldReport = variant === "fieldReport";
   const [draftId] = useState(() => crypto.randomUUID());
+
+  // Autosave: the whole form is mirrored to localStorage so a refresh, an
+  // accidental back-nav, or a failed submit never loses a half-filled report.
+  // Photos are already uploaded to storage by the uploader, so only their
+  // (serializable) metadata is persisted here.
+  const draftKey = `dpr-draft:${projectId}:${variant}`;
+  const hydratedRef = useRef(false);
+  const [restored, setRestored] = useState(false);
 
   const [reportDate, setReportDate] = useState(todayIso());
   const [narrative, setNarrative] = useState("");
@@ -203,6 +216,150 @@ export function DprForm({
   const [submitting, setSubmitting] = useState(false);
   const [, startTransition] = useTransition();
 
+  // Hydrate once from any saved draft. Runs client-only (localStorage is
+  // undefined during SSR), so it lives in an effect rather than a lazy state
+  // initializer.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) {
+        const d = JSON.parse(raw) as Record<string, unknown>;
+        if (typeof d.reportDate === "string") setReportDate(d.reportDate);
+        if (typeof d.narrative === "string") setNarrative(d.narrative);
+        if (typeof d.weather === "string") setWeather(d.weather);
+        if (typeof d.crewOverride === "string") setCrewOverride(d.crewOverride);
+        if (typeof d.hoursOverride === "string")
+          setHoursOverride(d.hoursOverride);
+        if (typeof d.hoursPerDay === "string") setHoursPerDay(d.hoursPerDay);
+        if (typeof d.reportSubId === "string") setReportSubId(d.reportSubId);
+        if (typeof d.sheet === "string" && d.sheet in BASEMAPS)
+          setSheet(d.sheet as BasemapKey);
+        if (Array.isArray(d.workPins)) setWorkPins(d.workPins as WorkPin[]);
+        if (typeof d.safetyIncident === "boolean")
+          setSafetyIncident(d.safetyIncident);
+        if (typeof d.nearMiss === "boolean") setNearMiss(d.nearMiss);
+        if (typeof d.safetyNarrative === "string")
+          setSafetyNarrative(d.safetyNarrative);
+        if (Array.isArray(d.photos))
+          // The blob: previewUrl does not survive a reload; blank it so the
+          // uploader shows a "Saved" placeholder instead of a broken image. The
+          // storagePath is intact, so the photo still submits.
+          setPhotos(
+            (d.photos as StagedPhoto[]).map((p) => ({ ...p, previewUrl: "" })),
+          );
+        if (Array.isArray(d.manpower)) setManpower(d.manpower as ManpowerRow[]);
+        if (Array.isArray(d.equipment))
+          setEquipment(d.equipment as EquipmentRow[]);
+        if (Array.isArray(d.deliveries))
+          setDeliveries(d.deliveries as DeliveryRow[]);
+        if (Array.isArray(d.delays)) setDelays(d.delays as DelayRow[]);
+        if (Array.isArray(d.updates))
+          setUpdates(new Map(d.updates as [string, TaskUpdate][]));
+        // Only surface the "restored" banner if the draft actually held work.
+        const meaningful =
+          (typeof d.narrative === "string" && d.narrative.trim() !== "") ||
+          (Array.isArray(d.workPins) && d.workPins.length > 0) ||
+          (Array.isArray(d.updates) && d.updates.length > 0) ||
+          (Array.isArray(d.manpower) && d.manpower.length > 0) ||
+          (Array.isArray(d.photos) && d.photos.length > 0);
+        if (meaningful) setRestored(true);
+      }
+    } catch {
+      // Corrupt draft - ignore and start clean.
+    }
+    hydratedRef.current = true;
+  }, [draftKey]);
+
+  // Persist the form on every change (debounced), but never before hydration
+  // has had its chance - otherwise the initial empty state would clobber a saved
+  // draft on mount.
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          draftKey,
+          JSON.stringify({
+            reportDate,
+            narrative,
+            weather,
+            crewOverride,
+            hoursOverride,
+            hoursPerDay,
+            reportSubId,
+            sheet,
+            workPins,
+            safetyIncident,
+            nearMiss,
+            safetyNarrative,
+            photos,
+            manpower,
+            equipment,
+            deliveries,
+            delays,
+            updates: Array.from(updates.entries()),
+          }),
+        );
+      } catch {
+        // Storage full or unavailable - autosave is best-effort.
+      }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [
+    draftKey,
+    reportDate,
+    narrative,
+    weather,
+    crewOverride,
+    hoursOverride,
+    hoursPerDay,
+    reportSubId,
+    sheet,
+    workPins,
+    safetyIncident,
+    nearMiss,
+    safetyNarrative,
+    photos,
+    manpower,
+    equipment,
+    deliveries,
+    delays,
+    updates,
+  ]);
+
+  function clearDraft() {
+    try {
+      localStorage.removeItem(draftKey);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Throw away the restored draft and reset the form to a clean slate.
+  function discardDraft() {
+    clearDraft();
+    setReportDate(todayIso());
+    setNarrative("");
+    setWeather("");
+    setCrewOverride("");
+    setHoursOverride("");
+    setHoursPerDay("");
+    setReportSubId("");
+    setSheet("C2-01");
+    setWorkPins([]);
+    setSafetyIncident(false);
+    setNearMiss(false);
+    setSafetyNarrative("");
+    setPhotos([]);
+    setManpower([]);
+    setEquipment([]);
+    setDeliveries([]);
+    setDelays([]);
+    setUpdates(new Map());
+    setRestored(false);
+    setError(null);
+  }
+
   // ===== rollups =====
   const manpowerTotals = useMemo(() => {
     let headcount = 0;
@@ -224,6 +381,63 @@ export function DprForm({
   // Field Report: total man-hours is derived from crew count x hours per day.
   const fieldReportHours =
     (Number(crewOverride) || 0) * (Number(hoursPerDay) || 0);
+
+  // Warn (do not block) when a report already exists for this date. For a Field
+  // Report we key on date + sub; for a classic DPR, on the date alone.
+  const duplicateReport = useMemo(() => {
+    if (!reportDate) return false;
+    return existingReports.some(
+      (r) =>
+        r.reportDate === reportDate &&
+        (isFieldReport ? r.subcontractorId === (reportSubId || null) : true),
+    );
+  }, [existingReports, reportDate, reportSubId, isFieldReport]);
+
+  // Client-side validation run before submit: a required, non-future report
+  // date and non-negative numeric fields. Returns the first problem, or null.
+  function validateInputs(): string | null {
+    if (!reportDate) return "Report date is required";
+    if (reportDate > todayIso()) return "Report date cannot be in the future";
+    const bad = (v: string) => v.trim() !== "" && !Number.isFinite(Number(v));
+    const neg = (v: string) => v.trim() !== "" && Number(v) < 0;
+    const nonNeg = (v: string, label: string) =>
+      bad(v) || neg(v) ? `${label} must be zero or more` : null;
+
+    return (
+      nonNeg(crewOverride, "Crew count") ??
+      nonNeg(hoursPerDay, "Hours per day") ??
+      nonNeg(hoursOverride, "Total man-hours") ??
+      manpower.reduce<string | null>(
+        (err, m) =>
+          err ??
+          nonNeg(m.headcount, "Manpower headcount") ??
+          nonNeg(m.regularHours, "Manpower regular hours") ??
+          nonNeg(m.otHours, "Manpower OT hours"),
+        null,
+      ) ??
+      equipment.reduce<string | null>(
+        (err, e) => err ?? nonNeg(e.quantity, "Equipment quantity"),
+        null,
+      ) ??
+      deliveries.reduce<string | null>(
+        (err, d) => err ?? nonNeg(d.quantity, "Delivery quantity"),
+        null,
+      ) ??
+      delays.reduce<string | null>(
+        (err, d) => err ?? nonNeg(d.hoursLost, "Delay hours lost"),
+        null,
+      ) ??
+      workPins.reduce<string | null>((err, p) => {
+        if (err) return err;
+        if (p.newPct.trim() !== "") {
+          const n = Number(p.newPct);
+          if (!Number.isFinite(n) || n < 0 || n > 100)
+            return "Pin % complete must be between 0 and 100";
+        }
+        return nonNeg(p.installedQty, "Pin installed quantity");
+      }, null)
+    );
+  }
 
   // ===== task updates =====
   const filteredTasks = useMemo(() => {
@@ -427,6 +641,11 @@ export function DprForm({
 
   async function onSubmit() {
     setError(null);
+    const invalid = validateInputs();
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
     if (!narrative.trim()) {
       setError("Work narrative is required");
       return;
@@ -516,6 +735,7 @@ export function DprForm({
       setError(res.error);
       return;
     }
+    clearDraft();
     startTransition(() => {
       router.push(`/projects/${projectId}/dprs/${res.dprId}`);
     });
@@ -601,6 +821,7 @@ export function DprForm({
       setError(res.error);
       return;
     }
+    clearDraft();
     startTransition(() => {
       router.push(`/projects/${projectId}/field-reports/${res.dprId}`);
     });
@@ -608,6 +829,23 @@ export function DprForm({
 
   return (
     <div className="space-y-6">
+      {restored && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span>
+            Restored your unsaved report from this device. Keep editing, or start
+            over.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={discardDraft}
+          >
+            Discard draft
+          </Button>
+        </div>
+      )}
+
       {/* ===== Day details ===== */}
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h3 className="text-sm font-semibold">Day details</h3>
@@ -617,9 +855,17 @@ export function DprForm({
             <Input
               id="dpr-date"
               type="date"
+              max={todayIso()}
               value={reportDate}
               onChange={(e) => setReportDate(e.target.value)}
             />
+            {duplicateReport && (
+              <p className="mt-1 text-[11px] text-amber-600">
+                A report already exists for this date
+                {isFieldReport ? " and subcontractor" : ""}. You can still file
+                a correction.
+              </p>
+            )}
           </div>
           <div>
             <Label htmlFor="dpr-crew">
@@ -1258,13 +1504,21 @@ export function DprForm({
                   }
                   placeholder="Qty"
                 />
-                <Input
+                <select
+                  aria-label="Unit of measure"
                   value={d.unitOfMeasure}
                   onChange={(ev) =>
                     patchDelivery(d.rowId, { unitOfMeasure: ev.target.value })
                   }
-                  placeholder="UoM"
-                />
+                  className="h-9 rounded-md border border-input bg-background px-1 text-xs"
+                >
+                  <option value="">UoM</option>
+                  {UNIT_OPTIONS.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
                 {!isFieldReport && (
                   <select
                     value={d.procurementOrderId}
@@ -1556,7 +1810,7 @@ export function DprForm({
               </tr>
             </thead>
             <tbody>
-              {filteredTasks.slice(0, 200).map((t) => {
+              {filteredTasks.map((t) => {
                 const selected = updates.has(t.id);
                 return (
                   <tr
@@ -1589,10 +1843,9 @@ export function DprForm({
               })}
             </tbody>
           </table>
-          {filteredTasks.length > 200 && (
-            <div className="border-t bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground">
-              Showing first 200 of {filteredTasks.length} results. Narrow the
-              search.
+          {filteredTasks.length === 0 && (
+            <div className="border-t bg-muted/30 px-2 py-2 text-center text-[10px] text-muted-foreground">
+              No tasks match the search.
             </div>
           )}
         </div>

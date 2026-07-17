@@ -29,6 +29,9 @@ export type ProjectEditValues = {
   ntp_date: string | null;
   cod_date: string | null;
   zip_code: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  timezone: string | null;
   owner_payment_terms_days: number | null;
   retainage_pct_default: number | null;
   retainage_release_event: string | null;
@@ -139,6 +142,48 @@ export function ProjectEditForm({ project }: { project: ProjectEditValues }) {
             type="date"
             defaultValue={project.cod_date ?? ""}
           />
+        </div>
+      </div>
+
+      <div className="rounded-md border bg-muted/30 p-4">
+        <h3 className="text-sm font-semibold">Site location</h3>
+        <p className="text-xs text-muted-foreground">
+          Coordinates of the jobsite. Used for auto-weather on daily reports and
+          the MW-installed rollup. Enter manually for now (look them up on a map
+          if you do not have them).
+        </p>
+        <div className="mt-3 grid gap-4 sm:grid-cols-3">
+          <div className="space-y-2">
+            <Label htmlFor="latitude">Latitude</Label>
+            <Input
+              id="latitude"
+              name="latitude"
+              type="text"
+              inputMode="decimal"
+              defaultValue={project.latitude ?? ""}
+              placeholder="28.5383"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="longitude">Longitude</Label>
+            <Input
+              id="longitude"
+              name="longitude"
+              type="text"
+              inputMode="decimal"
+              defaultValue={project.longitude ?? ""}
+              placeholder="-81.3792"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="timezone">Timezone</Label>
+            <Input
+              id="timezone"
+              name="timezone"
+              defaultValue={project.timezone ?? ""}
+              placeholder="America/New_York"
+            />
+          </div>
         </div>
       </div>
 
