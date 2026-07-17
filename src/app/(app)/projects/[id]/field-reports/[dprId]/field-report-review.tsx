@@ -21,6 +21,7 @@ import {
   reviewApproveInspection,
   reviewRejectInspection,
 } from "../../inspections/inspection-actions";
+import { resubmitFieldReportPin } from "../../field-report-actions";
 
 export type ReviewPhoto = {
   url: string;
@@ -50,6 +51,9 @@ type Props = {
   pins: ReviewPin[];
   canReview: boolean;
   canDecide: boolean;
+  // The owning sub (or an AHC user) may resubmit a returned report one flagged
+  // pin at a time, from inside that pin's card.
+  canResubmit: boolean;
 };
 
 // Collapse the 4-value status enum to the 3 states the CM sees: submitted work
@@ -66,6 +70,7 @@ export function FieldReportReview({
   pins,
   canReview,
   canDecide,
+  canResubmit,
 }: Props) {
   // Only the subcontractor's work items are reviewed on the map. Legacy CM
   // own-check pins ('cm') are no longer created and are hidden here.
@@ -191,6 +196,7 @@ export function FieldReportReview({
             pin={active}
             canReview={canReview}
             canDecide={canDecide}
+            canResubmit={canResubmit}
           />
         )}
       </div>
@@ -205,11 +211,13 @@ function PinReview({
   pin,
   canReview,
   canDecide,
+  canResubmit,
 }: {
   projectId: string;
   pin: ReviewPin;
   canReview: boolean;
   canDecide: boolean;
+  canResubmit: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -218,6 +226,9 @@ function PinReview({
   const [photos, setPhotos] = useState<UploadedPhoto[]>([]);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
+  // Sub's fix surface (returned report): new photos + a required note.
+  const [fixPhotos, setFixPhotos] = useState<UploadedPhoto[]>([]);
+  const [fixNotes, setFixNotes] = useState("");
 
   const view = displayStatus(pin.status);
   const subPhotos = pin.photos.filter((p) => p.side !== "ahc");
@@ -252,6 +263,32 @@ function PinReview({
       router.refresh();
     });
   }
+
+  function resubmit() {
+    setError(null);
+    if (!fixPhotos.length)
+      return setError("Add a new photo before resubmitting.");
+    if (!fixNotes.trim())
+      return setError("Describe what you fixed before resubmitting.");
+    startTransition(async () => {
+      const res = await resubmitFieldReportPin({
+        pinId: pin.id,
+        projectId,
+        fixNotes: fixNotes.trim(),
+        photos: fixPhotos.map((ph) => ({
+          storagePath: ph.storagePath,
+          caption: ph.caption,
+          gpsLat: ph.gpsLat,
+          gpsLng: ph.gpsLng,
+          takenAt: ph.takenAt,
+        })),
+      });
+      if (!res.ok) return setError(res.error);
+      router.refresh();
+    });
+  }
+
+  const canSubmitFix = fixPhotos.length > 0 && fixNotes.trim().length > 0;
 
   return (
     <div className="space-y-3 rounded-lg border bg-card p-3">
@@ -303,6 +340,47 @@ function PinReview({
               <span className="font-medium">Reason:</span> {pin.decisionNotes}
             </p>
           )}
+        </div>
+      )}
+
+      {/* Sub's fix surface, right in the card - the same per-pin flow used when
+          first submitting: attach a new photo, say what was fixed, resubmit
+          just this item. */}
+      {view === "rejected" && canResubmit && (
+        <div className="space-y-2 border-t pt-3">
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs font-medium text-muted-foreground">
+              New photo (required)
+            </label>
+            {fixPhotos.length > 0 && (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-900">
+                {fixPhotos.length} added
+              </span>
+            )}
+          </div>
+          <PhotoUploader
+            projectId={projectId}
+            side="sub"
+            onChange={setFixPhotos}
+          />
+          <label className="text-xs font-medium text-muted-foreground">
+            What did you fix? (required)
+          </label>
+          <textarea
+            value={fixNotes}
+            onChange={(e) => setFixNotes(e.target.value)}
+            rows={2}
+            className="w-full rounded-md border bg-background p-2 text-sm"
+            placeholder="Describe the correction you made"
+          />
+          <Button
+            size="sm"
+            disabled={pending || !canSubmitFix}
+            onClick={resubmit}
+            title={canSubmitFix ? undefined : "Add a photo and describe the fix"}
+          >
+            {pending ? "Resubmitting…" : "Resubmit item"}
+          </Button>
         </div>
       )}
 

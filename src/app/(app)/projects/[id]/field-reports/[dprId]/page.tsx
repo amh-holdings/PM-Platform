@@ -12,7 +12,6 @@ import { cn } from "@/lib/utils";
 import { INSPECTION_BUCKET } from "../../inspections/inspection-constants";
 
 import { FieldReportReview, type ReviewPin } from "./field-report-review";
-import { ResubmitBanner } from "./resubmit-banner";
 
 type Params = { id: string; dprId: string };
 
@@ -147,11 +146,6 @@ export default async function FieldReportDetailPage({
     photos: photosByPin.get(p.id) ?? [],
   }));
 
-  // Rejected sub-pin count drives the resubmit banner on a returned report.
-  const rejectedCount = reviewPins
-    .filter((p) => p.origin !== "cm")
-    .filter((p) => p.status === "rejected").length;
-
   const canResubmit =
     dpr.status === "returned" &&
     (canReview(role) ||
@@ -194,13 +188,15 @@ export default async function FieldReportDetailPage({
         </p>
       </div>
 
-      {canResubmit && (
-        <ResubmitBanner
-          projectId={params.id}
-          dprId={dpr.id}
-          reviewNotes={dpr.review_notes}
-          rejectedCount={rejectedCount}
-        />
+      {dpr.status === "returned" && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+          <span className="font-medium">
+            Returned - fix the flagged (red) pins and resubmit.
+          </span>
+          {dpr.review_notes && (
+            <p className="mt-1 whitespace-pre-wrap">{dpr.review_notes}</p>
+          )}
+        </div>
       )}
 
       {dpr.status === "approved" && dpr.review_notes && (
@@ -245,6 +241,7 @@ export default async function FieldReportDetailPage({
           pins={reviewPins}
           canReview={canReview(role)}
           canDecide={isInspectionApprover({ role })}
+          canResubmit={canResubmit}
         />
       </div>
     </div>

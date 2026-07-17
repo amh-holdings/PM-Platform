@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { TablesUpdate } from "@/lib/database.types";
 import {
   canReview,
   PHOTO_SIDE_CM,
@@ -277,74 +278,140 @@ function revalidateReport(projectId: string, dprId: string) {
   revalidatePath(`/projects/${projectId}/field-reports/${dprId}`);
 }
 
-// ===== Resubmit (subcontractor) =====
-// A returned report is fixed in place: the sub's rejected pins go back to
-// 'submitted' and the report re-enters the CM's queue. Signed-in subs have no
-// UPDATE grant on inspections/dprs (RLS is insert-only for them), so - like the
-// no-login secure-link path - this runs through the service-role client after
-// an explicit ownership check. Only the owning sub (or an AHC user) may call it.
+// ===== Resubmit one pin (subcontractor) =====
+// A returned report is fixed in place, one flagged pin at a time: the sub
+// attaches a fresh photo + a note describing the fix, and that single pin goes
+// back to 'submitted' (re-entering the CM's queue) while the others are left
+// alone. The parent report's status is then re-derived from all its pins, so it
+// stays 'returned' until the LAST red pin is resubmitted, then clears itself.
+//
+// Signed-in subs have no UPDATE grant on inspections/dprs (RLS is insert-only
+// for them), so - like the no-login secure-link path - this runs through the
+// service-role client after an explicit ownership check.
 
-export async function resubmitFieldReport(
-  dprId: string,
-  projectId: string,
-): Promise<{ ok: true; resubmittedPins: number } | { ok: false; error: string }> {
+export async function resubmitFieldReportPin(input: {
+  pinId: string;
+  projectId: string;
+  fixNotes: string;
+  photos: InspectionPhotoInput[];
+}): Promise<{ ok: true } | { ok: false; error: string }> {
   const auth = await getReportProfile();
   if (!auth.ok) return auth;
+  if (!input.fixNotes?.trim())
+    return { ok: false, error: "Describe what you fixed before resubmitting." };
+  if (!input.photos?.length)
+    return { ok: false, error: "Add a new photo before resubmitting." };
 
   const admin = createAdminClient();
-  const { data: dpr, error: dprErr } = await admin
-    .from("dprs")
-    .select("id, project_id, status, subcontractor_id")
-    .eq("id", dprId)
+  const { data: pin, error: pinErr } = await admin
+    .from("inspections")
+    .select(
+      "id, project_id, dpr_id, origin, status, subcontractor_id, notes, resubmission_count",
+    )
+    .eq("id", input.pinId)
     .maybeSingle();
-  if (dprErr) return { ok: false, error: dprErr.message };
-  if (!dpr || dpr.project_id !== projectId)
-    return { ok: false, error: "Report not found" };
+  if (pinErr) return { ok: false, error: pinErr.message };
+  if (!pin || pin.project_id !== input.projectId)
+    return { ok: false, error: "Work item not found" };
+  if (pin.origin === "cm")
+    return { ok: false, error: "Not a subcontractor work item" };
+  if (pin.status !== "rejected")
+    return { ok: false, error: "Only a rejected item can be resubmitted" };
 
   const isAhc = canReview(auth.role);
   const isOwner =
     auth.subcontractorId != null &&
-    dpr.subcontractor_id === auth.subcontractorId;
-  if (!isAhc && !isOwner) {
-    return { ok: false, error: "Not authorized to resubmit this report" };
-  }
-  if (dpr.status !== "returned") {
-    return { ok: false, error: "Only a returned report can be resubmitted" };
-  }
-
-  // Rejected sub pins -> submitted, clearing the prior decision and bumping the
-  // resubmission counter (the dispute-protection trail).
-  const { data: rejected, error: rejErr } = await admin
-    .from("inspections")
-    .select("id, resubmission_count")
-    .eq("dpr_id", dprId)
-    .eq("origin", "sub")
-    .eq("status", "rejected");
-  if (rejErr) return { ok: false, error: rejErr.message };
+    pin.subcontractor_id === auth.subcontractorId;
+  if (!isAhc && !isOwner)
+    return { ok: false, error: "Not authorized to resubmit this item" };
 
   const now = new Date().toISOString();
-  for (const p of rejected ?? []) {
-    const { error } = await admin
-      .from("inspections")
-      .update({
-        status: "submitted",
-        resubmission_count: (p.resubmission_count ?? 0) + 1,
-        submitted_at: now,
-        review_started_at: null,
-        decided_by: null,
-        decided_at: null,
-        decision_notes: null,
-      })
-      .eq("id", p.id);
-    if (error) return { ok: false, error: error.message };
+  // Record the fix as a stamped line appended to the pin's notes. (No dedicated
+  // sub-fix column yet; this keeps a readable, multi-round trail the CM sees on
+  // re-review.)
+  const fixLine = `[Fix ${now.slice(0, 10)}] ${input.fixNotes.trim()}`;
+  const nextNotes = pin.notes ? `${pin.notes}\n\n${fixLine}` : fixLine;
+
+  const { error: updErr } = await admin
+    .from("inspections")
+    .update({
+      status: "submitted",
+      resubmission_count: (pin.resubmission_count ?? 0) + 1,
+      submitted_at: now,
+      review_started_at: null,
+      decided_by: null,
+      decided_at: null,
+      decision_notes: null,
+      notes: nextNotes,
+    })
+    .eq("id", pin.id);
+  if (updErr) return { ok: false, error: updErr.message };
+
+  const rows = input.photos.map((ph) => ({
+    inspection_id: pin.id,
+    side: PHOTO_SIDE_SUB,
+    storage_path: ph.storagePath,
+    caption: ph.caption ?? null,
+    gps_lat: ph.gpsLat ?? null,
+    gps_lng: ph.gpsLng ?? null,
+    taken_at: ph.takenAt ?? now,
+    uploaded_by: auth.userId,
+  }));
+  const { error: photoErr } = await admin
+    .from("inspection_photos")
+    .insert(rows);
+  if (photoErr) return { ok: false, error: photoErr.message };
+
+  if (pin.dpr_id) {
+    await rollupReportStatusAdmin(admin, pin.dpr_id, auth.userId);
+    revalidateReport(input.projectId, pin.dpr_id);
   }
+  return { ok: true };
+}
 
-  const { error: dprUpdErr } = await admin
-    .from("dprs")
-    .update({ status: "submitted", submitted_at: now })
-    .eq("id", dprId);
-  if (dprUpdErr) return { ok: false, error: dprUpdErr.message };
+// Re-derive a report's status from its sub pins using the service-role client.
+// Mirrors rollupReportStatus in inspection-actions (which runs on the CM's
+// client during review); this variant is for the sub's admin-client resubmit,
+// since the sub can't write dprs directly. Keep the two in sync.
+async function rollupReportStatusAdmin(
+  admin: ReturnType<typeof createAdminClient>,
+  dprId: string,
+  userId: string,
+): Promise<void> {
+  const { data: pins } = await admin
+    .from("inspections")
+    .select("status, title, decision_notes")
+    .eq("dpr_id", dprId)
+    .eq("origin", "sub");
+  const rows = pins ?? [];
+  const statuses = rows.map((p) => p.status);
+  const total = statuses.length;
+  const rejected = statuses.some((s) => s === "rejected");
+  const allApproved = total > 0 && statuses.every((s) => s === "approved");
+  const nextStatus = rejected
+    ? "returned"
+    : allApproved
+      ? "approved"
+      : "submitted";
 
-  revalidateReport(projectId, dprId);
-  return { ok: true, resubmittedPins: (rejected ?? []).length };
+  const patch: TablesUpdate<"dprs"> = { status: nextStatus };
+  if (nextStatus === "returned") {
+    // Rebuild the return summary from whatever pins are STILL rejected (the one
+    // just resubmitted cleared its decision_notes, so it drops out).
+    const reasons = rows
+      .filter((p) => p.status === "rejected")
+      .map((p) => {
+        const reason = p.decision_notes?.trim();
+        return reason ? `${p.title}: ${reason}` : p.title;
+      });
+    patch.review_notes = reasons.length ? reasons.join("\n") : null;
+  } else {
+    // Back in the queue (or fully approved): clear the stale return note.
+    patch.review_notes = null;
+    if (nextStatus === "approved") {
+      patch.reviewed_by = userId;
+      patch.reviewed_at = new Date().toISOString();
+    }
+  }
+  await admin.from("dprs").update(patch).eq("id", dprId);
 }
