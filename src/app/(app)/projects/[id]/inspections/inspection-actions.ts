@@ -456,7 +456,13 @@ export async function reviewRejectInspection(input: {
   return { ok: true };
 }
 
-// Push an approved pin's captured progress onto its WBS schedule task. Best
+// Push verified work onto its WBS schedule task. We do NOT blindly apply the
+// pin that was just approved - we recompute the task from the LATEST-DATED
+// approved subcontractor pin for that WBS. That keeps the schedule and billing
+// on the most recent approved report no matter what order pins are approved in:
+// clearing an older report out of the review backlog after a newer one must not
+// drag the number backward, while a genuine approved correction (a later report
+// that lowers the value) is still honored. Rejected pins never count. Best
 // effort: a schedule-write failure does not roll back the approval (the
 // decision already stands); it just isn't reflected on the schedule.
 async function applyPinProgressToSchedule(
@@ -465,23 +471,61 @@ async function applyPinProgressToSchedule(
 ): Promise<void> {
   const { data: pin } = await auth.supabase
     .from("inspections")
-    .select("schedule_task_id, task_new_status, task_new_pct, quantity")
+    .select("schedule_task_id")
     .eq("id", inspectionId)
     .maybeSingle();
   if (!pin?.schedule_task_id) return;
+  const taskId = pin.schedule_task_id;
+
+  // Every approved sub pin on this WBS task - the just-approved one plus any
+  // prior approvals. The governing value is whichever belongs to the newest
+  // report.
+  const { data: pins } = await auth.supabase
+    .from("inspections")
+    .select("task_new_status, task_new_pct, quantity, decided_at, dpr_id")
+    .eq("schedule_task_id", taskId)
+    .eq("origin", "sub")
+    .eq("status", "approved");
+  if (!pins?.length) return;
+
+  // Resolve each pin's report date. Pins with no linked DPR (legacy) sort
+  // oldest so a dated report always wins.
+  const dprIds = Array.from(
+    new Set(pins.map((p) => p.dpr_id).filter((id): id is string => Boolean(id))),
+  );
+  const reportDateById = new Map<string, string>();
+  if (dprIds.length) {
+    const { data: dprRows } = await auth.supabase
+      .from("dprs")
+      .select("id, report_date")
+      .in("id", dprIds);
+    for (const d of dprRows ?? []) reportDateById.set(d.id, d.report_date);
+  }
+  const reportDate = (p: (typeof pins)[number]) =>
+    (p.dpr_id ? reportDateById.get(p.dpr_id) : "") ?? "";
+
+  // Latest report date wins; tie-break on the most recent decision.
+  const governing = pins.slice().sort((a, b) => {
+    const da = reportDate(a);
+    const db = reportDate(b);
+    if (da !== db) return da < db ? 1 : -1;
+    const ta = a.decided_at ?? "";
+    const tb = b.decided_at ?? "";
+    return ta < tb ? 1 : ta > tb ? -1 : 0;
+  })[0];
 
   const patch: TablesUpdate<"schedule_tasks"> = {
     status_source: "dpr",
     last_dpr_at: new Date().toISOString(),
   };
-  if (pin.task_new_status) patch.status = pin.task_new_status;
-  if (pin.task_new_pct != null) patch.pct_complete = pin.task_new_pct;
-  if (pin.quantity != null) patch.installed_quantity = pin.quantity;
+  if (governing.task_new_status) patch.status = governing.task_new_status;
+  if (governing.task_new_pct != null) patch.pct_complete = governing.task_new_pct;
+  if (governing.quantity != null) patch.installed_quantity = governing.quantity;
 
   await auth.supabase
     .from("schedule_tasks")
     .update(patch)
-    .eq("id", pin.schedule_task_id);
+    .eq("id", taskId);
 }
 
 // Shared transition guard: load current status, verify project ownership and
