@@ -70,9 +70,23 @@ drop policy if exists "ahc_write_projects"          on public.projects;
 
 -- Phase 1: every authenticated user can read any project.
 -- Tighten later via subcontractor membership join when subs start signing in.
+-- Subs (sub_pm/sub_foreman) may read ONLY projects where their company is
+-- engaged; every other role reads all projects. See migration 0030. This stops
+-- subs from seeing other projects' existence and contract_value.
 create policy "authenticated_read_projects" on public.projects
   for select to authenticated
-  using (true);
+  using (
+    case
+      when public.current_user_role() in ('sub_pm', 'sub_foreman') then
+        id in (
+          select s.project_id
+          from public.subcontractors s
+          join public.profiles p on p.subcontractor_id = s.id
+          where p.id = auth.uid()
+        )
+      else true
+    end
+  );
 
 -- AHC team owns project CRUD.
 create policy "ahc_write_projects" on public.projects

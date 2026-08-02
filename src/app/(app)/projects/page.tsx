@@ -3,6 +3,8 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { can } from "@/lib/roles";
+import { getEffectiveRole } from "@/lib/roles-server";
 
 export const metadata = {
   title: "Projects - AHC PM Platform",
@@ -10,6 +12,8 @@ export const metadata = {
 
 export default async function ProjectsPage() {
   const supabase = createClient();
+  const { effective } = await getEffectiveRole();
+  const showContract = can(effective, "viewContractValue");
   const { data: projects, error } = await supabase
     .from("projects")
     .select("id, name, client, status, contract_value, ntp_date, cod_date")
@@ -57,7 +61,9 @@ export default async function ProjectsPage() {
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">NTP</th>
                 <th className="px-4 py-3 font-medium">COD</th>
-                <th className="px-4 py-3 text-right font-medium">Contract</th>
+                {showContract && (
+                  <th className="px-4 py-3 text-right font-medium">Contract</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -80,9 +86,11 @@ export default async function ProjectsPage() {
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">{formatDate(project.ntp_date)}</td>
                   <td className="px-4 py-3 text-muted-foreground">{formatDate(project.cod_date)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
-                    {formatCurrency(project.contract_value)}
-                  </td>
+                  {showContract && (
+                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                      {formatCurrency(project.contract_value)}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

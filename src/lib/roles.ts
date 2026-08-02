@@ -55,6 +55,7 @@ export type Capability =
   | "viewSubs" // Subs tab
   | "viewProcurement" // Procurement tab
   | "viewCosts" // Costs tab + all internal cost/profit/margin figures (Phil-only)
+  | "viewContractValue" // project contract $ totals; hidden from subs
   | "viewDocuments" // Documents tab
   | "viewAsToggle"; // the Phil-only "view as" switcher
 
@@ -74,6 +75,7 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewSubs",
     "viewProcurement",
     "viewCosts",
+    "viewContractValue",
     "viewDocuments",
     "viewAsToggle",
   ]),
@@ -91,6 +93,7 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewSchedule",
     "viewSubs",
     "viewProcurement",
+    "viewContractValue",
     "viewDocuments",
   ]),
   // Subcontractor: files field reports only.
