@@ -6,59 +6,165 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { createCmLog } from "../../cm-log-actions";
+import {
+  createCmLog,
+  updateCmLog,
+  finalizeCmLog,
+} from "../../cm-log-actions";
 import {
   CmLogPhotoUploader,
   type StagedCmPhoto,
 } from "./cm-log-photo-uploader";
 
-type Props = {
-  projectId: string;
-  defaultDate: string; // yyyy-mm-dd, computed server-side
+// A photo already saved on the log (edit mode). previewUrl is a signed URL.
+export type ExistingCmPhoto = {
+  id: string;
+  storagePath: string;
+  caption: string;
+  url: string;
 };
 
-export function CmLogForm({ projectId, defaultDate }: Props) {
+// When present, the form edits an existing log instead of creating a new one.
+export type CmLogInitial = {
+  logId: string;
+  logDate: string;
+  weather: string;
+  tempHigh: string;
+  tempLow: string;
+  siteConditions: string;
+  progress: string;
+  safety: string;
+  photos: ExistingCmPhoto[];
+};
+
+type Props = {
+  projectId: string;
+  defaultDate: string; // yyyy-mm-dd, computed server-side (create mode)
+  initial?: CmLogInitial;
+};
+
+export function CmLogForm({ projectId, defaultDate, initial }: Props) {
   const router = useRouter();
+  const isEdit = Boolean(initial);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   // A stable draft id so staged photo blobs share one prefix before save.
-  const draftId = useRef(crypto.randomUUID());
+  // In edit mode the log id gives new blobs a stable, log-scoped prefix.
+  const draftId = useRef(initial?.logId ?? crypto.randomUUID());
 
-  const [logDate, setLogDate] = useState(defaultDate);
-  const [weather, setWeather] = useState("");
-  const [tempHigh, setTempHigh] = useState("");
-  const [tempLow, setTempLow] = useState("");
-  const [siteConditions, setSiteConditions] = useState("");
-  const [progress, setProgress] = useState("");
-  const [safety, setSafety] = useState("");
+  const [logDate, setLogDate] = useState(initial?.logDate ?? defaultDate);
+  const [weather, setWeather] = useState(initial?.weather ?? "");
+  const [tempHigh, setTempHigh] = useState(initial?.tempHigh ?? "");
+  const [tempLow, setTempLow] = useState(initial?.tempLow ?? "");
+  const [siteConditions, setSiteConditions] = useState(
+    initial?.siteConditions ?? "",
+  );
+  const [progress, setProgress] = useState(initial?.progress ?? "");
+  const [safety, setSafety] = useState(initial?.safety ?? "");
+
+  // Newly staged (uploaded-but-not-recorded) photos.
   const [photos, setPhotos] = useState<StagedCmPhoto[]>([]);
+  // Photos already on the log (edit mode), minus any the CM removed here.
+  const [existing, setExisting] = useState<ExistingCmPhoto[]>(
+    initial?.photos ?? [],
+  );
+  const [removedIds, setRemovedIds] = useState<string[]>([]);
 
   function numOrNull(v: string): number | null {
     const n = Number(v);
     return v.trim() === "" || Number.isNaN(n) ? null : n;
   }
 
-  function save() {
-    setError(null);
-    if (!logDate) return setError("Pick a date for the log");
-    startTransition(async () => {
-      const res = await createCmLog({
+  function removeExisting(id: string) {
+    setExisting((prev) => prev.filter((p) => p.id !== id));
+    setRemovedIds((prev) => [...prev, id]);
+  }
+
+  function patchExistingCaption(id: string, caption: string) {
+    setExisting((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, caption } : p)),
+    );
+  }
+
+  function fieldValues() {
+    return {
+      logDate,
+      weatherConditions: weather.trim() || null,
+      tempHigh: numOrNull(tempHigh),
+      tempLow: numOrNull(tempLow),
+      siteConditions: siteConditions.trim() || null,
+      progressSummary: progress.trim() || null,
+      safetyNotes: safety.trim() || null,
+    };
+  }
+
+  function newPhotoInputs() {
+    return photos.map((p) => ({
+      storagePath: p.storagePath,
+      caption: p.caption.trim() || null,
+    }));
+  }
+
+  // Persist the current form. Returns the log id, or null on error (message set).
+  async function persist(): Promise<string | null> {
+    if (!logDate) {
+      setError("Pick a date for the log");
+      return null;
+    }
+    if (isEdit && initial) {
+      const res = await updateCmLog({
+        logId: initial.logId,
         projectId,
-        logDate,
-        weatherConditions: weather.trim() || null,
-        tempHigh: numOrNull(tempHigh),
-        tempLow: numOrNull(tempLow),
-        siteConditions: siteConditions.trim() || null,
-        progressSummary: progress.trim() || null,
-        safetyNotes: safety.trim() || null,
-        photos: photos.map((p) => ({
-          storagePath: p.storagePath,
+        ...fieldValues(),
+        newPhotos: newPhotoInputs(),
+        removedPhotoIds: removedIds,
+        photoCaptions: existing.map((p) => ({
+          id: p.id,
           caption: p.caption.trim() || null,
         })),
       });
+      if (!res.ok) {
+        setError(res.error);
+        return null;
+      }
+      return res.logId;
+    }
+    const res = await createCmLog({
+      projectId,
+      ...fieldValues(),
+      photos: newPhotoInputs(),
+    });
+    if (!res.ok) {
+      setError(res.error);
+      return null;
+    }
+    return res.logId;
+  }
+
+  function save() {
+    setError(null);
+    startTransition(async () => {
+      const logId = await persist();
+      if (!logId) return;
+      // After a create, drop into edit mode so the CM keeps building the log
+      // through the day. After an edit save, go to the detail view.
+      const dest = isEdit
+        ? `/projects/${projectId}/cm-log/${logId}`
+        : `/projects/${projectId}/cm-log/${logId}/edit`;
+      router.push(dest);
+      router.refresh();
+    });
+  }
+
+  function saveAndFinalize() {
+    setError(null);
+    startTransition(async () => {
+      const logId = await persist();
+      if (!logId) return;
+      const res = await finalizeCmLog(logId, projectId);
       if (!res.ok) return setError(res.error);
-      router.push(`/projects/${projectId}/cm-log/${res.logId}`);
+      router.push(`/projects/${projectId}/cm-log/${logId}`);
       router.refresh();
     });
   }
@@ -136,8 +242,47 @@ export function CmLogForm({ projectId, defaultDate }: Props) {
         />
       </div>
 
+      {isEdit && existing.length > 0 && (
+        <div>
+          <Label className="text-xs">Photos on this log</Label>
+          <div className="mt-1 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {existing.map((p) => (
+              <div
+                key={p.id}
+                className="space-y-1 rounded-md border bg-background p-2"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={p.url}
+                  alt={p.caption || "CM log photo"}
+                  className="aspect-square w-full rounded object-cover"
+                />
+                <input
+                  type="text"
+                  value={p.caption}
+                  onChange={(e) => patchExistingCaption(p.id, e.target.value)}
+                  placeholder="Caption (optional)"
+                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-full text-xs text-destructive hover:text-destructive"
+                  onClick={() => removeExisting(p.id)}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div>
-        <Label className="text-xs">Photos</Label>
+        <Label className="text-xs">
+          {isEdit ? "Add photos" : "Photos"}
+        </Label>
         <CmLogPhotoUploader
           projectId={projectId}
           draftId={draftId.current}
@@ -148,18 +293,41 @@ export function CmLogForm({ projectId, defaultDate }: Props) {
 
       {error && <p className="text-xs text-destructive">{error}</p>}
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Button disabled={pending} onClick={save}>
-          {pending ? "Saving…" : "Save daily log"}
+          {pending
+            ? "Saving…"
+            : isEdit
+              ? "Save"
+              : "Save daily log"}
+        </Button>
+        <Button
+          variant="secondary"
+          disabled={pending}
+          onClick={saveAndFinalize}
+        >
+          {pending ? "Saving…" : "Save & Finalize"}
         </Button>
         <Button
           variant="ghost"
           disabled={pending}
-          onClick={() => router.push(`/projects/${projectId}/cm-log`)}
+          onClick={() =>
+            router.push(
+              isEdit && initial
+                ? `/projects/${projectId}/cm-log/${initial.logId}`
+                : `/projects/${projectId}/cm-log`,
+            )
+          }
         >
           Cancel
         </Button>
       </div>
+      {!isEdit && (
+        <p className="text-xs text-muted-foreground">
+          Save to keep a draft you can add notes and photos to through the day.
+          Finalize when it&apos;s the final record for the day.
+        </p>
+      )}
     </div>
   );
 }

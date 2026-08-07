@@ -15,7 +15,7 @@ export default async function CmLogListPage({ params }: { params: Params }) {
     supabase
       .from("cm_daily_logs")
       .select(
-        "id, log_date, weather_conditions, progress_summary, site_conditions",
+        "id, status, log_date, weather_conditions, progress_summary, site_conditions",
       )
       .eq("project_id", params.id)
       .order("log_date", { ascending: false }),
@@ -63,6 +63,7 @@ export default async function CmLogListPage({ params }: { params: Params }) {
           <thead className="text-xs uppercase tracking-wide text-muted-foreground">
             <tr className="border-b">
               <th className="px-3 py-2 text-left font-medium">Date</th>
+              <th className="px-3 py-2 text-left font-medium">Status</th>
               <th className="px-3 py-2 text-left font-medium">Weather</th>
               <th className="px-3 py-2 text-left font-medium">Summary</th>
               <th className="px-3 py-2 text-left font-medium">Photos</th>
@@ -85,6 +86,17 @@ export default async function CmLogListPage({ params }: { params: Params }) {
                     </Link>
                   </td>
                   <td className="px-3 py-2 text-xs">
+                    {r.status === "final" ? (
+                      <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-600 dark:text-emerald-400">
+                        Finalized
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-amber-500/10 px-2 py-0.5 font-medium text-amber-600 dark:text-amber-400">
+                        Draft
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-xs">
                     {r.weather_conditions ?? "-"}
                   </td>
                   <td className="max-w-xs truncate px-3 py-2 text-xs text-muted-foreground">
@@ -99,7 +111,7 @@ export default async function CmLogListPage({ params }: { params: Params }) {
             {rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={4}
+                  colSpan={5}
                   className="px-3 py-6 text-center text-xs text-muted-foreground"
                 >
                   No daily logs yet. Click &quot;New Daily Log&quot; to file the

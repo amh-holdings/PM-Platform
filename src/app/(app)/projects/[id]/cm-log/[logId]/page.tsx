@@ -5,6 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 import { guardCapability } from "@/lib/roles-server";
 import { formatDate } from "@/lib/format";
 
+import { CmLogStatusActions } from "./cm-log-status-actions";
+
 const CM_LOG_PHOTO_BUCKET = "dpr-photos";
 
 type Params = { id: string; logId: string };
@@ -20,7 +22,7 @@ export default async function CmLogDetailPage({
   const { data: log } = await supabase
     .from("cm_daily_logs")
     .select(
-      "id, log_date, weather_conditions, temp_high, temp_low, site_conditions, progress_summary, safety_notes",
+      "id, status, finalized_at, log_date, weather_conditions, temp_high, temp_low, site_conditions, progress_summary, safety_notes",
     )
     .eq("id", params.logId)
     .eq("project_id", params.id)
@@ -59,19 +61,42 @@ export default async function CmLogDetailPage({
       ? `${log.temp_high ?? "-"}° / ${log.temp_low ?? "-"}°`
       : "-";
 
+  const status = log.status === "final" ? "final" : "draft";
+
   return (
     <div className="space-y-5">
-      <div>
-        <Link
-          href={`/projects/${params.id}/cm-log`}
-          className="text-xs text-muted-foreground hover:underline"
-        >
-          &larr; My Daily Log
-        </Link>
-        <h2 className="mt-1 text-lg font-semibold">
-          {formatDate(log.log_date)}
-        </h2>
-        <p className="text-xs text-muted-foreground">Construction Manager daily log</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <Link
+            href={`/projects/${params.id}/cm-log`}
+            className="text-xs text-muted-foreground hover:underline"
+          >
+            &larr; My Daily Log
+          </Link>
+          <div className="mt-1 flex items-center gap-2">
+            <h2 className="text-lg font-semibold">{formatDate(log.log_date)}</h2>
+            {status === "final" ? (
+              <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                Finalized
+              </span>
+            ) : (
+              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                Draft
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Construction Manager daily log
+            {status === "final" && log.finalized_at
+              ? ` - finalized ${formatDate(log.finalized_at)}`
+              : ""}
+          </p>
+        </div>
+        <CmLogStatusActions
+          projectId={params.id}
+          logId={log.id}
+          status={status}
+        />
       </div>
 
       <div className="rounded-lg border bg-card p-4 text-sm">
