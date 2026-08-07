@@ -547,40 +547,49 @@ export type Database = {
         Row: {
           author_id: string | null
           created_at: string | null
+          finalized_at: string | null
           id: string
           log_date: string
           progress_summary: string | null
           project_id: string
           safety_notes: string | null
           site_conditions: string | null
+          status: string
           temp_high: number | null
           temp_low: number | null
+          updated_at: string | null
           weather_conditions: string | null
         }
         Insert: {
           author_id?: string | null
           created_at?: string | null
+          finalized_at?: string | null
           id?: string
           log_date: string
           progress_summary?: string | null
           project_id: string
           safety_notes?: string | null
           site_conditions?: string | null
+          status?: string
           temp_high?: number | null
           temp_low?: number | null
+          updated_at?: string | null
           weather_conditions?: string | null
         }
         Update: {
           author_id?: string | null
           created_at?: string | null
+          finalized_at?: string | null
           id?: string
           log_date?: string
           progress_summary?: string | null
           project_id?: string
           safety_notes?: string | null
           site_conditions?: string | null
+          status?: string
           temp_high?: number | null
           temp_low?: number | null
+          updated_at?: string | null
           weather_conditions?: string | null
         }
         Relationships: [
