@@ -22,6 +22,9 @@ type Props = {
   projectId: string;
   tasks: ScheduleTaskRow[];
   cpm: CpmOutput;
+  // Unscoped. Predecessor validation has to see the whole project, or a link
+  // to a task outside the current scope filter reads as "not found".
+  allTasks: ScheduleTaskRow[];
 };
 
 const STATUS_TONE: Record<string, string> = {
@@ -114,7 +117,7 @@ function buildProgress(tasks: ScheduleTaskRow[]): Map<string, Progress> {
   return out;
 }
 
-export function ScheduleTable({ projectId, tasks, cpm }: Props) {
+export function ScheduleTable({ projectId, tasks, cpm, allTasks }: Props) {
   const [phaseFilter, setPhaseFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [hideComplete, setHideComplete] = useState(false);
@@ -323,6 +326,7 @@ export function ScheduleTable({ projectId, tasks, cpm }: Props) {
                         task={t}
                         phaseOptions={phaseOptions}
                         statusOptions={statusOptions}
+                        allTasks={allTasks}
                         trigger={<Button variant="ghost" size="sm">Edit</Button>}
                       />
                     </td>

@@ -95,6 +95,36 @@ export function parsePredecessors(raw: string | null | undefined): Link[] {
     .filter((l): l is Link => l !== null);
 }
 
+export function serializeLink(l: Link): string {
+  const type = l.type === "FS" ? "" : l.type;
+  const lag = l.lag === 0 ? "" : l.lag > 0 ? `+${l.lag}` : `${l.lag}`;
+  return `${l.pred}${type}${lag}`;
+}
+
+export function serializeLinks(links: Link[]): string | null {
+  return links.length ? links.map(serializeLink).join(", ") : null;
+}
+
+// Would this set of predecessors close a loop? Run before saving, so a broken
+// network cannot be written in the first place. The engine detects cycles too,
+// but by then the whole schedule has already stopped calculating dates.
+//
+// Returns the tasks caught in the loop, or null when the edit is safe.
+export function findCycleWith(
+  tasks: { wbs_code: string; predecessors: string | null }[],
+  editedWbs: string,
+  editedLinks: Link[],
+): string[] | null {
+  const known = new Set(tasks.map((t) => t.wbs_code));
+  const links = new Map<string, Link[]>();
+  for (const t of tasks) {
+    const l =
+      t.wbs_code === editedWbs ? editedLinks : parsePredecessors(t.predecessors);
+    links.set(t.wbs_code, l.filter((x) => known.has(x.pred)));
+  }
+  return topoSort(Array.from(known), links).cycle;
+}
+
 // A task is a leaf when no other task's WBS sits beneath it.
 export function leavesOf<T extends { wbs_code: string }>(tasks: T[]): T[] {
   return tasks.filter(

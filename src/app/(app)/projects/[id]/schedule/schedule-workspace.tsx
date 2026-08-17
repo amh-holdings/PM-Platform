@@ -256,7 +256,7 @@ export function ScheduleWorkspace({
       {msg && <Banner tone={msg.startsWith("Failed") ? "bad" : "good"}>{msg}</Banner>}
 
       {view === "table" && (
-        <ScheduleTable projectId={projectId} tasks={scoped} cpm={cpm} />
+        <ScheduleTable projectId={projectId} tasks={scoped} cpm={cpm} allTasks={tasks} />
       )}
       {view === "gantt" && <ScheduleGantt tasks={scoped} cpm={cpm} />}
       {view === "lookahead" && (

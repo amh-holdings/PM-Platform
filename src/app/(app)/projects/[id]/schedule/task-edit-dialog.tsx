@@ -8,6 +8,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { updateScheduleTask } from "../schedule-actions";
+import {
+  PredecessorEditor,
+  hasLinkErrors,
+  type LinkTask,
+} from "./predecessor-editor";
 
 export type TaskFormValues = {
   id: string;
@@ -32,6 +37,9 @@ type Props = {
   phaseOptions: string[];
   statusOptions: string[];
   trigger: React.ReactNode;
+  // Every task on the project, so predecessors are chosen from a list rather
+  // than typed, and so cycles can be caught before the form is submitted.
+  allTasks: LinkTask[];
 };
 
 export function TaskEditDialog({
@@ -40,6 +48,7 @@ export function TaskEditDialog({
   phaseOptions,
   statusOptions,
   trigger,
+  allTasks,
 }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -48,6 +57,17 @@ export function TaskEditDialog({
   const [, startTransition] = useTransition();
 
   const handleSubmit = async (formData: FormData) => {
+    // Re-check the network here as well as in the editor. The editor shows the
+    // problem; this is what stops a broken graph reaching the database.
+    const linkError = hasLinkErrors(
+      allTasks,
+      task.wbs_code,
+      formData.get("predecessors") as string | null,
+    );
+    if (linkError) {
+      setError(linkError);
+      return;
+    }
     setSubmitting(true);
     setError(null);
     const result = await updateScheduleTask(task.id, projectId, formData);
@@ -159,10 +179,12 @@ export function TaskEditDialog({
                   <Input id="end_date" name="end_date" type="date" defaultValue={task.end_date ?? ""} />
                 </div>
 
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="predecessors">Predecessors</Label>
-                  <Input id="predecessors" name="predecessors" defaultValue={task.predecessors ?? ""} placeholder="e.g. 1.1.2, 2.3.1" />
-                </div>
+                <PredecessorEditor
+                  name="predecessors"
+                  currentWbs={task.wbs_code}
+                  allTasks={allTasks}
+                  defaultValue={task.predecessors}
+                />
 
                 <div className="flex flex-col gap-2 sm:col-span-2 sm:flex-row sm:gap-6">
                   <label className="flex items-center gap-2 text-sm">
