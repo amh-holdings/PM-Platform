@@ -157,6 +157,14 @@ export function ScheduleGantt({ tasks, cpm }: Props) {
                       CP
                     </span>
                   )}
+                  {!c?.critical && c?.nearCritical && (
+                    <span
+                      className="ml-auto shrink-0 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-900"
+                      title={`${c.totalFloat} working days of float`}
+                    >
+                      {c.totalFloat}d
+                    </span>
+                  )}
                 </div>
               );
             })}
@@ -245,7 +253,26 @@ export function ScheduleGantt({ tasks, cpm }: Props) {
                         />
                       )}
 
-                      {start && end && (
+                      {/* A milestone marks an instant, so it is drawn as a
+                          diamond rather than a bar of arbitrary width. A
+                          one-day-wide rectangle reads as work. */}
+                      {start && c?.isMilestone && (
+                        <div
+                          className={cn(
+                            "absolute rotate-45",
+                            c.critical ? "bg-destructive" : "bg-foreground/80",
+                          )}
+                          style={{
+                            left: xOf(start) - 4,
+                            width: 9,
+                            height: 9,
+                            top: rowH / 2 - 5,
+                          }}
+                          title={`${t.wbs_code} ${t.task_name}\nMilestone ${shortDate(start)}${c ? `\nFloat ${c.totalFloat}d` : ""}`}
+                        />
+                      )}
+
+                      {start && end && !c?.isMilestone && (
                         <div
                           className={cn(
                             "absolute overflow-hidden rounded-sm",
@@ -253,7 +280,9 @@ export function ScheduleGantt({ tasks, cpm }: Props) {
                               ? "bg-foreground/70"
                               : c?.critical
                                 ? "bg-destructive/80"
-                                : "bg-blue-500/80",
+                                : c?.nearCritical
+                                  ? "bg-amber-500/80"
+                                  : "bg-blue-500/80",
                           )}
                           style={{
                             left: xOf(start),
@@ -261,7 +290,7 @@ export function ScheduleGantt({ tasks, cpm }: Props) {
                             top: isSummary ? 11 : 8,
                             height: isSummary ? 6 : 11,
                           }}
-                          title={`${t.wbs_code} ${t.task_name}\n${shortDate(start)} - ${shortDate(end)}${c ? `\nFloat ${c.totalFloat}d${c.critical ? " (critical)" : ""}` : ""}`}
+                          title={`${t.wbs_code} ${t.task_name}\n${shortDate(start)} - ${shortDate(end)}${c ? `\nFloat ${c.totalFloat}d total, ${c.freeFloat}d free${c.critical ? " (critical)" : c.nearCritical ? " (near critical)" : ""}` : ""}`}
                         >
                           {!isSummary && pct > 0 && (
                             <div
@@ -301,6 +330,7 @@ function Legend() {
     { cls: "bg-blue-500/80", label: "Planned" },
     { cls: "bg-emerald-500", label: "Complete" },
     { cls: "bg-destructive/80", label: "Critical path" },
+    { cls: "bg-amber-500/80", label: "Near critical" },
     { cls: "bg-amber-400/70", label: "Projected slip" },
     { cls: "bg-muted-foreground/30", label: "Baseline" },
   ];
@@ -312,6 +342,10 @@ function Legend() {
           {i.label}
         </span>
       ))}
+      <span className="flex items-center gap-1.5">
+        <span className="inline-block h-2 w-2 rotate-45 bg-foreground/80" />
+        Milestone
+      </span>
       <span className="flex items-center gap-1.5">
         <span className="inline-block h-3 w-px bg-blue-500" />
         Today

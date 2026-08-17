@@ -14,7 +14,7 @@ import {
   parseIso,
   toIso,
   todayIso,
-  type WorkWeek,
+  type CalendarLike,
 } from "@/lib/schedule-calendar";
 import type { CpmOutput } from "@/lib/schedule-cpm";
 
@@ -72,12 +72,17 @@ export function buildLookahead(
     status: string | null;
   }[],
   cpm: CpmOutput,
-  opts: { weeks?: number; today?: string; workWeek?: WorkWeek } = {},
+  opts: {
+    weeks?: number;
+    /** As-of date. Falls back to the CPM data date, then to today. */
+    dataDate?: string;
+    calendar?: CalendarLike;
+  } = {},
 ): LookaheadWeek[] {
   const weeks = opts.weeks ?? 3;
-  const today = opts.today ?? todayIso();
-  const workWeek = opts.workWeek ?? 5;
-  const first = mondayOf(today);
+  const dataDate = opts.dataDate ?? cpm.dataDate ?? todayIso();
+  const calendar = opts.calendar ?? 5;
+  const first = mondayOf(dataDate);
 
   const out: LookaheadWeek[] = [];
   for (let w = 0; w < weeks; w++) {
@@ -88,7 +93,7 @@ export function buildLookahead(
     const workingDays: string[] = [];
     for (let d = 0; d < 7; d++) {
       const day = toIso(startMs + d * DAY_MS);
-      if (isWorkingDay(day, workWeek)) workingDays.push(day);
+      if (isWorkingDay(day, calendar)) workingDays.push(day);
     }
 
     const inWeek: LookaheadTask[] = [];

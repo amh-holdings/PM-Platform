@@ -7,6 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import {
+  DATE_CONSTRAINT_LABELS,
+  DATE_CONSTRAINT_TYPES,
+  HARD_CONSTRAINTS,
+  type DateConstraintType,
+} from "@/lib/schedule-cpm";
 import { updateScheduleTask } from "../schedule-actions";
 import {
   PredecessorEditor,
@@ -29,6 +35,9 @@ export type TaskFormValues = {
   is_at_risk: boolean | null;
   is_internal: boolean | null;
   non_ahc_delay: boolean | null;
+  is_milestone?: boolean | null;
+  date_constraint_type?: string | null;
+  date_constraint_date?: string | null;
 };
 
 type Props = {
@@ -40,6 +49,7 @@ type Props = {
   // Every task on the project, so predecessors are chosen from a list rather
   // than typed, and so cycles can be caught before the form is submitted.
   allTasks: LinkTask[];
+  phase1Available: boolean;
 };
 
 export function TaskEditDialog({
@@ -49,12 +59,17 @@ export function TaskEditDialog({
   statusOptions,
   trigger,
   allTasks,
+  phase1Available,
 }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [, startTransition] = useTransition();
+  const [isMilestone, setIsMilestone] = useState(!!task.is_milestone);
+  const [constraintType, setConstraintType] = useState(
+    task.date_constraint_type ?? "",
+  );
 
   const handleSubmit = async (formData: FormData) => {
     // Re-check the network here as well as in the editor. The editor shows the
@@ -166,7 +181,13 @@ export function TaskEditDialog({
                     type="number"
                     min={0}
                     defaultValue={task.duration_days ?? ""}
+                    disabled={isMilestone}
                   />
+                  {isMilestone && (
+                    <p className="text-[11px] text-muted-foreground">
+                      A milestone has no duration.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -186,7 +207,68 @@ export function TaskEditDialog({
                   defaultValue={task.predecessors}
                 />
 
+                {phase1Available && (
+                  <div className="space-y-3 rounded-md border bg-muted/20 p-3 sm:col-span-2">
+                    <div>
+                      <Label htmlFor="date_constraint_type">Date constraint</Label>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        A start date is a plan and logic can push it. A constraint
+                        cannot be pushed - it is the interconnection window, the
+                        permit expiry, the date in the contract. Use it sparingly:
+                        every one of these is a date the network stops calculating.
+                      </p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <select
+                        id="date_constraint_type"
+                        name="date_constraint_type"
+                        value={constraintType}
+                        onChange={(e) => setConstraintType(e.target.value)}
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      >
+                        <option value="">None - driven by logic</option>
+                        {DATE_CONSTRAINT_TYPES.map((c) => (
+                          <option key={c} value={c}>
+                            {DATE_CONSTRAINT_LABELS[c]}
+                            {HARD_CONSTRAINTS.has(c) ? " (hard)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <Input
+                        name="date_constraint_date"
+                        type="date"
+                        defaultValue={task.date_constraint_date ?? ""}
+                        disabled={!constraintType}
+                        required={!!constraintType}
+                      />
+                    </div>
+                    {constraintType &&
+                      HARD_CONSTRAINTS.has(constraintType as DateConstraintType) && (
+                        <p className="text-[11px] text-amber-700">
+                          A hard constraint caps the late dates, so work that
+                          cannot meet it shows negative float rather than
+                          absorbing the problem quietly. That is the point, and
+                          it is also why too many of them make the schedule stop
+                          forecasting and start merely recording.
+                        </p>
+                      )}
+                  </div>
+                )}
+
                 <div className="flex flex-col gap-2 sm:col-span-2 sm:flex-row sm:gap-6">
+                  {phase1Available && (
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        name="is_milestone"
+                        checked={isMilestone}
+                        onChange={(e) => setIsMilestone(e.target.checked)}
+                      />
+                      <span title="Marks an instant. Consumes no working days, so its start and finish are the same.">
+                        Milestone
+                      </span>
+                    </label>
+                  )}
                   <label className="flex items-center gap-2 text-sm">
                     <input type="checkbox" name="is_at_risk" defaultChecked={!!task.is_at_risk} />
                     <span>At risk</span>

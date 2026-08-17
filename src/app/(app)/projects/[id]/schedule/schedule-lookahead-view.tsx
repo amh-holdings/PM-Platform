@@ -5,7 +5,9 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { buildLookahead, lookaheadToText } from "@/lib/schedule-lookahead";
+import type { CalendarLike } from "@/lib/schedule-calendar";
 import type { CpmOutput } from "@/lib/schedule-cpm";
+import type { TaskConstraintState } from "@/lib/schedule-constraints";
 
 type Task = {
   wbs_code: string;
@@ -19,15 +21,23 @@ type Props = {
   tasks: Task[];
   cpm: CpmOutput;
   projectName: string;
+  calendar: CalendarLike;
+  constraintState: Map<string, TaskConstraintState>;
 };
 
-export function ScheduleLookaheadView({ tasks, cpm, projectName }: Props) {
+export function ScheduleLookaheadView({
+  tasks,
+  cpm,
+  projectName,
+  calendar,
+  constraintState,
+}: Props) {
   const [weeks, setWeeks] = useState(3);
   const [copied, setCopied] = useState(false);
 
   const lookahead = useMemo(
-    () => buildLookahead(tasks, cpm, { weeks }),
-    [tasks, cpm, weeks],
+    () => buildLookahead(tasks, cpm, { weeks, calendar, dataDate: cpm.dataDate }),
+    [tasks, cpm, weeks, calendar],
   );
 
   const text = useMemo(
@@ -85,15 +95,42 @@ export function ScheduleLookaheadView({ tasks, cpm, projectName }: Props) {
                   No scheduled work
                 </div>
               ) : (
-                w.tasks.map((t) => (
+                w.tasks.map((t) => {
+                  const blocked = constraintState.get(t.wbs);
+                  return (
                   <div key={t.wbs} className="px-3 py-2.5">
-                    <div className="flex items-start gap-2">
+                    <div className="flex flex-wrap items-start gap-2">
                       <span className="font-mono text-[10px] text-muted-foreground">
                         {t.wbs}
                       </span>
                       {t.critical && (
                         <span className="rounded bg-destructive/10 px-1 text-[10px] font-medium text-destructive">
                           CRITICAL
+                        </span>
+                      )}
+                      {!t.critical && t.totalFloat > 0 && t.totalFloat <= 5 && (
+                        <span className="rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-900">
+                          NEAR
+                        </span>
+                      )}
+                      {/* A task in the look-ahead with an open constraint is
+                          the one to talk about in the meeting: it is planned
+                          for this week and something is in its way. */}
+                      {blocked && blocked.open > 0 && (
+                        <span
+                          className={cn(
+                            "rounded px-1 text-[10px] font-medium",
+                            blocked.overdue > 0
+                              ? "bg-destructive/10 text-destructive"
+                              : "bg-amber-100 text-amber-900",
+                          )}
+                          title={
+                            blocked.nextNeedBy
+                              ? `${blocked.open} open, next needed by ${blocked.nextNeedBy}`
+                              : `${blocked.open} open constraint${blocked.open === 1 ? "" : "s"}`
+                          }
+                        >
+                          BLOCKED {blocked.open}
                         </span>
                       )}
                     </div>
@@ -112,7 +149,8 @@ export function ScheduleLookaheadView({ tasks, cpm, projectName }: Props) {
                       )}
                     </div>
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

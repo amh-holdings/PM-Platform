@@ -6,21 +6,49 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { computeCpm } from "@/lib/schedule-cpm";
-import { workingDaysBetween } from "@/lib/schedule-calendar";
+import {
+  makeCalendar,
+  todayIso,
+  workingDaysBetween,
+  type CalendarException,
+} from "@/lib/schedule-calendar";
+import { assessSchedule } from "@/lib/schedule-health";
+import {
+  constraintsByTask,
+  summarizeConstraints,
+  type ScheduleConstraint,
+} from "@/lib/schedule-constraints";
 import { SCOPE_ORDER, scopeOf, type TaskScope } from "@/lib/schedule-scope";
-import { applyProjectedDates, setScheduleBaseline } from "../schedule-actions";
+import {
+  applyProjectedDates,
+  setScheduleBaseline,
+  setScheduleDataDate,
+  takeScheduleUpdate,
+} from "../schedule-actions";
 import { ScheduleTable, type ScheduleTaskRow } from "./schedule-table";
 import { ScheduleGantt } from "./schedule-gantt";
 import { ScheduleLookaheadView } from "./schedule-lookahead-view";
+import { ScheduleHealthView, type ScheduleUpdateRow } from "./schedule-health-view";
+import { ScheduleConstraintsView } from "./schedule-constraints-view";
+import { CalendarDialog, type CalendarExceptionRow } from "./calendar-dialog";
 
 type Props = {
   projectId: string;
   projectName: string;
   tasks: ScheduleTaskRow[];
   baselineAvailable: boolean;
+  phase1Available: boolean;
+  dataDate: string | null;
+  workWeek: 5 | 6;
+  calendarExceptions: CalendarExceptionRow[];
+  calendarAvailable: boolean;
+  constraints: ScheduleConstraint[];
+  constraintsAvailable: boolean;
+  updates: ScheduleUpdateRow[];
+  updatesAvailable: boolean;
 };
 
-type View = "table" | "gantt" | "lookahead";
+type View = "table" | "gantt" | "lookahead" | "health" | "constraints";
 
 function fmt(iso: string | null): string {
   if (!iso) return "-";
@@ -38,11 +66,32 @@ export function ScheduleWorkspace({
   projectName,
   tasks,
   baselineAvailable,
+  phase1Available,
+  dataDate,
+  workWeek,
+  calendarExceptions,
+  calendarAvailable,
+  constraints,
+  constraintsAvailable,
+  updates,
+  updatesAvailable,
 }: Props) {
   const [view, setView] = useState<View>("table");
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
+  const [dateDraft, setDateDraft] = useState(dataDate ?? "");
+
+  const effectiveDataDate = dataDate ?? todayIso();
+
+  const calendar = useMemo(
+    () =>
+      makeCalendar(
+        workWeek,
+        calendarExceptions as unknown as CalendarException[],
+      ),
+    [workWeek, calendarExceptions],
+  );
 
   const scopeCounts = useMemo(() => {
     const m = new Map<TaskScope, number>();
@@ -54,14 +103,37 @@ export function ScheduleWorkspace({
     scopeCounts.get("Civil") ? "Civil" : "",
   );
 
+  // CPM runs over EVERY task, always. Running it over the scope filter dropped
+  // any predecessor pointing outside the filter, because a link to an unknown
+  // task is discarded - so the Civil view was calculating float and a critical
+  // path as if civil had no external constraints at all. The filter is a lens
+  // on the results, never an input to them.
+  const cpm = useMemo(
+    () => computeCpm(tasks, { calendar, dataDate: effectiveDataDate }),
+    [tasks, calendar, effectiveDataDate],
+  );
+
   const scoped = useMemo(
     () => (scopeFilter ? tasks.filter((t) => scopeOf(t) === scopeFilter) : tasks),
     [tasks, scopeFilter],
   );
 
-  // CPM runs on the client so the Map it returns never has to cross the RSC
-  // boundary. It is a pure pass over a few dozen rows, so the cost is nil.
-  const cpm = useMemo(() => computeCpm(scoped), [scoped]);
+  // Health is a property of the whole schedule, not of a scope. A logic gap
+  // between civil and electrical is invisible from inside either one.
+  const health = useMemo(
+    () => assessSchedule(tasks, cpm, { calendar, dataDate: effectiveDataDate }),
+    [tasks, cpm, calendar, effectiveDataDate],
+  );
+
+  const constraintState = useMemo(
+    () => constraintsByTask(constraints, effectiveDataDate, calendar),
+    [constraints, effectiveDataDate, calendar],
+  );
+
+  const constraintSummary = useMemo(
+    () => summarizeConstraints(constraints, effectiveDataDate, calendar),
+    [constraints, effectiveDataDate, calendar],
+  );
 
   const baselineStats = useMemo(() => {
     const withBaseline = scoped.filter((t) => t.baseline_end);
@@ -69,12 +141,24 @@ export function ScheduleWorkspace({
     let worst = 0;
     for (const t of withBaseline) {
       if (!t.end_date || !t.baseline_end) continue;
-      const v = workingDaysBetween(t.baseline_end, t.end_date);
+      const v = workingDaysBetween(t.baseline_end, t.end_date, calendar);
       if (v > 0) behind++;
       if (v > worst) worst = v;
     }
     return { count: withBaseline.length, total: scoped.length, behind, worst };
-  }, [scoped]);
+  }, [scoped, calendar]);
+
+  function run(
+    fn: () => Promise<{ ok: boolean; error?: string }>,
+    onOk: () => string,
+  ) {
+    setMsg(null);
+    startTransition(async () => {
+      const res = await fn();
+      setMsg(res.ok ? onOk() : `Failed: ${res.error}`);
+      if (res.ok) router.refresh();
+    });
+  }
 
   function takeBaseline(onlyUnbaselined: boolean) {
     setMsg(null);
@@ -106,25 +190,13 @@ export function ScheduleWorkspace({
     [scoped, cpm],
   );
 
-  function acceptProjection() {
-    setMsg(null);
-    startTransition(async () => {
-      const res = await applyProjectedDates(projectId, drifted);
-      setMsg(
-        res.ok
-          ? `Reflowed ${res.count} task${res.count === 1 ? "" : "s"} onto projected dates. Baseline untouched, so the variance is still visible.`
-          : `Failed: ${res.error}`,
-      );
-      if (res.ok) router.refresh();
-    });
-  }
-
   const slip = cpm.finishSlipDays;
+  const lastUpdate = updates[0] ?? null;
 
   return (
     <div className="space-y-4">
-      {/* Forecast banner - the two dates that matter, side by side. */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Forecast banner - the numbers that matter, side by side. */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Card label="Planned finish" value={fmt(cpm.plannedFinish)} />
         <Card
           label="Projected finish"
@@ -144,30 +216,149 @@ export function ScheduleWorkspace({
           note={cpm.criticalPath.length ? "zero float" : "no logic driving finish"}
           tone={cpm.criticalPath.length ? "bad" : undefined}
         />
-        <Card
-          label="Baseline"
-          value={
-            !baselineAvailable
-              ? "Not enabled"
-              : baselineStats.count === 0
-                ? "Not set"
-                : `${baselineStats.count} of ${baselineStats.total}`
-          }
-          note={
-            !baselineAvailable
-              ? "run migration 0032"
-              : baselineStats.count === 0
-                ? "no committed dates to measure against"
-                : `${baselineStats.behind} behind, worst ${baselineStats.worst}d`
-          }
-          tone={!baselineAvailable || baselineStats.count === 0 ? "warn" : undefined}
-        />
+        <button
+          onClick={() => setView("health")}
+          className="rounded-lg border bg-card px-4 py-3 text-left shadow-sm transition hover:border-foreground/30"
+        >
+          <div className="text-xs text-muted-foreground">Schedule health</div>
+          <div
+            className={cn(
+              "text-lg font-semibold",
+              health.score >= 80
+                ? "text-emerald-700"
+                : health.score >= 60
+                  ? "text-amber-700"
+                  : "text-destructive",
+            )}
+          >
+            {health.score}/100 <span className="text-sm font-normal">({health.grade})</span>
+          </div>
+          <div className="text-[11px] text-muted-foreground">
+            {health.findings.length
+              ? `${health.findings.length} check${health.findings.length === 1 ? "" : "s"} to clear`
+              : "all checks pass"}
+          </div>
+        </button>
+        <button
+          onClick={() => setView("constraints")}
+          disabled={!constraintsAvailable}
+          className="rounded-lg border bg-card px-4 py-3 text-left shadow-sm transition hover:border-foreground/30 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <div className="text-xs text-muted-foreground">Open constraints</div>
+          <div
+            className={cn(
+              "text-lg font-semibold",
+              !constraintsAvailable
+                ? "text-muted-foreground"
+                : constraintSummary.overdue > 0
+                  ? "text-destructive"
+                  : constraintSummary.open > 0
+                    ? "text-amber-700"
+                    : "text-emerald-700",
+            )}
+          >
+            {!constraintsAvailable ? "Not enabled" : constraintSummary.open}
+          </div>
+          <div className="text-[11px] text-muted-foreground">
+            {!constraintsAvailable
+              ? "run migration 0034"
+              : constraintSummary.overdue > 0
+                ? `${constraintSummary.overdue} past need-by, ${constraintSummary.blockedTasks} tasks blocked`
+                : constraintSummary.open > 0
+                  ? `${constraintSummary.blockedTasks} task${constraintSummary.blockedTasks === 1 ? "" : "s"} blocked`
+                  : "nothing in the way"}
+          </div>
+        </button>
+      </div>
+
+      {/* Data date - the as-of line everything is calculated against. */}
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-card p-3">
+        <div className="flex items-center gap-2">
+          <label className="text-xs uppercase tracking-wide text-muted-foreground">
+            Data date
+          </label>
+          <input
+            type="date"
+            value={dateDraft}
+            onChange={(e) => setDateDraft(e.target.value)}
+            className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          />
+          {dateDraft !== (dataDate ?? "") && (
+            <Button
+              size="sm"
+              disabled={pending}
+              onClick={() =>
+                run(
+                  () => setScheduleDataDate(projectId, dateDraft || null),
+                  () =>
+                    dateDraft
+                      ? `Data date set to ${dateDraft}. Every calculation is now as of that date.`
+                      : "Data date cleared. Calculations follow today again.",
+                )
+              }
+            >
+              Apply
+            </Button>
+          )}
+          <span className="text-[11px] text-muted-foreground">
+            {dataDate
+              ? "calculations are as of this date"
+              : `following today (${todayIso()})`}
+          </span>
+        </div>
+
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-[11px] text-muted-foreground">
+            {workWeek === 6 ? "6-day week" : "5-day week"}
+            {calendarExceptions.length
+              ? `, ${calendarExceptions.length} calendar exception${calendarExceptions.length === 1 ? "" : "s"}`
+              : ""}
+          </span>
+          <CalendarDialog
+            projectId={projectId}
+            workWeek={workWeek}
+            exceptions={calendarExceptions}
+            available={calendarAvailable}
+            trigger={
+              <Button variant="outline" size="sm">
+                Calendar
+              </Button>
+            }
+          />
+          {updatesAvailable && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={pending}
+              onClick={() =>
+                run(
+                  () => takeScheduleUpdate(projectId),
+                  () =>
+                    `Update captured at data date ${effectiveDataDate}. The task set is frozen and cannot be edited.`,
+                )
+              }
+              title="Freeze the whole schedule as it stands at the data date"
+            >
+              Take update
+            </Button>
+          )}
+        </div>
       </div>
 
       {cpm.cycle && (
         <Banner tone="bad">
           Circular dependency between {cpm.cycle.join(", ")}. Dates cannot be
           calculated until the loop is broken.
+        </Banner>
+      )}
+      {cpm.constraintViolations.length > 0 && (
+        <Banner tone="bad">
+          {cpm.constraintViolations.length} date constraint
+          {cpm.constraintViolations.length === 1 ? "" : "s"} the logic cannot
+          meet. {cpm.constraintViolations[0].message}
+          {cpm.constraintViolations.length > 1 && (
+            <> See the Health tab for the rest.</>
+          )}
         </Banner>
       )}
       {cpm.isolated.length > 0 && (
@@ -185,6 +376,8 @@ export function ScheduleWorkspace({
               ["table", "Table"],
               ["gantt", "Gantt"],
               ["lookahead", "Look-ahead"],
+              ["health", "Health"],
+              ["constraints", "Constraints"],
             ] as const
           ).map(([v, label]) => (
             <button
@@ -196,33 +389,51 @@ export function ScheduleWorkspace({
               )}
             >
               {label}
+              {v === "health" && health.findings.length > 0 && (
+                <span className="ml-1.5 rounded-full bg-destructive/15 px-1.5 text-[10px] font-semibold text-destructive">
+                  {health.findings.length}
+                </span>
+              )}
+              {v === "constraints" && constraintSummary.open > 0 && (
+                <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-900">
+                  {constraintSummary.open}
+                </span>
+              )}
             </button>
           ))}
         </div>
 
-        <div className="flex items-center gap-2 text-sm">
-          <label className="text-xs uppercase tracking-wide text-muted-foreground">Scope</label>
-          <select
-            value={scopeFilter}
-            onChange={(e) => setScopeFilter(e.target.value)}
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm font-medium"
-          >
-            <option value="">All scopes ({tasks.length})</option>
-            {SCOPE_ORDER.filter((s) => scopeCounts.get(s)).map((s) => (
-              <option key={s} value={s}>
-                {s} ({scopeCounts.get(s)})
-              </option>
-            ))}
-          </select>
-        </div>
+        {view !== "health" && (
+          <div className="flex items-center gap-2 text-sm">
+            <label className="text-xs uppercase tracking-wide text-muted-foreground">Scope</label>
+            <select
+              value={scopeFilter}
+              onChange={(e) => setScopeFilter(e.target.value)}
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm font-medium"
+            >
+              <option value="">All scopes ({tasks.length})</option>
+              {SCOPE_ORDER.filter((s) => scopeCounts.get(s)).map((s) => (
+                <option key={s} value={s}>
+                  {s} ({scopeCounts.get(s)})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
-          {drifted.length > 0 && (
+          {view !== "health" && drifted.length > 0 && (
             <Button
               variant="outline"
               size="sm"
               disabled={pending}
-              onClick={acceptProjection}
+              onClick={() =>
+                run(
+                  () => applyProjectedDates(projectId, drifted),
+                  () =>
+                    `Reflowed ${drifted.length} task${drifted.length === 1 ? "" : "s"} onto projected dates. Baseline untouched, so the variance is still visible.`,
+                )
+              }
               title="Move planned dates onto the projection. The baseline is not touched."
             >
               Reflow {drifted.length} task{drifted.length === 1 ? "" : "s"}
@@ -255,12 +466,67 @@ export function ScheduleWorkspace({
 
       {msg && <Banner tone={msg.startsWith("Failed") ? "bad" : "good"}>{msg}</Banner>}
 
+      {!phase1Available && (
+        <Banner tone="warn">
+          Migration 0033 has not been applied, so date constraints, milestones,
+          the project calendar and schedule updates are unavailable. Everything
+          else works; the engine falls back to a 5-day week and today&rsquo;s date.
+        </Banner>
+      )}
+
       {view === "table" && (
-        <ScheduleTable projectId={projectId} tasks={scoped} cpm={cpm} allTasks={tasks} />
+        <ScheduleTable
+          projectId={projectId}
+          tasks={scoped}
+          cpm={cpm}
+          allTasks={tasks}
+          calendar={calendar}
+          constraintState={constraintState}
+          phase1Available={phase1Available}
+        />
       )}
       {view === "gantt" && <ScheduleGantt tasks={scoped} cpm={cpm} />}
       {view === "lookahead" && (
-        <ScheduleLookaheadView tasks={scoped} cpm={cpm} projectName={projectName} />
+        <ScheduleLookaheadView
+          tasks={scoped}
+          cpm={cpm}
+          projectName={projectName}
+          calendar={calendar}
+          constraintState={constraintState}
+        />
+      )}
+      {view === "health" && (
+        <ScheduleHealthView
+          health={health}
+          cpm={cpm}
+          projectName={projectName}
+          projectId={projectId}
+          updates={updates}
+          updatesAvailable={updatesAvailable}
+          baselineAvailable={baselineAvailable}
+        />
+      )}
+      {view === "constraints" && (
+        <ScheduleConstraintsView
+          projectId={projectId}
+          projectName={projectName}
+          constraints={constraints}
+          available={constraintsAvailable}
+          dataDate={effectiveDataDate}
+          calendar={calendar}
+          tasks={tasks}
+          summary={constraintSummary}
+        />
+      )}
+
+      {lastUpdate && (
+        <p className="text-xs text-muted-foreground">
+          Last schedule update captured at data date {fmt(lastUpdate.data_date)}
+          {lastUpdate.projected_finish
+            ? `, projecting ${fmt(lastUpdate.projected_finish)}`
+            : ""}
+          . See Health for the full history.
+        </p>
       )}
     </div>
   );

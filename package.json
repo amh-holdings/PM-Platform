@@ -7,12 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "db:types": "supabase gen types typescript --project-id sksfyygufnnbzrmneccx --schema public 2>/dev/null > src/lib/database.types.ts",
+    "db:types": "npx --yes supabase gen types typescript --project-id sksfyygufnnbzrmneccx --schema public > /tmp/db.types.ts && test -s /tmp/db.types.ts && mv /tmp/db.types.ts src/lib/database.types.ts && echo 'database.types.ts regenerated'",
     "verify-setup": "node scripts/verify-setup.mjs",
     "import:scan": "node scripts/bulk-import.mjs scan",
     "import:apply": "node scripts/bulk-import.mjs apply",
     "backfill-text": "node scripts/backfill-text.mjs",
-    "test:inspections": "tsx scripts/qaqc/run-tests.ts"
+    "test:inspections": "tsx scripts/qaqc/run-tests.ts",
+    "test:schedule": "tsx scripts/schedule/run-tests.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",

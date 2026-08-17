@@ -3,7 +3,7 @@
 // Two passes run over the same dependency graph:
 //
 //   planned    - what the schedule says, ignoring progress. Produces early and
-//                late dates, total float, and the critical path.
+//                late dates, total and free float, and the critical path.
 //   projected  - what the field says, driven by approved report percentages.
 //                A task half done with its finish date behind it pushes every
 //                successor, which is what makes a slip visible the day it
@@ -19,18 +19,58 @@
 // A reference to a task that no longer exists is skipped rather than treated
 // as a missing constraint, so trimming the schedule cannot silently free up
 // a task to start on day one.
+//
+// Everything is calculated as of a DATA DATE, not as of today. An update that
+// recalculates itself every time it is opened cannot be reproduced, compared
+// against the previous update, or defended in a claim. The data date defaults
+// to today so a project that has never set one behaves as before.
 
 import {
   addWorkingDays,
+  advance,
   durationInWorkingDays,
   parseIso,
+  retreat,
   snapForward,
+  subWorkingDays,
   todayIso,
+  toCalendar,
   workingDaysBetween,
-  type WorkWeek,
+  type CalendarLike,
+  type Calendar,
 } from "@/lib/schedule-calendar";
 
 export type RelType = "FS" | "SS" | "FF" | "SF";
+
+// Hard date bounds, in the P6 sense. A task's start_date is a soft preference -
+// the plan - and can be pushed by logic. A constraint cannot: it is the
+// interconnection window, the permit expiry, the date in the contract.
+export type DateConstraintType =
+  | "SNET" // Start No Earlier Than
+  | "SNLT" // Start No Later Than
+  | "FNET" // Finish No Earlier Than
+  | "FNLT" // Finish No Later Than
+  | "MSO"  // Must Start On
+  | "MFO"; // Must Finish On
+
+export const DATE_CONSTRAINT_TYPES: DateConstraintType[] = [
+  "SNET", "SNLT", "FNET", "FNLT", "MSO", "MFO",
+];
+
+export const DATE_CONSTRAINT_LABELS: Record<DateConstraintType, string> = {
+  SNET: "Start no earlier than",
+  SNLT: "Start no later than",
+  FNET: "Finish no earlier than",
+  FNLT: "Finish no later than",
+  MSO: "Must start on",
+  MFO: "Must finish on",
+};
+
+// The four DCMA counts as "hard" - they pin a date outright rather than
+// bounding one side of it, and they can make float meaningless.
+export const HARD_CONSTRAINTS = new Set<DateConstraintType>([
+  "MSO", "MFO", "SNLT", "FNLT",
+]);
 
 export type CpmInput = {
   wbs_code: string;
@@ -41,6 +81,9 @@ export type CpmInput = {
   predecessors: string | null;
   pct_complete: number | null;
   status: string | null;
+  is_milestone?: boolean | null;
+  date_constraint_type?: string | null;
+  date_constraint_date?: string | null;
 };
 
 export type Link = { pred: string; type: RelType; lag: number };
@@ -48,22 +91,38 @@ export type Link = { pred: string; type: RelType; lag: number };
 export type CpmResult = {
   wbs: string;
   duration: number;
+  isMilestone: boolean;
   // Planned pass
   es: string;
   ef: string;
   ls: string;
   lf: string;
   totalFloat: number;
+  // Days this task can slip without moving ANY successor's early start. Total
+  // float says the project can absorb five days; free float says the foreman
+  // can take two without phoning anyone. They are different questions and the
+  // second is the one asked in the field.
+  freeFloat: number;
   critical: boolean;
+  nearCritical: boolean;
+  // No predecessor and no successor. Such a task is its own late date, so it
+  // computes to zero float - but zero float here means "measured against
+  // nothing", not "driving the finish". Reporting it as critical put Fencing
+  // Installation and Permit Closeout on the critical path of the civil scope
+  // alongside the four tasks actually driving it.
+  isolated: boolean;
   // Projected pass
   projectedStart: string;
   projectedEnd: string;
   slipDays: number;
   drivenBy: string | null;
+  // Set when a hard constraint and the logic disagree.
+  constraintViolation: string | null;
 };
 
 export type CpmOutput = {
   byWbs: Map<string, CpmResult>;
+  dataDate: string;
   plannedFinish: string | null;
   projectedFinish: string | null;
   finishSlipDays: number;
@@ -73,6 +132,7 @@ export type CpmOutput = {
   // Tasks with no logic on either side. They do not set the project finish;
   // surfacing them is how the missing links get noticed and fixed.
   isolated: string[];
+  constraintViolations: { wbs: string; message: string }[];
 };
 
 const REL_RE = /^([0-9.]+?)(FS|SS|FF|SF)?([+-]\d+)?$/i;
@@ -132,11 +192,29 @@ export function leavesOf<T extends { wbs_code: string }>(tasks: T[]): T[] {
   );
 }
 
-function durationOf(t: CpmInput, workWeek: WorkWeek): number {
+export function isMilestoneTask(t: CpmInput): boolean {
+  return !!t.is_milestone || t.duration_days === 0;
+}
+
+function durationOf(t: CpmInput, cal: Calendar): number {
+  // A milestone marks an instant. It consumes no working time, so its start
+  // and finish are the same day and it cannot itself be the reason anything
+  // is late - only the logic through it can.
+  if (isMilestoneTask(t)) return 0;
   if (t.duration_days != null && t.duration_days > 0) return t.duration_days;
   if (t.start_date && t.end_date)
-    return durationInWorkingDays(t.start_date, t.end_date, workWeek);
+    return durationInWorkingDays(t.start_date, t.end_date, cal);
   return 1;
+}
+
+function constraintOf(
+  t: CpmInput,
+): { type: DateConstraintType; date: string } | null {
+  const type = t.date_constraint_type as DateConstraintType | null | undefined;
+  const date = t.date_constraint_date;
+  if (!type || !date) return null;
+  if (!DATE_CONSTRAINT_TYPES.includes(type)) return null;
+  return { type, date };
 }
 
 // Kahn's algorithm. Returns null when the graph contains a cycle, along with
@@ -186,16 +264,92 @@ function hasStarted(t: CpmInput): boolean {
 // the future and only forecasts from remaining work once it has passed.
 function remainingDuration(t: CpmInput, duration: number): number {
   if (isComplete(t)) return 0;
+  if (duration === 0) return 0;
   const pct = Math.max(0, Math.min(100, Number(t.pct_complete ?? 0)));
   return Math.max(1, Math.ceil(duration * (1 - pct / 100)));
 }
 
+// Given a finish date and a duration, the start that produces it.
+function backIntoStart(finish: string, duration: number, cal: Calendar): string {
+  return subWorkingDays(finish, Math.max(0, duration - 1), cal);
+}
+
+// The earliest START a link permits for the successor, given where the
+// predecessor lands. One function so the forward pass, the projected pass and
+// the free-float calculation cannot drift apart - which is exactly how the
+// backward pass came to ignore lag on SS, FF and SF links.
+function candidateStart(
+  type: RelType,
+  lag: number,
+  predStart: string,
+  predEnd: string,
+  succDuration: number,
+  cal: Calendar,
+): string {
+  switch (type) {
+    case "SS":
+      // succ.ES >= pred.ES + lag
+      return advance(predStart, lag, cal);
+    case "FF":
+      // succ.EF >= pred.EF + lag; back into the start that produces it.
+      return backIntoStart(advance(predEnd, lag, cal), succDuration, cal);
+    case "SF":
+      // succ.EF >= pred.ES + lag
+      return backIntoStart(advance(predStart, lag, cal), succDuration, cal);
+    default:
+      // FS - succ.ES >= pred.EF + 1 + lag, the working day after it finishes.
+      return advance(predEnd, 1 + lag, cal);
+  }
+}
+
+// The latest FINISH a link permits for the predecessor, given where the
+// successor's late dates land. The exact mirror of candidateStart, which is
+// the property the previous implementation lost: it dropped the lag term on
+// SS, FF and SF, and read the successor's late START rather than its late
+// FINISH on SF. Any schedule using overlapping logic - which after the civil
+// review is most of Sweet Springs - had wrong float and therefore a wrong
+// critical path.
+function candidateFinish(
+  type: RelType,
+  lag: number,
+  succLs: string,
+  succLf: string,
+  predDuration: number,
+  cal: Calendar,
+): string {
+  switch (type) {
+    case "SS":
+      // pred.LS <= succ.LS - lag
+      return addWorkingDays(retreat(succLs, lag, cal), predDuration, cal);
+    case "FF":
+      // pred.LF <= succ.LF - lag
+      return retreat(succLf, lag, cal);
+    case "SF":
+      // pred.LS <= succ.LF - lag
+      return addWorkingDays(retreat(succLf, lag, cal), predDuration, cal);
+    default:
+      // FS - pred.LF <= succ.LS - 1 - lag
+      return retreat(succLs, 1 + lag, cal);
+  }
+}
+
+export type CpmOptions = {
+  calendar?: CalendarLike;
+  /** As-of date. Defaults to today. */
+  dataDate?: string;
+  /** @deprecated use dataDate */
+  today?: string;
+  /** Float at or below this, but above zero, reads as near-critical. */
+  nearCriticalDays?: number;
+};
+
 export function computeCpm(
   allTasks: CpmInput[],
-  opts: { workWeek?: WorkWeek; today?: string } = {},
+  opts: CpmOptions = {},
 ): CpmOutput {
-  const workWeek = opts.workWeek ?? 5;
-  const today = opts.today ?? todayIso();
+  const cal = toCalendar(opts.calendar ?? 5);
+  const dataDate = opts.dataDate ?? opts.today ?? todayIso();
+  const nearCriticalDays = opts.nearCriticalDays ?? 5;
 
   const tasks = leavesOf(allTasks);
   const byWbs = new Map(tasks.map((t) => [t.wbs_code, t]));
@@ -212,10 +366,12 @@ export function computeCpm(
   const { order, cycle } = topoSort(Array.from(known), links);
   const results = new Map<string, CpmResult>();
   const unscheduled: string[] = [];
+  const constraintViolations: { wbs: string; message: string }[] = [];
 
   if (cycle) {
     return {
       byWbs: results,
+      dataDate,
       plannedFinish: null,
       projectedFinish: null,
       finishSlipDays: 0,
@@ -223,11 +379,23 @@ export function computeCpm(
       cycle,
       unscheduled: [],
       isolated: [],
+      constraintViolations: [],
     };
   }
 
   const dur = new Map<string, number>();
-  for (const t of tasks) dur.set(t.wbs_code, durationOf(t, workWeek));
+  const cons = new Map<string, { type: DateConstraintType; date: string } | null>();
+  for (const t of tasks) {
+    dur.set(t.wbs_code, durationOf(t, cal));
+    cons.set(t.wbs_code, constraintOf(t));
+  }
+
+  const violationOf = new Map<string, string>();
+  const flag = (wbs: string, message: string) => {
+    if (violationOf.has(wbs)) return;
+    violationOf.set(wbs, message);
+    constraintViolations.push({ wbs, message });
+  };
 
   // ---- forward pass, planned ----
   const es = new Map<string, string>();
@@ -235,35 +403,64 @@ export function computeCpm(
   for (const wbs of order) {
     const t = byWbs.get(wbs)!;
     const d = dur.get(wbs)!;
-    const ls = t.start_date;
-    let start = ls ? snapForward(ls, workWeek) : null;
+    let start = t.start_date ? snapForward(t.start_date, cal) : null;
 
     for (const l of links.get(wbs) ?? []) {
-      const pStart = es.get(l.pred);
-      const pEnd = ef.get(l.pred);
-      if (!pStart || !pEnd) continue;
-      let candidate: string;
-      switch (l.type) {
-        case "SS":
-          candidate = addWorkingDays(pStart, 1 + l.lag, workWeek);
-          break;
-        case "FF":
-          // Finish no earlier than the predecessor's finish; back into a start.
-          candidate = addWorkingDays(pEnd, 1 + l.lag, workWeek);
-          candidate = backIntoStart(candidate, d, workWeek);
-          break;
-        case "SF":
-          candidate = backIntoStart(addWorkingDays(pStart, 1 + l.lag, workWeek), d, workWeek);
-          break;
-        default:
-          candidate = addWorkingDays(pEnd, 2 + l.lag, workWeek);
-      }
+      const ps = es.get(l.pred);
+      const pe = ef.get(l.pred);
+      if (!ps || !pe) continue;
+      const candidate = candidateStart(l.type, l.lag, ps, pe, d, cal);
       if (!start || parseIso(candidate) > parseIso(start)) start = candidate;
     }
 
-    if (!start) { unscheduled.push(wbs); start = snapForward(today, workWeek); }
+    if (!start) { unscheduled.push(wbs); start = snapForward(dataDate, cal); }
+
+    // Hard constraints are applied AFTER logic, and a constraint that pulls a
+    // task earlier than its logic allows is reported rather than obeyed. The
+    // engine will not invent a sequence that cannot be built; it says the two
+    // disagree and leaves the call to a human.
+    const c = cons.get(wbs);
+    if (c) {
+      const logicStart = start;
+      if (c.type === "SNET") {
+        const bound = snapForward(c.date, cal);
+        if (parseIso(bound) > parseIso(start)) start = bound;
+      } else if (c.type === "MSO") {
+        const bound = snapForward(c.date, cal);
+        if (parseIso(bound) < parseIso(logicStart)) {
+          flag(wbs, `Must start on ${c.date}, but its predecessors do not free it until ${logicStart}.`);
+        }
+        start = bound;
+      } else if (c.type === "MFO") {
+        const bound = snapForward(c.date, cal);
+        const forced = backIntoStart(bound, d, cal);
+        if (parseIso(forced) < parseIso(logicStart)) {
+          flag(wbs, `Must finish on ${c.date}, which requires starting ${forced}, but its predecessors do not free it until ${logicStart}.`);
+        }
+        start = forced;
+      }
+    }
+
     es.set(wbs, start);
-    ef.set(wbs, addWorkingDays(start, d, workWeek));
+    let finish = addWorkingDays(start, d, cal);
+
+    if (c) {
+      if (c.type === "FNET") {
+        const bound = snapForward(c.date, cal);
+        if (parseIso(bound) > parseIso(finish)) {
+          finish = bound;
+          es.set(wbs, backIntoStart(bound, d, cal));
+        }
+      } else if (c.type === "MFO") {
+        finish = snapForward(c.date, cal);
+      } else if (c.type === "SNLT" && parseIso(start) > parseIso(c.date)) {
+        flag(wbs, `Start no later than ${c.date}, but the earliest it can start is ${start}.`);
+      } else if (c.type === "FNLT" && parseIso(finish) > parseIso(c.date)) {
+        flag(wbs, `Finish no later than ${c.date}, but the earliest it can finish is ${finish}.`);
+      }
+    }
+
+    ef.set(wbs, finish);
   }
 
   // ---- backward pass ----
@@ -279,10 +476,13 @@ export function computeCpm(
   // real task about 230 days of float and made the critical path a single
   // milestone. The finish is taken from tasks that are actually part of the
   // network, and the loose milestones are reported separately.
-  const isolated = order.filter(
-    (w) => (links.get(w) ?? []).length === 0 && (successors.get(w) ?? []).length === 0,
+  const isolatedSet = new Set(
+    order.filter(
+      (w) => (links.get(w) ?? []).length === 0 && (successors.get(w) ?? []).length === 0,
+    ),
   );
-  const networked = order.filter((w) => !isolated.includes(w));
+  const isolated = Array.from(isolatedSet);
+  const networked = order.filter((w) => !isolatedSet.has(w));
   const finishFrom = networked.length ? networked : order;
 
   const plannedFinish =
@@ -292,7 +492,6 @@ export function computeCpm(
 
   const lf = new Map<string, string>();
   const lsMap = new Map<string, string>();
-  const isolatedSet = new Set(isolated);
   for (const wbs of order.slice().reverse()) {
     const d = dur.get(wbs)!;
     // An isolated milestone sits outside the network, so measuring it against
@@ -300,37 +499,63 @@ export function computeCpm(
     // read as 204 days behind. It is its own late date, giving it zero float
     // and keeping it off the critical path.
     let latestFinish = isolatedSet.has(wbs) ? ef.get(wbs)! : plannedFinish;
+
     for (const s of successors.get(wbs) ?? []) {
       const sLs = lsMap.get(s.succ);
       const sLf = lf.get(s.succ);
       if (!sLs || !sLf) continue;
-      let candidate: string;
-      switch (s.type) {
-        case "SS":
-          candidate = addWorkingDays(backIntoStart(sLs, 1, workWeek), d, workWeek);
-          break;
-        case "FF":
-          candidate = sLf;
-          break;
-        case "SF":
-          candidate = sLs;
-          break;
-        default:
-          candidate = subWorkingDays(sLs, 1 + s.lag, workWeek);
-      }
+      const candidate = candidateFinish(s.type, s.lag, sLs, sLf, d, cal);
       if (!latestFinish || parseIso(candidate) < parseIso(latestFinish))
         latestFinish = candidate;
     }
+
+    // A late-side constraint caps the late dates. This is what makes negative
+    // float appear where it should: an FNLT the logic cannot meet drives the
+    // whole chain behind it negative, which is the signal that the date is at
+    // risk rather than merely tight.
+    const c = cons.get(wbs);
+    if (c) {
+      let bound: string | null = null;
+      if (c.type === "FNLT" || c.type === "MFO") bound = c.date;
+      else if (c.type === "SNLT" || c.type === "MSO")
+        bound = addWorkingDays(c.date, d, cal);
+      if (bound && (!latestFinish || parseIso(bound) < parseIso(latestFinish)))
+        latestFinish = bound;
+    }
+
     const finish = latestFinish ?? ef.get(wbs)!;
     lf.set(wbs, finish);
-    lsMap.set(wbs, backIntoStart(finish, d, workWeek));
+    lsMap.set(wbs, backIntoStart(finish, d, cal));
+  }
+
+  // ---- free float ----
+  // How far this task can move before it moves a successor. With no successors
+  // it is bounded by the project finish instead, which is total float.
+  const freeFloat = new Map<string, number>();
+  for (const wbs of order) {
+    const succs = successors.get(wbs) ?? [];
+    if (!succs.length) {
+      freeFloat.set(wbs, workingDaysBetween(ef.get(wbs)!, lf.get(wbs)!, cal));
+      continue;
+    }
+    let min: number | null = null;
+    for (const s of succs) {
+      const sEs = es.get(s.succ);
+      if (!sEs) continue;
+      const required = candidateStart(
+        s.type, s.lag, es.get(wbs)!, ef.get(wbs)!, dur.get(s.succ)!, cal,
+      );
+      const slack = workingDaysBetween(required, sEs, cal);
+      if (min === null || slack < min) min = slack;
+    }
+    freeFloat.set(wbs, min ?? 0);
   }
 
   // ---- forward pass, projected from field progress ----
   const pStart = new Map<string, string>();
   const pEnd = new Map<string, string>();
   const drivenBy = new Map<string, string | null>();
-  const workStart = snapForward(today, workWeek);
+  const workStart = snapForward(dataDate, cal);
 
   for (const wbs of order) {
     const t = byWbs.get(wbs)!;
@@ -347,10 +572,10 @@ export function computeCpm(
     const started = hasStarted(t);
     const plannedEnd = t.end_date;
 
-    // Earliest this task could start given only its own plan and today.
+    // Earliest this task could start given only its own plan and the data date.
     let start = started
       ? (t.start_date ?? workStart)
-      : snapForward(t.start_date ?? workStart, workWeek);
+      : snapForward(t.start_date ?? workStart, cal);
     if (!started && parseIso(start) < parseIso(workStart)) start = workStart;
 
     // A predecessor can only push a task later, never earlier.
@@ -360,20 +585,7 @@ export function computeCpm(
       const predEnd = pEnd.get(l.pred);
       const predStart = pStart.get(l.pred);
       if (!predEnd || !predStart) continue;
-      let candidate: string;
-      switch (l.type) {
-        case "SS":
-          candidate = addWorkingDays(predStart, 1 + l.lag, workWeek);
-          break;
-        case "FF":
-          candidate = backIntoStart(addWorkingDays(predEnd, 1 + l.lag, workWeek), d, workWeek);
-          break;
-        case "SF":
-          candidate = backIntoStart(addWorkingDays(predStart, 1 + l.lag, workWeek), d, workWeek);
-          break;
-        default:
-          candidate = addWorkingDays(predEnd, 2 + l.lag, workWeek);
-      }
+      const candidate = candidateStart(l.type, l.lag, predStart, predEnd, d, cal);
       if (!depStart || parseIso(candidate) > parseIso(depStart)) {
         depStart = candidate;
         driver = l.pred;
@@ -382,12 +594,12 @@ export function computeCpm(
 
     let end: string;
     if (started) {
-      // Under way. The plan stands while its finish is still ahead of us;
-      // only once that date has passed do we forecast from remaining work.
+      // Under way. The plan stands while its finish is still ahead of the data
+      // date; only once that date has passed do we forecast from remaining work.
       end =
         plannedEnd && parseIso(plannedEnd) >= parseIso(workStart)
           ? plannedEnd
-          : addWorkingDays(workStart, remainingDuration(t, d), workWeek);
+          : addWorkingDays(workStart, remainingDuration(t, d), cal);
     } else {
       // Not started. If a predecessor pushes it, or its own start has already
       // slipped past, it runs its full duration from wherever it can begin.
@@ -397,13 +609,30 @@ export function computeCpm(
         parseIso(start) <= parseIso(t.start_date ?? start) &&
         parseIso(plannedEnd) >= parseIso(start)
           ? plannedEnd
-          : addWorkingDays(start, d, workWeek);
+          : addWorkingDays(start, d, cal);
     }
 
     // A dependency landing after the forecast finish drags the finish with it.
     if (depStart && parseIso(depStart) > parseIso(end)) {
-      end = addWorkingDays(depStart, d, workWeek);
+      end = addWorkingDays(depStart, d, cal);
       if (!started) start = depStart;
+    }
+
+    // Early-side constraints hold in the projection too - a task cannot be
+    // forecast to start before the window that lets it start at all.
+    const c = cons.get(wbs);
+    if (c && !started) {
+      if (c.type === "SNET" || c.type === "MSO") {
+        const bound = snapForward(c.date, cal);
+        if (parseIso(bound) > parseIso(start)) {
+          start = bound;
+          end = addWorkingDays(start, d, cal);
+        }
+      }
+    }
+    if (c && (c.type === "FNET" || c.type === "MFO")) {
+      const bound = snapForward(c.date, cal);
+      if (parseIso(bound) > parseIso(end)) end = bound;
     }
 
     pStart.set(wbs, start);
@@ -418,22 +647,32 @@ export function computeCpm(
 
   for (const wbs of order) {
     const t = byWbs.get(wbs)!;
-    const totalFloat = workingDaysBetween(ef.get(wbs)!, lf.get(wbs)!, workWeek);
+    const totalFloat = workingDaysBetween(ef.get(wbs)!, lf.get(wbs)!, cal);
+    // Free float can never exceed total float. Imposed start dates can make the
+    // raw successor slack read higher, which would tell a foreman he has room
+    // the project does not have.
+    const free = Math.min(freeFloat.get(wbs) ?? totalFloat, totalFloat);
+    const loose = isolatedSet.has(wbs);
     results.set(wbs, {
       wbs,
       duration: dur.get(wbs)!,
+      isMilestone: isMilestoneTask(t),
+      isolated: loose,
       es: es.get(wbs)!,
       ef: ef.get(wbs)!,
       ls: lsMap.get(wbs)!,
       lf: lf.get(wbs)!,
       totalFloat,
-      critical: totalFloat <= 0,
+      freeFloat: free,
+      critical: totalFloat <= 0 && !loose,
+      nearCritical: !loose && totalFloat > 0 && totalFloat <= nearCriticalDays,
       projectedStart: pStart.get(wbs)!,
       projectedEnd: pEnd.get(wbs)!,
       slipDays: t.end_date
-        ? workingDaysBetween(t.end_date, pEnd.get(wbs)!, workWeek)
+        ? workingDaysBetween(t.end_date, pEnd.get(wbs)!, cal)
         : 0,
       drivenBy: drivenBy.get(wbs) ?? null,
+      constraintViolation: violationOf.get(wbs) ?? null,
     });
   }
 
@@ -443,44 +682,17 @@ export function computeCpm(
 
   return {
     byWbs: results,
+    dataDate,
     plannedFinish,
     projectedFinish,
     finishSlipDays:
       plannedFinish && projectedFinish
-        ? workingDaysBetween(plannedFinish, projectedFinish, workWeek)
+        ? workingDaysBetween(plannedFinish, projectedFinish, cal)
         : 0,
     criticalPath,
     cycle: null,
     unscheduled,
     isolated,
+    constraintViolations,
   };
-}
-
-// Given a finish date and a duration, the start that produces it.
-function backIntoStart(finish: string, duration: number, workWeek: WorkWeek): string {
-  return subWorkingDays(finish, Math.max(0, duration - 1), workWeek);
-}
-
-function subWorkingDays(iso: string, days: number, workWeek: WorkWeek): string {
-  let ms = parseIso(iso);
-  let left = days;
-  while (left > 0) {
-    ms -= 86_400_000;
-    const d = new Date(ms).toISOString().slice(0, 10);
-    if (isWorking(d, workWeek)) left--;
-  }
-  let out = new Date(ms).toISOString().slice(0, 10);
-  while (!isWorking(out, workWeek)) {
-    ms -= 86_400_000;
-    out = new Date(ms).toISOString().slice(0, 10);
-  }
-  return out;
-}
-
-// Local alias so the backward pass does not import the calendar twice.
-function isWorking(iso: string, workWeek: WorkWeek): boolean {
-  const dow = new Date(parseIso(iso)).getUTCDay();
-  if (dow === 0) return false;
-  if (dow === 6 && workWeek === 5) return false;
-  return snapForward(iso, workWeek) === iso;
 }

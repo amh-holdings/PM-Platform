@@ -4,8 +4,9 @@ import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { workingDaysBetween } from "@/lib/schedule-calendar";
+import { workingDaysBetween, type CalendarLike } from "@/lib/schedule-calendar";
 import type { CpmOutput } from "@/lib/schedule-cpm";
+import type { TaskConstraintState } from "@/lib/schedule-constraints";
 import { TaskEditDialog, type TaskFormValues } from "./task-edit-dialog";
 
 export type ScheduleTaskRow = TaskFormValues & {
@@ -25,6 +26,9 @@ type Props = {
   // Unscoped. Predecessor validation has to see the whole project, or a link
   // to a task outside the current scope filter reads as "not found".
   allTasks: ScheduleTaskRow[];
+  calendar: CalendarLike;
+  constraintState: Map<string, TaskConstraintState>;
+  phase1Available: boolean;
 };
 
 const STATUS_TONE: Record<string, string> = {
@@ -117,7 +121,15 @@ function buildProgress(tasks: ScheduleTaskRow[]): Map<string, Progress> {
   return out;
 }
 
-export function ScheduleTable({ projectId, tasks, cpm, allTasks }: Props) {
+export function ScheduleTable({
+  projectId,
+  tasks,
+  cpm,
+  allTasks,
+  calendar,
+  constraintState,
+  phase1Available,
+}: Props) {
   const [phaseFilter, setPhaseFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [hideComplete, setHideComplete] = useState(false);
@@ -125,6 +137,7 @@ export function ScheduleTable({ projectId, tasks, cpm, allTasks }: Props) {
   const [reportedOnly, setReportedOnly] = useState(false);
   const [criticalOnly, setCriticalOnly] = useState(false);
   const [slippingOnly, setSlippingOnly] = useState(false);
+  const [blockedOnly, setBlockedOnly] = useState(false);
 
   const phaseOptions = useMemo(
     () => Array.from(new Set(tasks.map((t) => t.phase).filter(Boolean))) as string[],
@@ -148,31 +161,40 @@ export function ScheduleTable({ projectId, tasks, cpm, allTasks }: Props) {
       if (reportedOnly && t.status_source !== "dpr") return false;
       if (criticalOnly && !c?.critical) return false;
       if (slippingOnly && !(c && c.slipDays > 0)) return false;
+      if (blockedOnly && !(constraintState.get(t.wbs_code)?.open ?? 0)) return false;
       return true;
     });
   }, [
     tasks, cpm, phaseFilter, statusFilter, hideComplete,
     hideInternal, reportedOnly, criticalOnly, slippingOnly,
+    blockedOnly, constraintState,
   ]);
 
   const counts = useMemo(() => {
-    let critical = 0, slipping = 0, fromField = 0;
+    let critical = 0, nearCritical = 0, slipping = 0, blocked = 0;
     for (const t of tasks) {
       const c = cpm.byWbs.get(t.wbs_code);
       if (c?.critical) critical++;
+      if (c?.nearCritical) nearCritical++;
       if (c && c.slipDays > 0) slipping++;
-      if (t.status_source === "dpr") fromField++;
+      if (constraintState.get(t.wbs_code)?.open) blocked++;
     }
-    return { total: tasks.length, critical, slipping, fromField };
-  }, [tasks, cpm]);
+    return { total: tasks.length, critical, nearCritical, slipping, blocked };
+  }, [tasks, cpm, constraintState]);
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Stat label="Tasks" value={counts.total} />
         <Stat label="On critical path" value={counts.critical} tone="destructive" />
+        <Stat
+          label="Near critical"
+          value={counts.nearCritical}
+          tone="amber"
+          hint="5 working days of float or less - the tasks that become critical next"
+        />
         <Stat label="Projected late" value={counts.slipping} tone="amber" />
-        <Stat label="From field reports" value={counts.fromField} tone="blue" />
+        <Stat label="Blocked" value={counts.blocked} tone="destructive" hint="has an open constraint" />
       </div>
 
       <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-card p-3">
@@ -200,6 +222,7 @@ export function ScheduleTable({ projectId, tasks, cpm, allTasks }: Props) {
         </div>
         <Check label="Critical only" checked={criticalOnly} onChange={setCriticalOnly} />
         <Check label="Slipping only" checked={slippingOnly} onChange={setSlippingOnly} />
+        <Check label="Blocked only" checked={blockedOnly} onChange={setBlockedOnly} />
         <Check label="Field-reported only" checked={reportedOnly} onChange={setReportedOnly} />
         <Check label="Hide complete" checked={hideComplete} onChange={setHideComplete} />
         <Check label="Hide internal" checked={hideInternal} onChange={setHideInternal} />
@@ -220,7 +243,9 @@ export function ScheduleTable({ projectId, tasks, cpm, allTasks }: Props) {
               <th className="px-3 py-3 font-medium">Start</th>
               <th className="px-3 py-3 font-medium">Finish</th>
               <th className="px-3 py-3 font-medium">Projected</th>
-              <th className="px-3 py-3 text-right font-medium">Float</th>
+              <th className="px-3 py-3 text-right font-medium" title="Total float over free float. Total is how far the project can absorb; free is how far this task can move without touching a successor.">
+                Float
+              </th>
               {anyBaseline && <th className="px-3 py-3 text-right font-medium">vs Base</th>}
               <th className="px-3 py-3 text-right font-medium">Actions</th>
             </tr>
@@ -240,8 +265,9 @@ export function ScheduleTable({ projectId, tasks, cpm, allTasks }: Props) {
                 const isSummary = p.kind === "rolled";
                 const variance =
                   t.baseline_end && t.end_date
-                    ? workingDaysBetween(t.baseline_end, t.end_date)
+                    ? workingDaysBetween(t.baseline_end, t.end_date, calendar)
                     : null;
+                const blocked = constraintState.get(t.wbs_code);
 
                 return (
                   <tr
@@ -249,17 +275,75 @@ export function ScheduleTable({ projectId, tasks, cpm, allTasks }: Props) {
                     className={cn(
                       "hover:bg-muted/30",
                       c?.critical && "bg-destructive/5",
+                      !c?.critical && c?.nearCritical && "bg-amber-50/50",
                     )}
                   >
                     <td className="px-3 py-2.5 font-mono text-xs">{t.wbs_code}</td>
                     <td className="px-3 py-2.5">
-                      <div className="flex items-center gap-1.5" style={{ paddingLeft: indent }}>
+                      <div className="flex flex-wrap items-center gap-1.5" style={{ paddingLeft: indent }}>
+                        {c?.isMilestone && (
+                          <span
+                            className="text-xs text-foreground/70"
+                            title="Milestone - marks an instant, consumes no working days"
+                          >
+                            &#9670;
+                          </span>
+                        )}
                         <span className={cn("font-medium", isSummary && "text-muted-foreground")}>
                           {t.task_name}
                         </span>
                         {c?.critical && (
                           <span className="rounded bg-destructive/10 px-1 text-[10px] font-medium text-destructive">
                             CRITICAL
+                          </span>
+                        )}
+                        {!c?.critical && c?.nearCritical && (
+                          <span
+                            className="rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-900"
+                            title={`${c.totalFloat} working days of float - this becomes critical next`}
+                          >
+                            NEAR
+                          </span>
+                        )}
+                        {c?.isolated && (
+                          <span
+                            className="rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground"
+                            title="No predecessor and no successor. Its float is measured against itself, so it is neither critical nor safe - it is simply not connected to the job."
+                          >
+                            UNLINKED
+                          </span>
+                        )}
+                        {t.date_constraint_type && (
+                          <span
+                            className="rounded bg-blue-100 px-1 text-[10px] font-medium text-blue-900"
+                            title={`${t.date_constraint_type} ${t.date_constraint_date}`}
+                          >
+                            {t.date_constraint_type}
+                          </span>
+                        )}
+                        {c?.constraintViolation && (
+                          <span
+                            className="rounded bg-destructive/10 px-1 text-[10px] font-medium text-destructive"
+                            title={c.constraintViolation}
+                          >
+                            CONFLICT
+                          </span>
+                        )}
+                        {blocked && blocked.open > 0 && (
+                          <span
+                            className={cn(
+                              "rounded px-1 text-[10px] font-medium",
+                              blocked.overdue > 0
+                                ? "bg-destructive/10 text-destructive"
+                                : "bg-amber-100 text-amber-900",
+                            )}
+                            title={
+                              blocked.overdue > 0
+                                ? `${blocked.open} open constraint${blocked.open === 1 ? "" : "s"}, ${blocked.overdue} past need-by`
+                                : `${blocked.open} open constraint${blocked.open === 1 ? "" : "s"}${blocked.nextNeedBy ? `, next due ${blocked.nextNeedBy}` : ""}`
+                            }
+                          >
+                            BLOCKED {blocked.open}
                           </span>
                         )}
                       </div>
@@ -296,13 +380,26 @@ export function ScheduleTable({ projectId, tasks, cpm, allTasks }: Props) {
                     </td>
                     <td className="px-3 py-2.5 text-right tabular-nums">
                       {c ? (
-                        <span className={cn(
-                          c.totalFloat <= 0 ? "font-medium text-destructive"
-                            : c.totalFloat <= 5 ? "text-amber-700"
-                            : "text-muted-foreground",
-                        )}>
-                          {c.totalFloat}d
-                        </span>
+                        <div>
+                          <span className={cn(
+                            c.isolated ? "text-muted-foreground"
+                              : c.totalFloat <= 0 ? "font-medium text-destructive"
+                              : c.nearCritical ? "text-amber-700"
+                              : "text-muted-foreground",
+                          )}>
+                            {c.isolated ? "-" : `${c.totalFloat}d`}
+                          </span>
+                          {/* Free float only earns its place when it differs -
+                              showing "5d / 5d" on every row is noise. */}
+                          {!c.isolated && c.freeFloat !== c.totalFloat && (
+                            <div
+                              className="text-[11px] text-muted-foreground"
+                              title="Free float - days this task can slip before it moves a successor"
+                            >
+                              {c.freeFloat}d free
+                            </div>
+                          )}
+                        </div>
                       ) : <span className="text-muted-foreground">-</span>}
                     </td>
                     {anyBaseline && (
@@ -327,6 +424,7 @@ export function ScheduleTable({ projectId, tasks, cpm, allTasks }: Props) {
                         phaseOptions={phaseOptions}
                         statusOptions={statusOptions}
                         allTasks={allTasks}
+                        phase1Available={phase1Available}
                         trigger={<Button variant="ghost" size="sm">Edit</Button>}
                       />
                     </td>
@@ -342,8 +440,11 @@ export function ScheduleTable({ projectId, tasks, cpm, allTasks }: Props) {
         Progress comes from approved field reports only - a task with no approved
         report shows &ldquo;No report&rdquo; rather than an estimated percentage.
         Summary rows roll up their leaf tasks weighted by duration. Projected
-        dates and float are calculated from the dependency network in working
-        days, skipping weekends and holidays.
+        dates and float are calculated from the whole dependency network in
+        working days, skipping weekends, holidays and any days recorded on the
+        project calendar. Float is shown as total over free: total is how much
+        the project can absorb, free is how far this task can move before it
+        moves something else.
       </p>
     </div>
   );
@@ -389,10 +490,15 @@ function ProgressCell({ progress }: { progress: Progress }) {
 }
 
 function Stat({
-  label, value, tone,
-}: { label: string; value: number; tone?: "emerald" | "blue" | "destructive" | "amber" }) {
+  label, value, tone, hint,
+}: {
+  label: string;
+  value: number;
+  tone?: "emerald" | "blue" | "destructive" | "amber";
+  hint?: string;
+}) {
   return (
-    <div className="rounded-lg border bg-card px-4 py-3 shadow-sm">
+    <div className="rounded-lg border bg-card px-4 py-3 shadow-sm" title={hint}>
       <div className={cn(
         "text-2xl font-semibold tabular-nums",
         tone === "emerald" && "text-emerald-700",
