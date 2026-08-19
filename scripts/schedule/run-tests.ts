@@ -25,6 +25,26 @@ import {
   type CpmInput,
 } from "@/lib/schedule-cpm";
 import { assessSchedule } from "@/lib/schedule-health";
+import {
+  buildImportRows,
+  compareWbs,
+  diffImport,
+  guessColumns,
+  nextChildCode,
+  nextTopLevelCode,
+  parseGrid,
+  parseLooseDate,
+  parseLooseDuration,
+  planIndent,
+  planMove,
+  planOutdent,
+  orderRenames,
+  rewritePredecessors,
+  shiftDates,
+  splitPredecessorToken,
+  type ColumnKey,
+  type EditTask,
+} from "@/lib/schedule-edit";
 
 // ---- tiny test runner ----
 let passed = 0;
@@ -518,6 +538,288 @@ section("Schedule health - DCMA checks");
   const health = assessSchedule(tasks, computeCpm(tasks, OPTS), { dataDate: "2026-09-01" });
   const rel = health.checks.find((c) => c.id === "relationship_types")!;
   check("an all-SS network is flagged", rel.status !== "pass", rel.detail);
+}
+
+
+// ============================================================================
+section("Editing - WBS arithmetic");
+
+{
+  eq("5.1.10 sorts after 5.1.9", compareWbs("5.1.10", "5.1.9") > 0, true);
+  eq("5.1 sorts before 5.1.1", compareWbs("5.1", "5.1.1") < 0, true);
+
+  const t = (wbs: string, i: number): EditTask => ({
+    id: `id-${wbs}`, wbs_code: wbs, task_name: wbs, predecessors: null,
+    sort_order: (i + 1) * 10, level_code: wbs.split(".").length,
+  });
+  const set = ["5.1", "5.1.1", "5.1.2", "5.1.10"].map(t);
+  // Highest child plus one, never the first gap - a reused code silently
+  // re-points whatever still references the deleted task.
+  eq("next child after 5.1.10 is 5.1.11", nextChildCode(set, "5.1"), "5.1.11");
+  // Sweet Springs has no depth-1 row - the "5" root went with the civil cut -
+  // so the top of the schedule is 5.1 and a new branch beside it is 5.2.
+  eq("no depth-1 task means no depth-1 sibling", nextChildCode(set, null), "1");
+  eq("top-level code follows the shallowest row", nextTopLevelCode(set), "5.2");
+  eq("empty schedule starts at 1", nextTopLevelCode([]), "1");
+}
+
+section("Editing - predecessor rewriting");
+
+{
+  const map = new Map([["5.1.1.2", "5.1.1.9"]]);
+  eq(
+    "rewrite keeps type and lag",
+    rewritePredecessors("5.1.1.2SS+3, 5.1.1.4", map),
+    "5.1.1.9SS+3, 5.1.1.4",
+  );
+  eq("rewrite leaves untouched strings alone", rewritePredecessors("5.1.1.4", map), "5.1.1.4");
+  eq("rewrite handles null", rewritePredecessors(null, map), null);
+}
+
+section("Editing - indent, outdent, move");
+
+{
+  const mk = (wbs: string, i: number, preds: string | null = null): EditTask => ({
+    id: `id-${wbs}`, wbs_code: wbs, task_name: `Task ${wbs}`, predecessors: preds,
+    sort_order: (i + 1) * 10, level_code: wbs.split(".").length,
+  });
+  // 5.1.3 depends on 5.1.2; indenting 5.1.2 under 5.1.1 must repoint it.
+  const tasks = [
+    mk("5.1", 0), mk("5.1.1", 1), mk("5.1.2", 2), mk("5.1.3", 3, "5.1.2"),
+  ];
+
+  const ind = planIndent(tasks, ["5.1.2"]);
+  eq("indent succeeds", ind.ok, true);
+  eq("indent renames one task", ind.renames.length, 1);
+  eq("indent target is the first free child code", ind.renames[0]?.to, "5.1.1.1");
+  eq("indent repoints the successor", ind.predecessorRewrites.length, 1);
+  eq(
+    "successor now points at the new code",
+    ind.predecessorRewrites[0]?.predecessors,
+    "5.1.1.1",
+  );
+  eq("indent sets the new depth", ind.levelUpdates[0]?.level_code, 4);
+
+  // A branch moves whole.
+  const withChild = [...tasks, mk("5.1.2.1", 4)];
+  const ind2 = planIndent(withChild, ["5.1.2"]);
+  eq("indent carries descendants", ind2.renames.length, 2);
+  eq(
+    "descendant keeps its position under the moved parent",
+    ind2.renames.find((r) => r.from === "5.1.2.1")?.to,
+    "5.1.1.1.1",
+  );
+
+  // The first row at a level has nothing to indent under.
+  eq("indent refuses the first sibling", planIndent(tasks, ["5.1.1"]).ok, false);
+
+  const out = planOutdent(withChild, ["5.1.2.1"]);
+  eq("outdent succeeds", out.ok, true);
+  eq("outdent promotes to the next free sibling", out.renames[0]?.to, "5.1.4");
+
+  // 5.1's code implies a parent "5", but no such task exists, so there is no
+  // level to be promoted into and the bare code "1" is not an answer.
+  eq("outdent refuses a task whose parent is not a real row", planOutdent(tasks, ["5.1"]).ok, false);
+  const rooted = [mk("5", -1), ...tasks];
+  eq("outdent works when the parent really exists", planOutdent(rooted, ["5.1.1"]).ok, true);
+
+  // Moving steps over a whole block, not one row.
+  const flat = [mk("1", 0), mk("2", 1), mk("2.1", 2), mk("3", 3)];
+  const moved = planMove(flat, ["3"], "up");
+  eq("move up reorders", moved.sortUpdates.length > 0, true);
+  const order = moved.sortUpdates
+    .slice()
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((u) => u.id);
+  // "3" has to clear both "2" and its subtask, not land between them.
+  eq("move up steps over the whole block", order.join(","), "id-1,id-3,id-2,id-2.1");
+
+  const down = planMove(flat, ["2"], "down");
+  const downOrder = down.sortUpdates
+    .slice()
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((u) => u.id);
+  eq("move down carries the subtree", downOrder.join(","), "id-1,id-3,id-2,id-2.1");
+
+  // Reordering is display order only. A move that would change who the parent
+  // is has to be refused, or the row order and the WBS tree start disagreeing.
+  const nested = [mk("1", 0), mk("1.1", 1), mk("1.2", 2), mk("2", 3)];
+  const escape = planMove(nested, ["1.2"], "down");
+  eq("a move out of the branch is refused", escape.ok, false);
+  eq("moving inside the branch is fine", planMove(nested, ["1.2"], "up").ok, true);
+}
+
+{
+  // Two tasks that want each other's code have to be ordered, or the unique
+  // index rejects the write halfway through.
+  const swap = [
+    { id: "a", from: "1", to: "2" },
+    { id: "b", from: "2", to: "1" },
+  ];
+  const { direct, viaTemp } = orderRenames(swap, new Set(["1", "2"]));
+  eq("a swap needs a temporary code", viaTemp.length > 0, true);
+  eq("every rename is still accounted for", direct.length + viaTemp.length, 2);
+
+  const chain = [{ id: "a", from: "1", to: "9" }];
+  const r2 = orderRenames(chain, new Set(["1", "2"]));
+  eq("a free target needs no temp", r2.viaTemp.length, 0);
+}
+
+section("Editing - loose value parsing");
+
+{
+  eq("ISO date", parseLooseDate("2026-09-08"), "2026-09-08");
+  eq("US slash date", parseLooseDate("9/8/26"), "2026-09-08");
+  eq("four-digit year", parseLooseDate("09/08/2026"), "2026-09-08");
+  eq("spelled month", parseLooseDate("Sep 8, 2026"), "2026-09-08");
+  eq("day first spelled month", parseLooseDate("8-Sep-26"), "2026-09-08");
+  eq("31 Feb is rejected", parseLooseDate("2/31/26"), null);
+  eq("prose is not a date", parseLooseDate("next week"), null);
+
+  eq("bare number duration", parseLooseDuration("5"), 5);
+  eq("Smartsheet day suffix", parseLooseDuration("5d"), 5);
+  eq("estimated flag ignored", parseLooseDuration("5d?"), 5);
+  eq("weeks convert to working days", parseLooseDuration("2w"), 10);
+  eq("garbage duration", parseLooseDuration("tbd"), null);
+}
+
+{
+  const a = splitPredecessorToken("12FS+3d")!;
+  eq("token ref", a.ref, "12");
+  eq("token type", a.type, "FS");
+  eq("token lag", a.lag, 3);
+
+  const b = splitPredecessorToken("5.1.1.2SS")!;
+  eq("dotted ref survives", b.ref, "5.1.1.2");
+  eq("type without lag", b.type, "SS");
+  eq("no lag is zero", b.lag, 0);
+
+  const c = splitPredecessorToken("14FF-2")!;
+  eq("negative lag", c.lag, -2);
+  eq("bare ref defaults to FS", splitPredecessorToken("7")!.type, "FS");
+}
+
+section("Editing - pasted grid import");
+
+{
+  const pasted = [
+    "WBS\tTask Name\tDuration\tStart\tFinish\tPredecessors",
+    "5.1.1\tClear and grub\t10d\t9/1/26\t9/14/26\t",
+    "5.1.2\tInstall culvert\t5d\t9/15/26\t9/21/26\t1",
+    "5.1.3\tBuild entrance\t8d\t9/16/26\t9/25/26\t2SS+1d",
+  ].join("\n");
+
+  const grid = parseGrid(pasted);
+  eq("tab delimiter detected", grid.delimiter, "tab");
+  eq("header row detected", grid.headers?.[1], "Task Name");
+  eq("data rows", grid.rows.length, 3);
+
+  const mapping = guessColumns(grid.headers, grid.rows);
+  eq("wbs column mapped", mapping[0], "wbs_code");
+  eq("name column mapped", mapping[1], "task_name");
+  eq("duration column mapped", mapping[2], "duration_days");
+  eq("start column mapped", mapping[3], "start_date");
+  eq("finish column mapped", mapping[4], "end_date");
+  eq("predecessor column mapped", mapping[5], "predecessors");
+
+  const { rows, notes } = buildImportRows(grid, mapping);
+  eq("duration parsed", rows[0].values.duration_days, 10);
+  eq("date parsed", rows[0].values.start_date, "2026-09-01");
+  // The whole point of the Smartsheet bridge: row numbers become WBS codes.
+  eq("row-number predecessor translated", rows[1].values.predecessors, "5.1.1");
+  eq("type and lag survive translation", rows[2].values.predecessors, "5.1.2SS+1");
+  check("translation is reported", notes.some((n) => n.includes("row numbers")), notes.join(" "));
+  eq("no row issues", rows.filter((r) => r.issues.length).length, 0);
+}
+
+{
+  // No WBS column: hierarchy comes from the indentation the clipboard kept.
+  const pasted = [
+    "Task Name\tDuration",
+    "Sitework\t",
+    "  Clear and grub\t10",
+    "  Rough grade\t12",
+  ].join("\n");
+  const grid = parseGrid(pasted);
+  const mapping = guessColumns(grid.headers, grid.rows);
+  const { rows } = buildImportRows(grid, mapping, { wbsRoot: "5.2" });
+  eq("root applied", rows[0].wbs_code, "5.2.1");
+  eq("indent becomes depth", rows[1].wbs_code, "5.2.1.1");
+  eq("second child increments", rows[2].wbs_code, "5.2.1.2");
+}
+
+{
+  // A quoted comma must not split the cell.
+  const grid = parseGrid('WBS,Task Name\n5.1.1,"Clear, grub and haul"');
+  eq("comma delimiter detected", grid.delimiter, "comma");
+  eq("quoted comma kept", grid.rows[0][1], "Clear, grub and haul");
+}
+
+section("Editing - import diff");
+
+{
+  const existing: EditTask[] = [
+    {
+      id: "a", wbs_code: "5.1.1", task_name: "Clear and grub", predecessors: null,
+      sort_order: 10, level_code: 3, duration_days: 10,
+      start_date: "2026-09-01", end_date: "2026-09-14",
+      phase: "Civil", assigned_to: "Pyramid", status: "In Progress",
+    },
+    {
+      id: "b", wbs_code: "5.1.9", task_name: "Old task", predecessors: null,
+      sort_order: 20, level_code: 3,
+    },
+  ];
+
+  const grid = parseGrid(
+    [
+      "WBS\tTask Name\tDuration",
+      "5.1.1\tClear and grub\t12",
+      "5.1.2\tInstall culvert\t5",
+    ].join("\n"),
+  );
+  const mapping = guessColumns(grid.headers, grid.rows);
+  const { rows } = buildImportRows(grid, mapping, {
+    knownWbs: existing.map((e) => e.wbs_code),
+  });
+
+  const diff = diffImport(existing, rows, mapping);
+  eq("one add", diff.adds.length, 1);
+  eq("one change", diff.changes.length, 1);
+  eq("the change is the duration", diff.changes[0].fields[0].field, "duration_days");
+  eq("from value", diff.changes[0].fields[0].from, 10);
+  eq("to value", diff.changes[0].fields[0].to, 12);
+  // The destructive default an unguarded importer gets wrong: a three-column
+  // paste must not blank phase, assignment and logic on the task it touches.
+  eq("unmapped fields are untouched", diff.changes[0].fields.length, 1);
+  eq("no deletes without opting in", diff.deletes.length, 0);
+
+  const scoped = diffImport(existing, rows, mapping, { deleteMissingUnder: "5.1" });
+  eq("opting in finds the missing task", scoped.deletes.length, 1);
+  eq("and it is the right one", scoped.deletes[0].wbs_code, "5.1.9");
+
+  const otherBranch = diffImport(existing, rows, mapping, { deleteMissingUnder: "6" });
+  eq("deletes stay inside the named branch", otherBranch.deletes.length, 0);
+}
+
+{
+  // A duplicated code has to block the apply, not silently win last-write.
+  const grid = parseGrid(["WBS\tTask Name", "5.1.1\tOne", "5.1.1\tTwo"].join("\n"));
+  const mapping = guessColumns(grid.headers, grid.rows);
+  const { rows } = buildImportRows(grid, mapping);
+  const diff = diffImport([], rows, mapping);
+  check("duplicate WBS blocks the import", diff.blocking.length > 0, diff.blocking.join(" "));
+}
+
+section("Editing - bulk date shift");
+
+{
+  // Fri 4 Sep 2026 + 1 working day is Tue 8 Sep, because Mon 7 Sep is Labor Day.
+  const moved = shiftDates({ start_date: "2026-09-04", end_date: "2026-09-04" }, 1, 5)!;
+  eq("shift skips the weekend and the holiday", moved.start_date, "2026-09-08");
+  const back = shiftDates({ start_date: "2026-09-08", end_date: "2026-09-08" }, -1, 5)!;
+  eq("negative shift pulls back over the same days", back.start_date, "2026-09-04");
+  eq("a task with no dates is skipped", shiftDates({}, 5, 5), null);
 }
 
 // ============================================================================

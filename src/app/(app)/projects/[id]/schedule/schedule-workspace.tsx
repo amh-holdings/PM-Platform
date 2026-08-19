@@ -21,12 +21,15 @@ import {
 import { SCOPE_ORDER, scopeOf, type TaskScope } from "@/lib/schedule-scope";
 import {
   applyProjectedDates,
+  bulkUpdateScheduleTasks,
   setScheduleBaseline,
   setScheduleDataDate,
   takeScheduleUpdate,
 } from "../schedule-actions";
 import { ScheduleTable, type ScheduleTaskRow } from "./schedule-table";
-import { ScheduleGantt } from "./schedule-gantt";
+import { ScheduleGantt, type GanttEdit } from "./schedule-gantt";
+import { ScheduleEditGrid } from "./schedule-edit-grid";
+import { ScheduleImportDialog } from "./schedule-import-dialog";
 import { ScheduleLookaheadView } from "./schedule-lookahead-view";
 import { ScheduleHealthView, type ScheduleUpdateRow } from "./schedule-health-view";
 import { ScheduleConstraintsView } from "./schedule-constraints-view";
@@ -48,7 +51,7 @@ type Props = {
   updatesAvailable: boolean;
 };
 
-type View = "table" | "gantt" | "lookahead" | "health" | "constraints";
+type View = "table" | "edit" | "gantt" | "lookahead" | "health" | "constraints";
 
 function fmt(iso: string | null): string {
   if (!iso) return "-";
@@ -91,6 +94,26 @@ export function ScheduleWorkspace({
         calendarExceptions as unknown as CalendarException[],
       ),
     [workWeek, calendarExceptions],
+  );
+
+  // Shared with the edit grid and every task dialog. Derived from the whole
+  // project rather than the current scope, so filtering to Civil does not
+  // shrink the list of phases you can assign.
+  const phaseOptions = useMemo(
+    () => Array.from(new Set(tasks.map((t) => t.phase).filter(Boolean))) as string[],
+    [tasks],
+  );
+  const statusOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...(tasks.map((t) => t.status).filter(Boolean) as string[]),
+          "Not Started",
+          "In Progress",
+          "Complete",
+        ]),
+      ),
+    [tasks],
   );
 
   const scopeCounts = useMemo(() => {
@@ -158,6 +181,26 @@ export function ScheduleWorkspace({
       setMsg(res.ok ? onOk() : `Failed: ${res.error}`);
       if (res.ok) router.refresh();
     });
+  }
+
+  // Bars dropped on the Gantt. Same write path as the grid and the import, so
+  // a date moved by dragging is indistinguishable from one that was typed.
+  async function commitGanttEdits(edits: GanttEdit[]) {
+    setMsg(null);
+    const res = await bulkUpdateScheduleTasks(
+      projectId,
+      edits.map((e) => ({
+        id: e.id,
+        start_date: e.start_date,
+        end_date: e.end_date,
+      })),
+    );
+    setMsg(
+      res.ok
+        ? `${res.count} task${res.count === 1 ? "" : "s"} moved. The baseline is untouched, so the variance is still visible.`
+        : `Failed: ${res.error}`,
+    );
+    if (res.ok) router.refresh();
   }
 
   function takeBaseline(onlyUnbaselined: boolean) {
@@ -314,6 +357,15 @@ export function ScheduleWorkspace({
               ? `, ${calendarExceptions.length} calendar exception${calendarExceptions.length === 1 ? "" : "s"}`
               : ""}
           </span>
+          <ScheduleImportDialog
+            projectId={projectId}
+            tasks={tasks as never}
+            trigger={
+              <Button variant="outline" size="sm" title="Paste rows from Smartsheet or Excel">
+                Import rows
+              </Button>
+            }
+          />
           <CalendarDialog
             projectId={projectId}
             workWeek={workWeek}
@@ -374,6 +426,7 @@ export function ScheduleWorkspace({
           {(
             [
               ["table", "Table"],
+              ["edit", "Edit"],
               ["gantt", "Gantt"],
               ["lookahead", "Look-ahead"],
               ["health", "Health"],
@@ -485,7 +538,27 @@ export function ScheduleWorkspace({
           phase1Available={phase1Available}
         />
       )}
-      {view === "gantt" && <ScheduleGantt tasks={scoped} cpm={cpm} />}
+      {view === "edit" && (
+        <ScheduleEditGrid
+          projectId={projectId}
+          tasks={scoped}
+          allTasks={tasks}
+          calendar={calendar}
+          phaseOptions={phaseOptions}
+          statusOptions={statusOptions}
+          phase1Available={phase1Available}
+        />
+      )}
+      {view === "gantt" && (
+        <ScheduleGantt
+          tasks={scoped}
+          cpm={cpm}
+          editable
+          calendar={calendar}
+          saving={pending}
+          onCommit={commitGanttEdits}
+        />
+      )}
       {view === "lookahead" && (
         <ScheduleLookaheadView
           tasks={scoped}
