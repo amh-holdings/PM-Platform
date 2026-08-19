@@ -36,6 +36,7 @@ import {
   parseLooseDate,
   parseLooseDuration,
   planIndent,
+  planDrop,
   planMove,
   planOutdent,
   orderRenames,
@@ -663,6 +664,56 @@ section("Editing - indent, outdent, move");
   const chain = [{ id: "a", from: "1", to: "9" }];
   const r2 = orderRenames(chain, new Set(["1", "2"]));
   eq("a free target needs no temp", r2.viaTemp.length, 0);
+}
+
+section("Editing - drag and drop");
+
+{
+  const mk = (wbs: string, i: number, preds: string | null = null): EditTask => ({
+    id: `id-${wbs}`, wbs_code: wbs, task_name: `Task ${wbs}`, predecessors: preds,
+    sort_order: (i + 1) * 10, level_code: wbs.split(".").length,
+  });
+  const order = (p: { sortUpdates: { id: string; sort_order: number }[] }) =>
+    p.sortUpdates.slice().sort((a, b) => a.sort_order - b.sort_order).map((u) => u.id).join(",");
+
+  // Same parent: order only, nothing renamed.
+  const sibs = [mk("1", 0), mk("1.1", 1), mk("1.2", 2), mk("1.3", 3)];
+  const reorder = planDrop(sibs, ["1.3"], "1.1", "before");
+  eq("sibling drop succeeds", reorder.ok, true);
+  eq("sibling drop does not re-parent", reorder.reparents, false);
+  eq("sibling drop renames nothing", reorder.renames.length, 0);
+  eq("sibling drop reorders", order(reorder), "id-1,id-1.3,id-1.1,id-1.2");
+
+  // Dropping after a row places you past its whole subtree, not inside it.
+  const nested = [mk("1", 0), mk("1.1", 1), mk("1.1.1", 2), mk("1.2", 3), mk("1.3", 4)];
+  const past = planDrop(nested, ["1.3"], "1.1", "after");
+  eq("after clears the target's subtree", order(past), "id-1,id-1.1,id-1.1.1,id-1.3,id-1.2");
+
+  // A drop under a different parent renames and repoints.
+  const cross = [mk("1", 0), mk("1.1", 1), mk("2", 2), mk("2.1", 3, "1.1")];
+  const moved = planDrop(cross, ["1.1"], "2.1", "after");
+  eq("cross-branch drop succeeds", moved.ok, true);
+  eq("cross-branch drop re-parents", moved.reparents, true);
+  eq("cross-branch drop renames the moved row", moved.renames[0]?.to, "2.2");
+  eq("cross-branch drop repoints the successor", moved.predecessorRewrites.length, 1);
+  eq(
+    "successor points at the new code",
+    moved.predecessorRewrites[0]?.predecessors,
+    "2.2",
+  );
+  eq("cross-branch drop still sets the order", moved.sortUpdates.length, 4);
+
+  // A summary takes its children with it.
+  const withKids = [mk("1", 0), mk("1.1", 1), mk("2", 2), mk("2.1", 3), mk("2.2", 4)];
+  const branch = planDrop(withKids, ["2"], "1", "before");
+  eq("a dragged summary carries its subtree", order(branch), "id-2,id-2.1,id-2.2,id-1,id-1.1");
+
+  // Dropping a branch into itself would detach it from the schedule.
+  eq("cannot drop a task inside itself", planDrop(withKids, ["2"], "2.1", "after").ok, false);
+  eq("cannot drop a task onto itself", planDrop(withKids, ["2"], "2", "before").ok, false);
+
+  // Dropping where it already is changes nothing rather than churning sort_order.
+  eq("a no-op drop writes nothing", planDrop(sibs, ["1.2"], "1.3", "before").sortUpdates.length, 0);
 }
 
 section("Editing - loose value parsing");

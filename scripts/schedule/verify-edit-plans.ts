@@ -15,6 +15,7 @@ import {
   guessColumns,
   nextTopLevelCode,
   parseGrid,
+  planDrop,
   planIndent,
   planMove,
   planOutdent,
@@ -102,6 +103,34 @@ if (demo.ok) {
   for (const w of demo.warnings) line(`  warn: ${w}`);
 } else line(`  refused: ${demo.error}`);
 
+// --- every possible drag and drop ------------------------------------------
+// 30 tasks x 30 targets x 2 positions. What matters is that nothing throws,
+// self-drops are refused, and a same-parent drop never renames anything.
+let dropOk = 0, dropRefused = 0, dropReparent = 0, dropNoop = 0, renamedOnSameParent = 0;
+for (const a of tasks) {
+  for (const b of tasks) {
+    for (const pos of ["before", "after"] as const) {
+      const p = planDrop(tasks, [a.wbs_code], b.wbs_code, pos);
+      if (!p.ok) { dropRefused++; continue; }
+      dropOk++;
+      if (p.reparents) dropReparent++;
+      else if (p.renames.length) renamedOnSameParent++;
+      if (!p.sortUpdates.length && !p.renames.length) dropNoop++;
+    }
+  }
+}
+line(`\nDrag and drop: ${dropOk} valid, ${dropRefused} refused, ${dropReparent} re-parent, ${dropNoop} no-op`);
+line(`  same-parent drops that renamed something (must be 0): ${renamedOnSameParent}`);
+
+// A worked re-parenting drop, with the full rename set.
+const from = tasks.find((t) => t.wbs_code.startsWith("5.1.2."))!;
+const onto = tasks.find((t) => t.wbs_code.startsWith("5.1.1."))!;
+const dropDemo = planDrop(tasks, [from.wbs_code], onto.wbs_code, "after");
+line(`\nWorked example - drag ${from.wbs_code} onto ${onto.wbs_code}:`);
+line(`  re-parents: ${dropDemo.reparents}`);
+for (const r of dropDemo.renames) line(`  ${r.from} -> ${r.to}`);
+for (const w of dropDemo.predecessorRewrites) line(`  repoint ${w.wbs_code}: ${w.predecessors}`);
+
 // --- shifting the whole schedule two weeks ---------------------------------
 const shifted = tasks.map((t) => shiftDates(t, 10, 5)).filter(Boolean);
 line(`\nShift +10 working days: ${shifted.length} of ${tasks.length} tasks have dates to move`);
@@ -138,7 +167,9 @@ const rowsWithIssues = rows.filter((r) => r.issues.length);
 line(`  ${rowsWithIssues.length} rows with unreadable values`);
 for (const r of rowsWithIssues.slice(0, 10)) line(`    row ${r.rowNumber} ${r.wbs_code}: ${r.issues.join("; ")}`);
 
-const verdict = diff.adds.length === 0 && diff.changes.length === 0 && diff.blocking.length === 0;
+const verdict =
+  diff.adds.length === 0 && diff.changes.length === 0 && diff.blocking.length === 0 &&
+  renamedOnSameParent === 0;
 line(`\n${verdict ? "PASS" : "FAIL"} - the schedule round-trips through the importer unchanged`);
 process.exit(verdict ? 0 : 1);
 }

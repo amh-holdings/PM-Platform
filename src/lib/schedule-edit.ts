@@ -549,6 +549,102 @@ export function planMove(
   };
 }
 
+// Drag a row (or a selection) and drop it between two others.
+//
+// Smartsheet's drag does two things at once. Here they are different animals
+// and the plan says which one happened: landing among your own siblings is
+// pure sort_order and renames nothing, while landing under a different parent
+// is the same renumbering edit as an indent, with every predecessor that
+// mentions the moved branch repointed to follow it.
+//
+// The parent is taken from the row you drop against, which is what makes the
+// gesture predictable: drop between two children of 5.1.2 and you become a
+// child of 5.1.2.
+export type DropPlan = StructurePlan & { reparents: boolean };
+
+export function planDrop(
+  allTasks: EditTask[],
+  movingWbs: string[],
+  targetWbs: string,
+  position: "before" | "after",
+): DropPlan {
+  const withKind = (p: StructurePlan, reparents: boolean): DropPlan => ({ ...p, reparents });
+  const ordered = scheduleOrder(allTasks);
+
+  const target = ordered.find((t) => t.wbs_code === targetWbs);
+  if (!target) return withKind(fail("That row is no longer on the schedule."), false);
+
+  // Blocks, in schedule order, each a selected root plus its whole subtree.
+  const claimed = new Set<string>();
+  const blocks: EditTask[][] = [];
+  for (const t of ordered) {
+    if (!movingWbs.includes(t.wbs_code) || claimed.has(t.wbs_code)) continue;
+    const rows = [t, ...ordered.filter((o) => isDescendantOf(o.wbs_code, t.wbs_code))];
+    for (const r of rows) claimed.add(r.wbs_code);
+    blocks.push(rows);
+  }
+  if (!blocks.length) return withKind(fail("Nothing to move."), false);
+
+  // Dropping a branch inside itself would detach it from the schedule.
+  for (const b of blocks) {
+    if (b.some((r) => r.wbs_code === targetWbs)) {
+      return withKind(fail("A task cannot be dropped inside itself."), false);
+    }
+  }
+
+  const newParent = parentCodeOf(target.wbs_code);
+  const moving = blocks.map((b) => b[0]);
+  const reparents = moving.some((m) => parentCodeOf(m.wbs_code) !== newParent);
+
+  // --- placement, which is the same either way ---------------------------
+  const movingIds = new Set(claimed);
+  const rest = ordered.filter((t) => !movingIds.has(t.wbs_code));
+  const targetIdx = rest.findIndex((t) => t.wbs_code === targetWbs);
+  if (targetIdx === -1) return withKind(fail("That row is no longer on the schedule."), false);
+
+  const targetSubtree =
+    1 + rest.filter((o) => isDescendantOf(o.wbs_code, targetWbs)).length;
+  const insertAt = position === "before" ? targetIdx : targetIdx + targetSubtree;
+
+  const flat = blocks.flat();
+  const placed = [...rest.slice(0, insertAt), ...flat, ...rest.slice(insertAt)];
+  const sortUpdates = placed.map((t, i) => ({ id: t.id, sort_order: (i + 1) * 10 }));
+
+  if (!reparents) {
+    const unchanged = placed.every((t, i) => ordered[i]?.id === t.id);
+    return withKind(unchanged ? { ...EMPTY_PLAN } : { ...EMPTY_PLAN, sortUpdates }, false);
+  }
+
+  // --- re-parenting, which renames --------------------------------------
+  const working: EditTask[] = ordered.map((t) => ({ ...t }));
+  const rootRenames: { task: EditTask; to: string }[] = [];
+  for (const m of moving) {
+    if (parentCodeOf(m.wbs_code) === newParent) continue;
+    const to = nextChildCode(working, newParent);
+    rootRenames.push({ task: m, to });
+    const from = m.wbs_code;
+    for (const w of working) {
+      if (w.wbs_code === from) w.wbs_code = to;
+      else if (isDescendantOf(w.wbs_code, from)) w.wbs_code = to + w.wbs_code.slice(from.length);
+    }
+  }
+
+  const plan = planFromRenames(allTasks, rootRenames);
+  if (!plan.ok) return withKind(plan, true);
+
+  return withKind(
+    {
+      ...plan,
+      sortUpdates,
+      warnings: [
+        `This drop moves the task under ${newParent ?? "the top level"}, which renumbers it. Dropping between rows that share its current parent would only change the order.`,
+        ...plan.warnings,
+      ],
+    },
+    true,
+  );
+}
+
 // ============================================================================
 // Bulk date shift
 // ============================================================================

@@ -11,11 +11,14 @@ import { parsePredecessors } from "@/lib/schedule-cpm";
 import {
   nextChildCode,
   nextTopLevelCode,
+  planDrop,
   planIndent,
   planMove,
   planOutdent,
+  parentCodeOf,
   scheduleOrder,
   shiftDates,
+  type DropPlan,
   type EditTask,
   type StructurePlan,
 } from "@/lib/schedule-edit";
@@ -101,6 +104,13 @@ export function ScheduleEditGrid({
     ReturnType<typeof describeTaskDeletion>
   >>(null);
   const [shiftBy, setShiftBy] = useState("5");
+  // Drag state. The moving set is WBS codes rather than ids because every
+  // planning function in schedule-edit.ts speaks WBS.
+  const [dragging, setDragging] = useState<string[] | null>(null);
+  const [dropAt, setDropAt] = useState<{ wbs: string; position: "before" | "after" } | null>(null);
+  // A drop that changes the parent renames codes, which is not something a
+  // drag gesture should do silently. Reorders apply on release; this does not.
+  const [pendingDrop, setPendingDrop] = useState<{ plan: DropPlan; parent: string | null } | null>(null);
   const [, startTransition] = useTransition();
   const cellRefs = useRef(new Map<string, HTMLElement>());
 
@@ -340,6 +350,58 @@ export function ScheduleEditGrid({
     else runStructure(planMove(all, codes, kind === "up" ? "up" : "down"), "Moved.");
   }
 
+  // ---- drag to reorder -----------------------------------------------------
+  function onDragStart(e: React.DragEvent, t: ScheduleTaskRow) {
+    if (structureBlocked) {
+      e.preventDefault();
+      setMsg({
+        tone: "warn",
+        text: "Save or discard your cell edits first - reordering can renumber WBS codes and the two would fight.",
+      });
+      return;
+    }
+    // Dragging a row that is part of the selection moves the whole selection,
+    // which is what every grid does and what makes multi-row moves possible.
+    const codes =
+      selected.has(t.id) && selected.size > 1
+        ? rows.filter((r) => selected.has(r.id)).map((r) => r.wbs_code)
+        : [t.wbs_code];
+    setDragging(codes);
+    setMsg(null);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", codes.join(","));
+  }
+
+  function onDragOverRow(e: React.DragEvent, t: ScheduleTaskRow) {
+    if (!dragging) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const before = e.clientY < rect.top + rect.height / 2;
+    setDropAt({ wbs: t.wbs_code, position: before ? "before" : "after" });
+  }
+
+  function onDropRow(e: React.DragEvent) {
+    e.preventDefault();
+    const moving = dragging;
+    const at = dropAt;
+    setDragging(null);
+    setDropAt(null);
+    if (!moving || !at) return;
+
+    // Planned against the whole project, not the scoped view, so a drop still
+    // reads the rows the scope filter is hiding.
+    const plan = planDrop(allTasks.map(asEdit), moving, at.wbs, at.position);
+    if (!plan.ok) { setMsg({ tone: "bad", text: plan.error ?? "Cannot drop there." }); return; }
+    if (!plan.sortUpdates.length && !plan.renames.length) return;
+
+    if (plan.reparents) {
+      setPendingDrop({ plan, parent: parentCodeOf(at.wbs) });
+      return;
+    }
+    runStructure(plan, "Reordered.");
+  }
+
   async function askDelete() {
     const codes = Array.from(selected).map((id) => byId.get(id)?.wbs_code).filter(Boolean) as string[];
     if (!codes.length) return;
@@ -395,7 +457,9 @@ export function ScheduleEditGrid({
         <span className="mx-1 h-6 w-px bg-border" />
 
         <span className="text-xs text-muted-foreground">
-          {selected.size ? `${selected.size} selected` : "Select rows to edit in bulk"}
+          {selected.size
+            ? `${selected.size} selected`
+            : "Drag the grip to reorder, or select rows to edit in bulk"}
         </span>
 
         <Button variant="outline" size="sm" disabled={!selected.size || busy} onClick={() => structure("up")}>
@@ -500,6 +564,54 @@ export function ScheduleEditGrid({
         </div>
       )}
 
+      {pendingDrop && (
+        <div className="space-y-2 rounded-md border border-blue-300 bg-blue-50 p-3 text-sm text-blue-900">
+          <p className="font-medium">
+            Move under {pendingDrop.parent ?? "the top level"}?
+          </p>
+          <p className="text-xs">
+            This drop changes the parent, not just the order, so the moved branch
+            is renumbered. Dropping between rows that already share its parent
+            would only change the order and rename nothing.
+          </p>
+          <ul className="space-y-0.5 font-mono text-xs">
+            {pendingDrop.plan.renames.slice(0, 12).map((r) => (
+              <li key={r.from}>{r.from} → {r.to}</li>
+            ))}
+            {pendingDrop.plan.renames.length > 12 && (
+              <li>...and {pendingDrop.plan.renames.length - 12} more</li>
+            )}
+          </ul>
+          {pendingDrop.plan.predecessorRewrites.length > 0 && (
+            <p className="text-xs">
+              {pendingDrop.plan.predecessorRewrites.length} predecessor reference
+              {pendingDrop.plan.predecessorRewrites.length === 1 ? "" : "s"} will be
+              repointed to follow it.
+            </p>
+          )}
+          <p className="text-xs">
+            Billing lines and cost codes hold WBS codes as plain text and will not
+            follow this rename.
+          </p>
+          <div className="flex gap-2 pt-1">
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                const p = pendingDrop.plan;
+                setPendingDrop(null);
+                runStructure(p, "Moved and renumbered.");
+              }}
+            >
+              {busy ? "Moving..." : "Move and renumber"}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setPendingDrop(null)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
       {confirmDelete && (
         <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
           <p className="font-medium text-destructive">
@@ -543,6 +655,7 @@ export function ScheduleEditGrid({
         <table className="w-full text-sm">
           <thead className="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
+              <th className="w-6 px-1 py-2" title="Drag to reorder" />
               <th className="w-8 px-2 py-2">
                 <input
                   type="checkbox"
@@ -568,7 +681,7 @@ export function ScheduleEditGrid({
           <tbody className="divide-y">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                <td colSpan={12} className="px-3 py-8 text-center text-sm text-muted-foreground">
                   No tasks in this scope yet. Use Add task, or Import rows to
                   paste a sheet.
                 </td>
@@ -584,12 +697,34 @@ export function ScheduleEditGrid({
                 return (
                   <tr
                     key={t.id}
+                    onDragOver={(e) => onDragOverRow(e, t)}
+                    onDrop={onDropRow}
                     className={cn(
                       "hover:bg-muted/20",
                       selected.has(t.id) && "bg-blue-50/60",
                       rowDirty && "bg-amber-50/60",
+                      dragging?.includes(t.wbs_code) && "opacity-40",
                     )}
+                    style={
+                      dropAt?.wbs === t.wbs_code
+                        ? {
+                            boxShadow:
+                              dropAt.position === "before"
+                                ? "inset 0 2px 0 0 #2563eb"
+                                : "inset 0 -2px 0 0 #2563eb",
+                          }
+                        : undefined
+                    }
                   >
+                    <td
+                      className="cursor-grab px-1 py-1 text-center text-muted-foreground active:cursor-grabbing"
+                      draggable
+                      onDragStart={(e) => onDragStart(e, t)}
+                      onDragEnd={() => { setDragging(null); setDropAt(null); }}
+                      title="Drag to reorder"
+                    >
+                      ⠿
+                    </td>
                     <td className="px-2 py-1">
                       <input
                         type="checkbox"
@@ -721,7 +856,12 @@ export function ScheduleEditGrid({
       </datalist>
 
       <p className="text-xs text-muted-foreground">
-        Arrow keys and Enter move between cells; Escape puts a cell back. Bulk
+        Drag the grip at the left of a row to reorder it; dragging a row that is
+        part of the selection moves the whole selection, and a summary always
+        carries its subtree. Dropping among a task&rsquo;s own siblings only
+        changes the order. Dropping it under a different parent renumbers it, so
+        that one asks first. Arrow keys and Enter move between cells; Escape puts
+        a cell back. Bulk
         actions land in the same unsaved state as a typed edit, so Discard undoes
         them. Progress is not editable here - it comes from approved field
         reports, and a schedule you can type a percentage into is a schedule
