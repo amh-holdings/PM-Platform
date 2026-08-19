@@ -164,12 +164,8 @@ async function main() {
     .lte("report_date", to)
     .order("report_date", { ascending: true });
   if (dprErr) throw dprErr;
-  if (!dprs?.length) {
-    console.error(`No field reports between ${from} and ${to}`);
-    process.exit(1);
-  }
 
-  const dprIds = dprs.map((d) => d.id);
+  const dprIds = (dprs ?? []).map((d) => d.id);
   const [{ data: pins }, { data: cmLogs }] = await Promise.all([
     supabase
       .from("inspections")
@@ -202,18 +198,32 @@ async function main() {
   }
 
   // ---- Build the evidence for each day ----
-  const days: DayEvidence[] = dprs.map((d) => {
-    const narrative = d.work_narrative ?? "";
-    const cmLog = cmByDate.get(d.report_date) ?? "";
-    const pinLines = pinsByDpr.get(d.id) ?? [];
+  // Union of both sources, not just field reports. A sub can miss a day; the CM
+  // rarely does, and a CM-log-only day still had production on it. Keying off
+  // dprs alone made those days invisible to this script.
+  const dprByDate = new Map((dprs ?? []).map((d) => [d.report_date, d]));
+  const allDates = Array.from(
+    new Set([...Array.from(dprByDate.keys()), ...Array.from(cmByDate.keys())])
+  ).sort();
+
+  if (allDates.length === 0) {
+    console.error(`No field reports or CM logs between ${from} and ${to}`);
+    process.exit(1);
+  }
+
+  const days: DayEvidence[] = allDates.map((date) => {
+    const d = dprByDate.get(date);
+    const narrative = d?.work_narrative ?? "";
+    const cmLog = cmByDate.get(date) ?? "";
+    const pinLines = d ? pinsByDpr.get(d.id) ?? [] : [];
     const combined = [narrative, cmLog, pinLines.join(" ")].join("\n");
     const loadsFromSub = countLoadsIn(narrative);
     const loadsFromCm = countLoadsIn(cmLog);
     const loads = countLoads(narrative, cmLog);
-    const crew = d.crew_count ?? null;
+    const crew = d?.crew_count ?? null;
     return {
-      date: d.report_date,
-      reportStatus: d.status,
+      date,
+      reportStatus: d?.status ?? "no field report",
       crewCount: crew,
       narrative,
       cmLog,
