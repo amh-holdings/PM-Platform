@@ -25,6 +25,8 @@ export function ProjectTabs({ projectId, role }: Props) {
     // reviewers), so there is no separate tab for it.
     { href: `${base}/field-reports`, label: "Field Reports", cap: "viewFieldReports" },
     { href: `${base}/cm-log`, label: "My Daily Log", cap: "viewAllReports" },
+    // The owner's daily Commodity Tracker. Phil files it; the CM can see it.
+    { href: `${base}/production`, label: "Production", cap: "viewDailyProduction" },
     { href: `${base}/billing`, label: "Billing", cap: "viewBilling" },
     { href: `${base}/pay-apps`, label: "Pay apps", cap: "viewPayApps" },
     { href: `${base}/change-orders`, label: "Change orders", cap: "viewChangeOrders" },

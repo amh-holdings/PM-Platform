@@ -45,6 +45,8 @@ export type Capability =
   | "reviewPins" // open/verify sub work pins
   | "decidePins" // approve/reject (also gated server-side by the approver rule)
   | "addCmChecks" // drop CM own-check pins
+  | "enterDailyProduction" // create/edit the daily commodity production report (Phil only)
+  | "viewDailyProduction" // see commodity production figures
   // --- per-tab / per-view visibility ---
   | "viewDashboard" // project dashboard landing
   | "viewFieldReports" // Field Reports tab
@@ -66,6 +68,8 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "reviewPins",
     "decidePins",
     "addCmChecks",
+    "enterDailyProduction",
+    "viewDailyProduction",
     "viewDashboard",
     "viewFieldReports",
     "viewBilling",
@@ -88,6 +92,7 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "reviewPins",
     "decidePins",
     "addCmChecks",
+    "viewDailyProduction",
     "viewDashboard",
     "viewFieldReports",
     "viewSchedule",
@@ -96,7 +101,9 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewContractValue",
     "viewDocuments",
   ]),
-  // Subcontractor: files field reports only.
+  // Subcontractor: files field reports only. Commodity production is AHC's
+  // deliverable to the owner, built FROM the sub's reports - the sub never
+  // touches it.
   sub: new Set<Capability>(["viewFieldReports", "submitFieldReport"]),
 };
 

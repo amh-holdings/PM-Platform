@@ -324,6 +324,101 @@ export type Database = {
           },
         ]
       }
+      commodities: {
+        Row: {
+          active: boolean
+          category: Database["public"]["Enums"]["commodity_category"]
+          created_at: string | null
+          id: string
+          key: string
+          label: string
+          project_id: string
+          smartsheet_rollup_row_id: number | null
+          sort_order: number
+          sov_item: string | null
+          total_quantity: number | null
+          total_verified: boolean
+          uom: string
+          updated_at: string | null
+        }
+        Insert: {
+          active?: boolean
+          category: Database["public"]["Enums"]["commodity_category"]
+          created_at?: string | null
+          id?: string
+          key: string
+          label: string
+          project_id: string
+          smartsheet_rollup_row_id?: number | null
+          sort_order?: number
+          sov_item?: string | null
+          total_quantity?: number | null
+          total_verified?: boolean
+          uom: string
+          updated_at?: string | null
+        }
+        Update: {
+          active?: boolean
+          category?: Database["public"]["Enums"]["commodity_category"]
+          created_at?: string | null
+          id?: string
+          key?: string
+          label?: string
+          project_id?: string
+          smartsheet_rollup_row_id?: number | null
+          sort_order?: number
+          sov_item?: string | null
+          total_quantity?: number | null
+          total_verified?: boolean
+          uom?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commodities_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      commodity_task_links: {
+        Row: {
+          commodity_id: string
+          created_at: string | null
+          id: string
+          schedule_task_id: string
+        }
+        Insert: {
+          commodity_id: string
+          created_at?: string | null
+          id?: string
+          schedule_task_id: string
+        }
+        Update: {
+          commodity_id?: string
+          created_at?: string | null
+          id?: string
+          schedule_task_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commodity_task_links_commodity_id_fkey"
+            columns: ["commodity_id"]
+            isOneToOne: false
+            referencedRelation: "commodities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commodity_task_links_schedule_task_id_fkey"
+            columns: ["schedule_task_id"]
+            isOneToOne: false
+            referencedRelation: "schedule_tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       comms_log: {
         Row: {
           comm_date: string | null
@@ -507,6 +602,83 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "v_cost_code_totals"
             referencedColumns: ["cost_code_id"]
+          },
+        ]
+      }
+      daily_production: {
+        Row: {
+          commodity_id: string
+          created_at: string | null
+          dpr_id: string | null
+          entered_by: string | null
+          id: string
+          notes: string | null
+          production_date: string
+          project_id: string
+          quantity: number
+          smartsheet_row_id: number | null
+          source: Database["public"]["Enums"]["production_source"]
+          synced_at: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          commodity_id: string
+          created_at?: string | null
+          dpr_id?: string | null
+          entered_by?: string | null
+          id?: string
+          notes?: string | null
+          production_date: string
+          project_id: string
+          quantity?: number
+          smartsheet_row_id?: number | null
+          source?: Database["public"]["Enums"]["production_source"]
+          synced_at?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          commodity_id?: string
+          created_at?: string | null
+          dpr_id?: string | null
+          entered_by?: string | null
+          id?: string
+          notes?: string | null
+          production_date?: string
+          project_id?: string
+          quantity?: number
+          smartsheet_row_id?: number | null
+          source?: Database["public"]["Enums"]["production_source"]
+          synced_at?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "daily_production_commodity_id_fkey"
+            columns: ["commodity_id"]
+            isOneToOne: false
+            referencedRelation: "commodities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_production_dpr_id_fkey"
+            columns: ["dpr_id"]
+            isOneToOne: false
+            referencedRelation: "dprs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_production_entered_by_fkey"
+            columns: ["entered_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_production_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -2469,6 +2641,7 @@ export type Database = {
       whoami: { Args: never; Returns: Json }
     }
     Enums: {
+      commodity_category: "civil" | "electrical" | "mechanical"
       comms_type:
         | "phone"
         | "email"
@@ -2476,6 +2649,7 @@ export type Database = {
         | "site_visit"
         | "text"
         | "other"
+      production_source: "field_report" | "backfill" | "manual"
       document_category:
         | "prime_contract"
         | "amendment"
@@ -2641,7 +2815,9 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      commodity_category: ["civil", "electrical", "mechanical"],
       comms_type: ["phone", "email", "meeting", "site_visit", "text", "other"],
+      production_source: ["field_report", "backfill", "manual"],
       document_category: [
         "prime_contract",
         "amendment",
