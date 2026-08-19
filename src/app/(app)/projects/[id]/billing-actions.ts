@@ -8,9 +8,11 @@ import {
   estimateProcurementProgress,
   estimateTaskProgress,
   isProcurementLine,
+  durationWeightedPct,
   type Confidence,
   type ProgressEstimate,
 } from "@/lib/progress";
+import { defaultBillingPeriod, periodEndOf } from "@/lib/billing-period";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -110,18 +112,69 @@ export type BillingSuggestion = {
   confidence: "high" | "medium" | "low" | "none";
   reasons: string[];          // one per linked task, in order
   sourcesSummary: string;     // e.g. "2 status, 1 date_interpolation"
+  /**
+   * Set when the line cannot produce a defensible number and needs a human.
+   * suggestedAmount is 0 whenever this is present.
+   */
+  blockedReason?: string;
+  /** True when targetPct was weighted by task duration rather than averaged. */
+  weightedByDuration: boolean;
+  /** The plain mean, so the UI can show what the weighting changed. */
+  unweightedPct: number;
+  /**
+   * The per-task working behind suggestedAmount, so the PM can see WHY the
+   * number is what it is before putting it on an owner-facing G702 rather than
+   * taking it on faith.
+   */
+  evidence: BillingEvidenceItem[];
 };
+
+export type BillingEvidenceItem = {
+  wbsCode: string;
+  taskName: string;
+  pct: number;
+  durationDays: number | null;
+  /** Share of the SOV line this task carries, 0-1. */
+  weight: number;
+  /** 'dpr' when an approved field report set it, else how it was inferred. */
+  source: string;
+};
+
+/**
+ * WBS codes that are summary/parent rows rather than real work.
+ *
+ * A parent's percent is a rollup, and on this project it is worse than that:
+ * applyPinProgressToSchedule writes an approved pin's task_new_pct straight
+ * onto whatever schedule_task the pin is linked to, so Sweet Springs' "5.1
+ * Civil Construction" summary carries 75% while nearly every child under it is
+ * Not Started. 75% x $413,045.92 on SOV 6.02 would recommend billing ~$230k for
+ * a month of clearing and grubbing. Summary rows never drive money; a SOV line
+ * linked only to summaries is reported as needing a re-link instead.
+ */
+function summaryWbsCodes(
+  tasks: Array<{ wbs_code: string; parent_wbs_code?: string | null }>,
+): Set<string> {
+  const parents = new Set<string>();
+  for (const t of tasks) {
+    if (t.parent_wbs_code) parents.add(t.parent_wbs_code);
+  }
+  return parents;
+}
 
 export async function computeBillingSuggestions(
   projectId: string,
+  periodMonth?: string,
 ): Promise<{ ok: true; suggestions: BillingSuggestion[]; nextMonthIso: string } | { ok: false; error: string }> {
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
-  const today = new Date();
-  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  const nextMonthIso = `${nextMonthStart.getFullYear()}-${String(nextMonthStart.getMonth() + 1).padStart(2, "0")}-01`;
+  // Progress is evaluated AS OF THE END OF THE PERIOD BEING BILLED, not today.
+  // Billing August on 3 September must see the schedule as it stood on
+  // 31 August, or estimateTaskProgress's date interpolation quietly credits
+  // September's planned work to August's application.
+  const period = periodMonth ?? defaultBillingPeriod();
+  const nextMonthIso = period;
+  const todayIso = periodEndOf(period);
 
   const [{ data: lines }, { data: tasks }, { data: totals }, { data: pos }] = await Promise.all([
     auth.supabase
@@ -130,7 +183,7 @@ export async function computeBillingSuggestions(
       .eq("project_id", projectId),
     auth.supabase
       .from("schedule_tasks")
-      .select("wbs_code, status, start_date, end_date, pct_complete")
+      .select("wbs_code, task_name, status, start_date, end_date, pct_complete, parent_wbs_code, duration_days")
       .eq("project_id", projectId),
     auth.supabase
       .from("v_billing_line_totals")
@@ -157,6 +210,18 @@ export async function computeBillingSuggestions(
         },
         todayIso,
       ),
+    );
+  }
+  const summaryCodes = summaryWbsCodes(tasks ?? []);
+  const taskNameByCode = new Map<string, string>();
+  for (const t of tasks ?? []) {
+    taskNameByCode.set(t.wbs_code, (t as { task_name?: string }).task_name ?? "");
+  }
+  const durationByCode = new Map<string, number | null>();
+  for (const t of tasks ?? []) {
+    durationByCode.set(
+      t.wbs_code,
+      (t as { duration_days?: number | null }).duration_days ?? null,
     );
   }
   const totalsById = new Map<string, { billed: number; remaining: number }>();
@@ -186,6 +251,10 @@ export async function computeBillingSuggestions(
     const t = totalsById.get(line.id) ?? { billed: 0, remaining: scheduledValue };
 
     let estimateRecords: ProgressEstimate[] = [];
+    // Parallel to estimateRecords: the scheduled duration backing each
+    // estimate, used to weight the roll-up. See durationWeightedPct().
+    let estimateWeights: Array<number | null> = [];
+    let evidenceCodes: string[] = [];
     let linkedCount = 0;
 
     // Procurement-scope lines: progress comes from PO state, NOT schedule date math.
@@ -203,21 +272,86 @@ export async function computeBillingSuggestions(
         linkedPos,
       );
       estimateRecords = [procEst];
+      estimateWeights = [null]; // single estimate - weighting is a no-op
+      evidenceCodes = [line.item_number];
       linkedCount = linkedPos.length;
     } else {
-      // Non-procurement lines: existing schedule-task-driven logic.
+      // Non-procurement lines: schedule-task-driven, leaf tasks only.
       const links = line.linked_task_wbs_codes ?? [];
       if (links.length === 0) continue;
-      const matched = links
-        .map((c) => estimateByCode.get(c))
-        .filter((e): e is ProgressEstimate => !!e);
+
+      const leafLinks = links.filter((c) => !summaryCodes.has(c));
+      const summaryLinks = links.filter((c) => summaryCodes.has(c));
+
+      if (leafLinks.length === 0) {
+        // Every link is a summary row, so there is no defensible percent.
+        // Surface it rather than dropping the line silently - a $0 with a
+        // reason is actionable, an absent row is not.
+        suggestions.push({
+          billingLineId: line.id,
+          itemNumber: line.item_number,
+          description: line.description,
+          scheduledValue,
+          alreadyBilled: t.billed,
+          remaining: t.remaining,
+          linkedTaskCount: 0,
+          targetPct: 0,
+          suggestedAmount: 0,
+          confidence: "none",
+          reasons: summaryLinks.map(
+            (c) => `${c} is a summary/parent task - its percent is a rollup, not measured work`,
+          ),
+          sourcesSummary: "blocked",
+          weightedByDuration: false,
+          unweightedPct: 0,
+          evidence: [],
+          blockedReason: `Linked only to summary task${summaryLinks.length > 1 ? "s" : ""} ${summaryLinks.join(", ")}. Re-link this SOV line to the leaf tasks that represent the actual work.`,
+        });
+        continue;
+      }
+
+      const matched = leafLinks
+        .map((c) => ({ code: c, est: estimateByCode.get(c) }))
+        .filter((m): m is { code: string; est: ProgressEstimate } => !!m.est);
       if (matched.length === 0) continue;
-      estimateRecords = matched;
+      estimateRecords = matched.map((m) => m.est);
+      estimateWeights = matched.map((m) => durationByCode.get(m.code) ?? null);
+      evidenceCodes = matched.map((m) => m.code);
       linkedCount = matched.length;
     }
 
-    const avgPct =
-      estimateRecords.reduce((s, e) => s + e.pct, 0) / estimateRecords.length;
+    const rollup = durationWeightedPct(
+      estimateRecords.map((e, i) => ({
+        pct: e.pct,
+        durationDays: estimateWeights[i] ?? null,
+      })),
+    );
+    const avgPct = rollup.pct;
+
+    const knownDur = estimateWeights.filter(
+      (d): d is number => d != null && d > 0,
+    );
+    const fallbackDur =
+      knownDur.length > 0
+        ? knownDur.reduce((a, b) => a + b, 0) / knownDur.length
+        : 1;
+    const totalWeight = estimateWeights.reduce(
+      (s2: number, d) => s2 + (d != null && d > 0 ? d : fallbackDur),
+      0,
+    );
+    const evidence: BillingEvidenceItem[] = estimateRecords.map((e, i) => {
+      const d = estimateWeights[i];
+      const w = d != null && d > 0 ? d : fallbackDur;
+      const code = evidenceCodes[i] ?? "";
+      return {
+        wbsCode: code,
+        taskName: taskNameByCode.get(code) ?? "",
+        pct: Math.round(e.pct * 1000) / 10,
+        durationDays: d ?? null,
+        weight: totalWeight > 0 ? w / totalWeight : 0,
+        source: e.source,
+      };
+    });
     const confidence: Confidence = aggregateConfidence(
       estimateRecords.map((e) => e.confidence),
     );
@@ -245,6 +379,9 @@ export async function computeBillingSuggestions(
       confidence,
       reasons: estimateRecords.map((e) => e.reason),
       sourcesSummary,
+      weightedByDuration: rollup.weightedByDuration,
+      unweightedPct: rollup.unweightedPct,
+      evidence,
     });
   }
 
@@ -311,6 +448,21 @@ export type BillableRow =
       scheduleSuggestedAmount?: number;
       scheduleConfidence?: Confidence;
       scheduleSourcesSummary?: string;
+      /**
+       * What the field evidence supports, and the working behind it. This -
+       * NOT the imported forecast - is what the panel proposes billing.
+       *
+       * The forecast came out of the owner cash-flow spreadsheet months ago and
+       * says what someone PLANNED to bill; the recommendation says what the
+       * approved field reports and the schedule actually support. Defaulting to
+       * the forecast meant the Create AFP button was pre-loaded with $123,108
+       * for an August the evidence valued at $95,064.
+       */
+      recommendedAmount?: number;
+      evidence?: BillingEvidenceItem[];
+      // Set when the signals do not support billing this line. The row is
+      // still rendered (unchecked, with the reason shown) rather than hidden.
+      blockedReason?: string;
     }
   | {
       kind: "suggestion";
@@ -325,6 +477,7 @@ export type BillableRow =
       reasons: string[];
       alreadyBilled: number;
       targetPct: number;
+      evidence?: BillingEvidenceItem[];
     };
 
 export type HiddenForecast = {
@@ -337,21 +490,21 @@ export type HiddenForecast = {
 
 export async function getBillThisPeriodRows(
   projectId: string,
+  periodMonth?: string,
 ): Promise<
-  | { ok: true; rows: BillableRow[]; hidden: HiddenForecast[] }
+  | { ok: true; rows: BillableRow[]; hidden: HiddenForecast[]; periodMonth: string }
   | { ok: false; error: string }
 > {
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
-  const today = new Date();
-  const thisMonthIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
-  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  // Tight billing window: current month + immediate next month only. Far-future
-  // forecasts (esp. from bulk cash-flow imports) belong on the timeline chart,
-  // not on the "Bill this period" action panel.
-  const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  const nextMonthIsoLocal = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, "0")}-01`;
+  // One period at a time. This used to be "current month + next month", which
+  // both mixed two months into one application and made a closed month
+  // unbillable once the calendar rolled over.
+  const period = periodMonth ?? defaultBillingPeriod();
+  const thisMonthIso = period;
+  const nextMonthIsoLocal = period;
+  const todayIso = periodEndOf(period);
 
   // Pull forecast entries within the billing window only.
   // billing_line_id is included explicitly so dedup against suggestions works.
@@ -394,10 +547,15 @@ export async function getBillThisPeriodRows(
       };
     });
 
-  // Now pull schedule-based suggestions for the upcoming period.
-  const suggResult = await computeBillingSuggestions(projectId);
+  // Schedule-based suggestions for the same period.
+  const suggResult = await computeBillingSuggestions(projectId, period);
   if (!suggResult.ok) {
-    return { ok: true, rows: allForecastRows.map((x) => x.row), hidden: [] };
+    return {
+      ok: true,
+      rows: allForecastRows.map((x) => x.row),
+      hidden: [],
+      periodMonth: period,
+    };
   }
   const { suggestions, nextMonthIso } = suggResult;
 
@@ -409,7 +567,7 @@ export async function getBillThisPeriodRows(
     .eq("project_id", projectId);
   const { data: taskInfo } = await auth.supabase
     .from("schedule_tasks")
-    .select("wbs_code, status, start_date, end_date, pct_complete")
+    .select("wbs_code, status, start_date, end_date, pct_complete, parent_wbs_code")
     .eq("project_id", projectId);
   const { data: posInfo } = await auth.supabase
     .from("procurement_orders")
@@ -458,6 +616,10 @@ export async function getBillThisPeriodRows(
       ).pct,
     );
   }
+  // Summary rows are excluded from the billing signal here for the same reason
+  // they are in computeBillingSuggestions - a rollup percent is not measured
+  // work. See summaryWbsCodes().
+  const summaryCodes = summaryWbsCodes(taskInfo ?? []);
   const poStateById = new Map<
     string,
     { total_value: number | null; status: string | null; signed_at: string | null }
@@ -470,12 +632,32 @@ export async function getBillThisPeriodRows(
     });
   }
 
-  // Filter: a forecast row appears only if the schedule (or PO state, for
-  // procurement lines) confirms work / scope is being billed. Items the
-  // signals say aren't happening shouldn't appear on a "Bill this period"
-  // panel even if the import put a forecast there.
+  // Every forecast row in the window is rendered. Where the schedule (or PO
+  // state, for procurement lines) does not support billing, the row carries a
+  // blockedReason and arrives unchecked instead of being dropped.
+  //
+  // It used to be dropped. On Sweet Springs that silently removed SOV 6.03
+  // (Fencing/SWPPP) from the August panel because its only link, 5.1.1.6, sat
+  // at 0% - while the approved 8/12 field report said the silt fence was
+  // finished. A line the PM may legitimately need to bill must never vanish
+  // without saying why. `hidden` is still populated so existing callers keep
+  // working, but it is now a duplicate view of the blocked rows, not a set of
+  // rows that disappeared.
   const forecastRows: BillableRow[] = [];
   const hidden: HiddenForecast[] = [];
+
+  const blockRow = (row: BillableRow, reason: string) => {
+    forecastRows.push({ ...row, blockedReason: reason } as BillableRow);
+    if (row.kind === "forecast") {
+      hidden.push({
+        itemNumber: row.itemNumber,
+        description: row.description,
+        periodMonth: row.periodMonth,
+        amount: row.amount,
+        reason,
+      });
+    }
+  };
   for (const x of allForecastRows) {
     const lineMeta = lineById.get(x.row.billingLineId);
 
@@ -516,31 +698,38 @@ export async function getBillThisPeriodRows(
           ...x.row,
           amount: billable,
         });
-      } else if (x.row.kind === "forecast") {
+      } else {
         const draftCount = linked.filter(
           (p) => p.status !== "cancelled" && !p.signed_at,
         ).length;
-        hidden.push({
-          itemNumber: x.row.itemNumber,
-          description: x.row.description,
-          periodMonth: x.row.periodMonth,
-          amount: x.row.amount,
-          reason:
-            draftCount > 0
-              ? `${draftCount} PO(s) linked but unsigned - mark a PO as signed to unlock billing`
-              : "Procurement line has no signed POs - submit + sign a PO to unlock billing",
-        });
+        blockRow(
+          x.row,
+          draftCount > 0
+            ? `${draftCount} PO(s) linked but unsigned - mark a PO as signed to unlock billing`
+            : "Procurement line has no signed POs - submit + sign a PO to unlock billing",
+        );
       }
       continue;
     }
 
-    // NON-PROCUREMENT: schedule task signal.
+    // NON-PROCUREMENT: schedule task signal, leaf tasks only.
     const links = lineMeta?.linked_task_wbs_codes ?? [];
     if (links.length === 0) {
       forecastRows.push(x.row);
       continue;
     }
-    const linked = links
+
+    const summaryLinks = links.filter((c) => summaryCodes.has(c));
+    const leafLinks = links.filter((c) => !summaryCodes.has(c));
+    if (leafLinks.length === 0) {
+      blockRow(
+        x.row,
+        `Linked only to summary task${summaryLinks.length > 1 ? "s" : ""} ${summaryLinks.join(", ")}. A rollup percent is not measured work - re-link to the leaf tasks.`,
+      );
+      continue;
+    }
+
+    const linked = leafLinks
       .map((c) => taskEstimates.get(c))
       .filter((v): v is number => v != null);
     const avgPct =
@@ -549,17 +738,13 @@ export async function getBillThisPeriodRows(
         : linked.reduce((s, v) => s + v, 0) / linked.length;
     if (avgPct > 0) {
       forecastRows.push(x.row);
-    } else if (x.row.kind === "forecast") {
-      hidden.push({
-        itemNumber: x.row.itemNumber,
-        description: x.row.description,
-        periodMonth: x.row.periodMonth,
-        amount: x.row.amount,
-        reason:
-          linked.length < links.length
-            ? `${links.length} WBS code(s) linked but ${links.length - linked.length} not found in schedule`
-            : "Linked schedule tasks show 0% progress",
-      });
+    } else {
+      blockRow(
+        x.row,
+        linked.length < leafLinks.length
+          ? `${leafLinks.length} WBS code(s) linked but ${leafLinks.length - linked.length} not found in schedule`
+          : "Linked schedule tasks show 0% progress. If work happened, check the field reports are approved and pinned to the right task.",
+      );
     }
   }
 
@@ -587,6 +772,8 @@ export async function getBillThisPeriodRows(
       scheduleSuggestedAmount: match.suggestedAmount,
       scheduleConfidence: match.confidence,
       scheduleSourcesSummary: match.sourcesSummary,
+      recommendedAmount: match.suggestedAmount,
+      evidence: match.evidence,
     };
   });
 
@@ -597,6 +784,7 @@ export async function getBillThisPeriodRows(
       key: `s:${s.billingLineId}:${nextMonthIso}`,
       billingLineId: s.billingLineId,
       itemNumber: s.itemNumber,
+      evidence: s.evidence,
       description: s.description,
       periodMonth: nextMonthIso,
       amount: s.suggestedAmount,
@@ -614,7 +802,7 @@ export async function getBillThisPeriodRows(
     return (a.itemNumber || "").localeCompare(b.itemNumber || "");
   });
 
-  return { ok: true, rows: all, hidden };
+  return { ok: true, rows: all, hidden, periodMonth: period };
 }
 
 export async function promoteSuggestionsToPlanned(

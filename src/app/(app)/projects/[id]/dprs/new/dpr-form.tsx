@@ -17,6 +17,7 @@ import {
 } from "../../inspections/photo-uploader";
 
 import { DprPhotoUploader, type StagedPhoto } from "./dpr-photo-uploader";
+import { PICKER_GROUP_LABEL, type PickerGroup } from "@/lib/schedule-picker";
 
 // A work-done pin the sub drops on the site map in a Field Report. Becomes an
 // inspection (origin='sub') on submit. Each pin remembers which sheet it was
@@ -85,7 +86,13 @@ type Task = {
   phase: string | null;
   currentStatus: string | null;
   currentPct: number | null;
+  startDate?: string | null;
   endDate: string | null;
+  /**
+   * Relevance bucket from buildTaskPicker(). Summary rows are already filtered
+   * out upstream, so everything here is a real, pinnable piece of work.
+   */
+  group?: PickerGroup;
 };
 
 type Sub = { id: string; companyName: string; trade: string | null };
@@ -873,11 +880,29 @@ export function DprForm({
                               className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
                             >
                               <option value="">- Select the work item -</option>
-                              {tasks.map((t) => (
-                                <option key={t.id} value={t.id}>
-                                  {t.wbsCode} {t.taskName}
-                                </option>
-                              ))}
+                              {(["open", "soon", "other"] as PickerGroup[]).map(
+                                (g) => {
+                                  const inGroup = tasks.filter(
+                                    (t) => (t.group ?? "other") === g,
+                                  );
+                                  if (inGroup.length === 0) return null;
+                                  return (
+                                    <optgroup
+                                      key={g}
+                                      label={PICKER_GROUP_LABEL[g]}
+                                    >
+                                      {inGroup.map((t) => (
+                                        <option key={t.id} value={t.id}>
+                                          {t.wbsCode} {t.taskName}
+                                          {t.currentPct != null
+                                            ? ` (${t.currentPct}%)`
+                                            : ""}
+                                        </option>
+                                      ))}
+                                    </optgroup>
+                                  );
+                                },
+                              )}
                             </select>
                           </div>
 

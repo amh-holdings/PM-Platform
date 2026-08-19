@@ -31,6 +31,20 @@ export type CommoditySpec = {
   /** SOV item on the roll-up. Null where the roll-up leaves it blank. */
   sovItem: string | null;
   /**
+   * SOV item on the EXECUTED CONTRACT, which is what billing may use.
+   *
+   * This differs from `sovItem` on four rows. The client's roll-up maps
+   * fencing to 6.02 and road install to 6.03, but the contract has 6.02 =
+   * "Civil, Roads and Landscaping" and 6.03 = "Fencing/SWPPP" - the reverse.
+   * Phil confirmed the contract descriptions are authoritative (2026-08-19).
+   * `sovItem` still records the roll-up verbatim because the Smartsheet export
+   * has to match the client's sheet; only this field may drive money.
+   *
+   * Null means the commodity does not map cleanly to one contract line and
+   * must never be used to compute a billing percentage.
+   */
+  contractSovItem: string | null;
+  /**
    * Row id on the roll-up sheet (4657028358164356), captured 2026-08-19.
    * Lets the automated push target the row without re-matching on label.
    */
@@ -56,6 +70,8 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "civil",
     uom: "ft",
     sovItem: "6.02",
+    // roll-up says 6.02; contract 6.03 is Fencing/SWPPP
+    contractSovItem: "6.03",
     rollupRowId: 5108332002283396,
     placeholderTotal: 1000,
   },
@@ -66,6 +82,8 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "civil",
     uom: "pct",
     sovItem: "6.02",
+    // spans 6.02 (timbering/clearing/grubbing) and 6.03 (silt fence) - unmapped until split
+    contractSovItem: null,
     rollupRowId: 7360131815968644,
     placeholderTotal: 1,
   },
@@ -76,6 +94,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "civil",
     uom: "pct",
     sovItem: "6.02",
+    contractSovItem: "6.02",
     rollupRowId: 2856532188598148,
     placeholderTotal: 1,
   },
@@ -86,6 +105,8 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "civil",
     uom: "ft",
     sovItem: "6.03",
+    // roll-up says 6.03; contract 6.02 is Civil, Roads and Landscaping
+    contractSovItem: "6.02",
     rollupRowId: 1730632281755524,
     placeholderTotal: 250,
   },
@@ -96,6 +117,8 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "civil",
     uom: "ea",
     sovItem: "6.03",
+    // roll-up says 6.03; concrete pads are named in 7.02
+    contractSovItem: "7.02",
     rollupRowId: 6234231909126020,
     placeholderTotal: 15,
   },
@@ -108,6 +131,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "electrical",
     uom: "ea",
     sovItem: "7.01",
+    contractSovItem: "7.01",
     rollupRowId: 8486031722811268,
     placeholderTotal: 50,
   },
@@ -118,6 +142,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "electrical",
     uom: "ft",
     sovItem: "7.02",
+    contractSovItem: "7.02",
     rollupRowId: 323257398202244,
     placeholderTotal: 500,
   },
@@ -128,6 +153,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "electrical",
     uom: "pct",
     sovItem: "7.02",
+    contractSovItem: "7.02",
     rollupRowId: 4826857025572740,
     placeholderTotal: 1,
   },
@@ -138,6 +164,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "electrical",
     uom: "ea",
     sovItem: "7.02",
+    contractSovItem: "7.02",
     rollupRowId: 2575057211887492,
     placeholderTotal: 2,
   },
@@ -148,6 +175,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "electrical",
     uom: "pct",
     sovItem: "7.02",
+    contractSovItem: "7.02",
     rollupRowId: 7078656839257988,
     placeholderTotal: 1,
   },
@@ -158,6 +186,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "electrical",
     uom: "ea",
     sovItem: "7.02",
+    contractSovItem: "7.02",
     rollupRowId: 1449157305044868,
     placeholderTotal: 20,
   },
@@ -168,6 +197,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "electrical",
     uom: "ea",
     sovItem: "7.03",
+    contractSovItem: "7.03",
     rollupRowId: 5952756932415364,
     placeholderTotal: 2,
   },
@@ -178,6 +208,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "electrical",
     uom: "ea",
     sovItem: "7.04",
+    contractSovItem: "7.04",
     rollupRowId: 3700957118730116,
     placeholderTotal: 2,
   },
@@ -189,6 +220,8 @@ export const COMMODITIES: CommoditySpec[] = [
     uom: "pct",
     // The roll-up leaves SOV Item blank on this row.
     sovItem: null,
+    // roll-up leaves SOV Item blank
+    contractSovItem: null,
     rollupRowId: 8204556746100612,
     placeholderTotal: 1,
   },
@@ -201,6 +234,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "mechanical",
     uom: "ea",
     sovItem: "8.01",
+    contractSovItem: "8.01",
     rollupRowId: 5389806978994052,
     placeholderTotal: 500,
   },
@@ -211,6 +245,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "mechanical",
     uom: "rows",
     sovItem: "8.01",
+    contractSovItem: "8.01",
     rollupRowId: 3138007165308804,
     placeholderTotal: 100,
   },
@@ -221,6 +256,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "mechanical",
     uom: "ea",
     sovItem: "8.02",
+    contractSovItem: "8.02",
     rollupRowId: 7641606792679300,
     placeholderTotal: 12000,
   },
@@ -231,6 +267,7 @@ export const COMMODITIES: CommoditySpec[] = [
     category: "mechanical",
     uom: "pct",
     sovItem: "8.03",
+    contractSovItem: "8.03",
     rollupRowId: 2012107258466180,
     placeholderTotal: 1,
   },
@@ -283,4 +320,20 @@ export function isValidDailyValue(spec: CommoditySpec, value: number): boolean {
   if (!Number.isFinite(value) || value < 0) return false;
   if (spec.uom === "pct" && value > 100) return false;
   return true;
+}
+
+/**
+ * Commodities that map to one contract SOV line, grouped by that line.
+ * Rows whose contractSovItem is null are excluded - they cannot be used to
+ * compute a percentage against a single line.
+ */
+export function commoditiesByContractSovItem(): Map<string, CommoditySpec[]> {
+  const byItem = new Map<string, CommoditySpec[]>();
+  for (const c of COMMODITIES) {
+    if (!c.contractSovItem) continue;
+    const list = byItem.get(c.contractSovItem) ?? [];
+    list.push(c);
+    byItem.set(c.contractSovItem, list);
+  }
+  return byItem;
 }

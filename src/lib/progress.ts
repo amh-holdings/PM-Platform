@@ -229,3 +229,56 @@ export function estimateProcurementProgress(
     reason: `${eligible.length} signed PO(s) totaling $${totalPoValue.toLocaleString("en-US")} against scope $${scheduledValue.toLocaleString("en-US")} = ${Math.round(pct * 100)}% covered`,
   };
 }
+
+/**
+ * Rolls several leaf-task percents into one SOV-line percent, weighted by
+ * scheduled duration.
+ *
+ * An unweighted mean makes the recommendation depend on how many tasks happen
+ * to be linked rather than on what was built. On Sweet Springs SOV 6.03, the
+ * same August field evidence produced $133,260, $75,507 or $17,753 depending
+ * only on whether the not-yet-started fencing and ESC tasks were in the list.
+ * Weighting by duration_days makes a 15-day fencing task count five times a
+ * 3-day one, so adding scope that has not started lowers the percent by the
+ * right amount instead of by an arbitrary one.
+ *
+ * Tasks with no duration_days (7 of 30 on Sweet Springs) take the mean duration
+ * of the tasks on the same line that do have one, so they neither dominate nor
+ * vanish. If none of them do, every weight is 1 and this degrades to the plain
+ * mean.
+ */
+export function durationWeightedPct(
+  items: Array<{ pct: number; durationDays: number | null }>,
+): { pct: number; weightedByDuration: boolean; unweightedPct: number } {
+  const unweightedPct =
+    items.length === 0
+      ? 0
+      : items.reduce((s, i) => s + i.pct, 0) / items.length;
+  if (items.length === 0) {
+    return { pct: 0, weightedByDuration: false, unweightedPct: 0 };
+  }
+
+  const known = items
+    .map((i) => i.durationDays)
+    .filter((d): d is number => d != null && Number.isFinite(d) && d > 0);
+  if (known.length === 0) {
+    return { pct: unweightedPct, weightedByDuration: false, unweightedPct };
+  }
+
+  const fallback = known.reduce((s, d) => s + d, 0) / known.length;
+  let num = 0;
+  let den = 0;
+  for (const i of items) {
+    const w =
+      i.durationDays != null && Number.isFinite(i.durationDays) && i.durationDays > 0
+        ? i.durationDays
+        : fallback;
+    num += i.pct * w;
+    den += w;
+  }
+  return {
+    pct: den > 0 ? num / den : unweightedPct,
+    weightedByDuration: true,
+    unweightedPct,
+  };
+}

@@ -11,12 +11,15 @@ import { shortMonthLabel } from "@/lib/cashflow";
 
 import { createAfpFromBillThisPeriod } from "../pay-app-actions";
 import type { BillableRow, HiddenForecast } from "../billing-actions";
+import { periodLabel } from "@/lib/billing-period";
 
 type Props = {
   projectId: string;
   rows: BillableRow[];
   hidden: HiddenForecast[];
   variant: "page" | "widget";
+  /** YYYY-MM-01 of the month being billed. */
+  periodMonth: string;
 };
 
 const CONF_STYLES: Record<string, string> = {
@@ -26,14 +29,44 @@ const CONF_STYLES: Record<string, string> = {
   none: "text-muted-foreground",
 };
 
-export function BillThisPeriodClient({ projectId, rows, hidden, variant }: Props) {
+export function BillThisPeriodClient({
+  projectId,
+  rows,
+  hidden,
+  variant,
+  periodMonth,
+}: Props) {
   // Default selection: ALL forecast rows checked, suggestion rows unchecked
   // (so the panel acts like the old Next AFP panel by default - lower friction).
-  const initialSelected = new Set(rows.filter((r) => r.kind === "forecast").map((r) => r.key));
-  const [selected, setSelected] = useState<Set<string>>(initialSelected);
-  const [amounts, setAmounts] = useState<Record<string, number>>(
-    Object.fromEntries(rows.map((r) => [r.key, r.amount])),
+  const initialSelected = new Set(
+    rows
+      .filter((r) => r.kind === "forecast" && !r.blockedReason)
+      .map((r) => r.key),
   );
+  const [selected, setSelected] = useState<Set<string>>(initialSelected);
+  // The recommendation wins by default. r.amount on a forecast row is the
+  // imported cash-flow plan; recommendedAmount is what the approved field
+  // reports and the schedule support. Defaulting to the plan meant Create AFP
+  // was pre-loaded with a number nobody had verified.
+  const [amounts, setAmounts] = useState<Record<string, number>>(
+    Object.fromEntries(
+      rows.map((r) => [
+        r.key,
+        r.kind === "forecast" && r.recommendedAmount != null
+          ? r.recommendedAmount
+          : r.amount,
+      ]),
+    ),
+  );
+  const [openEvidence, setOpenEvidence] = useState<Set<string>>(new Set());
+  function toggleEvidence(key: string) {
+    setOpenEvidence((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
   const [appNumber, setAppNumber] = useState(
     rows.find((r) => r.kind === "forecast")?.afpNumber ?? "",
   );
@@ -76,12 +109,14 @@ export function BillThisPeriodClient({ projectId, rows, hidden, variant }: Props
               variant === "page" ? "text-sm" : "text-xs",
             )}
           >
-            Bill this period
+            Bill {periodLabel(periodMonth)}
           </h3>
           <p className="text-xs text-muted-foreground">
-            What the schedule says is billable this month + next. Mix of
-            existing forecasts and live schedule-driven suggestions. Far-future
-            forecasts are on the Billing timeline below.
+            What the field evidence supports for{" "}
+            {periodLabel(periodMonth)} - existing forecasts alongside live
+            schedule-driven amounts, measured as of the last day of the month.
+            Rows that the schedule does not support are shown with the reason
+            and arrive unchecked.
           </p>
         </div>
       </div>
@@ -135,14 +170,22 @@ export function BillThisPeriodClient({ projectId, rows, hidden, variant }: Props
             <tbody>
               {rows.map((r) => {
                 const isChecked = selected.has(r.key);
-                const sourceLabel =
-                  r.kind === "forecast"
-                    ? `Forecast (${r.status})${r.afpNumber ? ` ${r.afpNumber}` : ""}`
-                    : "Schedule";
-                const sourceColor =
-                  r.kind === "forecast"
-                    ? "text-emerald-700"
-                    : CONF_STYLES[r.confidence] ?? "text-muted-foreground";
+                // Label what the AMOUNT is, not where the row came from - the
+                // row may be a forecast entry while the figure is the
+                // evidence-based recommendation that replaced it.
+                const usingRecommendation =
+                  r.kind === "suggestion" ||
+                  (r.kind === "forecast" && r.recommendedAmount != null);
+                const sourceLabel = usingRecommendation
+                  ? "Field evidence"
+                  : `Forecast (${r.status})${r.kind === "forecast" && r.afpNumber ? ` ${r.afpNumber}` : ""}`;
+                const sourceColor = usingRecommendation
+                  ? CONF_STYLES[
+                      r.kind === "suggestion"
+                        ? r.confidence
+                        : r.scheduleConfidence ?? "none"
+                    ] ?? "text-emerald-700"
+                  : "text-muted-foreground";
                 return (
                   <tr
                     key={r.key}
@@ -172,25 +215,80 @@ export function BillThisPeriodClient({ projectId, rows, hidden, variant }: Props
                           {formatCurrency(r.alreadyBilled)} - {r.sourcesSummary}
                         </div>
                       )}
+                      {r.kind === "forecast" && r.blockedReason && (
+                        <div className="mt-0.5 text-[10px] font-medium text-amber-700">
+                          ⚠ {r.blockedReason}
+                        </div>
+                      )}
                       {r.kind === "forecast" &&
-                        r.scheduleSuggestedAmount != null &&
+                        r.recommendedAmount != null &&
                         (() => {
-                          const sched = r.scheduleSuggestedAmount ?? 0;
+                          const rec = r.recommendedAmount ?? 0;
                           const fcst = r.amount;
-                          const ratio = sched > 0 ? fcst / sched : Infinity;
+                          const ratio = rec > 0 ? fcst / rec : Infinity;
                           const bigMismatch = ratio >= 1.5 || ratio <= 0.5;
                           return (
-                            <div
-                              className={cn(
-                                "mt-0.5 text-[10px]",
-                                bigMismatch ? "text-amber-700 font-medium" : "text-muted-foreground",
-                              )}
-                            >
-                              {bigMismatch && "⚠ "}
-                              Schedule says {formatCurrency(sched)} ({r.scheduleConfidence} conf, {r.scheduleSourcesSummary})
+                            <div className="mt-0.5 text-[10px] text-muted-foreground">
+                              <span
+                                className={cn(
+                                  bigMismatch && "font-medium text-amber-700",
+                                )}
+                              >
+                                {bigMismatch && "⚠ "}
+                                Cash-flow forecast was {formatCurrency(fcst)}
+                              </span>
+                              {" - "}
+                              {r.scheduleConfidence} confidence
                             </div>
                           );
                         })()}
+                      {r.evidence && r.evidence.length > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => toggleEvidence(r.key)}
+                            className="mt-0.5 text-[10px] underline underline-offset-2 text-muted-foreground hover:text-foreground"
+                          >
+                            {`${openEvidence.has(r.key) ? "Hide" : "Show"} the ${r.evidence.length} task${r.evidence.length === 1 ? "" : "s"} behind this`}
+                          </button>
+                          {openEvidence.has(r.key) && (
+                            <table className="mt-1 w-full text-[10px]">
+                              <tbody>
+                                {r.evidence
+                                  .slice()
+                                  .sort((a, b) => b.pct * b.weight - a.pct * a.weight)
+                                  .map((e) => (
+                                    <tr
+                                      key={e.wbsCode}
+                                      className={cn(
+                                        e.pct === 0 && "text-muted-foreground/60",
+                                      )}
+                                    >
+                                      <td className="pr-2 font-mono">{e.wbsCode}</td>
+                                      <td className="pr-2">{e.taskName}</td>
+                                      <td className="pr-2 text-right tabular-nums">
+                                        {e.pct}%
+                                      </td>
+                                      <td className="pr-2 text-right tabular-nums text-muted-foreground">
+                                        {e.durationDays != null
+                                          ? `${e.durationDays}d`
+                                          : "-"}
+                                      </td>
+                                      <td className="pr-2 text-right tabular-nums text-muted-foreground">
+                                        {(e.weight * 100).toFixed(1)}%
+                                      </td>
+                                      <td className="text-muted-foreground">
+                                        {e.source === "pct_complete"
+                                          ? "field report"
+                                          : e.source}
+                                      </td>
+                                    </tr>
+                                  ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </>
+                      )}
                     </td>
                     <td className="py-1.5 pr-2">
                       {shortMonthLabel(r.periodMonth)}

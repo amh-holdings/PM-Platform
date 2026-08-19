@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { createClient } from "@/lib/supabase/server";
+import { buildTaskPicker, summaryCodesOf } from "@/lib/schedule-picker";
 
 import { DprForm } from "../../dprs/new/dpr-form";
 
@@ -16,7 +17,9 @@ export default async function NewFieldReportPage({
   const [tasksRes, subsRes, posRes] = await Promise.all([
     supabase
       .from("schedule_tasks")
-      .select("id, wbs_code, task_name, phase, status, pct_complete, end_date")
+      .select(
+        "id, wbs_code, task_name, phase, status, pct_complete, start_date, end_date, parent_wbs_code",
+      )
       .eq("project_id", params.id)
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("wbs_code", { ascending: true }),
@@ -41,15 +44,26 @@ export default async function NewFieldReportPage({
     );
   }
 
-  const taskRows = (tasksRes.data ?? []).map((t) => ({
-    id: t.id,
-    wbsCode: t.wbs_code,
-    taskName: t.task_name,
-    phase: t.phase,
-    currentStatus: t.status,
-    currentPct: Number(t.pct_complete ?? 0) || null,
-    endDate: t.end_date,
-  }));
+  // Summary rows are removed and the rest is ordered so what the crew is
+  // actually working on sits at the top. See src/lib/schedule-picker.ts for why
+  // this matters to billing.
+  const now = new Date();
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const summaryCodes = summaryCodesOf(tasksRes.data ?? []);
+  const taskRows = buildTaskPicker(
+    (tasksRes.data ?? []).map((t) => ({
+      id: t.id,
+      wbsCode: t.wbs_code,
+      taskName: t.task_name,
+      phase: t.phase,
+      currentStatus: t.status,
+      currentPct: Number(t.pct_complete ?? 0) || null,
+      startDate: t.start_date,
+      endDate: t.end_date,
+    })),
+    summaryCodes,
+    todayIso,
+  );
 
   const subs = (subsRes.data ?? []).map((s) => ({
     id: s.id,

@@ -8,10 +8,18 @@ import { guardCapability } from "@/lib/roles-server";
 import { BillingLinkForm } from "../billing-link-form";
 import { BillingPoLinkForm } from "../billing-po-link-form";
 import { BillThisPeriodPanel } from "./bill-this-period-panel";
+import { BillingPeriodSelector } from "./billing-period-selector";
+import { defaultBillingPeriod } from "@/lib/billing-period";
 
 type Params = { id: string };
 
-export default async function ProjectBillingPage({ params }: { params: Params }) {
+export default async function ProjectBillingPage({
+  params,
+  searchParams,
+}: {
+  params: Params;
+  searchParams?: { period?: string };
+}) {
   await guardCapability("viewBilling");
   const supabase = createClient();
 
@@ -73,7 +81,15 @@ export default async function ProjectBillingPage({ params }: { params: Params })
         </p>
       </div>
 
-      <BillThisPeriodPanel projectId={params.id} variant="page" />
+      <BillingPeriodSelector
+        projectId={params.id}
+        selected={searchParams?.period ?? defaultBillingPeriod()}
+      />
+      <BillThisPeriodPanel
+        projectId={params.id}
+        variant="page"
+        periodMonth={searchParams?.period ?? defaultBillingPeriod()}
+      />
 
       <div className="overflow-x-auto rounded-lg border bg-card shadow-sm">
         <table className="w-full text-sm">

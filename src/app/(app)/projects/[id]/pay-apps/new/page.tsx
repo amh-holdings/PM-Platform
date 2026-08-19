@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { createClient } from "@/lib/supabase/server";
 import { guardCapability } from "@/lib/roles-server";
+import { nextAppNumber } from "@/lib/afp-number";
 
 import { NewPayAppForm } from "./new-pay-app-form";
 
@@ -11,36 +12,31 @@ export default async function NewPayAppPage({ params }: { params: Params }) {
   await guardCapability("viewPayApps");
   const supabase = createClient();
 
-  const [{ data: project }, { data: lastApp }] = await Promise.all([
-    supabase
-      .from("projects")
-      .select("retainage_pct_default")
-      .eq("id", params.id)
-      .maybeSingle(),
-    supabase
-      .from("pay_applications")
-      .select("app_number, period_end")
-      .eq("project_id", params.id)
-      .order("period_end", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
+  const [{ data: project }, { data: lastApp }, defaultAppNumber] =
+    await Promise.all([
+      supabase
+        .from("projects")
+        .select("retainage_pct_default")
+        .eq("id", params.id)
+        .maybeSingle(),
+      supabase
+        .from("pay_applications")
+        .select("app_number, period_end")
+        .eq("project_id", params.id)
+        .order("period_end", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      // Scans pay_applications AND the billing_entries.afp_number history, so
+      // a project whose pre-app AFPs live only as free text still gets the
+      // right next number. See src/lib/afp-number.ts.
+      nextAppNumber(supabase, params.id),
+    ]);
 
-  // Default app number: incremented from last app_number if it ends in a digit
-  let defaultAppNumber = "1";
-  if (lastApp?.app_number) {
-    const m = lastApp.app_number.match(/^(.*?)(\d+)$/);
-    if (m) {
-      defaultAppNumber = `${m[1]}${Number(m[2]) + 1}`;
-    } else {
-      defaultAppNumber = `${lastApp.app_number}+1`;
-    }
-  }
-
-  // Default period: the calendar month following the last app's period_end,
-  // or the current month if no prior app exists.
+  // Default period: the month before the current one (AFPs bill in arrears),
+  // or the month following the last app's period_end when one exists.
   const now = new Date();
-  let defaultStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const prevMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1));
+  let defaultStart = `${prevMonth.getUTCFullYear()}-${String(prevMonth.getUTCMonth() + 1).padStart(2, "0")}-01`;
   if (lastApp?.period_end) {
     const [y, m] = lastApp.period_end.split("-").map(Number);
     const next = new Date(Date.UTC(y, m, 1));

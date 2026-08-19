@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { createClient } from "@/lib/supabase/server";
+import { buildTaskPicker, summaryCodesOf } from "@/lib/schedule-picker";
 
 import { DprForm } from "./dpr-form";
 
@@ -12,7 +13,9 @@ export default async function NewDprPage({ params }: { params: Params }) {
   const [tasksRes, subsRes, posRes] = await Promise.all([
     supabase
       .from("schedule_tasks")
-      .select("id, wbs_code, task_name, phase, status, pct_complete, end_date")
+      .select(
+        "id, wbs_code, task_name, phase, status, pct_complete, start_date, end_date, parent_wbs_code",
+      )
       .eq("project_id", params.id)
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("wbs_code", { ascending: true }),
@@ -37,15 +40,23 @@ export default async function NewDprPage({ params }: { params: Params }) {
     );
   }
 
-  const taskRows = (tasksRes.data ?? []).map((t) => ({
-    id: t.id,
-    wbsCode: t.wbs_code,
-    taskName: t.task_name,
-    phase: t.phase,
-    currentStatus: t.status,
-    currentPct: Number(t.pct_complete ?? 0) || null,
-    endDate: t.end_date,
-  }));
+  // Leaf tasks only, most-likely-first. See src/lib/schedule-picker.ts.
+  const now = new Date();
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const taskRows = buildTaskPicker(
+    (tasksRes.data ?? []).map((t) => ({
+      id: t.id,
+      wbsCode: t.wbs_code,
+      taskName: t.task_name,
+      phase: t.phase,
+      currentStatus: t.status,
+      currentPct: Number(t.pct_complete ?? 0) || null,
+      startDate: t.start_date,
+      endDate: t.end_date,
+    })),
+    summaryCodesOf(tasksRes.data ?? []),
+    todayIso,
+  );
 
   const subs = (subsRes.data ?? []).map((s) => ({
     id: s.id,

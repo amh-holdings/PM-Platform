@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import { friendlyAppNumberError, nextAppNumber } from "@/lib/afp-number";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -36,14 +37,33 @@ export type CreatePayAppInput = {
   onlyEntryIds?: string[];
 };
 
+/**
+ * A billing_entries row in a month BEFORE the application's period that still
+ * carries only a planned amount and no billing evidence. Either it was billed
+ * on an earlier AFP and never reconciled (so actual_amount needs backfilling),
+ * or it was forecast and never billed (so it should be moved or deleted).
+ * Either way it is excluded from previous billings and surfaced for review.
+ */
+export type StalePriorForecast = {
+  itemNumber: string;
+  periodMonth: string;
+  plannedAmount: number;
+  status: string;
+};
+
 export type CreatePayAppResult =
-  | { ok: true; payAppId: string; linesCount: number }
+  | {
+      ok: true;
+      payAppId: string;
+      linesCount: number;
+      stalePriorForecasts: StalePriorForecast[];
+    }
   | { ok: false; error: string };
 
 // Creates a new pay application as a draft, snapshotting the billing
 // situation for all billing_lines in this project. For each line:
-//   work_completed_previous   = sum of actual_amount in any billing_entry
-//                              that already has a pay_application_id set
+//   work_completed_previous   = sum of the effective amount of every entry
+//                              billed BEFORE this application (see below)
 //   work_completed_this_period = sum of actual_amount in billing_entries
 //                              for periods within [period_start, period_end]
 //                              that are NOT already on another pay app
@@ -53,6 +73,16 @@ export type CreatePayAppResult =
 //
 // Billing entries that contributed to this_period get
 // pay_application_id stamped and status='on_pay_app'.
+//
+// PREVIOUS BILLINGS. This used to mean "entry carries a pay_application_id",
+// which silently reported $0 on Sweet Springs: AFP 1-8 were loaded by
+// scripts/import-collections.mjs as paid billing_entries carrying only the
+// free-text afp_number, and predate the pay_applications table entirely. An
+// entry now counts as previous when it is not being billed on THIS app and
+// either (a) it is stamped onto some other pay application, or (b) its
+// period_month falls before this application's period. Condition (b) is what
+// lets pre-pay_applications history land in G703 column D, and the two are
+// OR'd rather than summed so an entry that satisfies both is counted once.
 export async function createPayApplication(
   input: CreatePayAppInput,
 ): Promise<CreatePayAppResult> {
@@ -77,7 +107,11 @@ export async function createPayApplication(
     .select("id")
     .single();
   if (appErr || !app) {
-    return { ok: false, error: appErr?.message ?? "Failed to create pay app" };
+    const friendly = friendlyAppNumberError(appErr?.message, input.appNumber.trim());
+    return {
+      ok: false,
+      error: friendly ?? appErr?.message ?? "Failed to create pay app",
+    };
   }
 
   // Pull every billing_line for the project + its entries
@@ -93,7 +127,7 @@ export async function createPayApplication(
   const { data: entries } = await auth.supabase
     .from("billing_entries")
     .select(
-      "id, billing_line_id, period_month, actual_amount, planned_amount, pay_application_id",
+      "id, billing_line_id, period_month, actual_amount, planned_amount, pay_application_id, status, afp_number",
     )
     .in("billing_line_id", lineIds);
 
@@ -114,25 +148,72 @@ export async function createPayApplication(
     input.onlyEntryIds && input.onlyEntryIds.length > 0
       ? new Set(input.onlyEntryIds)
       : null;
+
+  // A prior-month row counts as previously billed only when something shows it
+  // actually went out: a pay_application_id, an afp_number, or a status past
+  // 'forecast'.
+  //
+  // A non-zero actual_amount is NOT proof on its own. scripts/import-cashflow*
+  // loaded the owner cash-flow spreadsheet into actual_amount for months that
+  // were only ever projections - Sweet Springs carries $160,381 / $80,000 /
+  // $40,000 on 2026-06 with status 'forecast' and no AFP, for civil work that
+  // had not happened (the first field report on the job is dated 2026-08-04).
+  // Treating those as previous billings would report $120,000 of civil already
+  // paid and suppress the first legitimate civil billing.
+  const BILLED_STATUSES = new Set([
+    "on_pay_app",
+    "submitted",
+    "approved",
+    "paid",
+  ]);
+  const hasBillingEvidence = (e: {
+    pay_application_id?: string | null;
+    afp_number?: string | null;
+    status?: string | null;
+  }) =>
+    !!e.pay_application_id ||
+    !!e.afp_number ||
+    BILLED_STATUSES.has(e.status ?? "");
+  const stalePriorForecasts: StalePriorForecast[] = [];
+  const lineById = new Map((lines ?? []).map((l) => [l.id, l]));
+
   for (const e of entries ?? []) {
     const b = buckets.get(e.billing_line_id);
     if (!b) continue;
     const actual = Number(e.actual_amount ?? 0);
     const planned = Number(e.planned_amount ?? 0);
-    if (e.pay_application_id) {
-      b.previous += actual || planned;
-      continue;
-    }
-    if (
-      e.period_month >= input.periodStart &&
-      e.period_month <= input.periodEnd &&
-      (!filterSet || filterSet.has(e.id))
-    ) {
+
+    const inWindow =
+      e.period_month >= input.periodStart && e.period_month <= input.periodEnd;
+    const selectedForThisApp =
+      inWindow && !e.pay_application_id && (!filterSet || filterSet.has(e.id));
+
+    if (selectedForThisApp) {
       const amount = actual > 0 ? actual : planned;
       if (amount > 0) {
         b.thisPeriodIds.push(e.id);
         b.thisPeriodAmount += amount;
       }
+      continue;
+    }
+
+    // Not on this app. Previously billed if stamped onto another pay
+    // application, or if it sits in a month before this application's period.
+    const isPrior =
+      !!e.pay_application_id || e.period_month < input.periodStart;
+    if (!isPrior) continue;
+
+    const amount = actual > 0 ? actual : planned;
+    if (amount <= 0) continue;
+    if (hasBillingEvidence(e)) {
+      b.previous += amount;
+    } else {
+      stalePriorForecasts.push({
+        itemNumber: lineById.get(e.billing_line_id)?.item_number ?? "",
+        periodMonth: e.period_month,
+        plannedAmount: amount,
+        status: e.status ?? "forecast",
+      });
     }
   }
 
@@ -185,15 +266,32 @@ export async function createPayApplication(
     0,
   );
   const amountDue = totalCompleted - totalRetainage;
-  await auth.supabase
+  const rollup = {
+    total_completed: Math.round(totalCompleted * 100) / 100,
+    total_retainage: Math.round(totalRetainage * 100) / 100,
+    previous_billings: Math.round(previousBillings * 100) / 100,
+    amount_due: Math.round(amountDue * 100) / 100,
+  };
+
+  // The rate is stored on the application, not just applied and discarded, so
+  // the G702 can print "Retainage {pct}% of completed work" and reprint the
+  // same figure later even if projects.retainage_pct_default has since changed.
+  // retainage_pct arrives in migration 0037, which Phil applies by hand - fall
+  // back to the rest of the roll-up if the column is not there yet rather than
+  // failing the whole application.
+  // Cast: src/lib/database.types.ts is generated and has not been regenerated
+  // since 0037 added retainage_pct. A green build does not prove the live
+  // schema, which is why the fallback below exists rather than the cast alone.
+  const { error: rollupErr } = await auth.supabase
     .from("pay_applications")
-    .update({
-      total_completed: Math.round(totalCompleted * 100) / 100,
-      total_retainage: Math.round(totalRetainage * 100) / 100,
-      previous_billings: Math.round(previousBillings * 100) / 100,
-      amount_due: Math.round(amountDue * 100) / 100,
-    })
+    .update({ ...rollup, retainage_pct: retPct } as never)
     .eq("id", app.id);
+  if (rollupErr) {
+    await auth.supabase
+      .from("pay_applications")
+      .update(rollup)
+      .eq("id", app.id);
+  }
 
   // Stamp the billing_entries that were rolled into this pay app, and
   // promote the value used (actual or planned-fallback) into actual_amount
@@ -224,6 +322,7 @@ export async function createPayApplication(
     ok: true,
     payAppId: app.id,
     linesCount: lineInserts.length,
+    stalePriorForecasts,
   };
 }
 
@@ -406,18 +505,15 @@ export async function createAfpFromBillThisPeriod(
   const lastDay = new Date(Date.UTC(ey, em, 0)).getUTCDate();
   const periodEnd = `${ey}-${String(em).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
-  // 4. App number: form input, or first forecast's afp_number, or next sequential.
+  // 4. App number: form input, or first forecast's afp_number, or next in the
+  //    project's real sequence (which spans both numbering sources).
   let appNumber = appNumberInput;
   if (!appNumber) {
     const firstWithAfp = selectedEntries.find((e) => e.afp_number);
     if (firstWithAfp) appNumber = firstWithAfp.afp_number ?? "";
   }
   if (!appNumber) {
-    const { count } = await auth.supabase
-      .from("pay_applications")
-      .select("id", { count: "exact", head: true })
-      .eq("project_id", projectId);
-    appNumber = `AFP ${(count ?? 0) + 1}`;
+    appNumber = await nextAppNumber(auth.supabase, projectId);
   }
 
   const { data: project } = await auth.supabase
@@ -485,11 +581,7 @@ export async function createPayAppFromSelectedEntries(
   let appNumber = appNumberInput;
   if (!appNumber) appNumber = selected[0].afp_number ?? "";
   if (!appNumber) {
-    const { count } = await auth.supabase
-      .from("pay_applications")
-      .select("id", { count: "exact", head: true })
-      .eq("project_id", projectId);
-    appNumber = `AFP ${(count ?? 0) + 1}`;
+    appNumber = await nextAppNumber(auth.supabase, projectId);
   }
 
   const { data: project } = await auth.supabase
