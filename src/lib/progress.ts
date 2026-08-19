@@ -175,60 +175,143 @@ export function isProcurementLine(line: {
 // total value of SIGNED + non-cancelled procurement_orders compared to the
 // billing line's scheduled value. Drafts and unsigned POs don't count -
 // they're speculative scope, not committed scope.
+export type ProcurementMilestone = {
+  milestone_name?: string | null;
+  amount?: number | null;
+  pct_of_total?: number | null;
+  /** Free text from the PO, e.g. "PO release - Net 30", "Delivery to site". */
+  trigger_event?: string | null;
+  paid_at?: string | null;
+};
+
+export type LinkedPo = {
+  po_number?: string | null;
+  vendor_name?: string | null;
+  total_value?: number | null;
+  status?: string | null;
+  signed_at?: string | null;
+  actual_delivery_date?: string | null;
+  milestones?: ProcurementMilestone[];
+};
+
+/**
+ * Whether a PO payment milestone has actually been triggered.
+ *
+ * Triggers are free text off the PO, so this reads intent rather than matching
+ * an enum. The three shapes on Sweet Springs are "PO release - Net 30",
+ * "Delivery to site - Net 30" and "Commissioning complete - Net 30".
+ * Anything unrecognised is treated as NOT triggered - an unbillable milestone
+ * that should have billed is a conversation, one that bills early is a credit
+ * the owner claws back.
+ */
+export function milestoneTriggered(
+  m: ProcurementMilestone,
+  po: LinkedPo,
+): { fired: boolean; why: string } {
+  if (m.paid_at) return { fired: true, why: "already paid" };
+  const t = (m.trigger_event ?? m.milestone_name ?? "").toLowerCase();
+  const signed = !!po.signed_at && po.status !== "cancelled";
+  const delivered = !!po.actual_delivery_date;
+
+  if (/commission/.test(t)) {
+    return { fired: false, why: "awaiting commissioning" };
+  }
+  if (/deliver/.test(t)) {
+    return delivered
+      ? { fired: true, why: `delivered ${po.actual_delivery_date}` }
+      : { fired: false, why: "awaiting delivery to site" };
+  }
+  if (/po release|deposit|down|mob/.test(t)) {
+    return signed
+      ? { fired: true, why: `PO signed ${po.signed_at?.slice(0, 10)}` }
+      : { fired: false, why: "PO not signed" };
+  }
+  return { fired: false, why: `trigger "${m.trigger_event ?? "unset"}" not recognised` };
+}
+
+/**
+ * Progress on a procurement SOV line, from the payment milestones that have
+ * actually been triggered.
+ *
+ * This used to count any SIGNED PO at its FULL value. On Sweet Springs SOV 5.05
+ * that read 86% - $144,902 of signed POs - and offered to bill roughly $65,700
+ * in August for equipment not due on site until November. Signing a PO is a
+ * commitment, not earned value: on a G702 it is neither column D (work
+ * completed) nor column E (materials presently stored).
+ *
+ * The PO payment terms already say what is earned and when. GroundWork is 100%
+ * on delivery; Power Factors is 40% deposit / 30% delivery / 30% commissioning.
+ * Only the deposits have triggered, which is $38,775 rather than $144,902.
+ *
+ * A PO with no milestones recorded contributes nothing and says so, rather than
+ * silently falling back to its full value.
+ */
 export function estimateProcurementProgress(
   line: { scheduled_value?: number | null },
-  linkedPos: {
-    total_value?: number | null;
-    status?: string | null;
-    signed_at?: string | null;
-  }[],
-): ProgressEstimate {
-  const eligible = linkedPos.filter(
-    (p) => p.status !== "cancelled" && !!p.signed_at,
-  );
-  if (eligible.length === 0) {
-    const draftCount = linkedPos.filter(
-      (p) => p.status !== "cancelled" && !p.signed_at,
-    ).length;
+  linkedPos: LinkedPo[],
+): ProgressEstimate & { earnedValue: number; detail: string[] } {
+  const scheduledValue = Number(line.scheduled_value ?? 0);
+  const live = linkedPos.filter((p) => p.status !== "cancelled");
+
+  if (live.length === 0) {
     return {
-      pct: 0,
-      confidence: "high",
-      source: "no_signal",
-      reason:
-        draftCount > 0
-          ? `${draftCount} PO(s) linked but none signed - mark a PO as signed to unlock billing`
-          : "No signed procurement order linked - submit + sign a PO to bill this scope",
+      pct: 0, confidence: "high", source: "no_signal", earnedValue: 0, detail: [],
+      reason: "No procurement order linked - link and sign a PO to bill this scope",
     };
   }
-  const totalPoValue = eligible.reduce(
-    (s, p) => s + Number(p.total_value ?? 0),
-    0,
-  );
-  const scheduledValue = Number(line.scheduled_value ?? 0);
   if (scheduledValue <= 0) {
     return {
-      pct: 0,
-      confidence: "low",
-      source: "no_signal",
+      pct: 0, confidence: "low", source: "no_signal", earnedValue: 0, detail: [],
       reason: "Billing line has no scheduled value",
     };
   }
-  // Pct represents "fraction of scope covered by signed POs."
-  // The suggestion engine multiplies this by scheduled_value to get target,
-  // then subtracts already_billed. That subtraction is wrong for procurement
-  // (historical billings were for unrelated scope, not these POs), so we
-  // cheat: return pct such that target = totalPoValue exactly. The engine's
-  // remaining math will then compute totalPoValue - already_billed and may
-  // hide the row, but our caller in getBillThisPeriodRows uses the SAME
-  // billable math (no subtraction) and overrides this for procurement rows.
-  const pct = Math.min(1, totalPoValue / scheduledValue);
+
+  let earned = 0;
+  const detail: string[] = [];
+  let missingTerms = 0;
+
+  for (const po of live) {
+    const label = po.po_number ?? po.vendor_name ?? "PO";
+    const ms = po.milestones ?? [];
+    if (ms.length === 0) {
+      missingTerms++;
+      detail.push(`${label}: no payment milestones recorded - contributes $0`);
+      continue;
+    }
+    for (const m of ms) {
+      const amount =
+        Number(m.amount ?? 0) > 0
+          ? Number(m.amount)
+          : (Number(m.pct_of_total ?? 0) / 100) * Number(po.total_value ?? 0);
+      const { fired, why } = milestoneTriggered(m, po);
+      if (fired) earned += amount;
+      detail.push(
+        `${label} ${m.milestone_name ?? "milestone"}: ${fired ? "EARNED" : "not earned"} $${Math.round(amount).toLocaleString("en-US")} (${why})`,
+      );
+    }
+  }
+
+  if (earned <= 0) {
+    return {
+      pct: 0, confidence: "high", source: "no_signal", earnedValue: 0, detail,
+      reason:
+        missingTerms === live.length
+          ? `${live.length} PO(s) linked but none has payment milestones recorded - add the payment terms to bill this scope`
+          : "No payment milestone has been triggered yet - nothing earned on this scope",
+    };
+  }
+
+  const pct = Math.min(1, earned / scheduledValue);
   return {
     pct,
     confidence: "high",
     source: "pct_complete",
-    reason: `${eligible.length} signed PO(s) totaling $${totalPoValue.toLocaleString("en-US")} against scope $${scheduledValue.toLocaleString("en-US")} = ${Math.round(pct * 100)}% covered`,
+    earnedValue: earned,
+    detail,
+    reason: `$${Math.round(earned).toLocaleString("en-US")} of triggered payment milestones against scope $${scheduledValue.toLocaleString("en-US")} = ${Math.round(pct * 100)}%`,
   };
 }
+
 
 /**
  * Rolls several leaf-task percents into one SOV-line percent, weighted by

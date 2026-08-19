@@ -9,6 +9,8 @@ import {
   estimateTaskProgress,
   isProcurementLine,
   durationWeightedPct,
+  type LinkedPo,
+  type ProcurementMilestone,
   type Confidence,
   type ProgressEstimate,
 } from "@/lib/progress";
@@ -191,9 +193,22 @@ export async function computeBillingSuggestions(
       .eq("project_id", projectId),
     auth.supabase
       .from("procurement_orders")
-      .select("id, po_number, vendor_name, total_value, status, signed_at")
+      .select("id, po_number, vendor_name, total_value, status, signed_at, actual_delivery_date")
       .eq("project_id", projectId),
   ]);
+
+  // Payment milestones decide what a procurement line has actually earned.
+  // See estimateProcurementProgress: a signed PO is a commitment, not value.
+  const { data: milestones } = await auth.supabase
+    .from("procurement_payments")
+    .select("procurement_order_id, milestone_name, amount, pct_of_total, trigger_event, paid_at")
+    .in("procurement_order_id", (pos ?? []).map((p) => p.id));
+  const msByPo = new Map<string, Array<Record<string, unknown>>>();
+  for (const m of milestones ?? []) {
+    const list = msByPo.get(m.procurement_order_id) ?? [];
+    list.push(m);
+    msByPo.set(m.procurement_order_id, list);
+  }
 
   // Estimate progress for every task up-front so we have a confidence + reason
   // alongside the pct.
@@ -233,15 +248,16 @@ export async function computeBillingSuggestions(
     });
   }
   // Index POs by id so we can resolve linked_procurement_order_ids quickly.
-  const poById = new Map<
-    string,
-    { total_value: number | null; status: string | null; signed_at: string | null }
-  >();
+  const poById = new Map<string, LinkedPo>();
   for (const p of pos ?? []) {
     poById.set(p.id, {
+      po_number: p.po_number,
+      vendor_name: p.vendor_name,
       total_value: p.total_value,
       status: p.status,
       signed_at: p.signed_at,
+      actual_delivery_date: (p as { actual_delivery_date?: string | null }).actual_delivery_date ?? null,
+      milestones: (msByPo.get(p.id) ?? []) as ProcurementMilestone[],
     });
   }
 
@@ -255,6 +271,7 @@ export async function computeBillingSuggestions(
     // estimate, used to weight the roll-up. See durationWeightedPct().
     let estimateWeights: Array<number | null> = [];
     let evidenceCodes: string[] = [];
+    let procurementDetail: string[] = [];
     let linkedCount = 0;
 
     // Procurement-scope lines: progress comes from PO state, NOT schedule date math.
@@ -263,10 +280,7 @@ export async function computeBillingSuggestions(
         .linked_procurement_order_ids ?? [];
       const linkedPos = poIds
         .map((id) => poById.get(id))
-        .filter(
-          (p): p is { total_value: number | null; status: string | null; signed_at: string | null } =>
-            !!p,
-        );
+        .filter((p): p is LinkedPo => !!p);
       const procEst = estimateProcurementProgress(
         { scheduled_value: scheduledValue },
         linkedPos,
@@ -274,6 +288,7 @@ export async function computeBillingSuggestions(
       estimateRecords = [procEst];
       estimateWeights = [null]; // single estimate - weighting is a no-op
       evidenceCodes = [line.item_number];
+      procurementDetail = (procEst as { detail?: string[] }).detail ?? [];
       linkedCount = linkedPos.length;
     } else {
       // Non-procurement lines: schedule-task-driven, leaf tasks only.
@@ -339,7 +354,19 @@ export async function computeBillingSuggestions(
       (s2: number, d) => s2 + (d != null && d > 0 ? d : fallbackDur),
       0,
     );
-    const evidence: BillingEvidenceItem[] = estimateRecords.map((e, i) => {
+    const evidence: BillingEvidenceItem[] = procurementDetail.length
+      ? procurementDetail.map((d) => {
+          const [who, rest] = d.split(": ");
+          return {
+            wbsCode: who,
+            taskName: rest ?? d,
+            pct: /EARNED/.test(d) ? 100 : 0,
+            durationDays: null,
+            weight: 0,
+            source: "payment milestone",
+          };
+        })
+      : estimateRecords.map((e, i) => {
       const d = estimateWeights[i];
       const w = d != null && d > 0 ? d : fallbackDur;
       const code = evidenceCodes[i] ?? "";
@@ -571,8 +598,18 @@ export async function getBillThisPeriodRows(
     .eq("project_id", projectId);
   const { data: posInfo } = await auth.supabase
     .from("procurement_orders")
-    .select("id, total_value, status, signed_at")
+    .select("id, po_number, vendor_name, total_value, status, signed_at, actual_delivery_date")
     .eq("project_id", projectId);
+  const { data: msInfo } = await auth.supabase
+    .from("procurement_payments")
+    .select("procurement_order_id, milestone_name, amount, pct_of_total, trigger_event, paid_at")
+    .in("procurement_order_id", (posInfo ?? []).map((p) => p.id));
+  const msByPoId = new Map<string, ProcurementMilestone[]>();
+  for (const m of msInfo ?? []) {
+    const list = msByPoId.get(m.procurement_order_id) ?? [];
+    list.push(m as ProcurementMilestone);
+    msByPoId.set(m.procurement_order_id, list);
+  }
   const { data: lineTotals } = await auth.supabase
     .from("v_billing_line_totals")
     .select("billing_line_id, total_billed")
@@ -620,15 +657,16 @@ export async function getBillThisPeriodRows(
   // they are in computeBillingSuggestions - a rollup percent is not measured
   // work. See summaryWbsCodes().
   const summaryCodes = summaryWbsCodes(taskInfo ?? []);
-  const poStateById = new Map<
-    string,
-    { total_value: number | null; status: string | null; signed_at: string | null }
-  >();
+  const poStateById = new Map<string, LinkedPo>();
   for (const p of posInfo ?? []) {
     poStateById.set(p.id, {
+      po_number: p.po_number,
+      vendor_name: p.vendor_name,
       total_value: p.total_value,
       status: p.status,
       signed_at: p.signed_at,
+      actual_delivery_date: (p as { actual_delivery_date?: string | null }).actual_delivery_date ?? null,
+      milestones: msByPoId.get(p.id) ?? [],
     });
   }
 
@@ -675,39 +713,38 @@ export async function getBillThisPeriodRows(
     // duplicate AFPs for the same PO. Tracking per-PO billed_at on
     // procurement_orders is the next step to prevent this.
     if (lineMeta && isProcurementLine(lineMeta)) {
+      // Earned value comes from PO payment milestones that have actually been
+      // triggered, not from the fact a PO was signed. Counting signed POs at
+      // full value made SOV 5.05 offer ~$65,700 in August for POI equipment not
+      // due on site until November. See estimateProcurementProgress.
+      //
+      // Prior billings ARE subtracted here now. The old code deliberately did
+      // not, on the reasoning that historical billings covered unrelated scope,
+      // and carried a KNOWN LIMITATION note that the same PO could therefore be
+      // billed month after month. Milestones make the subtraction safe: a
+      // milestone is a specific piece of value, so netting off what has already
+      // been billed against the line cannot double-count it.
       const poIds = lineMeta.linked_procurement_order_ids ?? [];
-      const linked = poIds.map((id) => poStateById.get(id)).filter(Boolean) as Array<{
-        total_value: number | null;
-        status: string | null;
-        signed_at: string | null;
-      }>;
-      const signedActive = linked.filter(
-        (p) => p.status !== "cancelled" && !!p.signed_at,
-      );
-      const signedTotal = signedActive.reduce(
-        (s, p) => s + Number(p.total_value ?? 0),
-        0,
-      );
+      const linked = poIds
+        .map((id) => poStateById.get(id))
+        .filter((p): p is LinkedPo => !!p);
       const scheduledValue = Number(lineMeta.scheduled_value ?? 0);
-      const billable = Math.min(signedTotal, scheduledValue);
+      const est = estimateProcurementProgress(
+        { scheduled_value: scheduledValue },
+        linked,
+      );
+      const alreadyBilled = billedByLine.get(x.row.billingLineId) ?? 0;
+      const billable = Math.max(0, est.earnedValue - alreadyBilled);
 
       if (billable > 0) {
-        // Override forecast amount with the signed PO total (NOT the stale
-        // import value of $168k for POI etc).
-        forecastRows.push({
-          ...x.row,
-          amount: billable,
-        });
-      } else {
-        const draftCount = linked.filter(
-          (p) => p.status !== "cancelled" && !p.signed_at,
-        ).length;
+        forecastRows.push({ ...x.row, amount: billable });
+      } else if (est.earnedValue > 0) {
         blockRow(
           x.row,
-          draftCount > 0
-            ? `${draftCount} PO(s) linked but unsigned - mark a PO as signed to unlock billing`
-            : "Procurement line has no signed POs - submit + sign a PO to unlock billing",
+          `$${Math.round(est.earnedValue).toLocaleString("en-US")} of milestones triggered, but $${Math.round(alreadyBilled).toLocaleString("en-US")} already billed on this line - nothing further earned`,
         );
+      } else {
+        blockRow(x.row, est.reason);
       }
       continue;
     }
