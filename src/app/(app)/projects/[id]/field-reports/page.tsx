@@ -122,7 +122,6 @@ export default async function FieldReportsPage({
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Field Reports</h2>
           <p className="text-xs text-muted-foreground">
             One daily report per sub: the progress narrative plus work marked on
             the site map. The Construction Manager reviews each pin.

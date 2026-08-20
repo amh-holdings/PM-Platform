@@ -90,7 +90,6 @@ export default async function ProjectProcurementPage({ params }: { params: Param
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Procurement</h2>
           <p className="text-xs text-muted-foreground">
             Purchase orders for equipment and materials, with milestone payment
             schedules. Each PO drives its own cash-out timeline.

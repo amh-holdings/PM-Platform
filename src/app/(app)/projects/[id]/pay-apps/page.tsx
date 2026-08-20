@@ -48,7 +48,6 @@ export default async function ProjectPayAppsPage({ params }: { params: Params })
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Pay applications</h2>
           <p className="text-xs text-muted-foreground">
             Monthly G702/G703 billing cycles to the owner. Each pay app
             snapshots the billing schedule at finalization.

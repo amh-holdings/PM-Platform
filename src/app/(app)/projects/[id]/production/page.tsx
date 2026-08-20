@@ -1,4 +1,3 @@
-import Link from "next/link";
 
 import { createClient } from "@/lib/supabase/server";
 import { guardCapability, getEffectiveRole } from "@/lib/roles-server";
@@ -154,13 +153,6 @@ export default async function ProductionPage({
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link
-            href={`/projects/${params.id}`}
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            &larr; Project
-          </Link>
-          <h2 className="mt-1 text-lg font-semibold">Daily production report</h2>
           <p className="text-xs text-muted-foreground">
             The owner&apos;s Commodity Tracker. Daily quantities, not running
             totals. Pull the dates you need, fill them from the field reports

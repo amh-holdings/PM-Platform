@@ -39,7 +39,6 @@ export default async function SubBillingPage({ params }: { params: Params }) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold">Sub billing</h2>
         <p className="text-xs text-muted-foreground">
           What each subcontractor is entitled to under their executed schedule
           of values, what they billed, and whether the field record supports it.

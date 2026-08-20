@@ -49,29 +49,6 @@ export default async function ProjectDashboardPage({ params }: { params: Params 
     <div className="space-y-8">
       <DashboardToday projectId={params.id} />
 
-      <nav className="sticky top-0 z-10 -mx-4 flex gap-1 overflow-x-auto border-b bg-background/95 px-4 py-2 text-xs backdrop-blur supports-[backdrop-filter]:bg-background/70 sm:mx-0 sm:rounded-md sm:border sm:px-2">
-        <a
-          href="#operations"
-          className="whitespace-nowrap rounded px-2 py-1 font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          Operations
-        </a>
-        {showFinancials && (
-          <a
-            href="#financial"
-            className="whitespace-nowrap rounded px-2 py-1 font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            Financial
-          </a>
-        )}
-        <a
-          href="#compliance"
-          className="whitespace-nowrap rounded px-2 py-1 font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          Compliance
-        </a>
-      </nav>
-
       <section className="space-y-4">
         <SectionHeader
           id="operations"

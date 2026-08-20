@@ -74,7 +74,6 @@ export default async function ProjectBillingPage({
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold">Billing schedule</h2>
         <p className="text-xs text-muted-foreground">
           Owner billing lines from the cash flow spreadsheet. Link schedule
           tasks per line so the dashboard can auto-suggest next-month billing.

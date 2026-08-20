@@ -18,7 +18,8 @@
     "commodity:seed": "tsx scripts/commodity/seed-commodities.ts",
     "commodity:propose": "tsx scripts/commodity/propose-backfill.ts",
     "commodity:apply": "tsx scripts/commodity/apply-backfill.ts",
-    "verify:schedule-edit": "tsx scripts/schedule/verify-edit-plans.ts"
+    "verify:schedule-edit": "tsx scripts/schedule/verify-edit-plans.ts",
+    "test:nav": "tsx scripts/nav/check-nav.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",

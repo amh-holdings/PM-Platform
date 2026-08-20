@@ -47,7 +47,6 @@ export default async function CmLogListPage({ params }: { params: Params }) {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">My Daily Log</h2>
           <p className="text-xs text-muted-foreground">
             The Construction Manager&apos;s own daily record - site conditions,
             progress, safety, and photos. One log per day.

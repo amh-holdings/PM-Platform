@@ -1,12 +1,16 @@
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { MobileNav } from "@/components/nav/mobile-nav";
+import { ProjectMain } from "@/components/nav/project-main";
+import { ProjectRail, RAIL_COOKIE } from "@/components/nav/project-rail";
 import { createClient } from "@/lib/supabase/server";
 import { can } from "@/lib/roles";
+import { getNavCounts } from "@/lib/nav-counts";
 import { getEffectiveRole } from "@/lib/roles-server";
 
-import { ProjectTabs } from "./project-tabs";
 import { ViewAsSwitcher } from "./view-as-switcher";
 
 type Params = { id: string };
@@ -31,45 +35,52 @@ export default async function ProjectLayout({
   params: Params;
 }) {
   const supabase = createClient();
-  const { data: project } = await supabase
-    .from("projects")
-    .select("id, name, client, status")
-    .eq("id", params.id)
-    .maybeSingle();
+  const { effective, actual } = await getEffectiveRole();
+
+  const [{ data: project }, { data: projects }, counts] = await Promise.all([
+    supabase
+      .from("projects")
+      .select("id, name, client, status")
+      .eq("id", params.id)
+      .maybeSingle(),
+    supabase
+      .from("projects")
+      .select("id, name, client, status")
+      .order("created_at", { ascending: false }),
+    getNavCounts(params.id, effective),
+  ]);
 
   if (!project) notFound();
 
-  const { effective, actual } = await getEffectiveRole();
+  const collapsed = cookies().get(RAIL_COOKIE)?.value === "collapsed";
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <Link
-            href="/projects"
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            &larr; Projects
-          </Link>
-          <h1 className="mt-1 text-2xl font-semibold">{project.name}</h1>
-          <p className="text-xs text-muted-foreground">
-            {project.client ?? "-"}
-            {project.status ? ` - ${project.status}` : ""}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {can(actual, "viewAsToggle") && (
-            <ViewAsSwitcher effective={effective} projectId={params.id} />
-          )}
-          <Button asChild variant="outline" size="sm">
-            <Link href={`/projects/${params.id}/edit`}>Edit project</Link>
-          </Button>
-        </div>
-      </div>
+    <div className="flex">
+      <ProjectRail
+        projectId={params.id}
+        role={effective}
+        counts={counts}
+        projects={projects ?? []}
+        defaultCollapsed={collapsed}
+      />
 
-      <ProjectTabs projectId={params.id} role={effective} />
+      <ProjectMain
+        projectId={params.id}
+        actions={
+          <>
+            {can(actual, "viewAsToggle") && (
+              <ViewAsSwitcher effective={effective} projectId={params.id} />
+            )}
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/projects/${params.id}/edit`}>Edit project</Link>
+            </Button>
+          </>
+        }
+      >
+        {children}
+      </ProjectMain>
 
-      <div>{children}</div>
+      <MobileNav projectId={params.id} role={effective} counts={counts} />
     </div>
   );
 }

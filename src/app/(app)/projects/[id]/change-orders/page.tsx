@@ -68,7 +68,6 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Change orders</h2>
           <p className="text-xs text-muted-foreground">
             Approved scope changes to the prime contract. Each CO can carry
             one or more SOV line items that get billed on subsequent AFPs.
