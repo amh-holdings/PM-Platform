@@ -4,14 +4,23 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { TablesUpdate } from "@/lib/database.types";
+import type { Json, TablesUpdate } from "@/lib/database.types";
 import {
   canReview,
   PHOTO_SIDE_CM,
   PHOTO_SIDE_SUB,
 } from "@/lib/inspection-status";
+import {
+  draftStoragePaths,
+  parseFieldReportDraft,
+  type FieldReportDraft,
+} from "@/lib/field-report-draft";
 import { submitDpr, type DprSubmitInput } from "./dpr-actions";
 import type { InspectionPhotoInput } from "./inspections/inspection-actions";
+
+// Draft photo blobs are staged in the shared private DPR bucket before the
+// draft is ever saved (same convention as submitDpr).
+const DPR_PHOTO_BUCKET = "dpr-photos";
 
 // One map-pinned "work done today" item on a Field Report. It becomes an
 // inspection row (origin='sub') linked to the day's DPR, inheriting the
@@ -38,6 +47,9 @@ export type WorkPinInput = {
 export type FieldReportInput = Omit<DprSubmitInput, "subcontractorId"> & {
   subcontractorId: string;
   workPins: WorkPinInput[];
+  // Set when the sub is filing a draft they saved earlier (migration 0039).
+  // Ownership is re-checked here before it reaches submitDpr.
+  dprId?: string | null;
 };
 
 export type FieldReportResult =
@@ -58,10 +70,27 @@ export async function submitFieldReport(
       return { ok: false, error: `Drop a map pin for "${p.title.trim()}"` };
   }
 
-  // 1. Write the DPR container (reuses the single DPR-writing path). This sets
+  // 1. If this is a saved draft being filed, confirm the caller owns it and
+  //    that it is still a draft BEFORE handing the id to submitDpr - that is
+  //    where it gets promoted through the service-role client, which bypasses
+  //    RLS, so this check is the only thing standing between one sub and
+  //    another sub's report.
+  if (input.dprId) {
+    const guard = await assertOwnedDraft(input.dprId, input.projectId);
+    if (!guard.ok) return guard;
+    if (guard.subcontractorId && guard.subcontractorId !== input.subcontractorId) {
+      return {
+        ok: false,
+        error: "This draft belongs to a different subcontractor.",
+      };
+    }
+  }
+
+  // 2. Write the DPR container (reuses the single DPR-writing path). This sets
   //    subcontractor_id and stamps status='submitted'.
   const dprRes = await submitDpr({
     projectId: input.projectId,
+    promoteDprId: input.dprId ?? null,
     subcontractorId: input.subcontractorId,
     reportDate: input.reportDate,
     workNarrative: input.workNarrative,
@@ -81,7 +110,7 @@ export async function submitFieldReport(
   if (!dprRes.ok) return dprRes;
   const dprId = dprRes.dprId;
 
-  // 2. Insert each work-done pin as an inspection linked to this DPR. RLS lets
+  // 3. Insert each work-done pin as an inspection linked to this DPR. RLS lets
   //    a signed-in sub insert inspections scoped to their own subcontractor_id.
   const supabase = createClient();
   const {
@@ -419,4 +448,224 @@ async function rollupReportStatusAdmin(
     }
   }
   await admin.from("dprs").update(patch).eq("id", dprId);
+}
+
+// ===== Draft lifecycle (migration 0039) =====
+// The sub's Field Report used to be create-once, which meant a report had to be
+// filled and filed in a single sitting. It now mirrors the CM Daily Log: start
+// it, save it as often as you like, and it LOCKS the moment you submit - from
+// there it is the CM's to review, and the sub can only touch it through the
+// per-pin resubmit flow above.
+//
+// Everything unsubmitted lives in dprs.draft_payload as JSON and owns no child
+// rows, so a draft cannot appear on the review board, on the pin map, or in a
+// pay application. See src/lib/field-report-draft.ts for why that shape.
+//
+// Like resubmitFieldReportPin, these run through the service-role client after
+// an explicit ownership check rather than leaning on a sub's RLS grants.
+
+type DraftGuard =
+  | {
+      ok: true;
+      admin: ReturnType<typeof createAdminClient>;
+      userId: string;
+      dprId: string;
+      subcontractorId: string | null;
+      draft: FieldReportDraft | null;
+    }
+  | { ok: false; error: string };
+
+// Confirm the signed-in user may write this draft, and that it IS still a
+// draft. A sub may only reach their own company's report; AHC reviewers may
+// reach any of them.
+async function assertOwnedDraft(
+  dprId: string,
+  projectId: string,
+): Promise<DraftGuard> {
+  const auth = await getReportProfile();
+  if (!auth.ok) return auth;
+
+  const admin = createAdminClient();
+  const { data: row, error } = await admin
+    .from("dprs")
+    .select("id, project_id, status, subcontractor_id, draft_payload")
+    .eq("id", dprId)
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!row || row.project_id !== projectId)
+    return { ok: false, error: "Report not found" };
+  if (row.status !== "draft") {
+    return {
+      ok: false,
+      error: "This report was already submitted and can no longer be edited.",
+    };
+  }
+
+  const isAhc = canReview(auth.role);
+  const isOwner =
+    auth.subcontractorId != null &&
+    row.subcontractor_id === auth.subcontractorId;
+  if (!isAhc && !isOwner)
+    return { ok: false, error: "Not authorized to edit this report" };
+
+  return {
+    ok: true,
+    admin,
+    userId: auth.userId,
+    dprId: row.id,
+    subcontractorId: row.subcontractor_id,
+    draft: parseFieldReportDraft(row.draft_payload),
+  };
+}
+
+export type SaveFieldReportDraftInput = {
+  projectId: string;
+  // Absent on the first save of a new report; set on every save after that.
+  dprId?: string | null;
+  subcontractorId: string;
+  draft: FieldReportDraft;
+};
+
+// Free-text numeric fields are coerced only for the summary columns below;
+// the draft's own copy stays exactly as typed so the form round-trips.
+function numOrNull(v: string): number | null {
+  const n = Number(v);
+  return v.trim() !== "" && Number.isFinite(n) ? n : null;
+}
+
+export async function saveFieldReportDraft(
+  input: SaveFieldReportDraftInput,
+): Promise<FieldReportResult> {
+  const auth = await getReportProfile();
+  if (!auth.ok) return auth;
+  if (!input.subcontractorId)
+    return { ok: false, error: "Select which subcontractor this report is for" };
+  if (!input.draft?.reportDate)
+    return { ok: false, error: "Pick a date for the report" };
+
+  // A sub may only file under their own company. AHC reviewers are unrestricted
+  // so they can pick a report up on a sub's behalf.
+  if (
+    !canReview(auth.role) &&
+    (auth.subcontractorId == null ||
+      auth.subcontractorId !== input.subcontractorId)
+  ) {
+    return { ok: false, error: "You can only save reports for your own company" };
+  }
+
+  const admin = createAdminClient();
+  const now = new Date().toISOString();
+  // Mirror the headline fields into their real columns as well as the payload,
+  // so the reports list and the coverage view can read a draft without parsing
+  // JSON. The payload stays authoritative for the form.
+  const summary = {
+    project_id: input.projectId,
+    subcontractor_id: input.subcontractorId,
+    report_date: input.draft.reportDate,
+    work_narrative: input.draft.narrative.trim() || null,
+    crew_count: numOrNull(input.draft.crewOverride),
+    weather_conditions: input.draft.weather.trim() || null,
+    safety_incident: input.draft.safetyIncident,
+    near_miss: input.draft.nearMiss,
+    safety_narrative: input.draft.safetyNarrative.trim() || null,
+    // The draft is a plain object of strings/booleans/arrays, so it satisfies
+    // Json; TS just cannot see that through the declared interface.
+    draft_payload: input.draft as unknown as Json,
+    updated_at: now,
+  };
+
+  let dprId = input.dprId ?? null;
+
+  if (dprId) {
+    const guard = await assertOwnedDraft(dprId, input.projectId);
+    if (!guard.ok) return guard;
+    const { error } = await admin.from("dprs").update(summary).eq("id", dprId);
+    if (error) {
+      // The sub moved this draft onto a date their company already has a
+      // report for - the unique (project, sub, date) index. Say which date,
+      // because the raw constraint message means nothing in the field.
+      if (error.code === "23505") {
+        return {
+          ok: false,
+          error: `Your company already has a report for ${input.draft.reportDate}. Pick a different date.`,
+        };
+      }
+      return { ok: false, error: error.message };
+    }
+  } else {
+    // No id yet. One report per sub per day (the unique index on
+    // project/sub/report_date), so an existing row for that date is the same
+    // report - resume it rather than colliding. If it is already submitted,
+    // say so instead of silently overwriting the filed record.
+    const { data: existing } = await admin
+      .from("dprs")
+      .select("id, status")
+      .eq("project_id", input.projectId)
+      .eq("subcontractor_id", input.subcontractorId)
+      .eq("report_date", input.draft.reportDate)
+      .maybeSingle();
+
+    if (existing && existing.status !== "draft") {
+      return {
+        ok: false,
+        error: `A report for ${input.draft.reportDate} was already submitted.`,
+      };
+    }
+    if (existing) {
+      const { error } = await admin
+        .from("dprs")
+        .update(summary)
+        .eq("id", existing.id);
+      if (error) return { ok: false, error: error.message };
+      dprId = existing.id;
+    } else {
+      const { data: created, error } = await admin
+        .from("dprs")
+        .insert({ ...summary, foreman_id: auth.userId, status: "draft" })
+        .select("id")
+        .single();
+      if (error?.code === "23505") {
+        // Raced with another device saving the same day's report.
+        return {
+          ok: false,
+          error: `A report for ${input.draft.reportDate} was just created elsewhere. Reload to pick it up.`,
+        };
+      }
+      if (error || !created)
+        return { ok: false, error: error?.message ?? "Could not save the draft" };
+      dprId = created.id;
+    }
+  }
+
+  revalidatePath(`/projects/${input.projectId}/field-reports`);
+  revalidatePath(`/projects/${input.projectId}/field-reports/${dprId}`);
+  return { ok: true, dprId };
+}
+
+// Throw a draft away: its staged photo blobs, then the row. Only ever reachable
+// for status='draft', so this can never delete a filed report.
+export async function discardFieldReportDraft(
+  dprId: string,
+  projectId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const guard = await assertOwnedDraft(dprId, projectId);
+  if (!guard.ok) return guard;
+
+  if (guard.draft) {
+    const paths = draftStoragePaths(guard.draft);
+    if (paths.length > 0) {
+      // Best-effort: a blob left behind is dead weight, not a correctness bug.
+      await guard.admin.storage.from(DPR_PHOTO_BUCKET).remove(paths);
+    }
+  }
+
+  const { error } = await guard.admin
+    .from("dprs")
+    .delete()
+    .eq("id", guard.dprId)
+    .eq("status", "draft");
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/field-reports`);
+  return { ok: true };
 }

@@ -11,6 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { INSPECTION_BUCKET } from "../../inspections/inspection-constants";
 
+import { FieldReportDraftActions } from "./field-report-draft-actions";
 import { FieldReportReview, type ReviewPin } from "./field-report-review";
 
 type Params = { id: string; dprId: string };
@@ -146,6 +147,12 @@ export default async function FieldReportDetailPage({
     photos: photosByPin.get(p.id) ?? [],
   }));
 
+  const isDraft = dpr.status === "draft";
+  const ownsReport =
+    canReview(role) ||
+    (profile?.subcontractor_id != null &&
+      dpr.subcontractor_id === profile.subcontractor_id);
+
   const canResubmit =
     dpr.status === "returned" &&
     (canReview(role) ||
@@ -183,10 +190,28 @@ export default async function FieldReportDetailPage({
           </span>
         </div>
         <p className="text-xs text-muted-foreground">
-          {sub?.company_name ?? "Unassigned sub"} · submitted{" "}
-          {dpr.submitted_at ? formatDate(dpr.submitted_at) : "-"}
+          {sub?.company_name ?? "Unassigned sub"} ·{" "}
+          {dpr.submitted_at
+            ? `submitted ${formatDate(dpr.submitted_at)}`
+            : "not submitted yet"}
         </p>
       </div>
+
+      {isDraft && (
+        <div className="space-y-2 rounded-lg border border-dashed bg-muted/40 px-3 py-2.5">
+          <p className="text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">
+              Draft - not submitted.
+            </span>{" "}
+            Nobody is reviewing this yet and its work pins have not been filed,
+            so nothing here counts toward progress or billing. Finish it in the
+            editor and submit to hand it to the Construction Manager.
+          </p>
+          {ownsReport && (
+            <FieldReportDraftActions projectId={params.id} dprId={dpr.id} />
+          )}
+        </div>
+      )}
 
       {dpr.status === "returned" && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
@@ -233,16 +258,25 @@ export default async function FieldReportDetailPage({
         )}
       </div>
 
-      {/* Map review: sub work pins + CM own checks */}
+      {/* Map review: sub work pins + CM own checks. A draft has no inspections
+          rows by design - its pins live in the draft payload until submit - so
+          the map would be empty and misleading. */}
       <div>
         <h3 className="mb-2 text-sm font-semibold">Work on the map</h3>
-        <FieldReportReview
-          projectId={params.id}
-          pins={reviewPins}
-          canReview={canReview(role)}
-          canDecide={isInspectionApprover({ role })}
-          canResubmit={canResubmit}
-        />
+        {isDraft ? (
+          <p className="rounded-lg border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+            Work pins are held in the draft until it is submitted. Open the
+            editor to see and change them.
+          </p>
+        ) : (
+          <FieldReportReview
+            projectId={params.id}
+            pins={reviewPins}
+            canReview={canReview(role)}
+            canDecide={isInspectionApprover({ role })}
+            canResubmit={canResubmit}
+          />
+        )}
       </div>
     </div>
   );

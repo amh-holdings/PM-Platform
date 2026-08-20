@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import type { TablesUpdate } from "@/lib/database.types";
 
 async function assertAhcUser() {
@@ -89,6 +90,14 @@ export type DprDelayInput = {
 export type DprSubmitInput = {
   projectId: string;
   reportDate: string; // YYYY-MM-DD
+  // Set when this submit is FILING AN EXISTING DRAFT rather than creating a
+  // report from scratch (migration 0039). The row already exists at
+  // status='draft', so it is updated in place instead of inserted - inserting
+  // would collide with the unique (project_id, subcontractor_id, report_date)
+  // index, and deleting-then-inserting would lose the sub's whole day if the
+  // insert then failed. The CALLER is responsible for having verified the
+  // draft's ownership before passing it (see submitFieldReport).
+  promoteDprId?: string | null;
   // The subcontractor this report is for. Legacy DPRs left this null; the Field
   // Report flow sets it so map pins can be scoped per sub.
   subcontractorId?: string | null;
@@ -125,28 +134,73 @@ export async function submitDpr(input: DprSubmitInput): Promise<DprActionResult>
   if (!input.workNarrative?.trim())
     return { ok: false, error: "Work narrative is required" };
 
-  // Insert the DPR row in submitted state. The foreman_id is the current user.
-  const { data: dpr, error: insertErr } = await auth.supabase
-    .from("dprs")
-    .insert({
-      project_id: input.projectId,
-      foreman_id: auth.userId,
-      subcontractor_id: input.subcontractorId ?? null,
-      report_date: input.reportDate,
-      work_narrative: input.workNarrative.trim(),
-      crew_count: input.crewCount ?? null,
-      total_man_hours: input.totalManHours ?? null,
-      weather_conditions: input.weatherConditions ?? null,
-      safety_incident: input.safetyIncident ?? false,
-      near_miss: input.nearMiss ?? false,
-      safety_narrative: input.safetyNarrative ?? null,
-      status: "submitted",
-      submitted_at: new Date().toISOString(),
-    })
-    .select("id")
-    .single();
-  if (insertErr || !dpr) {
-    return { ok: false, error: insertErr?.message ?? "Failed to create DPR" };
+  // The report's own fields, identical whether this is a fresh submit or a
+  // draft being filed.
+  const now = new Date().toISOString();
+  const reportFields = {
+    project_id: input.projectId,
+    foreman_id: auth.userId,
+    subcontractor_id: input.subcontractorId ?? null,
+    report_date: input.reportDate,
+    work_narrative: input.workNarrative.trim(),
+    crew_count: input.crewCount ?? null,
+    total_man_hours: input.totalManHours ?? null,
+    weather_conditions: input.weatherConditions ?? null,
+    safety_incident: input.safetyIncident ?? false,
+    near_miss: input.nearMiss ?? false,
+    safety_narrative: input.safetyNarrative ?? null,
+    status: "submitted" as const,
+    submitted_at: now,
+  };
+
+  let dpr: { id: string } | null = null;
+  if (input.promoteDprId) {
+    // Filing a draft. Runs through the service-role client for the same reason
+    // resubmitFieldReportPin does: a signed-in sub's grants on dprs are not
+    // dependable for UPDATE, and the ownership check has already happened in
+    // the caller. draft_payload is cleared here - once the report is filed the
+    // JSON copy is stale, and the table's CHECK constraint refuses to keep it
+    // alongside a non-draft status.
+    const admin = createAdminClient();
+    const { data: promoted, error: promoteErr } = await admin
+      .from("dprs")
+      .update({ ...reportFields, draft_payload: null, updated_at: now })
+      .eq("id", input.promoteDprId)
+      .eq("project_id", input.projectId)
+      .eq("status", "draft")
+      .select("id")
+      .maybeSingle();
+    if (promoteErr) return { ok: false, error: promoteErr.message };
+    if (!promoted) {
+      // No row matched: it was filed by another device, or discarded.
+      return {
+        ok: false,
+        error: "This report is no longer a draft - reload to see its status.",
+      };
+    }
+    dpr = promoted;
+
+    // A draft holds everything as JSON and owns no child rows, so there is
+    // normally nothing to clear. Sweep anyway, so a retry after a half-failed
+    // submit rewrites the children instead of doubling them.
+    await Promise.all([
+      admin.from("dpr_task_updates").delete().eq("dpr_id", dpr.id),
+      admin.from("dpr_manpower").delete().eq("dpr_id", dpr.id),
+      admin.from("dpr_equipment").delete().eq("dpr_id", dpr.id),
+      admin.from("dpr_deliveries").delete().eq("dpr_id", dpr.id),
+      admin.from("dpr_delays").delete().eq("dpr_id", dpr.id),
+      admin.from("photos").delete().eq("dpr_id", dpr.id),
+    ]);
+  } else {
+    const { data: created, error: insertErr } = await auth.supabase
+      .from("dprs")
+      .insert(reportFields)
+      .select("id")
+      .single();
+    if (insertErr || !created) {
+      return { ok: false, error: insertErr?.message ?? "Failed to create DPR" };
+    }
+    dpr = created;
   }
 
   // ===== task updates with before-snapshot =====

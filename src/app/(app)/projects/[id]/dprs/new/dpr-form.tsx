@@ -9,7 +9,14 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { BASEMAPS, type BasemapKey, type NormalizedPin } from "@/lib/inspection-map";
 import { submitDpr } from "../../dpr-actions";
-import { submitFieldReport } from "../../field-report-actions";
+import {
+  saveFieldReportDraft,
+  submitFieldReport,
+} from "../../field-report-actions";
+import {
+  FIELD_REPORT_DRAFT_VERSION,
+  type FieldReportDraft,
+} from "@/lib/field-report-draft";
 import { InspectionMap } from "../../inspections/inspection-map";
 import {
   PhotoUploader,
@@ -112,6 +119,15 @@ type Props = {
   // combined daily Field Report: DPR fields PLUS work-done pins on the site map,
   // reviewed by the Construction Manager the next day.
   variant?: "dpr" | "fieldReport";
+  // Field Report drafts (migration 0039). `initialDraft` reopens a report the
+  // sub saved earlier and `draftDprId` is the row it saves back to. Both absent
+  // = a brand new report.
+  initialDraft?: FieldReportDraft | null;
+  draftDprId?: string | null;
+  // Signed URLs for the draft's already-uploaded photos, keyed by storage path.
+  // The stored draft cannot carry previews: those are blob: URLs that die with
+  // the browser session, so the server re-signs them on load.
+  draftPhotoUrls?: Record<string, string>;
 };
 
 type TaskUpdate = {
@@ -176,38 +192,108 @@ export function DprForm({
   subs,
   procurementOrders,
   variant = "dpr",
+  initialDraft = null,
+  draftDprId = null,
+  draftPhotoUrls = {},
 }: Props) {
   const router = useRouter();
   const isFieldReport = variant === "fieldReport";
-  const [draftId] = useState(() => crypto.randomUUID());
+  // Reuse the draft's storage prefix when resuming, so a report worked on over
+  // several sittings keeps all its photos under one folder.
+  const [draftId] = useState(
+    () => initialDraft?.draftId || crypto.randomUUID(),
+  );
+  // The row this form saves drafts back to. Null until the first save, then set
+  // from the server's response so subsequent saves update instead of inserting.
+  const [dprId, setDprId] = useState<string | null>(draftDprId);
 
-  const [reportDate, setReportDate] = useState(todayIso());
-  const [narrative, setNarrative] = useState("");
-  const [weather, setWeather] = useState("");
-  const [crewOverride, setCrewOverride] = useState("");
-  const [hoursOverride, setHoursOverride] = useState("");
+  const [reportDate, setReportDate] = useState(
+    initialDraft?.reportDate || todayIso(),
+  );
+  const [narrative, setNarrative] = useState(initialDraft?.narrative ?? "");
+  const [weather, setWeather] = useState(initialDraft?.weather ?? "");
+  const [crewOverride, setCrewOverride] = useState(
+    initialDraft?.crewOverride ?? "",
+  );
+  const [hoursOverride, setHoursOverride] = useState(
+    initialDraft?.hoursOverride ?? "",
+  );
   // Field Report: total man-hours = crew count x hours per day.
-  const [hoursPerDay, setHoursPerDay] = useState("");
+  const [hoursPerDay, setHoursPerDay] = useState(
+    initialDraft?.hoursPerDay ?? "",
+  );
 
   // Field Report only: which sub is filing, which sheet, and the work-done pins.
-  const [reportSubId, setReportSubId] = useState("");
-  const [sheet, setSheet] = useState<BasemapKey>("C2-01");
-  const [workPins, setWorkPins] = useState<WorkPin[]>([]);
+  const [reportSubId, setReportSubId] = useState(
+    initialDraft?.subcontractorId ?? "",
+  );
+  const [sheet, setSheet] = useState<BasemapKey>(
+    (initialDraft?.sheet as BasemapKey) || "C2-01",
+  );
+  const [workPins, setWorkPins] = useState<WorkPin[]>(() =>
+    (initialDraft?.workPins ?? []).map((p) => ({
+      rowId: p.rowId,
+      basemapKey: p.basemapKey as BasemapKey,
+      x: p.x,
+      y: p.y,
+      wbsTaskId: p.wbsTaskId,
+      newStatus: p.newStatus,
+      newPct: p.newPct,
+      installedQty: p.installedQty,
+      unitOfMeasure: p.unitOfMeasure,
+      notes: p.notes,
+      photos: p.photos,
+      confirmed: p.confirmed,
+      // Any error was about the state at save time; re-derive it on next edit
+      // rather than greeting the sub with a stale complaint.
+      rowError: null,
+    })),
+  );
 
-  const [safetyIncident, setSafetyIncident] = useState(false);
-  const [nearMiss, setNearMiss] = useState(false);
-  const [safetyNarrative, setSafetyNarrative] = useState("");
+  const [safetyIncident, setSafetyIncident] = useState(
+    initialDraft?.safetyIncident ?? false,
+  );
+  const [nearMiss, setNearMiss] = useState(initialDraft?.nearMiss ?? false);
+  const [safetyNarrative, setSafetyNarrative] = useState(
+    initialDraft?.safetyNarrative ?? "",
+  );
 
-  const [photos, setPhotos] = useState<StagedPhoto[]>([]);
-  const [manpower, setManpower] = useState<ManpowerRow[]>([]);
-  const [equipment, setEquipment] = useState<EquipmentRow[]>([]);
-  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
-  const [delays, setDelays] = useState<DelayRow[]>([]);
+  const [photos, setPhotos] = useState<StagedPhoto[]>(() =>
+    (initialDraft?.photos ?? []).map((p) => ({
+      photoId: p.photoId,
+      fileName: p.fileName,
+      storagePath: p.storagePath,
+      sizeBytes: p.sizeBytes,
+      mimeType: p.mimeType,
+      caption: p.caption,
+      photoType: p.photoType as StagedPhoto["photoType"],
+      // Re-signed by the server; blank if the blob has since gone missing.
+      previewUrl: draftPhotoUrls[p.storagePath] ?? "",
+    })),
+  );
+  const [manpower, setManpower] = useState<ManpowerRow[]>(
+    () => initialDraft?.manpower ?? [],
+  );
+  const [equipment, setEquipment] = useState<EquipmentRow[]>(
+    () => initialDraft?.equipment ?? [],
+  );
+  const [deliveries, setDeliveries] = useState<DeliveryRow[]>(
+    () => initialDraft?.deliveries ?? [],
+  );
+  const [delays, setDelays] = useState<DelayRow[]>(
+    () => initialDraft?.delays ?? [],
+  );
 
   const [search, setSearch] = useState("");
-  const [updates, setUpdates] = useState<Map<string, TaskUpdate>>(new Map());
+  const [updates, setUpdates] = useState<Map<string, TaskUpdate>>(
+    () => new Map((initialDraft?.taskUpdates ?? []).map((u) => [u.taskId, u])),
+  );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Draft save runs on its own flag so "Saving..." never blocks or masks the
+  // submit button's state.
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
   // ===== rollups =====
@@ -432,6 +518,86 @@ export function DprForm({
     patchWorkPin(rowId, { confirmed: false });
   }
 
+  // ===== Draft save (Field Report only) =====
+  // Snapshot the form exactly as it stands - including pins the sub has not
+  // finished - into the shape stored in dprs.draft_payload. Nothing here is
+  // validated or coerced: a draft is a half-filled form, and the checks belong
+  // at submit, where there is something complete to check.
+  function buildDraft(): FieldReportDraft {
+    return {
+      version: FIELD_REPORT_DRAFT_VERSION,
+      draftId,
+      reportDate,
+      subcontractorId: reportSubId,
+      narrative,
+      weather,
+      crewOverride,
+      hoursPerDay,
+      hoursOverride,
+      sheet,
+      safetyIncident,
+      nearMiss,
+      safetyNarrative,
+      workPins: workPins.map((p) => ({
+        rowId: p.rowId,
+        basemapKey: p.basemapKey,
+        x: p.x,
+        y: p.y,
+        wbsTaskId: p.wbsTaskId,
+        newStatus: p.newStatus,
+        newPct: p.newPct,
+        installedQty: p.installedQty,
+        unitOfMeasure: p.unitOfMeasure,
+        notes: p.notes,
+        photos: p.photos,
+        confirmed: p.confirmed,
+      })),
+      taskUpdates: Array.from(updates.values()),
+      manpower,
+      equipment,
+      deliveries,
+      delays,
+      // previewUrl is deliberately dropped - it is a blob: URL scoped to this
+      // browser session. The server re-signs from storagePath on reload.
+      photos: photos.map((p) => ({
+        photoId: p.photoId,
+        fileName: p.fileName,
+        storagePath: p.storagePath,
+        sizeBytes: p.sizeBytes,
+        mimeType: p.mimeType,
+        caption: p.caption,
+        photoType: p.photoType,
+      })),
+    };
+  }
+
+  async function onSaveDraft() {
+    setError(null);
+    // The one thing a draft cannot do without: which company it belongs to.
+    // It is the ownership key and half of the one-report-per-sub-per-day index.
+    if (!reportSubId) {
+      setError("Select which subcontractor this report is for before saving");
+      return;
+    }
+    setSavingDraft(true);
+    const res = await saveFieldReportDraft({
+      projectId,
+      dprId,
+      subcontractorId: reportSubId,
+      draft: buildDraft(),
+    });
+    setSavingDraft(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    setDprId(res.dprId);
+    setSavedAt(
+      new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+    );
+    router.refresh();
+  }
+
   async function onSubmit() {
     setError(null);
     if (!narrative.trim()) {
@@ -533,6 +699,7 @@ export function DprForm({
     setSubmitting(true);
     const res = await submitFieldReport({
       projectId,
+      dprId,
       subcontractorId: reportSubId,
       reportDate,
       workNarrative: narrative,
@@ -1630,16 +1797,43 @@ export function DprForm({
         </div>
       )}
 
-      <div className="flex items-center justify-end gap-2">
+      {isFieldReport && (
+        <p className="text-xs text-muted-foreground">
+          Save as often as you like while the day is running. Submitting hands
+          the report to the Construction Manager and locks it - after that you
+          can only fix items he sends back.
+        </p>
+      )}
+
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {savedAt && (
+          <span className="mr-auto text-xs text-muted-foreground">
+            Draft saved {savedAt}
+          </span>
+        )}
         <Button
           type="button"
           variant="ghost"
-          disabled={submitting}
+          disabled={submitting || savingDraft}
           onClick={() => router.back()}
         >
           Cancel
         </Button>
-        <Button type="button" disabled={submitting} onClick={onSubmit}>
+        {isFieldReport && (
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={submitting || savingDraft}
+            onClick={onSaveDraft}
+          >
+            {savingDraft ? "Saving..." : "Save draft"}
+          </Button>
+        )}
+        <Button
+          type="button"
+          disabled={submitting || savingDraft}
+          onClick={onSubmit}
+        >
           {submitting
             ? "Submitting..."
             : isFieldReport

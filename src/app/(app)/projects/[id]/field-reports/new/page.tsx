@@ -1,9 +1,7 @@
 import Link from "next/link";
 
-import { createClient } from "@/lib/supabase/server";
-import { buildTaskPicker, summaryCodesOf } from "@/lib/schedule-picker";
-
 import { DprForm } from "../../dprs/new/dpr-form";
+import { loadFieldReportFormData } from "../form-data";
 
 type Params = { id: string };
 
@@ -12,71 +10,15 @@ export default async function NewFieldReportPage({
 }: {
   params: Params;
 }) {
-  const supabase = createClient();
+  const data = await loadFieldReportFormData(params.id);
 
-  const [tasksRes, subsRes, posRes] = await Promise.all([
-    supabase
-      .from("schedule_tasks")
-      .select(
-        "id, wbs_code, task_name, phase, status, pct_complete, start_date, end_date, parent_wbs_code",
-      )
-      .eq("project_id", params.id)
-      .order("sort_order", { ascending: true, nullsFirst: false })
-      .order("wbs_code", { ascending: true }),
-    supabase
-      .from("subcontractors")
-      .select("id, company_name, trade")
-      .eq("project_id", params.id)
-      .eq("active", true)
-      .order("company_name", { ascending: true }),
-    supabase
-      .from("procurement_orders")
-      .select("id, vendor_name, po_number, description")
-      .eq("project_id", params.id)
-      .order("ordered_date", { ascending: false, nullsFirst: false }),
-  ]);
-
-  if (tasksRes.error) {
+  if (data.error) {
     return (
       <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-        Failed to load schedule tasks: {tasksRes.error.message}
+        {data.error}
       </div>
     );
   }
-
-  // Summary rows are removed and the rest is ordered so what the crew is
-  // actually working on sits at the top. See src/lib/schedule-picker.ts for why
-  // this matters to billing.
-  const now = new Date();
-  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  const summaryCodes = summaryCodesOf(tasksRes.data ?? []);
-  const taskRows = buildTaskPicker(
-    (tasksRes.data ?? []).map((t) => ({
-      id: t.id,
-      wbsCode: t.wbs_code,
-      taskName: t.task_name,
-      phase: t.phase,
-      currentStatus: t.status,
-      currentPct: Number(t.pct_complete ?? 0) || null,
-      startDate: t.start_date,
-      endDate: t.end_date,
-    })),
-    summaryCodes,
-    todayIso,
-  );
-
-  const subs = (subsRes.data ?? []).map((s) => ({
-    id: s.id,
-    companyName: s.company_name,
-    trade: s.trade,
-  }));
-
-  const procurementOrders = (posRes.data ?? []).map((p) => ({
-    id: p.id,
-    vendorName: p.vendor_name,
-    poNumber: p.po_number,
-    description: p.description,
-  }));
 
   return (
     <div className="space-y-4">
@@ -90,16 +32,16 @@ export default async function NewFieldReportPage({
         <h2 className="mt-1 text-lg font-semibold">Daily Field Report</h2>
         <p className="text-xs text-muted-foreground">
           One report for the day: the progress narrative plus the work you did,
-          marked on the site map. The Construction Manager reviews each pin the
-          next day.
+          marked on the site map. Save it and come back to it as many times as
+          you need - it is only filed when you submit.
         </p>
       </div>
 
       <DprForm
         projectId={params.id}
-        tasks={taskRows}
-        subs={subs}
-        procurementOrders={procurementOrders}
+        tasks={data.tasks}
+        subs={data.subs}
+        procurementOrders={data.procurementOrders}
         variant="fieldReport"
       />
     </div>

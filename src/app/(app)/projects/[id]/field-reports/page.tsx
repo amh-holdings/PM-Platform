@@ -43,7 +43,7 @@ export default async function FieldReportsPage({
   const { data: profile } = user
     ? await supabase
         .from("profiles")
-        .select("role")
+        .select("role, subcontractor_id")
         .eq("id", user.id)
         .maybeSingle()
     : { data: null };
@@ -77,7 +77,18 @@ export default async function FieldReportsPage({
     );
   }
 
-  const rows = dprsRes.data ?? [];
+  // A draft is an unfiled, half-written record. The read policy on dprs lets
+  // any sub role read every report on the project, which was tolerable when
+  // every row was a submitted document - it is not once drafts exist, so hide
+  // other companies' drafts here. Filed reports stay visible to everyone as
+  // before. (The underlying read policy is the real fix; see BACKLOG.md.)
+  const rows = (dprsRes.data ?? []).filter(
+    (d) =>
+      d.status !== "draft" ||
+      isReviewer ||
+      (profile?.subcontractor_id != null &&
+        d.subcontractor_id === profile.subcontractor_id),
+  );
   const subName = new Map(
     (subsRes.data ?? []).map((s) => [s.id, s.company_name]),
   );
@@ -187,6 +198,14 @@ export default async function FieldReportsPage({
                       >
                         {d.status}
                       </span>
+                      {d.status === "draft" && (
+                        <Link
+                          href={`/projects/${params.id}/field-reports/${d.id}/edit`}
+                          className="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium hover:bg-accent"
+                        >
+                          Continue
+                        </Link>
+                      )}
                       {d.safety_incident ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2 py-0.5 text-xs font-semibold text-white">
                           ⚠ Safety incident

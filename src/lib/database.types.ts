@@ -984,6 +984,7 @@ export type Database = {
           crew_count: number | null
           delays: Json | null
           deliveries: Json | null
+          draft_payload: Json | null
           equipment_on_site: Json | null
           foreman_id: string | null
           id: string
@@ -1004,6 +1005,7 @@ export type Database = {
           toolbox_attendees: number | null
           toolbox_topic: string | null
           total_man_hours: number | null
+          updated_at: string | null
           weather_conditions: string | null
           work_narrative: string | null
         }
@@ -1012,6 +1014,7 @@ export type Database = {
           crew_count?: number | null
           delays?: Json | null
           deliveries?: Json | null
+          draft_payload?: Json | null
           equipment_on_site?: Json | null
           foreman_id?: string | null
           id?: string
@@ -1032,6 +1035,7 @@ export type Database = {
           toolbox_attendees?: number | null
           toolbox_topic?: string | null
           total_man_hours?: number | null
+          updated_at?: string | null
           weather_conditions?: string | null
           work_narrative?: string | null
         }
@@ -1040,6 +1044,7 @@ export type Database = {
           crew_count?: number | null
           delays?: Json | null
           deliveries?: Json | null
+          draft_payload?: Json | null
           equipment_on_site?: Json | null
           foreman_id?: string | null
           id?: string
@@ -1060,6 +1065,7 @@ export type Database = {
           toolbox_attendees?: number | null
           toolbox_topic?: string | null
           total_man_hours?: number | null
+          updated_at?: string | null
           weather_conditions?: string | null
           work_narrative?: string | null
         }
