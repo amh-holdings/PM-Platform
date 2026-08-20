@@ -288,7 +288,7 @@ export async function submitDpr(input: DprSubmitInput): Promise<DprActionResult>
     if (error) return { ok: false, error: `Photos failed: ${error.message}` };
   }
 
-  revalidatePath(`/projects/${input.projectId}`);
+  revalidatePath(`/projects/${input.projectId}`, "layout");
   revalidatePath(`/projects/${input.projectId}/dprs`);
   return { ok: true, dprId: dpr.id };
 }
@@ -359,7 +359,7 @@ export async function approveDpr(
     .eq("id", dprId);
   if (stampErr) return { ok: false, error: stampErr.message };
 
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}`, "layout");
   revalidatePath(`/projects/${projectId}/dprs`);
   revalidatePath(`/projects/${projectId}/dprs/${dprId}`);
   revalidatePath(`/projects/${projectId}/billing`);

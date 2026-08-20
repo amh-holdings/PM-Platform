@@ -69,7 +69,7 @@ export async function createChangeOrder(
   if (error || !data) return { ok: false, error: error?.message ?? "Insert failed" };
 
   revalidatePath(`/projects/${input.projectId}/change-orders`);
-  revalidatePath(`/projects/${input.projectId}`);
+  revalidatePath(`/projects/${input.projectId}`, "layout");
   return { ok: true, coId: data.id };
 }
 
@@ -102,7 +102,7 @@ export async function updateChangeOrder(
 
   revalidatePath(`/projects/${projectId}/change-orders`);
   revalidatePath(`/projects/${projectId}/change-orders/${coId}`);
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}`, "layout");
   return { ok: true };
 }
 
@@ -126,7 +126,7 @@ export async function deleteChangeOrder(
   if (error) return { ok: false, error: error.message };
 
   revalidatePath(`/projects/${projectId}/change-orders`);
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}`, "layout");
   return { ok: true };
 }
 
@@ -172,7 +172,7 @@ export async function addCoBillingLine(
 
   revalidatePath(`/projects/${input.projectId}/change-orders/${input.changeOrderId}`);
   revalidatePath(`/projects/${input.projectId}/change-orders`);
-  revalidatePath(`/projects/${input.projectId}`);
+  revalidatePath(`/projects/${input.projectId}`, "layout");
   return { ok: true, lineId: data.id };
 }
 

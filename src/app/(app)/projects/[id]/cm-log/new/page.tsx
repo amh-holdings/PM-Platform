@@ -39,7 +39,7 @@ export default async function NewCmLogPage({ params }: { params: Params }) {
           href={`/projects/${params.id}/cm-log`}
           className="text-xs text-muted-foreground hover:text-foreground"
         >
-          &larr; My Daily Log
+          &larr; CM Log
         </Link>
         <h2 className="mt-1 text-lg font-semibold">New CM Daily Log</h2>
         <p className="text-xs text-muted-foreground">

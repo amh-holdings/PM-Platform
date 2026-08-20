@@ -71,7 +71,7 @@ export default async function CmLogDetailPage({
             href={`/projects/${params.id}/cm-log`}
             className="text-xs text-muted-foreground hover:underline"
           >
-            &larr; My Daily Log
+            &larr; CM Log
           </Link>
           <div className="mt-1 flex items-center gap-2">
             <h2 className="text-lg font-semibold">{formatDate(log.log_date)}</h2>

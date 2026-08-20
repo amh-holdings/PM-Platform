@@ -315,7 +315,7 @@ export async function createPayApplication(
       .eq("id", id);
   }
 
-  revalidatePath(`/projects/${input.projectId}`);
+  revalidatePath(`/projects/${input.projectId}`, "layout");
   revalidatePath(`/projects/${input.projectId}/billing`);
   revalidatePath(`/projects/${input.projectId}/pay-apps`);
   return {
@@ -535,7 +535,7 @@ export async function createAfpFromBillThisPeriod(
 
   revalidatePath(`/projects/${projectId}/billing`);
   revalidatePath(`/projects/${projectId}/pay-apps`);
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}`, "layout");
 }
 
 // Multi-select flow: PM checks one or more forecast entries in the Next AFP
@@ -603,5 +603,5 @@ export async function createPayAppFromSelectedEntries(
 
   revalidatePath(`/projects/${projectId}/billing`);
   revalidatePath(`/projects/${projectId}/pay-apps`);
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}`, "layout");
 }

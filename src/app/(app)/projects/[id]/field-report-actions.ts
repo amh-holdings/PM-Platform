@@ -145,6 +145,8 @@ export async function submitFieldReport(
   revalidatePath(`/projects/${input.projectId}/field-reports`);
   revalidatePath(`/projects/${input.projectId}/field-reports/${dprId}`);
   revalidatePath(`/projects/${input.projectId}/inspections`);
+  // The nav count lives in the project layout, which "page" revalidation misses.
+  revalidatePath(`/projects/${input.projectId}`, "layout");
   return { ok: true, dprId };
 }
 
@@ -276,6 +278,9 @@ function revalidateReport(projectId: string, dprId: string) {
   revalidatePath(`/projects/${projectId}/review-board`);
   revalidatePath(`/projects/${projectId}/field-reports`);
   revalidatePath(`/projects/${projectId}/field-reports/${dprId}`);
+  // Approving or returning a report changes the "awaiting review" count in the
+  // rail, and that is rendered by the project layout.
+  revalidatePath(`/projects/${projectId}`, "layout");
 }
 
 // ===== Resubmit one pin (subcontractor) =====
