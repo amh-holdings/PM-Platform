@@ -29,6 +29,9 @@ export function ProjectTabs({ projectId, role }: Props) {
     { href: `${base}/production`, label: "Production", cap: "viewDailyProduction" },
     { href: `${base}/billing`, label: "Billing", cap: "viewBilling" },
     { href: `${base}/pay-apps`, label: "Pay apps", cap: "viewPayApps" },
+    // Sub billing is the one financial view the CM can reach, in percentages
+    // only - he is the only person who knows whether the work was actually done.
+    { href: `${base}/sub-billing`, label: "Sub billing", cap: "verifySubBilling" },
     { href: `${base}/change-orders`, label: "Change orders", cap: "viewChangeOrders" },
     { href: `${base}/schedule`, label: "Schedule", cap: "viewSchedule" },
     { href: `${base}/subs`, label: "Subs", cap: "viewSubs" },

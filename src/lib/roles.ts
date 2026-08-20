@@ -52,6 +52,12 @@ export type Capability =
   | "viewFieldReports" // Field Reports tab
   | "viewBilling" // Billing tab
   | "viewPayApps" // Pay apps tab + pages (Phil-only)
+  // --- subcontractor billing (buy side) ---
+  | "verifySubBilling" // Sub Billing tab + line-by-line verification (CM works here)
+  | "viewSubBillingDollars" // see sub bill $ amounts, not just percentages (Phil-only)
+  | "enterSubBill" // record a bill received from a sub (Phil-only)
+  | "recommendSubBill" // CM signs off that the field record supports the bill
+  | "approveSubBilling" // final approve/reject a sub bill for payment (Phil-only)
   | "viewChangeOrders" // Change orders tab
   | "viewSchedule" // Schedule tab
   | "viewSubs" // Subs tab
@@ -74,6 +80,11 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewFieldReports",
     "viewBilling",
     "viewPayApps",
+    "verifySubBilling",
+    "viewSubBillingDollars",
+    "enterSubBill",
+    "recommendSubBill",
+    "approveSubBilling",
     "viewChangeOrders",
     "viewSchedule",
     "viewSubs",
@@ -86,6 +97,12 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
   // Construction Manager: operational visibility (schedule, subs, procurement,
   // documents, field reports) but NO financials - no dashboard Financial
   // section, no Billing, no Change orders, no Costs/margin, no Pay apps.
+  //
+  // Sub billing is the one deliberate exception. The CM is the only person who
+  // knows whether a sub actually did the work they billed for, so he gets the
+  // verification screen and the recommend action - but in PERCENTAGES ONLY.
+  // `viewSubBillingDollars` stays with Phil, so the CM judges the work without
+  // seeing what AHC pays for it, and cannot approve his own recommendation.
   cm: new Set<Capability>([
     "viewAllReports",
     "submitFieldReport",
@@ -95,6 +112,8 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewDailyProduction",
     "viewDashboard",
     "viewFieldReports",
+    "verifySubBilling",
+    "recommendSubBill",
     "viewSchedule",
     "viewSubs",
     "viewProcurement",
