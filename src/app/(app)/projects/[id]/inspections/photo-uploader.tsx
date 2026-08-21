@@ -38,8 +38,25 @@ type Props = {
   inspectionId?: string;
   // No-login mode: pass the secure-link token to use signed upload URLs.
   token?: string;
+  /**
+   * Photos already attached to whatever this uploader is editing. Required
+   * anywhere the record can be reopened - a Field Report draft saved in the
+   * morning and finished in the afternoon is the case that matters. Without
+   * it this component reports only what it uploaded during THIS mount, and
+   * the earlier photos are dropped from the pin.
+   */
+  initialPhotos?: UploadedPhoto[];
   onChange: (photos: UploadedPhoto[]) => void;
 };
+
+// Storage paths are "<uuid>-<original name>". Show the human half.
+function displayName(storagePath: string): string {
+  const base = storagePath.split("/").pop() ?? storagePath;
+  return base.replace(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i,
+    "",
+  );
+}
 
 const GPS_TIMEOUT_MS = 5000;
 const UPLOAD_TIMEOUT_MS = 120_000;
@@ -91,11 +108,21 @@ export function PhotoUploader({
   side,
   inspectionId,
   token,
+  initialPhotos,
   onChange,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [items, setItems] = useState<Item[]>([]);
-  const photosRef = useRef<UploadedPhoto[]>([]);
+  // Seeded, not empty. New uploads append to what is already on the record.
+  // Both initialisers run per mount, so if this remounts it re-seeds from the
+  // parent's current photos rather than resurrecting a stale list.
+  const [items, setItems] = useState<Item[]>(() =>
+    (initialPhotos ?? []).map((ph) => ({
+      id: ph.storagePath,
+      name: displayName(ph.storagePath),
+      status: "done" as const,
+    })),
+  );
+  const photosRef = useRef<UploadedPhoto[]>(initialPhotos ?? []);
 
   const pathFor = useCallback(
     (fileName: string) => {

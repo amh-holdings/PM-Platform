@@ -1192,6 +1192,7 @@ export function DprForm({
                             <PhotoUploader
                               projectId={projectId}
                               side="sub"
+                              initialPhotos={p.photos}
                               onChange={(ph) =>
                                 patchWorkPin(p.rowId, { photos: ph })
                               }
