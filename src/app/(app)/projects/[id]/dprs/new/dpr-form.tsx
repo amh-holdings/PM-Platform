@@ -26,6 +26,10 @@ import {
 import { DprPhotoUploader, type StagedPhoto } from "./dpr-photo-uploader";
 import { PICKER_GROUP_LABEL, type PickerGroup } from "@/lib/schedule-picker";
 
+// Field crews are on LTE at the edge of a site. A save that has not come
+// back in two minutes is not coming back, and the sub needs the buttons.
+const ACTION_TIMEOUT_MS = 120_000;
+
 // A work-done pin the sub drops on the site map in a Field Report. Becomes an
 // inspection (origin='sub') on submit. Each pin remembers which sheet it was
 // placed on and links to a WBS/schedule task.
@@ -294,7 +298,7 @@ export function DprForm({
   // submit button's state.
   const [savingDraft, setSavingDraft] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
-  const [, startTransition] = useTransition();
+  const [navigating, startTransition] = useTransition();
 
   // ===== rollups =====
   const manpowerTotals = useMemo(() => {
@@ -571,6 +575,30 @@ export function DprForm({
     };
   }
 
+  // Server actions have no timeout of their own, and a rejected one used to
+  // escape these handlers entirely - which left `submitting`/`savingDraft`
+  // stuck true, and every button in the footer disabled, with nothing on
+  // screen to say why. Bound the call and always hand back a result.
+  async function callAction<T>(work: Promise<T>): Promise<T | { ok: false; error: string }> {
+    try {
+      return await Promise.race([
+        work,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Timed out reaching the server")),
+            ACTION_TIMEOUT_MS,
+          ),
+        ),
+      ]);
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : "Unknown error";
+      return {
+        ok: false,
+        error: `${detail}. Nothing was lost - everything you entered is still on this screen. Check your signal and try again.`,
+      };
+    }
+  }
+
   async function onSaveDraft() {
     setError(null);
     // The one thing a draft cannot do without: which company it belongs to.
@@ -580,12 +608,14 @@ export function DprForm({
       return;
     }
     setSavingDraft(true);
-    const res = await saveFieldReportDraft({
-      projectId,
-      dprId,
-      subcontractorId: reportSubId,
-      draft: buildDraft(),
-    });
+    const res = await callAction(
+      saveFieldReportDraft({
+        projectId,
+        dprId,
+        subcontractorId: reportSubId,
+        draft: buildDraft(),
+      }),
+    );
     setSavingDraft(false);
     if (!res.ok) {
       setError(res.error);
@@ -627,7 +657,7 @@ export function DprForm({
       return;
     }
     setSubmitting(true);
-    const res = await submitDpr({
+    const res = await callAction(submitDpr({
       projectId,
       reportDate,
       workNarrative: narrative,
@@ -683,7 +713,7 @@ export function DprForm({
         caption: p.caption.trim() || null,
         photoType: p.photoType,
       })),
-    });
+    }));
     setSubmitting(false);
     if (!res.ok) {
       setError(res.error);
@@ -697,7 +727,7 @@ export function DprForm({
   // Field Report submit: DPR fields + subcontractor + work-done map pins.
   async function submitAsFieldReport() {
     setSubmitting(true);
-    const res = await submitFieldReport({
+    const res = await callAction(submitFieldReport({
       projectId,
       dprId,
       subcontractorId: reportSubId,
@@ -769,7 +799,7 @@ export function DprForm({
         pinY: p.y,
         photos: p.photos,
       })),
-    });
+    }));
     setSubmitting(false);
     if (!res.ok) {
       setError(res.error);
@@ -1831,14 +1861,16 @@ export function DprForm({
         )}
         <Button
           type="button"
-          disabled={submitting || savingDraft}
+          disabled={submitting || savingDraft || navigating}
           onClick={onSubmit}
         >
           {submitting
             ? "Submitting..."
-            : isFieldReport
-              ? "Submit Field Report"
-              : "Submit DPR"}
+            : navigating
+              ? "Opening report..."
+              : isFieldReport
+                ? "Submit Field Report"
+                : "Submit DPR"}
         </Button>
       </div>
     </div>

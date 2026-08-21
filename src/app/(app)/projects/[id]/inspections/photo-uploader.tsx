@@ -24,6 +24,8 @@ type Item = {
   name: string;
   status: "uploading" | "done" | "error";
   error?: string;
+  // Kept so Retry can re-send the same file without re-picking it.
+  file?: File;
 };
 
 type Props = {
@@ -39,18 +41,49 @@ type Props = {
   onChange: (photos: UploadedPhoto[]) => void;
 };
 
-// Captures a single GPS fix (best effort, non-blocking) reused for the batch.
-function captureGps(): Promise<{ lat: number | null; lng: number | null }> {
-  return new Promise((resolve) => {
+const GPS_TIMEOUT_MS = 5000;
+const UPLOAD_TIMEOUT_MS = 120_000;
+
+type Gps = { lat: number | null; lng: number | null };
+const NO_GPS: Gps = { lat: null, lng: null };
+
+/**
+ * A GPS fix, or nothing. Best effort in the strict sense: this must never be
+ * able to hold up a photo.
+ *
+ * getCurrentPosition's own `timeout` bounds acquiring a position AFTER the
+ * permission question is settled. It does not bound the prompt itself, and on
+ * iOS there are states where neither callback ever fires. This used to be
+ * awaited before the upload started, so a photo could sit on "Uploading..."
+ * forever having sent zero bytes. The outer race is the real guarantee.
+ */
+function captureGps(): Promise<Gps> {
+  const fix = new Promise<Gps>((resolve) => {
     if (typeof navigator === "undefined" || !navigator.geolocation) {
-      return resolve({ lat: null, lng: null });
+      return resolve(NO_GPS);
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => resolve({ lat: null, lng: null }),
-      { timeout: 4000 },
+      () => resolve(NO_GPS),
+      { timeout: GPS_TIMEOUT_MS },
     );
   });
+  const bail = new Promise<Gps>((resolve) =>
+    setTimeout(() => resolve(NO_GPS), GPS_TIMEOUT_MS),
+  );
+  return Promise.race([fix, bail]);
+}
+
+/**
+ * Bounds a promise that has no cancellation of its own. The underlying request
+ * may still be in flight; the point is that the UI stops waiting on it and the
+ * user gets a Retry instead of a spinner that never ends.
+ */
+function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    work,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
 }
 
 export function PhotoUploader({
@@ -75,47 +108,66 @@ export function PhotoUploader({
   );
 
   const uploadOne = useCallback(
-    async (file: File) => {
-      const id = crypto.randomUUID();
-      setItems((p) => [...p, { id, name: file.name, status: "uploading" }]);
+    async (file: File, itemId?: string) => {
+      const id = itemId ?? crypto.randomUUID();
+      setItems((p) =>
+        itemId
+          ? p.map((i) =>
+              i.id === id
+                ? { ...i, status: "uploading", error: undefined }
+                : i,
+            )
+          : [...p, { id, name: file.name, status: "uploading", file }],
+      );
 
       if (file.size > MAX_PHOTO_BYTES) {
         setItems((p) =>
           p.map((i) =>
-            i.id === id ? { ...i, status: "error", error: "Over 25 MB" } : i,
+            i.id === id
+              ? { ...i, status: "error", error: "Photo is too large" }
+              : i,
           ),
         );
         return;
       }
 
       const supabase = createClient();
-      const gps = await captureGps();
+      // Started, not awaited. The upload must not wait on a location fix - see
+      // captureGps. Whatever it has by the time the bytes land is what we use.
+      const gpsPromise = captureGps();
       let storagePath: string | null = null;
 
       try {
         if (token) {
           // No-login path: mint a signed URL server-side, then upload to it.
-          const res = await createSecureLinkUploadUrl({
-            token,
-            fileName: file.name,
-          });
+          const res = await withTimeout(
+            createSecureLinkUploadUrl({ token, fileName: file.name }),
+            UPLOAD_TIMEOUT_MS,
+            "Timed out preparing the upload. Tap Retry.",
+          );
           if (!res.ok) throw new Error(res.error);
-          const { error } = await supabase.storage
-            .from(INSPECTION_BUCKET)
-            .uploadToSignedUrl(res.path, res.signedToken, file, {
-              contentType: file.type || undefined,
-            });
+          const { error } = await withTimeout(
+            supabase.storage
+              .from(INSPECTION_BUCKET)
+              .uploadToSignedUrl(res.path, res.signedToken, file, {
+                contentType: file.type || undefined,
+              }),
+            UPLOAD_TIMEOUT_MS,
+            "Upload timed out. Tap Retry.",
+          );
           if (error) throw new Error(error.message);
           storagePath = res.path;
         } else {
           // Authenticated path: direct upload (RLS gates it).
           const path = pathFor(file.name);
-          const { error } = await supabase.storage
-            .from(INSPECTION_BUCKET)
-            .upload(path, file, {
+          const { error } = await withTimeout(
+            supabase.storage.from(INSPECTION_BUCKET).upload(path, file, {
               contentType: file.type || undefined,
               upsert: false,
-            });
+            }),
+            UPLOAD_TIMEOUT_MS,
+            "Upload timed out. Tap Retry.",
+          );
           if (error) throw new Error(error.message);
           storagePath = path;
         }
@@ -129,6 +181,8 @@ export function PhotoUploader({
         );
         return;
       }
+
+      const gps = await gpsPromise;
 
       photosRef.current = [
         ...photosRef.current,
@@ -175,17 +229,28 @@ export function PhotoUploader({
           {items.map((i) => (
             <li key={i.id} className="flex items-center justify-between gap-2">
               <span className="truncate">{i.name}</span>
-              <span
-                className={cn(
-                  "shrink-0 rounded-full px-2 py-0.5",
-                  i.status === "uploading" && "bg-muted text-muted-foreground",
-                  i.status === "done" && "bg-emerald-100 text-emerald-900",
-                  i.status === "error" && "bg-destructive/10 text-destructive",
+              <span className="flex shrink-0 items-center gap-1.5">
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5",
+                    i.status === "uploading" && "bg-muted text-muted-foreground",
+                    i.status === "done" && "bg-emerald-100 text-emerald-900",
+                    i.status === "error" && "bg-destructive/10 text-destructive",
+                  )}
+                >
+                  {i.status === "uploading" && "Uploading…"}
+                  {i.status === "done" && "Done"}
+                  {i.status === "error" && (i.error ?? "Failed")}
+                </span>
+                {i.status === "error" && i.file && (
+                  <button
+                    type="button"
+                    onClick={() => void uploadOne(i.file as File, i.id)}
+                    className="rounded-md border px-2 py-0.5 font-medium hover:bg-accent"
+                  >
+                    Retry
+                  </button>
                 )}
-              >
-                {i.status === "uploading" && "Uploading…"}
-                {i.status === "done" && "Done"}
-                {i.status === "error" && (i.error ?? "Failed")}
               </span>
             </li>
           ))}
