@@ -30,7 +30,11 @@ export function ProjectMain({ projectId, actions, children }: Props) {
     <div className="min-w-0 flex-1">
       <div
         className={cn(
-          "mx-auto w-full px-4 py-6 lg:px-8",
+          // The phone bottom bar is fixed, so the content column reserves its
+          // height plus a gap - otherwise the bar lands on whatever the last
+          // row is, which on the field report is Save draft / Submit.
+          "mx-auto w-full px-4 pt-6 lg:px-8",
+          "pb-[calc(var(--mobile-nav-h)+1.5rem)]",
           wide ? "max-w-[1600px]" : "max-w-5xl",
         )}
       >

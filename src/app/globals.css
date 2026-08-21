@@ -24,6 +24,17 @@
     --input: 240 5.9% 90%;
     --ring: 240 5.9% 10%;
     --radius: 0.5rem;
+
+    /* Height of the fixed phone bottom bar, safe area included. Pages reserve
+       this much room at the foot of their content so the bar never lands on a
+       submit button. Resolves to 0px on desktop, where the bar is hidden. */
+    --mobile-nav-h: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  @media (min-width: 1024px) {
+    :root {
+      --mobile-nav-h: 0px;
+    }
   }
 
   .dark {

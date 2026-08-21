@@ -102,7 +102,7 @@ export function MobileNav({ projectId, role, counts }: Props) {
 
       <nav
         aria-label="Project sections"
-        className="fixed inset-x-0 bottom-0 z-30 grid border-t bg-background pb-[env(safe-area-inset-bottom)] lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 grid h-[var(--mobile-nav-h)] border-t bg-background pb-[env(safe-area-inset-bottom,0px)] lg:hidden"
         style={{ gridTemplateColumns: `repeat(${primary.length + (hasOverflow ? 1 : 0)}, 1fr)` }}
       >
         {primary.map((item) => {
@@ -146,8 +146,10 @@ export function MobileNav({ projectId, role, counts }: Props) {
         )}
       </nav>
 
-      {/* Keeps the last rows of a page clear of the fixed bar. */}
-      <div aria-hidden className="h-16 lg:hidden" />
+      {/* No spacer here. This component is a flex-row child of the project
+          layout, so a block of height would sit beside the content column
+          instead of under it and reserve nothing. Pages reserve the room
+          themselves with --mobile-nav-h - see components/nav/project-main.tsx. */}
     </>
   );
 }
