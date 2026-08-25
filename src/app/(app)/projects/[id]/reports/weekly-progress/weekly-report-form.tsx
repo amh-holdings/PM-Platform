@@ -23,7 +23,12 @@ import {
   saveWeeklyReport,
 } from "./weekly-report-actions";
 
-type Props = { view: WeeklyReportView; canIssue: boolean };
+type Props = {
+  view: WeeklyReportView;
+  canIssue: boolean;
+  /** Boxes whose live derivation has moved since the report was issued. */
+  drift?: string[];
+};
 
 // The working surface for the Dimension weekly report.
 //
@@ -38,7 +43,7 @@ type Props = { view: WeeklyReportView; canIssue: boolean };
 // and writing it while hunting back through seven days of field reports in
 // another tab is how the box ends up written from memory.
 
-export function WeeklyReportForm({ view, canIssue }: Props) {
+export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
@@ -57,6 +62,9 @@ export function WeeklyReportForm({ view, canIssue }: Props) {
     saved?.environment_concerns ?? view.environment.value,
   );
   const [security, setSecurity] = useState(saved?.security_concerns ?? view.security.value);
+  const [safety, setSafety] = useState(saved?.safety_summary ?? view.safety.value);
+  const [positionNote, setPositionNote] = useState(saved?.position_note ?? view.positionText);
+  const [photoNote, setPhotoNote] = useState(saved?.photo_note ?? "");
   const [weather, setWeather] = useState(saved?.weather_summary ?? view.weather.value);
   const [swppp, setSwppp] = useState(saved?.swppp_inspection_date ?? view.swppp.value ?? "");
   const [work, setWork] = useState(saved?.work_this_week ?? view.workThisWeek.value);
@@ -88,6 +96,9 @@ export function WeeklyReportForm({ view, canIssue }: Props) {
         epcTeam,
         environmentConcerns: environment,
         securityConcerns: security,
+        safetySummary: safety,
+        positionNote,
+        photoNote,
         weatherSummary: weather,
         workThisWeek: work,
         lookaheadNote,
@@ -149,12 +160,57 @@ export function WeeklyReportForm({ view, canIssue }: Props) {
       {view.gaps.length > 0 && (
         <Banner tone="warn">
           <p className="font-medium">
-            {view.gaps.length} day{view.gaps.length === 1 ? "" : "s"} in this
-            period have no field report and no CM log.
+            {view.gaps.length} working day{view.gaps.length === 1 ? "" : "s"} in
+            this period have no field report and no CM log.
           </p>
           <p className="mt-1">
             {view.gaps.map(shortDay).join(", ")}. Anything that happened on those
-            days is missing from every box below.
+            days is missing from every box below. Weekends and calendar holidays
+            are not counted.
+          </p>
+        </Banner>
+      )}
+
+      {view.unapproved.length > 0 && (
+        <Banner tone="warn">
+          <p className="font-medium">
+            {view.unapproved.length} field report
+            {view.unapproved.length === 1 ? "" : "s"} in this period{" "}
+            {view.unapproved.length === 1 ? "is" : "are"} not approved, and
+            feed nothing below.
+          </p>
+          <p className="mt-1">
+            {view.unapproved
+              .map((u) => `${shortDay(u.day)} ${u.who} (${u.status})`)
+              .join(", ")}
+            . This is an outbound document to the owner, so only approved
+            reports are read. Approve them in Field Reports and this page picks
+            them up.
+          </p>
+        </Banner>
+      )}
+
+      {!view.scheduleFlagsAvailable && (
+        <Banner tone="warn">
+          <p className="font-medium">
+            The schedule&apos;s milestone and at-risk columns are missing.
+          </p>
+          <p className="mt-1">
+            Milestone dates fall back to last week&apos;s report and no task can
+            be reported as at risk until the schedule migration is applied.
+          </p>
+        </Banner>
+      )}
+
+      {drift.length > 0 && (
+        <Banner tone="warn">
+          <p className="font-medium">
+            The field record has changed since this report was issued.
+          </p>
+          <p className="mt-1">
+            {drift.join(", ")} now derive differently. The print sheet still
+            reproduces exactly what Dimension was sent. Reopen and re-issue only
+            if you intend to send a correction.
           </p>
         </Banner>
       )}
@@ -265,7 +321,7 @@ export function WeeklyReportForm({ view, canIssue }: Props) {
       {/* ---- Site resources ---- */}
       <Section
         title="Site resources"
-        note="Headcount and last-date-onsite are read off the field reports. End date is the one column the platform cannot know - it is a commercial date, so type it once and it carries."
+        note="Headcount and last-date-onsite are read off the field reports. Equipment is one row per machine - the field spellings folded into each row are listed under its name, so check the merges. End date is the one column the platform cannot know: it is a commercial date, so type it once and it carries."
       >
         <ContractorTable
           rows={contractors}
@@ -275,10 +331,42 @@ export function WeeklyReportForm({ view, canIssue }: Props) {
         <div className="mt-5">
           <EquipmentTable rows={equipment} disabled={issued} onChange={setEquipment} />
         </div>
+        <div className="mt-5 rounded-md border bg-muted/30 p-3">
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+            <p className="text-sm">
+              <span className="font-medium">
+                {view.manHours.value.week.toLocaleString()}
+              </span>{" "}
+              <span className="text-muted-foreground">man-hours this week</span>
+            </p>
+            <p className="text-sm">
+              <span className="font-medium">
+                {view.manHours.value.cumulative.toLocaleString()}
+              </span>{" "}
+              <span className="text-muted-foreground">to date</span>
+            </p>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">{view.manHours.basis}</p>
+        </div>
       </Section>
 
-      {/* ---- Environment and security ---- */}
-      <Section title="Environment and security">
+      {!view.extraOverridesAvailable && (
+        <Banner tone="warn">
+          <p className="font-medium">Migration 0042 has not been applied.</p>
+          <p className="mt-1">
+            Safety, Project position and the photo note are derived and will
+            print, but edits to those three boxes cannot be saved until{" "}
+            <code>db/migrations/0042_weekly_report_safety_and_photos.sql</code>{" "}
+            is run in the Supabase SQL editor.
+          </p>
+        </Banner>
+      )}
+
+      {/* ---- Environment, security and safety ---- */}
+      <Section
+        title="Environment, security and safety"
+        note="Three different questions, so three boxes. Weather is not an environmental concern and lives with the weather; a recordable injury is not a security matter and lives under safety."
+      >
         <DerivedBox
           label="Environment concerns"
           derived={view.environment}
@@ -318,10 +406,28 @@ export function WeeklyReportForm({ view, canIssue }: Props) {
             />
           </div>
         </div>
+        <DerivedBox
+          label="Safety"
+          derived={view.safety}
+          value={safety}
+          onChange={setSafety}
+          disabled={issued}
+          rows={4}
+        />
       </Section>
 
       {/* ---- Progress ---- */}
       <Section title="Progress">
+        <DerivedBox
+          label="Project position"
+          derived={{ value: view.positionText, basis: view.position.basis, sources: [] }}
+          value={positionNote}
+          onChange={setPositionNote}
+          disabled={issued}
+          rows={5}
+        />
+        <PositionPanel view={view} />
+
         <Field
           label="Milestone tracking"
           hint="Dates expected by EPC. Matched to schedule milestones by name where one exists, otherwise carried forward from last week."
@@ -353,13 +459,13 @@ export function WeeklyReportForm({ view, canIssue }: Props) {
           value={work}
           onChange={setWork}
           disabled={issued}
-          rows={14}
+          rows={9}
           evidence={view.evidence}
         />
 
         <Field
           label="3 week look ahead"
-          hint="Generated from the schedule for the three weeks after this period and printed on its own page. Anything typed here appears in the box on page 1."
+          hint="Built from the schedule for the three weeks after this period and printed in full in its own box on the report. Anything typed here prints above the table as a note - leave it empty unless there is something to say about what is coming."
         >
           <textarea
             value={lookaheadNote}
@@ -367,7 +473,7 @@ export function WeeklyReportForm({ view, canIssue }: Props) {
             rows={2}
             disabled={issued}
             className="w-full rounded-md border bg-background p-2 text-sm"
-            placeholder="See 3-week look ahead on page 3."
+            placeholder="Optional note, e.g. Panel delivery confirmed for the week of 7-Sep."
           />
           <LookaheadPreview view={view} />
         </Field>
@@ -380,6 +486,62 @@ export function WeeklyReportForm({ view, canIssue }: Props) {
           disabled={issued}
           rows={5}
         />
+      </Section>
+
+      {/* ---- Photos ---- */}
+      <Section
+        title="Photos"
+        note="Every photo on the period's approved field reports, printed on its own page. Dimension's form asks for them and the platform has been holding them all along."
+      >
+        {view.photos.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No photos on this period&apos;s approved field reports, so no photo
+            page will print. Photos uploaded against a field report appear here
+            once that report is approved.
+          </p>
+        ) : (
+          <>
+            <Field
+              label="Note at the top of the photo page"
+              hint="Optional. Leave empty and the page prints as a plain photo sheet."
+            >
+              <textarea
+                value={photoNote}
+                onChange={(e) => setPhotoNote(e.target.value)}
+                rows={2}
+                disabled={issued}
+                className="w-full rounded-md border bg-background p-2 text-sm"
+                placeholder="Front entrance culvert installation, 20-21 Aug."
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {view.photos.map((ph) => (
+                <figure key={ph.id} className="overflow-hidden rounded-md border">
+                  {ph.url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={ph.url}
+                      alt={ph.caption ?? "Site photo"}
+                      className="h-24 w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-24 items-center justify-center text-xs text-muted-foreground">
+                      unavailable
+                    </div>
+                  )}
+                  <figcaption className="border-t px-1 py-0.5 text-[10px] leading-tight text-muted-foreground">
+                    {shortDay(ph.day)}
+                    {ph.caption ? ` - ${ph.caption}` : ""}
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {view.photos.length} photo{view.photos.length === 1 ? "" : "s"} will
+              print, two to a row.
+            </p>
+          </>
+        )}
       </Section>
     </div>
   );
@@ -789,6 +951,69 @@ function EquipmentTable({
             )}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+/** The numbers behind the Project Position box, so the sentence is checkable. */
+function PositionPanel({ view }: { view: WeeklyReportView }) {
+  const p = view.position.value;
+  if (p.pctComplete == null && p.commodities.length === 0) return null;
+  return (
+    <div className="grid gap-2 sm:grid-cols-3">
+      <div className="rounded-md border bg-muted/30 p-2">
+        <p className="text-xs text-muted-foreground">Schedule complete</p>
+        <p className="text-lg font-medium">
+          {p.pctComplete != null ? `${p.pctComplete}%` : "N/A"}
+        </p>
+        <p className="text-[11px] leading-tight text-muted-foreground">
+          {p.tasksComplete} of {p.tasksTotal} activities finished, weighted by
+          duration
+        </p>
+      </div>
+      <div className="rounded-md border bg-muted/30 p-2">
+        <p className="text-xs text-muted-foreground">Projected finish</p>
+        <p className="text-lg font-medium">
+          {p.projectedFinish ? dimensionDate(p.projectedFinish) : "N/A"}
+        </p>
+        <p
+          className={cn(
+            "text-[11px] leading-tight",
+            p.slipDays > 0 ? "text-destructive" : "text-muted-foreground",
+          )}
+        >
+          {p.slipDays > 0
+            ? `${p.slipDays} day${p.slipDays === 1 ? "" : "s"} behind plan`
+            : p.slipDays < 0
+              ? `${Math.abs(p.slipDays)} day${Math.abs(p.slipDays) === 1 ? "" : "s"} ahead of plan`
+              : "On plan"}
+        </p>
+      </div>
+      <div className="rounded-md border bg-muted/30 p-2">
+        <p className="text-xs text-muted-foreground">Quantities to date</p>
+        {p.commodities.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground">Nothing confirmed yet</p>
+        ) : (
+          <ul className="mt-0.5 space-y-0.5">
+            {p.commodities.slice(0, 4).map((c) => (
+              <li key={c.label} className="text-[11px] leading-tight">
+                {c.label}: {c.toDate.toLocaleString()} {c.uom}
+                {c.pct != null && (
+                  <span className="text-muted-foreground">
+                    {" "}
+                    ({c.pct}%{c.provisional ? ", provisional" : ""})
+                  </span>
+                )}
+              </li>
+            ))}
+            {p.commodities.length > 4 && (
+              <li className="text-[11px] text-muted-foreground">
+                +{p.commodities.length - 4} more
+              </li>
+            )}
+          </ul>
+        )}
       </div>
     </div>
   );

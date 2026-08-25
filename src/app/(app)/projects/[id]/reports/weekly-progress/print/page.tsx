@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { guardCapability } from "@/lib/roles-server";
-import { loadWeeklyReport, resolveWeekly } from "@/lib/weekly-report-load";
+import { loadWeeklyReport, weeklySheet } from "@/lib/weekly-report-load";
 import {
   MILESTONE_FIELDS,
   defaultWeekEnding,
@@ -24,8 +24,13 @@ const isIso = (s: string | undefined): s is string =>
 // white with hard borders rather than the app's theme: this is printed, and a
 // muted-foreground grey that reads fine on screen prints as illegible.
 //
-// The look-ahead gets page 2 on its own, which is what the form's "See 3-week
-// look ahead on page 3" note has always been pointing at.
+// The look-ahead is printed in its own box on this page rather than on a page
+// of its own. The platform builds it from the schedule now, so there is nothing
+// left to point somebody at: a box that says "see the following page" is a box
+// that made sense when a human was pasting a Primavera export in behind.
+//
+// An ISSUED report prints from its frozen payload, not from a live derivation -
+// see `weeklySheet`. What was sent has to stay what was sent.
 export default async function WeeklyProgressPrintPage({
   params,
   searchParams,
@@ -38,12 +43,13 @@ export default async function WeeklyProgressPrintPage({
   const today = new Date().toISOString().slice(0, 10);
   const weekEnding = isIso(searchParams.week) ? searchParams.week : defaultWeekEnding(today);
   const view = await loadWeeklyReport(params.id, weekEnding);
-  const r = resolveWeekly(view);
+  const r = weeklySheet(view);
 
   const milestones = MILESTONE_FIELDS.map((f) => ({
     label: f.label,
-    date: view.saved?.milestones?.[f.key] ?? view.milestones[f.key]?.value ?? null,
+    date: r.milestones[f.key] ?? null,
   }));
+  const lookaheadTotal = r.lookahead.reduce((n, w) => n + w.tasks.length, 0);
 
   return (
     <div className="mx-auto max-w-4xl bg-white p-2 text-black print:p-0">
@@ -57,13 +63,19 @@ export default async function WeeklyProgressPrintPage({
         <PrintButton />
       </div>
 
-      {view.status !== "issued" && (
+      {view.status !== "issued" ? (
         <p className="mb-2 border border-amber-500 bg-amber-50 px-2 py-1 text-[11px] print:hidden">
-          This is a draft. Issue it from the editor to freeze the figures as sent.
+          This is a draft, derived live. Issue it from the editor to freeze the
+          figures as sent.
+        </p>
+      ) : (
+        <p className="mb-2 border border-neutral-400 bg-neutral-50 px-2 py-1 text-[11px] print:hidden">
+          Issued copy. Every figure below is read back from the snapshot taken
+          when this was issued, so it reproduces exactly what Dimension was
+          sent - even if a field report has been corrected since.
         </p>
       )}
 
-      {/* ---------------- Page 1 ---------------- */}
       <div className="border border-neutral-400 text-[11px] leading-snug">
         <h1 className="border-b border-neutral-400 py-1 text-center text-sm font-bold">
           {view.projectName} Weekly Report
@@ -73,13 +85,13 @@ export default async function WeeklyProgressPrintPage({
         <Row label="Week Ending" value={dimensionDate(view.weekEnding)} boxed>
           <RowPair
             label="Dimension Construction Manager"
-            value={view.header.dimensionCm}
+            value={r.header.dimensionCm}
           />
         </Row>
         <Row label="Period covered" value={`${dimensionDate(view.period.start)} to ${dimensionDate(view.period.end)}`}>
-          <RowPair label="EPC Reporting Manager" value={view.header.epcReportingManager} />
+          <RowPair label="EPC Reporting Manager" value={r.header.epcReportingManager} />
         </Row>
-        <Row label="EPC Team Members and roles" value={view.header.epcTeam} wide />
+        <Row label="EPC Team Members and roles" value={r.header.epcTeam} wide />
 
         <Band>Site Resources</Band>
         <div className="flex border-b border-neutral-400">
@@ -96,7 +108,7 @@ export default async function WeeklyProgressPrintPage({
                 </tr>
               </thead>
               <tbody>
-                {view.contractors.map((c) => (
+                {r.contractors.map((c) => (
                   <tr key={c.key} className="text-center">
                     <td className="px-1 py-0.5 text-left">{c.name}</td>
                     <td className="px-1 py-0.5">{c.scope || "N/A"}</td>
@@ -111,7 +123,7 @@ export default async function WeeklyProgressPrintPage({
                     </td>
                   </tr>
                 ))}
-                {view.contractors.length === 0 && (
+                {r.contractors.length === 0 && (
                   <tr>
                     <td colSpan={5} className="px-1 py-0.5 text-left">
                       N/A
@@ -134,7 +146,7 @@ export default async function WeeklyProgressPrintPage({
                 </tr>
               </thead>
               <tbody>
-                {view.equipment.map((e) => (
+                {r.equipment.map((e) => (
                   <tr key={e.key} className="text-center">
                     <td className="px-1 py-0.5 text-left">{e.name}</td>
                     <td className="border border-neutral-400 px-1 py-0.5">
@@ -142,7 +154,7 @@ export default async function WeeklyProgressPrintPage({
                     </td>
                   </tr>
                 ))}
-                {view.equipment.length === 0 && (
+                {r.equipment.length === 0 && (
                   <tr>
                     <td colSpan={2} className="px-1 py-0.5 text-left">
                       N/A
@@ -154,9 +166,21 @@ export default async function WeeklyProgressPrintPage({
           </div>
         </div>
 
-        <Band>Environment and Security</Band>
+        <Row
+          label="Man-hours"
+          value={`${r.manHours.week.toLocaleString()} this week`}
+          boxed
+        >
+          <RowPair
+            label="Man-hours to Date"
+            value={r.manHours.cumulative ? r.manHours.cumulative.toLocaleString() : "N/A"}
+          />
+        </Row>
+
+        <Band>Environment, Security and Safety</Band>
         <Row label="Environment Concerns" value={r.environment || "N/A"} wide multiline />
         <Row label="Security Concerns" value={r.security || "N/A"} wide multiline />
+        <Row label="Safety" value={r.safety || "N/A"} wide multiline />
         <Row
           label="Date of Most Recent SWPPP Inspection"
           value={r.swppp ? dimensionDate(r.swppp) : "N/A"}
@@ -166,6 +190,7 @@ export default async function WeeklyProgressPrintPage({
         </Row>
 
         <Band>Progress</Band>
+        <Row label="Project Position" value={r.position || "N/A"} wide multiline />
         <div className="flex border-b border-neutral-400">
           <Cell head>Milestone Tracking:</Cell>
           <div className="flex-1 p-1">
@@ -186,68 +211,98 @@ export default async function WeeklyProgressPrintPage({
         </div>
 
         <Row label="Work This Week" value={r.workThisWeek || "N/A"} wide multiline />
-        <Row
-          label="3 Week Look Ahead"
-          value={r.lookaheadNote || "See 3-week look ahead on the following page."}
-          wide
-          multiline
-        />
+
+        <div className="flex border-b border-neutral-400">
+          <Cell head>3 Week Look Ahead:</Cell>
+          <div className="flex-1 px-2 py-1">
+            {r.lookaheadNote && (
+              <p className="mb-1 whitespace-pre-wrap">{r.lookaheadNote}</p>
+            )}
+            {lookaheadTotal === 0 ? (
+              <p>No work is projected in the three weeks after this period.</p>
+            ) : (
+              <div className="space-y-1">
+                {r.lookahead.map((w) => (
+                  <div key={w.weekStart} className="break-inside-avoid">
+                    <p className="text-[10px] font-bold uppercase">{w.label}</p>
+                    {w.tasks.length === 0 ? (
+                      <p className="text-[10px]">No scheduled work.</p>
+                    ) : (
+                      <table className="w-full text-[10px]">
+                        <tbody>
+                          {w.tasks.map((t) => (
+                            <tr key={t.wbs} className="align-top">
+                              <td className="w-16 py-px pr-1">{t.wbs}</td>
+                              <td className="py-px pr-1">{t.name}</td>
+                              <td className="w-28 py-px pr-1">{t.assignedTo ?? ""}</td>
+                              <td className="w-32 whitespace-nowrap py-px pr-1">
+                                {dimensionDate(t.start)} - {dimensionDate(t.end)}
+                              </td>
+                              <td className="w-24 py-px">
+                                {[
+                                  t.critical ? "critical" : null,
+                                  t.finishing ? "completes" : null,
+                                  t.continuing ? "continuing" : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(", ")}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
         <Row label="Open Schedule Risks" value={r.risks || "N/A"} wide multiline />
       </div>
 
       <p className="mt-1 text-[10px]">
-        Include clear photos attached to this report in 8.5x11&quot; format.
-        Complete all fields above. Put N/A as needed.
+        {view.photos.length > 0
+          ? `Photos on the following page${view.photos.length > 6 ? "s" : ""}. Complete all fields above. Put N/A as needed.`
+          : "Complete all fields above. Put N/A as needed."}
       </p>
 
-      {/* ---------------- Page 2: look-ahead ---------------- */}
-      <div className="mt-6 break-before-page border border-neutral-400 text-[11px] print:mt-0">
-        <h2 className="border-b border-neutral-400 py-1 text-center text-sm font-bold">
-          {view.projectName} - 3 Week Look Ahead
-        </h2>
-        {view.lookahead.map((w) => (
-          <div key={w.weekStart} className="border-b border-neutral-400 last:border-b-0">
-            <p className="bg-neutral-100 px-2 py-0.5 text-[11px] font-bold">{w.label}</p>
-            {w.tasks.length === 0 ? (
-              <p className="px-2 py-1 text-[10px]">No scheduled work.</p>
-            ) : (
-              <table className="w-full text-[10px]">
-                <thead>
-                  <tr className="text-left">
-                    <th className="px-2 py-0.5 font-bold">WBS</th>
-                    <th className="px-2 py-0.5 font-bold">Activity</th>
-                    <th className="px-2 py-0.5 font-bold">Responsible</th>
-                    <th className="px-2 py-0.5 font-bold">Start</th>
-                    <th className="px-2 py-0.5 font-bold">Finish</th>
-                    <th className="px-2 py-0.5 font-bold">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {w.tasks.map((t) => (
-                    <tr key={t.wbs} className="border-t border-neutral-200">
-                      <td className="px-2 py-0.5">{t.wbs}</td>
-                      <td className="px-2 py-0.5">{t.name}</td>
-                      <td className="px-2 py-0.5">{t.assignedTo ?? ""}</td>
-                      <td className="px-2 py-0.5">{dimensionDate(t.start)}</td>
-                      <td className="px-2 py-0.5">{dimensionDate(t.end)}</td>
-                      <td className="px-2 py-0.5">
-                        {[
-                          t.continuing ? "continuing" : null,
-                          t.finishing ? "completes this week" : null,
-                          t.critical ? "critical" : null,
-                          t.pctComplete != null ? `${t.pctComplete}%` : null,
-                        ]
-                          .filter(Boolean)
-                          .join(", ")}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+      {/* ---- Photos, from the period's approved field reports ---- */}
+      {view.photos.length > 0 && (
+        <div className="mt-6 break-before-page border border-neutral-400 print:mt-0">
+          <h2 className="border-b border-neutral-400 py-1 text-center text-sm font-bold">
+            {view.projectName} - Progress Photos
+          </h2>
+          {r.photoNote && (
+            <p className="border-b border-neutral-400 px-2 py-1 text-[11px] whitespace-pre-wrap">
+              {r.photoNote}
+            </p>
+          )}
+          <div className="grid grid-cols-2 gap-2 p-2">
+            {view.photos.map((ph) => (
+              <figure key={ph.id} className="break-inside-avoid border border-neutral-300">
+                {ph.url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={ph.url}
+                    alt={ph.caption ?? `Site photo ${dimensionDate(ph.day)}`}
+                    className="h-56 w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-56 w-full items-center justify-center text-[10px]">
+                    Photo unavailable
+                  </div>
+                )}
+                <figcaption className="border-t border-neutral-300 px-1 py-0.5 text-[9px]">
+                  {dimensionDate(ph.day)} - {ph.who}
+                  {ph.caption ? ` - ${ph.caption}` : ""}
+                </figcaption>
+              </figure>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
       <footer className="mt-2 text-[9px] text-neutral-500">
         {view.projectName}

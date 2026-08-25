@@ -3,7 +3,7 @@ import Link from "next/link";
 import { guardCapability, getEffectiveRole } from "@/lib/roles-server";
 import { can } from "@/lib/roles";
 import { createClient } from "@/lib/supabase/server";
-import { loadWeeklyReport } from "@/lib/weekly-report-load";
+import { issuedDrift, loadWeeklyReport } from "@/lib/weekly-report-load";
 import { addDays, defaultWeekEnding, dimensionDate } from "@/lib/weekly-report";
 
 import { WeeklyReportForm } from "./weekly-report-form";
@@ -96,7 +96,11 @@ export default async function WeeklyProgressPage({
         </div>
       )}
 
-      <WeeklyReportForm view={view} canIssue={can(effective, "enterDailyProduction")} />
+      <WeeklyReportForm
+        view={view}
+        canIssue={can(effective, "enterDailyProduction")}
+        drift={issuedDrift(view)}
+      />
     </div>
   );
 }

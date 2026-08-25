@@ -4,7 +4,12 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
 import { loadWeeklyReport, resolveWeekly } from "@/lib/weekly-report-load";
-import { defaultPeriod } from "@/lib/weekly-report";
+import {
+  defaultPeriod,
+  diffContractors,
+  diffEquipment,
+  diffMilestones,
+} from "@/lib/weekly-report";
 import type { ContractorRow, EquipmentRow } from "@/lib/weekly-report";
 import type { Json } from "@/lib/database.types";
 
@@ -17,6 +22,14 @@ import type { Json } from "@/lib/database.types";
 // pressing Save once would freeze all sixteen boxes at their current derived
 // values and the report would stop tracking the field record - which is the
 // one behaviour this feature exists to avoid.
+//
+// The corollary took a bug to learn: the thing each box is compared against has
+// to be the derivation with NO overrides applied (`view.base`), not the
+// resolved view. Compared against the resolved view, an override the human left
+// alone equals its own baseline, so it is dropped as "same as derived", so the
+// second Save deletes the first Save's corrections. The narrative boxes were
+// always safe because their derivation never saw the overrides; the tables,
+// the milestone dates and the SWPPP date were not.
 
 export type WeeklyResult = { ok: true } | { ok: false; error: string };
 
@@ -30,6 +43,9 @@ export type WeeklyFormInput = {
   epcTeam: string;
   environmentConcerns: string;
   securityConcerns: string;
+  safetySummary: string;
+  positionNote: string;
+  photoNote: string;
   weatherSummary: string;
   workThisWeek: string;
   lookaheadNote: string;
@@ -60,78 +76,6 @@ async function requireAhc() {
   return { ok: true as const, supabase, userId: user.id };
 }
 
-/**
- * Split the submitted rows back into overrides. A cell equal to what the
- * platform derived is dropped, so the saved row stays a thin diff and a late
- * field report can still move the number.
- */
-function diffContractors(
-  submitted: ContractorRow[],
-  derived: ContractorRow[],
-): { overrides: Record<string, Json>; extras: ContractorRow[] } {
-  const byKey = new Map(derived.map((r) => [r.key, r]));
-  const overrides: Record<string, Json> = {};
-  const extras: ContractorRow[] = [];
-  const seen = new Set<string>();
-
-  for (const row of submitted) {
-    const base = byKey.get(row.key);
-    if (!base) {
-      // Typed in by hand and matching no sub on the project.
-      extras.push({ ...row, key: row.key.startsWith("manual:") ? row.key : `manual:${row.name}` });
-      continue;
-    }
-    seen.add(row.key);
-    const diff: Record<string, Json> = {};
-    if (row.scope !== base.scope) diff.scope = row.scope;
-    if (row.headcount !== base.headcount && row.headcount != null) diff.headcount = row.headcount;
-    if (row.lastOnsite !== base.lastOnsite && row.lastOnsite) diff.lastOnsite = row.lastOnsite;
-    if (row.endDate !== base.endDate && row.endDate) diff.endDate = row.endDate;
-    if (Object.keys(diff).length) overrides[row.key] = diff;
-  }
-
-  // A derived row the human deleted from the table is a deliberate omission,
-  // recorded as hidden rather than forgotten - otherwise it reappears next
-  // save when the derivation runs again.
-  for (const row of derived) {
-    if (row.key.startsWith("manual:")) continue;
-    if (!seen.has(row.key)) {
-      overrides[row.key] = { ...((overrides[row.key] as object) ?? {}), hidden: true };
-    }
-  }
-
-  return { overrides, extras };
-}
-
-function diffEquipment(
-  submitted: EquipmentRow[],
-  derived: EquipmentRow[],
-): { overrides: Record<string, Json>; extras: EquipmentRow[] } {
-  const byKey = new Map(derived.map((r) => [r.key, r]));
-  const overrides: Record<string, Json> = {};
-  const extras: EquipmentRow[] = [];
-  const seen = new Set<string>();
-
-  for (const row of submitted) {
-    const base = byKey.get(row.key);
-    if (!base) {
-      extras.push({ ...row, key: row.key.startsWith("manual:") ? row.key : `manual:${row.name}` });
-      continue;
-    }
-    seen.add(row.key);
-    if (row.quantity !== base.quantity && row.quantity != null) {
-      overrides[row.key] = { quantity: row.quantity };
-    }
-  }
-  for (const row of derived) {
-    if (row.key.startsWith("manual:")) continue;
-    if (!seen.has(row.key)) {
-      overrides[row.key] = { ...((overrides[row.key] as object) ?? {}), hidden: true };
-    }
-  }
-  return { overrides, extras };
-}
-
 const isIso = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 export async function saveWeeklyReport(input: WeeklyFormInput): Promise<WeeklyResult> {
@@ -160,24 +104,18 @@ export async function saveWeeklyReport(input: WeeklyFormInput): Promise<WeeklyRe
     return { ok: false, error: "This report has been issued. Reopen it before editing." };
   }
 
-  const derived = resolveWeekly(view);
-  // Empty string and "same as derived" both mean "no override".
+  // Empty string and "same as derived" both mean "no override". The narrative
+  // derivations never see the saved overrides, so `view.<box>.value` is already
+  // the right baseline for these.
   const over = (submitted: string, derivedValue: string) => {
     const t = submitted.trim();
     if (!t) return null;
     return t === derivedValue.trim() ? null : t;
   };
 
-  const milestones: Record<string, string> = {};
-  for (const [key, value] of Object.entries(input.milestones)) {
-    if (!isIso(value)) continue;
-    // Only store a milestone date that differs from what the schedule says.
-    if (view.milestones[key as keyof typeof view.milestones]?.value === value) continue;
-    milestones[key] = value;
-  }
-
-  const contractors = diffContractors(input.contractors, view.contractors);
-  const equipment = diffEquipment(input.equipment, view.equipment);
+  const milestones = diffMilestones(input.milestones, view.base.milestones);
+  const contractors = diffContractors(input.contractors, view.base.contractors);
+  const equipment = diffEquipment(input.equipment, view.base.equipment);
 
   const { error } = await supabase.from("weekly_progress_reports").upsert(
     {
@@ -193,20 +131,35 @@ export async function saveWeeklyReport(input: WeeklyFormInput): Promise<WeeklyRe
       epc_team: input.epcTeam.trim() || null,
       environment_concerns: over(input.environmentConcerns, view.environment.value),
       security_concerns: over(input.securityConcerns, view.security.value),
+      // 0042's three columns. Written only when the migration is applied, so a
+      // save on an un-migrated database still stores everything else instead of
+      // failing whole.
+      ...(view.extraOverridesAvailable
+        ? {
+            safety_summary: over(input.safetySummary, view.safety.value),
+            position_note: over(input.positionNote, view.positionText),
+            photo_note: input.photoNote.trim() || null,
+          }
+        : {}),
       weather_summary: over(input.weatherSummary, view.weather.value),
       work_this_week: over(input.workThisWeek, view.workThisWeek.value),
       lookahead_note: input.lookaheadNote.trim() || null,
       schedule_risks: over(input.scheduleRisks, view.risks.value),
+      // Compared against the DERIVED inspection date, not the resolved one -
+      // resolved already contains the human's own answer, so re-saving an
+      // untouched override deleted it.
       swppp_inspection_date:
-        isIso(input.swpppInspectionDate) && input.swpppInspectionDate !== derived.swppp
+        isIso(input.swpppInspectionDate) && input.swpppInspectionDate !== view.swppp.value
           ? input.swpppInspectionDate
           : null,
-      milestones,
-      contractor_overrides: contractors.overrides as Json,
+      milestones: milestones as Json,
+      contractor_overrides: contractors.overrides as unknown as Json,
       extra_contractors: contractors.extras as unknown as Json,
-      equipment_overrides: equipment.overrides as Json,
+      equipment_overrides: equipment.overrides as unknown as Json,
       extra_equipment: equipment.extras as unknown as Json,
-      created_by: userId,
+      // Only on the first write. Setting it on every upsert turned "who
+      // created this report" into "who saved it last".
+      ...(view.saved ? {} : { created_by: userId }),
       updated_at: new Date().toISOString(),
     },
     { onConflict: "project_id,week_ending" },
@@ -244,6 +197,7 @@ export async function issueWeeklyReport(input: {
     header: view.header,
     contractors: view.contractors,
     equipment: view.equipment,
+    manHours: view.manHours.value,
     milestones: Object.fromEntries(
       Object.entries(view.milestones).map(([k, v]) => [k, v.value]),
     ),

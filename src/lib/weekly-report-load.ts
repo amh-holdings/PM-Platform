@@ -13,22 +13,30 @@ import { computeCpm } from "@/lib/schedule-cpm";
 import { makeCalendar, type CalendarException } from "@/lib/schedule-calendar";
 import { buildLookahead, type LookaheadWeek } from "@/lib/schedule-lookahead";
 import {
+  MILESTONE_FIELDS,
   addDays,
+  coverageGaps,
   defaultPeriod,
   deriveContractors,
   deriveEnvironment,
   deriveEquipment,
+  deriveManHours,
   deriveMilestones,
+  deriveProjectPosition,
   deriveRisks,
+  deriveSafety,
   deriveSecurity,
   deriveSwppp,
   deriveWeather,
   deriveWorkThisWeek,
   isSwppp,
+  positionSentence,
   type ContractorRow,
   type Derived,
   type EquipmentRow,
+  type ManHours,
   type MilestoneKey,
+  type ProjectPosition,
   type WeeklyOverrides,
 } from "@/lib/weekly-report";
 
@@ -39,7 +47,28 @@ export type WeeklyReportRow = {
   period_end: string;
   status: "draft" | "issued";
   issued_at: string | null;
+  issued_payload: WeeklyIssuedPayload | null;
 } & WeeklyOverrides;
+
+/** The frozen copy written at issue. See `weeklySheet`. */
+export type WeeklyIssuedPayload = {
+  header?: WeeklyReportView["header"];
+  contractors?: ContractorRow[];
+  equipment?: EquipmentRow[];
+  milestones?: Record<string, string | null>;
+  lookahead?: LookaheadWeek[];
+  environment?: string;
+  security?: string;
+  safety?: string;
+  weather?: string;
+  workThisWeek?: string;
+  risks?: string;
+  position?: string;
+  manHours?: ManHours;
+  lookaheadNote?: string | null;
+  photoNote?: string | null;
+  swppp?: string | null;
+};
 
 export type WeeklyReportView = {
   projectId: string;
@@ -64,8 +93,27 @@ export type WeeklyReportView = {
   contractors: ContractorRow[];
   equipment: EquipmentRow[];
 
+  /**
+   * The same derivation with NO overrides applied. This is the baseline the
+   * save action diffs against - diffing against the resolved values above
+   * makes every unchanged override equal itself and get dropped, which erased
+   * the human's corrections on the second Save.
+   */
+  base: {
+    contractors: ContractorRow[];
+    equipment: EquipmentRow[];
+    milestones: Record<MilestoneKey, Derived<string | null>>;
+  };
+
   environment: Derived<string>;
   security: Derived<string>;
+  safety: Derived<string>;
+  manHours: Derived<ManHours>;
+  position: Derived<ProjectPosition>;
+  /** The derived Project Position box as the prose that prints. */
+  positionText: string;
+  /** Photos from the period's approved field reports, newest last. */
+  photos: WeeklyPhoto[];
   weather: Derived<string>;
   swppp: Derived<string | null>;
   workThisWeek: Derived<string>;
@@ -84,8 +132,26 @@ export type WeeklyReportView = {
     status: string | null;
   }[];
 
-  /** Days in the period with no field report and no CM log at all. */
+  /** Worked days in the period with no field report and no CM log at all. */
   gaps: string[];
+  /**
+   * Field reports in the period that are not approved, and so feed nothing.
+   * Surfaced because a silently-excluded report reads as a missing day.
+   */
+  unapproved: { day: string; who: string; status: string }[];
+  /** False when the schedule's Phase 1 flag columns are not applied yet. */
+  scheduleFlagsAvailable: boolean;
+  /** False when migration 0042 is not applied, so the new boxes cannot save. */
+  extraOverridesAvailable: boolean;
+};
+
+export type WeeklyPhoto = {
+  id: string;
+  day: string;
+  who: string;
+  caption: string | null;
+  /** Signed URL. Short-lived, so it is generated per render, never stored. */
+  url: string | null;
 };
 
 const EMPTY_OVERRIDES: WeeklyOverrides = {
@@ -94,6 +160,9 @@ const EMPTY_OVERRIDES: WeeklyOverrides = {
   epc_team: null,
   environment_concerns: null,
   security_concerns: null,
+  safety_summary: null,
+  photo_note: null,
+  position_note: null,
   weather_summary: null,
   work_this_week: null,
   lookahead_note: null,
@@ -111,8 +180,18 @@ function isMissingTable(error: { code?: string } | null): boolean {
   return error?.code === "42P01" || error?.code === "PGRST205" || error?.code === "PGRST106";
 }
 
-const REPORT_COLS =
-  "id, week_ending, period_start, period_end, status, issued_at, dimension_cm, epc_reporting_manager, epc_team, environment_concerns, security_concerns, weather_summary, work_this_week, lookahead_note, schedule_risks, swppp_inspection_date, milestones, contractor_overrides, extra_contractors, equipment_overrides, extra_equipment";
+const BASE_REPORT_COLS =
+  "id, week_ending, period_start, period_end, status, issued_at, issued_payload, dimension_cm, epc_reporting_manager, epc_team, environment_concerns, security_concerns, weather_summary, work_this_week, lookahead_note, schedule_risks, swppp_inspection_date, milestones, contractor_overrides, extra_contractors, equipment_overrides, extra_equipment";
+
+/** The columns 0042 adds. Selected separately so a missing 0042 degrades the
+ *  three new boxes to read-only instead of taking the whole page down. */
+const EXTRA_REPORT_COLS = "safety_summary, photo_note, position_note";
+const REPORT_COLS = `${BASE_REPORT_COLS}, ${EXTRA_REPORT_COLS}`;
+
+/** Postgres `undefined_column`, and the PostgREST parse error it surfaces as. */
+function isMissingColumn(error: { code?: string } | null): boolean {
+  return error?.code === "42703" || error?.code === "PGRST204";
+}
 
 export async function loadWeeklyReport(
   projectId: string,
@@ -123,12 +202,22 @@ export async function loadWeeklyReport(
   // The saved row for this week, and the one before it. The previous week is
   // not decoration: it carries the header names and the agreed milestone dates
   // forward, which is what makes week two onward a five-minute job.
-  const savedRes = await supabase
+  let extraOverridesAvailable = true;
+  let savedRes = await supabase
     .from("weekly_progress_reports")
     .select(REPORT_COLS)
     .eq("project_id", projectId)
     .eq("week_ending", weekEnding)
     .maybeSingle();
+  if (isMissingColumn(savedRes.error)) {
+    extraOverridesAvailable = false;
+    savedRes = await supabase
+      .from("weekly_progress_reports")
+      .select(BASE_REPORT_COLS)
+      .eq("project_id", projectId)
+      .eq("week_ending", weekEnding)
+      .maybeSingle();
+  }
 
   // 0041 not applied yet: the page still renders the derived report, it just
   // cannot save. Better than a 500 on a page whose whole value is the derivation.
@@ -143,7 +232,7 @@ export async function loadWeeklyReport(
     ? { data: null }
     : await supabase
         .from("weekly_progress_reports")
-        .select(REPORT_COLS)
+        .select(extraOverridesAvailable ? REPORT_COLS : BASE_REPORT_COLS)
         .eq("project_id", projectId)
         .lt("week_ending", weekEnding)
         .order("week_ending", { ascending: false })
@@ -175,6 +264,8 @@ export async function loadWeeklyReport(
     inspectionRes,
     productionRes,
     commodityRes,
+    allHoursRes,
+    allProductionRes,
     calendarRes,
   ] = await Promise.all([
     supabase
@@ -182,6 +273,10 @@ export async function loadWeeklyReport(
       .select("name, client, work_week, schedule_data_date")
       .eq("id", projectId)
       .maybeSingle(),
+    // Every field report in the window, INCLUDING the unapproved ones - they
+    // are filtered below rather than in the query, because the page has to be
+    // able to say "three reports are excluded because nobody approved them".
+    // A silently dropped report is indistinguishable from a day nobody worked.
     supabase
       .from("dprs")
       .select(
@@ -200,11 +295,14 @@ export async function loadWeeklyReport(
       .gte("log_date", period.start)
       .lte("log_date", period.end)
       .order("log_date"),
+    // Deliberately NOT filtered to active. `deriveContractors` drops any sub
+    // with no site history, so the inactive ones cost nothing - and filtering
+    // here dropped a sub the week they demobbed, which is exactly the week
+    // their last-date-onsite is the answer Dimension is asking for.
     supabase
       .from("subcontractors")
       .select("id, company_name, trade, active")
-      .eq("project_id", projectId)
-      .eq("active", true),
+      .eq("project_id", projectId),
     // Last date onsite is an all-time fact, so this query is deliberately not
     // bounded by the period. Only the columns needed for a max().
     supabase
@@ -230,16 +328,38 @@ export async function loadWeeklyReport(
       .lte("production_date", period.end),
     supabase
       .from("commodities")
-      .select("id, label, uom")
+      .select("id, label, uom, total_quantity, total_verified")
       .eq("project_id", projectId)
       .eq("active", true),
+    // All-time, for cumulative man-hours and quantities-to-date. Both are
+    // recomputed from the rows every load rather than kept in a running total,
+    // so a field report corrected three weeks ago fixes the cumulative figure.
+    supabase
+      .from("dprs")
+      .select("report_date, total_man_hours, crew_count")
+      .eq("project_id", projectId)
+      .eq("status", "approved")
+      .lte("report_date", period.end),
+    supabase
+      .from("daily_production")
+      .select("production_date, commodity_id, quantity, confirmed_at")
+      .eq("project_id", projectId)
+      .lte("production_date", period.end),
     supabase
       .from("project_calendar_exceptions")
       .select("exception_date, kind")
       .eq("project_id", projectId),
   ]);
 
-  const dprs = dprRes.data ?? [];
+  const allDprs = dprRes.data ?? [];
+  // Only approved field reports feed the owner's report. The same table is
+  // already read this way for commodity production and for billing: a draft is
+  // unfinished and a `returned` report was rejected on review, and neither has
+  // any business appearing in a document going to Dimension over AHC's name.
+  const dprs = allDprs.filter((d) => d.status === "approved");
+  const unapproved = allDprs
+    .filter((d) => d.status !== "approved")
+    .map((d) => ({ day: d.report_date, status: d.status ?? "draft", subcontractor_id: d.subcontractor_id }));
   const logs = logRes.data ?? [];
   const subs = subRes.data ?? [];
   const dprIds = dprs.map((d) => d.id);
@@ -277,6 +397,10 @@ export async function loadWeeklyReport(
   if (!withFlags.error) {
     tasks = (withFlags.data ?? []) as never;
   } else {
+    // The flag columns are hand-applied, so their absence degrades milestones
+    // and at-risk tasks rather than taking the page down. It is surfaced on the
+    // view so the form can SAY the milestone box is degraded - it used to be
+    // computed and thrown away, so those boxes just quietly went empty.
     scheduleFlagsAvailable = false;
     const base = await supabase
       .from("schedule_tasks")
@@ -285,7 +409,41 @@ export async function loadWeeklyReport(
       .order("sort_order", { ascending: true, nullsFirst: false });
     tasks = (base.data ?? []) as never;
   }
-  void scheduleFlagsAvailable;
+  // Dimension's form asks for photos in its own footer and the platform has
+  // been holding them against each field report the whole time. The bucket is
+  // private, so the rows are useless without a signed URL - generated per
+  // render and never stored, because they expire.
+  const photoRows = dprIds.length
+    ? ((
+        await supabase
+          .from("photos")
+          .select("id, dpr_id, caption, storage_path, taken_at, created_at")
+          .in("dpr_id", dprIds)
+          .order("taken_at", { ascending: true })
+      ).data ?? [])
+    : [];
+
+  let photos: WeeklyPhoto[] = [];
+  if (photoRows.length) {
+    const paths = photoRows.map((r) => r.storage_path);
+    const signed = await supabase.storage
+      .from("dpr-photos")
+      .createSignedUrls(paths, 60 * 60);
+    const urlByPath = new Map(
+      (signed.data ?? []).map((r) => [r.path ?? "", r.signedUrl ?? null]),
+    );
+    photos = photoRows.map((r) => {
+      const dpr = dprs.find((d) => d.id === r.dpr_id);
+      return {
+        id: r.id,
+        day: (r.taken_at ?? r.created_at ?? dpr?.report_date ?? "").slice(0, 10),
+        who:
+          subs.find((sb) => sb.id === dpr?.subcontractor_id)?.company_name ?? "Field report",
+        caption: r.caption,
+        url: urlByPath.get(r.storage_path) ?? null,
+      };
+    });
+  }
 
   const project = projectRes.data;
   const workWeek = (project?.work_week ?? 5) === 6 ? 6 : 5;
@@ -311,8 +469,12 @@ export async function loadWeeklyReport(
 
   const swpppInspections = (inspectionRes.data ?? []).filter(isSwppp);
 
+  // Evidence is for the person WRITING the report, so it deliberately includes
+  // the unapproved reports the derivations refuse to read. They are tagged with
+  // their status in the panel: seeing that Thursday is sitting in `submitted` is
+  // how you know to go and approve it rather than write around a blank day.
   const evidence = [
-    ...dprs.map((d) => ({
+    ...allDprs.map((d) => ({
       day: d.report_date,
       who:
         subs.find((s) => s.id === d.subcontractor_id)?.company_name ?? "Field report",
@@ -331,11 +493,29 @@ export async function loadWeeklyReport(
     })),
   ].sort((a, b) => (a.day === b.day ? a.who.localeCompare(b.who) : a.day < b.day ? -1 : 1));
 
+  // A day with an unapproved report is covered for the purpose of the gap
+  // warning - somebody was there and filed. It gets its own warning instead.
   const covered = new Set(evidence.map((e) => e.day));
-  const gaps: string[] = [];
-  for (let d = period.start; d <= period.end; d = addDays(d, 1)) {
-    if (!covered.has(d)) gaps.push(d);
-  }
+  const nonWorkDays = new Set(
+    (calendarRes.data ?? [])
+      .filter((c) => (c as { kind?: string }).kind !== "workday")
+      .map((c) => (c as { exception_date: string }).exception_date),
+  );
+  const gaps = coverageGaps(period.start, period.end, covered, workWeek, nonWorkDays);
+
+  const manHours = deriveManHours(
+    dprs as never,
+    (allHoursRes.data ?? []) as never,
+    (manpowerRes.data ?? []) as never,
+    period.end,
+  );
+
+  const position = deriveProjectPosition(
+    typedTasks,
+    cpm,
+    (commodityRes.data ?? []) as never,
+    (allProductionRes.data ?? []) as never,
+  );
 
   const carriedFrom = prev
     ? prev.week_ending
@@ -359,6 +539,22 @@ export async function loadWeeklyReport(
       carriedFrom: !saved && prev ? carriedFrom : null,
     },
 
+    base: {
+      // The same three derivations with the overrides left out, which is the
+      // only honest baseline to diff an edited form against.
+      contractors: deriveContractors(
+        subs as never,
+        dprs as never,
+        (manpowerRes.data ?? []) as never,
+        (onsiteRes.data ?? []) as never,
+        typedTasks,
+        {},
+        [],
+      ),
+      equipment: deriveEquipment(dprs as never, (equipmentRes.data ?? []) as never, {}, []),
+      milestones: deriveMilestones(typedTasks, prev?.milestones ?? {}, {}),
+    },
+
     contractors: deriveContractors(
       subs as never,
       dprs as never,
@@ -375,9 +571,20 @@ export async function loadWeeklyReport(
       o.extra_equipment,
     ),
 
-    environment: deriveEnvironment(logs as never, dprs as never, (delayRes.data ?? []) as never),
+    environment: deriveEnvironment(
+      logs as never,
+      dprs as never,
+      (delayRes.data ?? []) as never,
+      (inspectionRes.data ?? []) as never,
+      period,
+    ),
     security: deriveSecurity(dprs as never, logs as never),
-    weather: deriveWeather(dprs as never, logs as never),
+    safety: deriveSafety(dprs as never, logs as never, manHours.value),
+    manHours,
+    position,
+    positionText: positionSentence(position.value),
+    photos,
+    weather: deriveWeather(dprs as never, logs as never, (delayRes.data ?? []) as never),
     swppp: deriveSwppp(swpppInspections as never, period.end),
     workThisWeek: deriveWorkThisWeek(
       dprs as never,
@@ -399,6 +606,13 @@ export async function loadWeeklyReport(
 
     evidence,
     gaps,
+    unapproved: unapproved.map((u) => ({
+      day: u.day,
+      who: subs.find((s) => s.id === u.subcontractor_id)?.company_name ?? "Field report",
+      status: u.status,
+    })),
+    scheduleFlagsAvailable,
+    extraOverridesAvailable,
   };
 }
 
@@ -413,7 +627,94 @@ export function resolveWeekly(view: WeeklyReportView) {
     weather: pick(o?.weather_summary, view.weather.value),
     workThisWeek: pick(o?.work_this_week, view.workThisWeek.value),
     risks: pick(o?.schedule_risks, view.risks.value),
+    safety: pick(o?.safety_summary, view.safety.value),
+    position: pick(o?.position_note, view.positionText),
     lookaheadNote: o?.lookahead_note ?? null,
+    photoNote: o?.photo_note ?? null,
     swppp: o?.swppp_inspection_date ?? view.swppp.value,
   };
+}
+
+/**
+ * The report as a reader sees it, from the one source that is correct for its
+ * status.
+ *
+ * A DRAFT is derived live, which is the whole point of the feature: a field
+ * report that lands on Tuesday improves last week's numbers instead of leaving
+ * a stale figure frozen in a saved copy.
+ *
+ * An ISSUED report is read back out of `issued_payload`. That column was being
+ * written at issue and then never read by anything - so the print sheet, which
+ * is the artefact that actually gets sent, went on re-deriving live. Correct a
+ * field report after issue and "the report we sent Dimension on the 24th"
+ * quietly became a different document. Reproducing what was sent is the one
+ * job a snapshot is right for, and now it does it.
+ */
+export function weeklySheet(view: WeeklyReportView) {
+  const frozen = view.status === "issued" ? view.saved?.issued_payload : null;
+  const live = resolveWeekly(view);
+
+  if (!frozen) {
+    return {
+      source: "live" as const,
+      header: view.header,
+      contractors: view.contractors,
+      equipment: view.equipment,
+      milestones: Object.fromEntries(
+        MILESTONE_FIELDS.map((f) => [f.key, view.milestones[f.key]?.value ?? null]),
+      ) as Record<string, string | null>,
+      lookahead: view.lookahead,
+      manHours: view.manHours.value,
+      ...live,
+    };
+  }
+
+  return {
+    source: "issued" as const,
+    header: frozen.header ?? view.header,
+    contractors: frozen.contractors ?? view.contractors,
+    equipment: frozen.equipment ?? view.equipment,
+    milestones:
+      frozen.milestones ??
+      (Object.fromEntries(
+        MILESTONE_FIELDS.map((f) => [f.key, view.milestones[f.key]?.value ?? null]),
+      ) as Record<string, string | null>),
+    lookahead: frozen.lookahead ?? view.lookahead,
+    environment: frozen.environment ?? live.environment,
+    security: frozen.security ?? live.security,
+    safety: frozen.safety ?? live.safety,
+    weather: frozen.weather ?? live.weather,
+    workThisWeek: frozen.workThisWeek ?? live.workThisWeek,
+    risks: frozen.risks ?? live.risks,
+    position: frozen.position ?? live.position,
+    manHours: frozen.manHours ?? view.manHours.value,
+    lookaheadNote: frozen.lookaheadNote ?? live.lookaheadNote,
+    photoNote: frozen.photoNote ?? live.photoNote,
+    swppp: frozen.swppp ?? live.swppp,
+  };
+}
+
+/**
+ * Whether the live derivation has moved since the report was issued. Shown on
+ * the editor so "a corrected field report landed after we sent this" is a thing
+ * you find out on the screen rather than in a phone call with the owner.
+ */
+export function issuedDrift(view: WeeklyReportView): string[] {
+  const frozen = view.status === "issued" ? view.saved?.issued_payload : null;
+  if (!frozen) return [];
+  const live = resolveWeekly(view);
+  const drift: string[] = [];
+  const cmp = (label: string, was: string | null | undefined, now: string) => {
+    if ((was ?? "").trim() !== now.trim()) drift.push(label);
+  };
+  cmp("Environment concerns", frozen.environment, live.environment);
+  cmp("Security concerns", frozen.security, live.security);
+  cmp("Weather", frozen.weather, live.weather);
+  cmp("Work this week", frozen.workThisWeek, live.workThisWeek);
+  cmp("Open schedule risks", frozen.risks, live.risks);
+  cmp("Safety", frozen.safety, live.safety);
+  cmp("Project position", frozen.position, live.position);
+  if ((frozen.contractors ?? []).length !== view.contractors.length) drift.push("Contractors");
+  if ((frozen.equipment ?? []).length !== view.equipment.length) drift.push("Equipment");
+  return drift;
 }

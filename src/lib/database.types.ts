@@ -2615,6 +2615,9 @@ export type Database = {
           project_id: string
           schedule_risks: string | null
           security_concerns: string | null
+          photo_note: string | null
+          position_note: string | null
+          safety_summary: string | null
           status: string
           swppp_inspection_date: string | null
           updated_at: string
@@ -2644,6 +2647,9 @@ export type Database = {
           project_id: string
           schedule_risks?: string | null
           security_concerns?: string | null
+          photo_note?: string | null
+          position_note?: string | null
+          safety_summary?: string | null
           status?: string
           swppp_inspection_date?: string | null
           updated_at?: string
@@ -2673,6 +2679,9 @@ export type Database = {
           project_id?: string
           schedule_risks?: string | null
           security_concerns?: string | null
+          photo_note?: string | null
+          position_note?: string | null
+          safety_summary?: string | null
           status?: string
           swppp_inspection_date?: string | null
           updated_at?: string
