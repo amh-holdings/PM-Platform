@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
-import { saveDailyProduction } from "../production-actions";
+import { saveDailyProduction } from "../../production-actions";
 
 type Commodity = {
   id: string;
@@ -20,18 +20,27 @@ type Commodity = {
   totalVerified: boolean;
 };
 
-type Evidence = { sub: string | null; cm: string | null; crew: number | null };
+type Evidence = {
+  sub: string | null;
+  cm: string | null;
+  crew: number | null;
+  reportStatus: string | null;
+};
 
 type Props = {
   projectId: string;
   commodities: Commodity[];
   dates: string[];
   initialValues: Record<string, Record<string, number>>;
+  /** date -> commodity key -> why this number was proposed. */
+  proposed: Record<string, Record<string, string>>;
   evidence: Record<string, Evidence>;
   projectTotals: Record<string, number>;
+  projectPending: Record<string, number>;
   range: { from: string; to: string };
   canEdit: boolean;
   syncedCount: number;
+  proposedCount: number;
 };
 
 const CATEGORY_LABEL = {
@@ -61,11 +70,14 @@ export function ProductionGrid({
   commodities,
   dates,
   initialValues,
+  proposed,
   evidence,
   projectTotals,
+  projectPending,
   range,
   canEdit,
   syncedCount,
+  proposedCount,
 }: Props) {
   const router = useRouter();
 
@@ -82,6 +94,13 @@ export function ProductionGrid({
     if (edit != null) return edit;
     const v = initialValues[date]?.[key];
     return v == null ? "" : String(v);
+  }
+
+  // A cell is a live proposal only until Phil touches it: once he types, the
+  // number is his and the amber treatment would be misleading.
+  function proposalBasis(date: string, key: string): string | null {
+    if (edits.has(cellKey(date, key))) return null;
+    return proposed[date]?.[key] ?? null;
   }
 
   function patch(date: string, key: string, value: string) {
@@ -101,6 +120,9 @@ export function ProductionGrid({
     if (showAll) return commodities;
     const withData = commodities.filter((c) => {
       if ((projectTotals[c.key] ?? 0) > 0) return true;
+      // A scope whose first-ever production is still an unconfirmed proposal
+      // has to get a column, or the thing awaiting review is invisible.
+      if ((projectPending[c.key] ?? 0) > 0) return true;
       return dates.some((d) => {
         const v = currentValue(d, c.key);
         return v !== "" && Number(v) > 0;
@@ -108,7 +130,7 @@ export function ProductionGrid({
     });
     return withData.length > 0 ? withData : commodities.slice(0, 5);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commodities, showAll, projectTotals, dates, edits, initialValues]);
+  }, [commodities, showAll, projectTotals, projectPending, dates, edits, initialValues]);
 
   const windowTotals = useMemo(() => {
     const out: Record<string, number> = {};
@@ -124,7 +146,32 @@ export function ProductionGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCommodities, dates, edits, initialValues]);
 
+  // The alarm this page needed: a day whose report the CM approved but which
+  // carries no production at all. Under-billing hides here - an approved report
+  // is work that happened, and a blank row is the owner being told it did not.
+  const uncoveredDays = useMemo(
+    () =>
+      dates.filter((d) => {
+        if (evidence[d]?.reportStatus !== "approved") return false;
+        return !commodities.some((c) => currentValue(d, c.key) !== "");
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dates, evidence, commodities, edits, initialValues],
+  );
+
   const dirtyCount = edits.size;
+
+  // Proposals sitting on the dates currently pulled up. Confirming is a save of
+  // the same numbers, so the button doubles as "I agree with all of these".
+  const pendingInView = useMemo(() => {
+    let n = 0;
+    for (const d of dates) {
+      for (const c of activeCommodities) {
+        if (!edits.has(cellKey(d, c.key)) && proposed[d]?.[c.key] != null) n += 1;
+      }
+    }
+    return n;
+  }, [dates, activeCommodities, proposed, edits]);
 
   function applyRange() {
     router.push(`/projects/${projectId}/production?from=${from}&to=${to}`);
@@ -133,7 +180,7 @@ export function ProductionGrid({
   async function onSave() {
     setError(null);
     setSaved(null);
-    if (dirtyCount === 0) return;
+    if (dirtyCount + pendingInView === 0) return;
     setSaving(true);
     const cells = Array.from(edits.entries()).map(([k, raw]) => {
       const [productionDate, commodityKey] = k.split("|");
@@ -143,6 +190,18 @@ export function ProductionGrid({
         quantity: raw.trim() === "" ? 0 : Number(raw),
       };
     });
+    // Untouched proposals go up with the edits. Leaving them behind would mean
+    // correcting one cell silently confirmed nothing else, and the amber would
+    // still be sitting there after a save that looked like it cleared the day.
+    for (const d of dates) {
+      for (const c of activeCommodities) {
+        if (edits.has(cellKey(d, c.key))) continue;
+        if (proposed[d]?.[c.key] == null) continue;
+        const v = initialValues[d]?.[c.key];
+        if (v == null) continue;
+        cells.push({ productionDate: d, commodityKey: c.key, quantity: v });
+      }
+    }
     const res = await saveDailyProduction({ projectId, cells });
     setSaving(false);
     if (!res.ok) {
@@ -150,7 +209,9 @@ export function ProductionGrid({
       return;
     }
     setEdits(new Map());
-    setSaved(`Saved ${res.written} value${res.written === 1 ? "" : "s"}.`);
+    setSaved(
+      `Filed ${res.written} value${res.written === 1 ? "" : "s"}. They now count toward billing and the owner push.`,
+    );
     router.refresh();
   }
 
@@ -194,12 +255,18 @@ export function ProductionGrid({
                 : `Show all ${commodities.length} commodities`}
             </Button>
             {canEdit && (
-              <Button type="button" onClick={onSave} disabled={saving || dirtyCount === 0}>
+              <Button
+                type="button"
+                onClick={onSave}
+                disabled={saving || dirtyCount + pendingInView === 0}
+              >
                 {saving
                   ? "Saving..."
                   : dirtyCount > 0
                     ? `Save ${dirtyCount} change${dirtyCount === 1 ? "" : "s"}`
-                    : "Saved"}
+                    : pendingInView > 0
+                      ? `Confirm ${pendingInView} proposed`
+                      : "Saved"}
               </Button>
             )}
           </div>
@@ -208,6 +275,27 @@ export function ProductionGrid({
         {!canEdit && (
           <p className="mt-3 text-xs text-muted-foreground">
             Read-only. The daily production report is filed by Phil.
+          </p>
+        )}
+        {proposedCount > 0 && (
+          <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+            <span className="font-medium">
+              {proposedCount} value{proposedCount === 1 ? "" : "s"} proposed from
+              approved Field Reports.
+            </span>{" "}
+            Shown in amber below. Hover a cell for the reasoning. They are held
+            out of billing and out of the owner&apos;s sheet until you save them.
+          </p>
+        )}
+        {uncoveredDays.length > 0 && (
+          <p className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <span className="font-medium">
+              {uncoveredDays.length} approved report
+              {uncoveredDays.length === 1 ? "" : "s"} with nothing on the tracker:
+            </span>{" "}
+            {uncoveredDays.join(", ")}. The report described work the classifier
+            could not put a number to - read it in the right-hand column and
+            enter the quantities.
           </p>
         )}
         {syncedCount > 0 && (
@@ -264,28 +352,44 @@ export function ProductionGrid({
                         {weekday(date)}
                       </span>
                     </td>
-                    {activeCommodities.map((c) => (
-                      <td key={c.key} className="px-1 py-1">
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          inputMode="decimal"
-                          aria-label={`${c.label} on ${date}`}
-                          disabled={!canEdit}
-                          placeholder="0"
-                          value={currentValue(date, c.key)}
-                          onChange={(e) => patch(date, c.key, e.target.value)}
-                          className={cn(
-                            "h-8 w-24 rounded-md border bg-background px-2 text-right text-sm tabular-nums",
-                            "focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60",
-                            edits.has(cellKey(date, c.key)) &&
-                              "border-foreground/60 bg-accent/40",
-                          )}
-                        />
-                      </td>
-                    ))}
+                    {activeCommodities.map((c) => {
+                      const basis = proposalBasis(date, c.key);
+                      return (
+                        <td key={c.key} className="px-1 py-1">
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            inputMode="decimal"
+                            aria-label={
+                              basis
+                                ? `${c.label} on ${date}, proposed and awaiting confirmation`
+                                : `${c.label} on ${date}`
+                            }
+                            title={basis ?? undefined}
+                            disabled={!canEdit}
+                            placeholder="0"
+                            value={currentValue(date, c.key)}
+                            onChange={(e) => patch(date, c.key, e.target.value)}
+                            className={cn(
+                              "h-8 w-24 rounded-md border bg-background px-2 text-right text-sm tabular-nums",
+                              "focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60",
+                              basis &&
+                                "border-amber-500/70 bg-amber-500/10 text-amber-900 dark:text-amber-200",
+                              edits.has(cellKey(date, c.key)) &&
+                                "border-foreground/60 bg-accent/40",
+                            )}
+                          />
+                        </td>
+                      );
+                    })}
                     <td className="max-w-[26rem] px-3 py-1.5 text-xs text-muted-foreground">
+                      {ev?.reportStatus === "approved" &&
+                        !commodities.some((c) => currentValue(date, c.key) !== "") && (
+                          <span className="mr-1 rounded bg-destructive/15 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-destructive">
+                            nothing filed
+                          </span>
+                        )}
                       {hasReport ? (
                         <button
                           type="button"
@@ -320,6 +424,26 @@ export function ProductionGrid({
                               {ev?.cm || "none"}
                             </p>
                           </div>
+                          {Object.keys(proposed[date] ?? {}).length > 0 && (
+                            <div>
+                              <span className="font-medium text-foreground">
+                                How these numbers were proposed
+                              </span>
+                              <ul className="mt-0.5 space-y-1">
+                                {Object.entries(proposed[date] ?? {}).map(
+                                  ([key, basis]) => (
+                                    <li key={key}>
+                                      <span className="font-medium">
+                                        {commodities.find((c) => c.key === key)
+                                          ?.label ?? key}
+                                      </span>
+                                      : {basis}
+                                    </li>
+                                  ),
+                                )}
+                              </ul>
+                            </div>
+                          )}
                         </div>
                       )}
                     </td>
@@ -341,10 +465,11 @@ export function ProductionGrid({
               </tr>
               <tr className="bg-muted/20 text-xs text-muted-foreground">
                 <td className="sticky left-0 z-10 bg-muted/20 px-3 py-2 uppercase tracking-wide">
-                  Project to date
+                  Project to date (confirmed)
                 </td>
                 {activeCommodities.map((c) => {
                   const total = projectTotals[c.key] ?? 0;
+                  const pending = projectPending[c.key] ?? 0;
                   const target = c.totalQuantity;
                   const pct =
                     c.uom === "%"
@@ -355,6 +480,14 @@ export function ProductionGrid({
                   return (
                     <td key={c.key} className="px-3 py-2 text-right tabular-nums">
                       {Math.round(total * 100) / 100}
+                      {pending > 0 && (
+                        <span
+                          className="ml-1 text-amber-700 dark:text-amber-300"
+                          title="Proposed from approved reports, not yet confirmed. Excluded from this percentage."
+                        >
+                          +{Math.round(pending * 100) / 100}
+                        </span>
+                      )}
                       {pct != null && (
                         <div
                           className={cn(

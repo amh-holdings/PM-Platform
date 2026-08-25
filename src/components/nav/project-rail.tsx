@@ -46,6 +46,8 @@ export function ProjectRail({
       aria-label="Project sections"
       className={cn(
         "sticky top-14 hidden h-[calc(100vh-3.5rem)] shrink-0 flex-col border-r bg-background lg:flex",
+        // A printed page goes to the owner. App chrome has no business on it.
+        "print:hidden",
         collapsed ? "w-14" : "w-56",
       )}
     >

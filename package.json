@@ -15,11 +15,13 @@
     "test:inspections": "tsx scripts/qaqc/run-tests.ts",
     "test:schedule": "tsx scripts/schedule/run-tests.ts",
     "test:commodity": "tsx scripts/commodity/run-tests.ts",
+    "test:weekly-report": "tsx scripts/weekly-report/run-tests.ts",
     "commodity:seed": "tsx scripts/commodity/seed-commodities.ts",
     "commodity:propose": "tsx scripts/commodity/propose-backfill.ts",
     "commodity:apply": "tsx scripts/commodity/apply-backfill.ts",
     "verify:schedule-edit": "tsx scripts/schedule/verify-edit-plans.ts",
-    "test:nav": "tsx scripts/nav/check-nav.ts"
+    "test:nav": "tsx scripts/nav/check-nav.ts",
+    "commodity:propose-reports": "tsx scripts/commodity/propose-from-reports.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",

@@ -16,10 +16,10 @@
 // server-side in `nav-counts.ts` and passed in as plain data.
 
 import {
-  Boxes,
   ClipboardList,
   CalendarRange,
   Coins,
+  FileBarChart,
   FileDiff,
   FileSpreadsheet,
   FolderOpen,
@@ -109,15 +109,23 @@ export const PROJECT_NAV: NavItem[] = [
     find: ["my daily log", "diary", "journal"],
   },
   {
-    key: "production",
+    key: "reports",
     wide: true,
-    label: "Commodity Tracker",
+    label: "Reports",
     group: "field",
-    path: "production",
+    path: "reports",
     cap: "viewDailyProduction",
-    icon: Boxes,
-    blurb: "Daily installed quantities reported to the owner",
-    find: ["production", "quantities", "commodities", "tracker"],
+    icon: FileBarChart,
+    blurb: "Every report this project has to hand somebody",
+    find: [
+      "commodity tracker",
+      "production",
+      "quantities",
+      "commodities",
+      "tracker",
+      "reporting",
+      "exports",
+    ],
   },
   {
     key: "billing",

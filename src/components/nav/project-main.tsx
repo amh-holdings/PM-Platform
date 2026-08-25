@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
 import { activeItem } from "@/lib/nav";
+import { activeReport } from "@/lib/reports";
 
 type Props = {
   projectId: string;
@@ -26,6 +28,11 @@ export function ProjectMain({ projectId, actions, children }: Props) {
   const active = activeItem(pathname, projectId);
   const wide = active?.wide ?? false;
 
+  // Reports is a hub, so its children need to say which report you opened
+  // rather than all rendering the word "Reports". The registry answers that,
+  // and the crumb back to the hub is the only way out on a phone.
+  const report = active?.key === "reports" ? activeReport(pathname, projectId) : null;
+
   return (
     <div className="min-w-0 flex-1">
       <div
@@ -35,14 +42,29 @@ export function ProjectMain({ projectId, actions, children }: Props) {
           // row is, which on the field report is Save draft / Submit.
           "mx-auto w-full px-4 pt-6 lg:px-8",
           "pb-[calc(var(--mobile-nav-h)+1.5rem)]",
+          // Printing is for the document, not the app around it: no gutters,
+          // no reserved phone-bar height, no max width fighting the paper.
+          "print:max-w-none print:p-0 print:pb-0",
           wide ? "max-w-[1600px]" : "max-w-5xl",
         )}
       >
         {/* Routes outside the registry (project settings, for one) keep their
             own heading and do not get the section actions. */}
         {active && (
-          <div className="mb-5 flex items-start justify-between gap-4">
-            <h1 className="text-xl font-semibold tracking-tight">{active.label}</h1>
+          <div className="mb-5 flex items-start justify-between gap-4 print:hidden">
+            <div className="min-w-0">
+              {report && (
+                <Link
+                  href={`/projects/${projectId}/reports`}
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                >
+                  ← {active.label}
+                </Link>
+              )}
+              <h1 className="text-xl font-semibold tracking-tight">
+                {report ? report.label : active.label}
+              </h1>
+            </div>
             <div className="flex shrink-0 items-center gap-2">{actions}</div>
           </div>
         )}

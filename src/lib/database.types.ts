@@ -608,6 +608,8 @@ export type Database = {
       daily_production: {
         Row: {
           commodity_id: string
+          confirmed_at: string | null
+          confirmed_by: string | null
           created_at: string | null
           dpr_id: string | null
           entered_by: string | null
@@ -615,6 +617,7 @@ export type Database = {
           notes: string | null
           production_date: string
           project_id: string
+          proposal_basis: string | null
           quantity: number
           smartsheet_row_id: number | null
           source: Database["public"]["Enums"]["production_source"]
@@ -623,6 +626,8 @@ export type Database = {
         }
         Insert: {
           commodity_id: string
+          confirmed_at?: string | null
+          confirmed_by?: string | null
           created_at?: string | null
           dpr_id?: string | null
           entered_by?: string | null
@@ -630,6 +635,7 @@ export type Database = {
           notes?: string | null
           production_date: string
           project_id: string
+          proposal_basis?: string | null
           quantity?: number
           smartsheet_row_id?: number | null
           source?: Database["public"]["Enums"]["production_source"]
@@ -638,6 +644,8 @@ export type Database = {
         }
         Update: {
           commodity_id?: string
+          confirmed_at?: string | null
+          confirmed_by?: string | null
           created_at?: string | null
           dpr_id?: string | null
           entered_by?: string | null
@@ -645,6 +653,7 @@ export type Database = {
           notes?: string | null
           production_date?: string
           project_id?: string
+          proposal_basis?: string | null
           quantity?: number
           smartsheet_row_id?: number | null
           source?: Database["public"]["Enums"]["production_source"]
@@ -664,6 +673,13 @@ export type Database = {
             columns: ["dpr_id"]
             isOneToOne: false
             referencedRelation: "dprs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_production_confirmed_by_fkey"
+            columns: ["confirmed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
           {
@@ -2572,6 +2588,104 @@ export type Database = {
             columns: ["subcontractor_id"]
             isOneToOne: false
             referencedRelation: "subcontractors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      weekly_progress_reports: {
+        Row: {
+          contractor_overrides: Json
+          created_at: string
+          created_by: string | null
+          dimension_cm: string | null
+          environment_concerns: string | null
+          epc_reporting_manager: string | null
+          epc_team: string | null
+          equipment_overrides: Json
+          extra_contractors: Json
+          extra_equipment: Json
+          id: string
+          issued_at: string | null
+          issued_by: string | null
+          issued_payload: Json | null
+          lookahead_note: string | null
+          milestones: Json
+          period_end: string
+          period_start: string
+          project_id: string
+          schedule_risks: string | null
+          security_concerns: string | null
+          status: string
+          swppp_inspection_date: string | null
+          updated_at: string
+          weather_summary: string | null
+          week_ending: string
+          work_this_week: string | null
+        }
+        Insert: {
+          contractor_overrides?: Json
+          created_at?: string
+          created_by?: string | null
+          dimension_cm?: string | null
+          environment_concerns?: string | null
+          epc_reporting_manager?: string | null
+          epc_team?: string | null
+          equipment_overrides?: Json
+          extra_contractors?: Json
+          extra_equipment?: Json
+          id?: string
+          issued_at?: string | null
+          issued_by?: string | null
+          issued_payload?: Json | null
+          lookahead_note?: string | null
+          milestones?: Json
+          period_end: string
+          period_start: string
+          project_id: string
+          schedule_risks?: string | null
+          security_concerns?: string | null
+          status?: string
+          swppp_inspection_date?: string | null
+          updated_at?: string
+          weather_summary?: string | null
+          week_ending: string
+          work_this_week?: string | null
+        }
+        Update: {
+          contractor_overrides?: Json
+          created_at?: string
+          created_by?: string | null
+          dimension_cm?: string | null
+          environment_concerns?: string | null
+          epc_reporting_manager?: string | null
+          epc_team?: string | null
+          equipment_overrides?: Json
+          extra_contractors?: Json
+          extra_equipment?: Json
+          id?: string
+          issued_at?: string | null
+          issued_by?: string | null
+          issued_payload?: Json | null
+          lookahead_note?: string | null
+          milestones?: Json
+          period_end?: string
+          period_start?: string
+          project_id?: string
+          schedule_risks?: string | null
+          security_concerns?: string | null
+          status?: string
+          swppp_inspection_date?: string | null
+          updated_at?: string
+          weather_summary?: string | null
+          week_ending?: string
+          work_this_week?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "weekly_progress_reports_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
             referencedColumns: ["id"]
           },
         ]

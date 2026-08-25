@@ -64,7 +64,7 @@ export function MobileNav({ projectId, role, counts }: Props) {
     .reduce((sum, item) => sum + (item.hasCount ? (counts[item.key] ?? 0) : 0), 0);
 
   return (
-    <>
+    <div className="print:hidden">
       {open && (
         <div className="fixed inset-0 z-40 lg:hidden">
           <button
@@ -150,7 +150,7 @@ export function MobileNav({ projectId, role, counts }: Props) {
           layout, so a block of height would sit beside the content column
           instead of under it and reserve nothing. Pages reserve the room
           themselves with --mobile-nav-h - see components/nav/project-main.tsx. */}
-    </>
+    </div>
   );
 }
 
