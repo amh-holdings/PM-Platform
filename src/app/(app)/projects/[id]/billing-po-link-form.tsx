@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 
+import { useLinkCatalog } from "./billing/link-catalog";
 import { updateBillingLineProcurementLinks } from "./billing-actions";
 
 export type PoOption = {
@@ -22,8 +23,12 @@ type Props = {
   itemNumber: string;
   description: string;
   initialPoIds: string[];
-  availablePos: PoOption[];
+  /** Defaults to the project's PO list from the link catalog. */
+  availablePos?: PoOption[];
 };
+
+/** Chips shown before the "+N more" toggle takes over. */
+const COLLAPSED_CHIPS = 3;
 
 // Inline UI to link a procurement-scope billing_line to one or more
 // procurement_orders. Used on the /billing page next to (or in place of)
@@ -34,10 +39,13 @@ export function BillingPoLinkForm({
   itemNumber,
   description,
   initialPoIds,
-  availablePos,
+  availablePos: availablePosProp,
 }: Props) {
+  const catalog = useLinkCatalog();
+  const availablePos = availablePosProp ?? catalog.pos;
   const [selected, setSelected] = useState<Set<string>>(new Set(initialPoIds));
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [saving, startSaving] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -71,6 +79,8 @@ export function BillingPoLinkForm({
     .reduce((s, p) => s + p.totalValue, 0);
 
   const selectedPos = availablePos.filter((p) => selected.has(p.id));
+  const shownPos = expanded ? selectedPos : selectedPos.slice(0, COLLAPSED_CHIPS);
+  const overflow = selectedPos.length - shownPos.length;
 
   return (
     <div className="space-y-1">
@@ -80,22 +90,43 @@ export function BillingPoLinkForm({
             No POs linked
           </span>
         ) : (
-          selectedPos.map((p) => (
+          shownPos.map((p) => (
             <span
               key={p.id}
-              className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-700"
+              className="inline-flex max-w-[16rem] items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-700"
               title={`${p.vendorName} - ${formatCurrency(p.totalValue)}`}
             >
-              {p.poNumber ?? "(no#)"}
+              <span className="font-mono">{p.poNumber ?? "(no#)"}</span>
+              <span className="hidden truncate text-blue-900/70 sm:inline">
+                {p.vendorName}
+              </span>
             </span>
           ))
+        )}
+        {overflow > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+          >
+            +{overflow} more
+          </button>
+        )}
+        {expanded && selectedPos.length > COLLAPSED_CHIPS && (
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+          >
+            Show less
+          </button>
         )}
         <button
           type="button"
           onClick={() => setOpen(!open)}
           className="text-[10px] text-muted-foreground hover:text-foreground hover:underline"
         >
-          {open ? "Close" : selectedPos.length > 0 ? "Edit" : "Link POs"}
+          {open ? "Close" : selectedPos.length > 0 ? "Edit links" : "+ Link POs"}
         </button>
       </div>
 
