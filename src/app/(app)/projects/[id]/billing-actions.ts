@@ -14,7 +14,7 @@ import {
   type Confidence,
   type ProgressEstimate,
 } from "@/lib/progress";
-import { defaultBillingPeriod, periodEndOf } from "@/lib/billing-period";
+import { defaultBillingPeriod, progressAsOf } from "@/lib/billing-period";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -170,13 +170,12 @@ export async function computeBillingSuggestions(
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
-  // Progress is evaluated AS OF THE END OF THE PERIOD BEING BILLED, not today.
-  // Billing August on 3 September must see the schedule as it stood on
-  // 31 August, or estimateTaskProgress's date interpolation quietly credits
-  // September's planned work to August's application.
+  // Progress is evaluated as of the end of the period being billed, or today if
+  // the period has not closed yet. See progressAsOf - a period end in the future
+  // would let date interpolation bill work that has not happened.
   const period = periodMonth ?? defaultBillingPeriod();
   const nextMonthIso = period;
-  const todayIso = periodEndOf(period);
+  const todayIso = progressAsOf(period);
 
   const [{ data: lines }, { data: tasks }, { data: totals }, { data: pos }] = await Promise.all([
     auth.supabase
@@ -531,7 +530,7 @@ export async function getBillThisPeriodRows(
   const period = periodMonth ?? defaultBillingPeriod();
   const thisMonthIso = period;
   const nextMonthIsoLocal = period;
-  const todayIso = periodEndOf(period);
+  const todayIso = progressAsOf(period);
 
   // Pull forecast entries within the billing window only.
   // billing_line_id is included explicitly so dedup against suggestions works.
