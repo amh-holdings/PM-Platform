@@ -12,6 +12,12 @@ import { createClient } from "@/lib/supabase/server";
 // this action and in RLS (migration 0036).
 //
 // Values are DAILY, not cumulative - that is what the owner's form asks for.
+//
+// SAVING IS CONFIRMING (migration 0040)
+// An approved Field Report now auto-proposes its day's production, and those
+// rows land with confirmed_at = null: visible on the tracker, excluded from
+// billing and from the owner push. Saving here is the act that stands behind a
+// number, so every cell written from this action is stamped confirmed.
 
 export type ProductionCell = {
   productionDate: string;
@@ -64,6 +70,21 @@ export async function saveDailyProduction(input: {
   }
   const byKey = new Map(commodities.map((c) => [c.key, c]));
 
+  // What is already on the tracker for the dates being saved. Needed to keep a
+  // row's provenance: a proposal Phil accepts unchanged stays a 'field_report'
+  // value linked to the report that produced it, because that is still where
+  // the number came from. Only a value he actually changed becomes 'manual'.
+  const dates = Array.from(new Set(input.cells.map((c) => c.productionDate)));
+  const { data: priorRows } = await supabase
+    .from("daily_production")
+    .select("commodity_id, production_date, quantity, source, dpr_id")
+    .eq("project_id", input.projectId)
+    .in("production_date", dates);
+  const priorByCell = new Map(
+    (priorRows ?? []).map((r) => [`${r.production_date}|${r.commodity_id}`, r]),
+  );
+
+  const confirmedAt = new Date().toISOString();
   const rows = [];
   for (const cell of input.cells) {
     const spec = byKey.get(cell.commodityKey);
@@ -78,13 +99,20 @@ export async function saveDailyProduction(input: {
     if (spec.uom === "%" && value > 100) {
       return { ok: false, error: `${spec.label} is a daily percent and cannot exceed 100` };
     }
+    const prior = priorByCell.get(`${cell.productionDate}|${spec.id}`);
+    const unchanged = prior != null && Number(prior.quantity) === value;
     rows.push({
       project_id: input.projectId,
       commodity_id: spec.id,
       production_date: cell.productionDate,
       quantity: value,
-      source: "manual" as const,
+      source: unchanged && prior ? prior.source : ("manual" as const),
+      // Keep the link to the report the day came from even on an override - it
+      // is the substantiation for the date, whoever set the figure.
+      dpr_id: prior?.dpr_id ?? null,
       entered_by: userId,
+      confirmed_at: confirmedAt,
+      confirmed_by: userId,
     });
   }
 
@@ -129,6 +157,6 @@ export async function saveDailyProduction(input: {
     .upsert(rows, { onConflict: "project_id,production_date,commodity_id" });
   if (error) return { ok: false, error: error.message };
 
-  revalidatePath(`/projects/${input.projectId}/production`);
+  revalidatePath(`/projects/${input.projectId}/reports/commodity-tracker`);
   return { ok: true, written: rows.length };
 }

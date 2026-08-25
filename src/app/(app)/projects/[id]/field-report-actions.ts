@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { proposeProductionForReport } from "@/lib/production-proposal-run";
 import type { Json, TablesUpdate } from "@/lib/database.types";
 import {
   canReview,
@@ -448,6 +449,26 @@ async function rollupReportStatusAdmin(
     }
   }
   await admin.from("dprs").update(patch).eq("id", dprId);
+
+  // Same trigger as the CM-side rollup: an approved report proposes the day's
+  // commodity production. This path is reached when a sub resubmits the LAST
+  // flagged pin on a returned report and that clears it to approved, so the
+  // tracker must fill from here too or those days stay invisible.
+  if (nextStatus === "approved") {
+    const { data: dpr } = await admin
+      .from("dprs")
+      .select("project_id")
+      .eq("id", dprId)
+      .maybeSingle();
+    if (dpr?.project_id) {
+      const result = await proposeProductionForReport(admin, {
+        projectId: dpr.project_id,
+        dprId,
+      });
+      if (result.error) console.error("[production-proposal]", dprId, result.error);
+      revalidatePath(`/projects/${dpr.project_id}/reports/commodity-tracker`);
+    }
+  }
 }
 
 // ===== Draft lifecycle (migration 0039) =====

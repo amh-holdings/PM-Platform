@@ -119,6 +119,14 @@ async function main() {
   }
 
   // ---- Build rows: every commodity for every date, zeros included ----
+  //
+  // These land CONFIRMED (migration 0040). That is this script's whole premise:
+  // it applies a file whose numbers were read off the proposal grid and
+  // corrected by hand, so they are not a machine estimate awaiting review the
+  // way the live auto-proposer's rows are. confirmed_by stays null because the
+  // review happened on the HTML grid rather than in the app - the same gap the
+  // pre-0040 rows carry, and the reason 0040 does not require a confirmer.
+  const confirmedAt = new Date().toISOString();
   const rows = doc.days.flatMap((day) =>
     commodities.map((c) => ({
       project_id: projectId,
@@ -126,6 +134,7 @@ async function main() {
       production_date: day.date,
       quantity: Number(day.values?.[c.key]) || 0,
       source: "backfill" as const,
+      confirmed_at: confirmedAt,
     }))
   );
 

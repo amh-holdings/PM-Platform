@@ -39,42 +39,20 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { COMMODITIES } from "@/lib/commodities";
+// The keyword rules and the load counter live in src/lib so the live
+// auto-proposer (production-proposal-run.ts, fired when the CM approves a
+// report) and this historical reconstruction judge a day the same way. They
+// were duplicated here originally; two copies of "what counts as site prep"
+// would have drifted the moment either was tuned.
+import {
+  CIVIL_WORK_KEYWORDS,
+  ROAD_KEYWORDS,
+  SITE_PREP_KEYWORDS,
+  countLoads,
+  countLoadsIn,
+  matched,
+} from "@/lib/production-proposal";
 import { parseArgs, serviceClient } from "./lib";
-
-// Keyword rules. Order matters: a day that mentions a basin or ditch is civil
-// work even when the verb is "grubbing", because the scope is what classifies
-// it, not the activity. Every matched keyword is reported as evidence.
-const CIVIL_WORK_KEYWORDS = [
-  "basin",
-  "diversion",
-  "ditch",
-  "culvert",
-  "grading",
-  "stabiliz",
-  "seeding",
-  "swale",
-  "riprap",
-  "check dam",
-];
-
-const SITE_PREP_KEYWORDS = [
-  "clearing",
-  "grubbing",
-  "grabbing", // recurring typo for "grubbing" in the CM logs
-  "logging",
-  "log load",
-  "log truck",
-  "pulpwood",
-  "chip",
-  "mulch",
-  "silt fence",
-  "timber",
-  "lod",
-  "limits of disturbance",
-  "debris",
-];
-
-const ROAD_KEYWORDS = ["road", "entrance way", "entranceway", "access road"];
 
 type DayEvidence = {
   date: string;
@@ -92,39 +70,6 @@ type DayEvidence = {
   roadHits: string[];
   score: number;
 };
-
-function matched(text: string, keywords: string[]): string[] {
-  const lower = text.toLowerCase();
-  return keywords.filter((k) => lower.includes(k));
-}
-
-// Count truck loads in ONE source. Matches "7 log loads out", "2 loads of
-// chips", "3 mulch trucks out", "5 truck loads of timber".
-function countLoadsIn(text: string): number {
-  const lower = text.toLowerCase();
-  let total = 0;
-  const patterns = [
-    /(\d+)\s+(?:\w+\s+){0,2}?loads?\b/g,
-    /(\d+)\s+(?:\w+\s+){0,2}?trucks?\s+out\b/g,
-  ];
-  for (const re of patterns) {
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(lower)) !== null) {
-      const n = Number(m[1]);
-      if (Number.isFinite(n) && n > 0 && n < 100) total += n;
-    }
-  }
-  return total;
-}
-
-// The sub's narrative and the CM's log describe the SAME trucks. Summing the two
-// double-counts every day where both itemised the haul-off, and under-weights
-// every day where only one of them did - which then skews the distributed
-// percent toward whichever days happened to be written up twice. Take the
-// higher of the two instead: the more complete account of one day's hauling.
-function countLoads(narrative: string, cmLog: string): number {
-  return Math.max(countLoadsIn(narrative), countLoadsIn(cmLog));
-}
 
 function escapeHtml(s: string): string {
   return s

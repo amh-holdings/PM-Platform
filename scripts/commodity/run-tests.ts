@@ -26,6 +26,13 @@ import {
   commoditiesByCategory,
   isValidDailyValue,
 } from "@/lib/commodities";
+import {
+  activityScore,
+  countLoads,
+  percentRate,
+  proposeForDay,
+  type ProposalCommodity,
+} from "@/lib/production-proposal";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS = [
@@ -33,6 +40,10 @@ const MIGRATIONS = [
   // 0036 corrects the ownership model: daily production is AHC's deliverable to
   // the owner, filed by Phil, NOT something the subcontractor enters.
   "0036_daily_production_phil_only.sql",
+  // 0040 adds the confirmation flag that separates a machine proposal from a
+  // number Phil filed. Applying it here proves the backfill statement and the
+  // partial index actually run, not just that the file exists.
+  "0040_production_proposals.sql",
 ].map((f) => join(__dirname, "..", "..", "db", "migrations", f));
 
 // ---- tiny test runner ----
@@ -411,6 +422,223 @@ async function main() {
   check(
     "UNIT-09 negative and non-finite values are rejected",
     !isValidDailyValue(piles, -1) && !isValidDailyValue(piles, NaN)
+  );
+
+  // ---------- unit: the auto-proposer ----------
+  // The rules that fire when a CM approves a Field Report. These decide what
+  // lands on the owner's tracker, so the interesting cases are the ones where
+  // the answer must be NOTHING.
+
+  const PROP_COMMODITIES: ProposalCommodity[] = [
+    { id: "c-site", key: "site_prep", label: "Site Prep", uom: "%" },
+    { id: "c-civil", key: "civil_work", label: "Civil Work", uom: "%" },
+    { id: "c-road", key: "road_install", label: "Road Install", uom: "ft" },
+    { id: "c-piles", key: "piles", label: "Piles", uom: "ea" },
+  ];
+  // 60% of site prep earned over 300 points of activity = 0.2% per point.
+  // typicalDaily is the ceiling a proposal may not beat: the MEDIAN day Phil
+  // has confirmed for that scope.
+  const HISTORY = {
+    totalByCommodity: { site_prep: 60, civil_work: 15 },
+    scoreByCommodity: { site_prep: 300, civil_work: 150 },
+    typicalDailyByCommodity: { site_prep: 14, civil_work: 8 },
+  };
+  const day = (over: Partial<Parameters<typeof proposeForDay>[0]["day"]> = {}) => ({
+    date: "2026-08-25",
+    narrative: "",
+    cmLog: "",
+    pinTitles: [] as string[],
+    crewCount: null as number | null,
+    ...over,
+  });
+
+  check(
+    "PROP-01 the same trucks in both reports are counted once, not twice",
+    countLoads("3 loads of logs", "3 loads of logs") === 3,
+    `got ${countLoads("3 loads of logs", "3 loads of logs")}`
+  );
+
+  check(
+    "PROP-02 activity score weights loads over crew size",
+    activityScore(day({ narrative: "4 loads out", crewCount: 6 })) === 11,
+    `got ${activityScore(day({ narrative: "4 loads out", crewCount: 6 }))}`
+  );
+
+  check(
+    "PROP-03 rate comes from confirmed history",
+    percentRate(HISTORY, "site_prep") === 0.2,
+    `got ${percentRate(HISTORY, "site_prep")}`
+  );
+
+  const grubbing = proposeForDay({
+    day: day({ narrative: "Grubbing and hauling debris, 5 loads out", crewCount: 6 }),
+    commodities: PROP_COMMODITIES,
+    history: HISTORY,
+    committedPercent: { site_prep: 60 },
+  });
+  check(
+    "PROP-04 a site prep day proposes score x rate",
+    grubbing.values.length === 1 &&
+      grubbing.values[0].commodityKey === "site_prep" &&
+      grubbing.values[0].quantity === 2.6,
+    JSON.stringify(grubbing.values)
+  );
+  check(
+    "PROP-05 the proposal carries a written basis",
+    (grubbing.values[0]?.basis ?? "").includes("Matched:") &&
+      grubbing.values[0].basis.includes("confirmed rate")
+  );
+
+  // No confirmed history means no defensible rate. A fabricated first percent
+  // is worse than a blank cell, so the day must be skipped with a reason.
+  const noHistory = proposeForDay({
+    day: day({ narrative: "Grubbing, 5 loads out", crewCount: 6 }),
+    commodities: PROP_COMMODITIES,
+    history: {
+      totalByCommodity: {},
+      scoreByCommodity: {},
+      typicalDailyByCommodity: {},
+    },
+    committedPercent: {},
+  });
+  check(
+    "PROP-06 no confirmed history proposes nothing and says why",
+    noHistory.values.length === 0 &&
+      noHistory.skipped.some((sk) => sk.commodityKey === "site_prep"),
+    JSON.stringify(noHistory)
+  );
+
+  // A day with a report but no measurable activity has nothing to scale by.
+  const idle = proposeForDay({
+    day: day({ narrative: "Grubbing continued", crewCount: null }),
+    commodities: PROP_COMMODITIES,
+    history: HISTORY,
+    committedPercent: { site_prep: 60 },
+  });
+  check(
+    "PROP-07 zero activity proposes nothing",
+    idle.values.length === 0 && idle.skipped.length > 0,
+    JSON.stringify(idle)
+  );
+
+  // Percent scopes cannot be pushed past 100 by an estimate.
+  const nearlyDone = proposeForDay({
+    day: day({ narrative: "Grubbing, 20 loads out", crewCount: 8 }),
+    commodities: PROP_COMMODITIES,
+    history: HISTORY,
+    committedPercent: { site_prep: 99 },
+  });
+  check(
+    "PROP-08 a percent scope is capped at its remaining headroom",
+    nearlyDone.values[0]?.quantity === 1,
+    JSON.stringify(nearlyDone.values)
+  );
+  const done = proposeForDay({
+    day: day({ narrative: "Grubbing, 20 loads out", crewCount: 8 }),
+    commodities: PROP_COMMODITIES,
+    history: HISTORY,
+    committedPercent: { site_prep: 100 },
+  });
+  check(
+    "PROP-09 a finished percent scope proposes nothing",
+    done.values.length === 0,
+    JSON.stringify(done.values)
+  );
+
+  // The bound that stops a detailed CM log from asserting a record day: Sweet
+  // Springs' load counts tripled when the crew moved to the entranceway, and
+  // raw rate x score wanted 16-21% of the whole scope in a day.
+  // Sweet Springs' real figures: 60.02% of site prep confirmed over 141 points
+  // of activity, median confirmed day 4.26%. Score 39 (18 loads, crew 6) puts
+  // raw rate x score at 16.6% - nearly four typical days in one - which is the
+  // case that took the scope from 60% to 95% before the ceiling existed.
+  const SWEET_SPRINGS_HISTORY = {
+    totalByCommodity: { site_prep: 60.02 },
+    scoreByCommodity: { site_prep: 141 },
+    typicalDailyByCommodity: { site_prep: 4.26 },
+  };
+  const bigDay = proposeForDay({
+    day: day({ narrative: "Grubbing, 18 truck loads of debris out", crewCount: 6 }),
+    commodities: PROP_COMMODITIES,
+    history: SWEET_SPRINGS_HISTORY,
+    committedPercent: { site_prep: 0 },
+  });
+  check(
+    "PROP-12 a load-count spike is held to a typical confirmed day",
+    bigDay.values[0]?.quantity === 4.26,
+    JSON.stringify(bigDay.values)
+  );
+  check(
+    "PROP-13 the basis says the number was held down",
+    (bigDay.values[0]?.basis ?? "").includes("typical confirmed day")
+  );
+
+  // Road keywords flag the day for a human; they never produce footage.
+  const roadDay = proposeForDay({
+    day: day({ narrative: "Cleared debris off the access road, 4 loads", crewCount: 5 }),
+    commodities: PROP_COMMODITIES,
+    history: HISTORY,
+    committedPercent: { site_prep: 60 },
+  });
+  check(
+    "PROP-10 road mentions are flagged, never valued",
+    roadDay.values.every((v) => v.commodityKey !== "road_install") &&
+      roadDay.flags.some((f) => f.commodityKey === "road_install"),
+    JSON.stringify(roadDay)
+  );
+
+  // A measured pin quantity is real data and outranks any keyword estimate.
+  const pinned = proposeForDay({
+    day: day({ narrative: "Grubbing, 5 loads out", crewCount: 6 }),
+    commodities: PROP_COMMODITIES,
+    history: HISTORY,
+    committedPercent: { site_prep: 60 },
+    pinQuantities: { piles: { quantity: 42, source: "5.2.1 Pile Driving" } },
+  });
+  check(
+    "PROP-11 measured pin quantities are proposed as-is",
+    pinned.values.some((v) => v.commodityKey === "piles" && v.quantity === 42),
+    JSON.stringify(pinned.values)
+  );
+
+  // ---------- integration: the confirmation flag ----------
+  const { rows: confCols } = await db.query<{ column_name: string }>(
+    `select column_name from information_schema.columns
+      where table_name = 'daily_production'
+        and column_name in ('confirmed_at','confirmed_by','proposal_basis')`
+  );
+  check(
+    "CONF-01 migration 0040 adds the confirmation columns",
+    confCols.length === 3,
+    `got ${confCols.map((c) => c.column_name).join(",")}`
+  );
+
+  await db.query(
+    `insert into public.daily_production
+       (project_id, commodity_id, production_date, quantity, source, proposal_basis)
+     values ($1, $2, '2026-08-25', 3.5, 'field_report', '5 loads, crew 6')`,
+    [P1, pilesP1]
+  );
+  const { rows: pending } = await db.query<{ count: string }>(
+    `select count(*)::text as count from public.daily_production
+      where confirmed_at is null and production_date = '2026-08-25'`
+  );
+  check(
+    "CONF-02 a proposed row lands unconfirmed",
+    pending[0].count === "1",
+    `got ${pending[0].count}`
+  );
+
+  // The whole safety story: this is the filter billing applies.
+  const { rows: billable } = await db.query<{ total: string }>(
+    `select coalesce(sum(quantity),0)::text as total from public.daily_production
+      where commodity_id = $1 and confirmed_at is not null`,
+    [pilesP1]
+  );
+  check(
+    "CONF-03 an unconfirmed proposal is invisible to the billing filter",
+    !billable[0].total.startsWith("3.5"),
+    `billable total is ${billable[0].total}`
   );
 
   // ---------- summary ----------

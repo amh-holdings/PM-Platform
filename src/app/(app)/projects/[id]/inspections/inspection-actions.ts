@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { TablesUpdate } from "@/lib/database.types";
 import { generateInspectionToken, isLinkUsable } from "@/lib/inspection-token";
+import { proposeProductionForReport } from "@/lib/production-proposal-run";
 import { INSPECTION_BUCKET, sanitizeFileName } from "./inspection-constants";
 import {
   canReview,
@@ -323,10 +324,44 @@ async function rollupReportStatus(
   }
   await auth.supabase.from("dprs").update(patch).eq("id", dprId);
 
+  // An approved report is the trigger for the owner's Commodity Tracker. Before
+  // this, nothing in the app ever wrote daily_production and the tracker only
+  // moved when someone remembered to run the backfill script - which is why it
+  // sat frozen at 2026-08-18 while approved reports piled up behind it.
+  if (nextStatus === "approved") {
+    await proposeProductionOnApproval(projectId, dprId);
+  }
+
   revalidatePath(`/projects/${projectId}/review-board`);
   revalidatePath(`/projects/${projectId}/field-reports`);
   revalidatePath(`/projects/${projectId}/field-reports/${dprId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
+  revalidatePath(`/projects/${projectId}/reports/commodity-tracker`);
+}
+
+// Propose the day's commodity production off a freshly approved report.
+//
+// Best effort, and deliberately so. The approval has already been written and
+// stands on its own; a proposal that fails must not surface as an error on the
+// CM's review board or roll anything back. It leaves the tracker blank for that
+// date, which is exactly how the app behaved before this existed.
+//
+// Runs on the service-role client because daily_production is phil-only for
+// writes (migration 0036) and the approver is normally the CM. The authorisation
+// that matters happened upstream: only an approver reaches this line.
+async function proposeProductionOnApproval(
+  projectId: string,
+  dprId: string,
+): Promise<void> {
+  try {
+    const admin = createAdminClient();
+    const result = await proposeProductionForReport(admin, { projectId, dprId });
+    if (result.error) {
+      console.error("[production-proposal]", dprId, result.error);
+    }
+  } catch (e) {
+    console.error("[production-proposal] threw", dprId, e);
+  }
 }
 
 // Load a work item, verifying it belongs to the project and is decidable.
