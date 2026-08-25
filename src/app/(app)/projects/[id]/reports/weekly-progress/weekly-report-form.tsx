@@ -497,7 +497,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
       {/* ---- Photos ---- */}
       <Section
         title="Photos"
-        note="Every photo taken against this period's inspections and CM daily logs. Pick the ones the owner should see - they print two to a row on their own page."
+        note="Every photo taken against this period's inspections and CM daily logs. The report shows one per activity by default, in WBS order - the CM log's general site shots are one click away. They print two to a row on their own page."
       >
         {view.photoCandidates.length === 0 ? (
           <p className="text-sm text-muted-foreground">
@@ -541,8 +541,9 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
 
             {view.photoAuto && (
               <p className="text-xs text-muted-foreground">
-                Nobody has chosen for this week, so the report is showing an
-                automatic spread across the days that have photos. Adjust it
+                Nobody has chosen for this week, so the report is showing one
+                photo per activity worked - the latest day for each, preferring
+                AHC&apos;s own verification shot over the sub&apos;s. Adjust it
                 below and save to make it a decision.
               </p>
             )}
@@ -604,7 +605,9 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
                       </span>
                     </div>
                     <span className="block border-t px-1 py-0.5 text-[10px] leading-tight text-muted-foreground">
-                      {shortDay(ph.day)} - {ph.who}
+                      {ph.taskKey ? `${ph.taskKey} - ` : ""}
+                      {shortDay(ph.day)}
+                      {ph.side === "ahc" ? " (AHC)" : ph.side === "sub" ? " (sub)" : ""}
                       {ph.caption ? ` - ${ph.caption}` : ""}
                     </span>
                   </button>

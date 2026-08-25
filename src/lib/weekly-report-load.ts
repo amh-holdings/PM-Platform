@@ -434,6 +434,15 @@ export async function loadWeeklyReport(
   }) as { id?: string; title?: string | null; decided_at: string | null; submitted_at: string | null; created_at: string | null }[];
 
   const inspectionIds = periodInspections.map((i) => i.id).filter(Boolean) as string[];
+  // The activity a photo evidences is the WBS code its inspection is titled
+  // with - "5.1.1.6 Construct Basin 1 ESC" is activity 5.1.1.6. That is what
+  // groups the same activity inspected twice in a week into one photo. An
+  // inspection with no code in its title falls back to the title itself, which
+  // still groups repeats of the same inspection.
+  const wbsOf = (title: string): string => {
+    const m = /^\s*(\d+(?:\.\d+)*)/.exec(title);
+    return m ? m[1] : title.trim().toLowerCase();
+  };
   const inspectionMeta = new Map(
     periodInspections
       .filter((i) => i.id)
@@ -441,6 +450,7 @@ export async function loadWeeklyReport(
         i.id!,
         {
           title: i.title ?? "Inspection",
+          taskKey: wbsOf(i.title ?? "Inspection"),
           day: (i.decided_at ?? i.submitted_at ?? i.created_at ?? "").slice(0, 10),
         },
       ]),
@@ -490,6 +500,8 @@ export async function loadWeeklyReport(
       who: `${meta?.title ?? "Inspection"} (${ph.side === "ahc" ? "AHC" : "sub"})`,
       caption: ph.caption,
       source: "inspection",
+      taskKey: meta?.taskKey ?? null,
+      side: ph.side === "ahc" ? "ahc" : "sub",
       bucket: "inspection-photos",
       path: ph.storage_path,
     });
@@ -505,6 +517,8 @@ export async function loadWeeklyReport(
       who: "CM daily log",
       caption: ph.caption,
       source: "cmlog",
+      taskKey: null,
+      side: null,
       bucket: "dpr-photos",
       path: ph.storage_path,
     });
@@ -521,6 +535,8 @@ export async function loadWeeklyReport(
       who: subs.find((sb) => sb.id === dpr?.subcontractor_id)?.company_name ?? "Field report",
       caption: ph.caption,
       source: "dpr",
+      taskKey: null,
+      side: null,
       bucket: "dpr-photos",
       path: ph.storage_path,
     });
@@ -552,6 +568,8 @@ export async function loadWeeklyReport(
       who: x.who,
       caption: x.caption,
       source: x.source,
+      taskKey: x.taskKey ?? null,
+      side: x.side ?? null,
       url: signedByKey.get(x.key) ?? null,
     }))
     .sort((a, b) => (a.day === b.day ? a.key.localeCompare(b.key) : a.day < b.day ? -1 : 1));

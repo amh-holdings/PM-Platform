@@ -22,6 +22,7 @@ import {
   coverageGaps,
   defaultPeriod,
   autoSelectPhotos,
+  compareWbs,
   deriveEnvironment,
   selectPhotoKeys,
   deriveManHours,
@@ -853,43 +854,69 @@ function unit() {
   // The photo page first read `public.photos`, which has never held a row on any
   // project, so it reported "no photos" every week while the site was being
   // photographed daily. The photos live on inspections and CM daily logs, and
-  // one real Sweet Springs week holds 64 of them - far too many to put in front
-  // of the owner, and "the first eight by timestamp" is whatever got uploaded
-  // on Monday rather than a selection.
+  // one real Sweet Springs week holds 64 of them.
+  //
+  // The rule is ONE PHOTO PER ACTIVITY. The owner reads a progress report
+  // activity by activity, so eleven shots of Thursday is not the page they want.
   {
-    const mk = (key: string, day: string, source: "inspection" | "cmlog" | "dpr") =>
-      ({ key, day, who: source, caption: null, source });
-    // Five worked days: Mon has 20 photos, the rest have 2 each.
-    const many = [
-      ...Array.from({ length: 20 }, (_, i) => mk(`cmlog:mon${i}`, "2026-08-17", "cmlog")),
-      ...["2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21"].flatMap((d) => [
-        mk(`cmlog:${d}a`, d, "cmlog"),
-        mk(`insp:${d}b`, d, "inspection"),
-      ]),
+    const insp = (
+      key: string,
+      day: string,
+      taskKey: string,
+      side: "ahc" | "sub",
+    ) => ({ key, day, who: taskKey, caption: null, source: "inspection" as const, taskKey, side });
+    const log = (key: string, day: string) =>
+      ({ key, day, who: "CM daily log", caption: null, source: "cmlog" as const, taskKey: null, side: null });
+
+    const week = [
+      // Basin 1 inspected twice in the week - one activity, not two.
+      insp("insp:b1-mon-sub", "2026-08-17", "5.1.1.6", "sub"),
+      insp("insp:b1-wed-sub", "2026-08-19", "5.1.1.6", "sub"),
+      insp("insp:b1-wed-ahc", "2026-08-19", "5.1.1.6", "ahc"),
+      insp("insp:b2-thu", "2026-08-20", "5.1.1.7", "ahc"),
+      insp("insp:debris-tue", "2026-08-18", "5.1.1.4", "ahc"),
+      insp("insp:yard-fri", "2026-08-21", "5.1.1.10", "sub"),
+      // The bulk of what actually gets uploaded: general site shots.
+      ...Array.from({ length: 40 }, (_, i) => log(`cmlog:${i}`, "2026-08-20")),
     ];
 
-    const auto = autoSelectPhotos(many);
-    check("PHO-01 the automatic selection is capped", auto.length === 8, String(auto.length));
-    // The point of the round robin: Monday's twenty must not crowd out the week.
-    const days = new Set(auto.map((k) => many.find((m) => m.key === k)!.day));
-    check("PHO-02 every day with photos is represented", days.size === 5, JSON.stringify(Array.from(days)));
-    check("PHO-03 one day cannot swamp the selection", auto.filter((k) => k.includes("mon")).length <= 2, JSON.stringify(auto));
-    // Inspection photos evidence a specific activity, so they lead within a day.
-    check("PHO-04 an inspection photo is preferred over a general site shot", auto.includes("insp:2026-08-18b"), JSON.stringify(auto));
+    const auto = autoSelectPhotos(week);
+    check("PHO-01 one photo per activity, not one per day", auto.length === 4, JSON.stringify(auto));
+    check("PHO-02 the same activity inspected twice is one photo", auto.filter((k) => k.startsWith("insp:b1")).length === 1, JSON.stringify(auto));
+    // Later in the week shows how far the work actually got.
+    check("PHO-03 the latest day wins within an activity", auto.some((k) => k.startsWith("insp:b1-wed")), JSON.stringify(auto));
+    // On our own outbound document, our own verification photo leads.
+    check("PHO-04 AHC's verification photo is preferred over the sub's", auto.includes("insp:b1-wed-ahc"), JSON.stringify(auto));
+    check("PHO-05 forty general site shots do not crowd out the activities", !auto.some((k) => k.startsWith("cmlog:")), JSON.stringify(auto));
+    // The page should read down the schedule, not at random.
+    check("PHO-06 activities come out in WBS order", auto.join(",") === "insp:debris-tue,insp:b1-wed-ahc,insp:b2-thu,insp:yard-fri", auto.join(","));
+    // 5.1.1.10 must sort after 5.1.1.7, not between 5.1.1.1 and 5.1.1.2.
+    check("PHO-07 WBS sorts numerically, so 10 follows 7", compareWbs("5.1.1.10", "5.1.1.7") > 0);
+
+    // A week with no inspection photos must not print a blank page.
+    const logsOnly = [log("cmlog:a", "2026-08-17"), log("cmlog:b", "2026-08-17"), log("cmlog:c", "2026-08-19")];
+    const fallback = autoSelectPhotos(logsOnly);
+    check("PHO-08 with no activity photos it falls back to the general shots", fallback.length === 3, JSON.stringify(fallback));
+    const spread = autoSelectPhotos(logsOnly, 2);
+    check("PHO-09 the fallback spreads across days rather than taking one day", new Set(spread.map((k) => logsOnly.find((l) => l.key === k)!.day)).size === 2, JSON.stringify(spread));
 
     // A human choice wins outright, in date order, however it was clicked.
-    const chosen = selectPhotoKeys(many, ["insp:2026-08-20b", "cmlog:mon3"]);
-    check("PHO-05 a saved choice wins over the automatic spread", chosen.length === 2);
-    check("PHO-06 the chosen photos print in date order", chosen[0] === "cmlog:mon3" && chosen[1] === "insp:2026-08-20b", JSON.stringify(chosen));
+    const chosen = selectPhotoKeys(week, ["insp:yard-fri", "cmlog:3"]);
+    check("PHO-10 a saved choice wins over the automatic selection", chosen.length === 2);
+    // Activity photos lead, in WBS order; general site shots follow by date.
+    check("PHO-11 an activity photo prints ahead of a general site shot", chosen[0] === "insp:yard-fri" && chosen[1] === "cmlog:3", JSON.stringify(chosen));
+    const mixed = selectPhotoKeys(week, ["cmlog:5", "insp:yard-fri", "insp:debris-tue"]);
+    check("PHO-11b a hand-picked set still reads down the schedule", mixed.join(",") === "insp:debris-tue,insp:yard-fri,cmlog:5", mixed.join(","));
 
     // A photo deleted from its inspection after the report was drafted must not
     // print as a gap on the owner's page.
-    const stale = selectPhotoKeys(many, ["cmlog:mon3", "insp:deleted"]);
-    check("PHO-07 a key with no photo behind it is dropped, not printed as a gap", stale.length === 1 && stale[0] === "cmlog:mon3", JSON.stringify(stale));
+    const stale = selectPhotoKeys(week, ["insp:b2-thu", "insp:deleted"]);
+    check("PHO-12 a key with no photo behind it is dropped, not printed as a gap", stale.length === 1 && stale[0] === "insp:b2-thu", JSON.stringify(stale));
 
-    check("PHO-08 no photos at all selects nothing rather than throwing", autoSelectPhotos([]).length === 0);
-    const few = [mk("insp:only", "2026-08-19", "inspection")];
-    check("PHO-09 fewer photos than the cap takes them all", autoSelectPhotos(few).length === 1);
+    check("PHO-13 no photos at all selects nothing rather than throwing", autoSelectPhotos([]).length === 0);
+    check("PHO-14 the ceiling is respected when a week has many activities", autoSelectPhotos(
+      Array.from({ length: 30 }, (_, i) => insp(`insp:t${i}`, "2026-08-19", `5.2.${i}`, "ahc")),
+    ).length === 12);
   }
 
   // ---- coverage gaps ----

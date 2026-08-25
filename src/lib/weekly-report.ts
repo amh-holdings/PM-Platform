@@ -1989,28 +1989,75 @@ export type PhotoCandidate = {
   who: string;
   caption: string | null;
   source: "inspection" | "cmlog" | "dpr";
+  /**
+   * The schedule activity this photo evidences - the WBS code off its
+   * inspection title. Null for a CM log photo, which is not tied to an activity.
+   */
+  taskKey?: string | null;
+  /** Which side filed it. AHC is our own verification, sub is what they sent. */
+  side?: "ahc" | "sub" | null;
 };
 
-/** How many photos the report prints when nobody has chosen. */
-export const PHOTO_AUTO_LIMIT = 8;
+/**
+ * Ceiling on the automatic selection. One per activity is the rule and a week
+ * rarely has more than a handful, but a schedule with thirty activities running
+ * at once should not silently produce a fifteen-page photo section.
+ */
+export const PHOTO_AUTO_LIMIT = 12;
 
 /**
- * The automatic selection, used until somebody makes a choice.
+ * The automatic selection: ONE photo per activity worked.
  *
- * One week on Sweet Springs holds 64 photos - 47 on the CM's daily logs and 17
- * against inspections. Taking the first eight by timestamp is not a selection,
- * it is whatever got uploaded on Monday, so this takes them round-robin across
- * the days that HAVE photos: five worked days and a limit of eight gives every
- * day one before any day gets a second, which is the spread somebody would have
- * picked by hand.
+ * The earlier rule spread photos evenly across the days of the week, which
+ * answered "what did each day look like". That is not what the page is for. The
+ * owner is reading a progress report activity by activity - Basin 1, Basin 2,
+ * debris haul, laydown yard - so one photo per activity is the page they want,
+ * and eleven shots of Thursday is not.
  *
- * Inspection photos come first within a day. They were taken to evidence a
- * specific activity, so they carry more for the owner than a general site shot.
+ * The activity is the WBS code off the photo's inspection. That deliberately
+ * groups the SAME activity inspected twice in a week into one row: Basin 1 ESC
+ * signed off on Monday and again on Wednesday is one activity, not two.
+ *
+ * Within an activity: the LATEST day wins, because it shows how far the work
+ * actually got, and AHC's own verification photo is preferred over the sub's
+ * submission on our own outbound document.
+ *
+ * CM daily log photos carry no activity. They are the bulk of what gets
+ * uploaded (47 of 64 in one real week) and are general site shots, so they are
+ * not auto-selected while any activity photo exists - they stay one click away
+ * in the picker. A week with no inspection photos at all falls back to a spread
+ * across the days, because a blank photo page is worse than a general one.
  */
 export function autoSelectPhotos(
   candidates: PhotoCandidate[],
   limit = PHOTO_AUTO_LIMIT,
 ): string[] {
+  const byTask = new Map<string, PhotoCandidate[]>();
+  for (const c of candidates) {
+    if (!c.taskKey) continue;
+    const bucket = byTask.get(c.taskKey) ?? [];
+    bucket.push(c);
+    byTask.set(c.taskKey, bucket);
+  }
+
+  if (byTask.size > 0) {
+    // WBS order, so the page reads down the schedule rather than at random.
+    const tasks = Array.from(byTask.keys()).sort(compareWbs);
+    const chosen: string[] = [];
+    for (const task of tasks) {
+      if (chosen.length >= limit) break;
+      const best = byTask.get(task)!.slice().sort((a, b) => {
+        if (a.day !== b.day) return a.day < b.day ? 1 : -1; // latest first
+        const rank = (x: PhotoCandidate) => (x.side === "ahc" ? 0 : 1);
+        return rank(a) - rank(b) || a.key.localeCompare(b.key);
+      })[0];
+      chosen.push(best.key);
+    }
+    return chosen;
+  }
+
+  // No activity photos this week. Spread the general shots across the days that
+  // have them - every day gets one before any day gets two.
   const byDay = new Map<string, PhotoCandidate[]>();
   for (const c of candidates) {
     const bucket = byDay.get(c.day) ?? [];
@@ -2019,12 +2066,8 @@ export function autoSelectPhotos(
   }
   const days = Array.from(byDay.keys()).sort();
   for (const day of days) {
-    byDay.get(day)!.sort((a, b) => {
-      const rank = (x: PhotoCandidate) => (x.source === "inspection" ? 0 : 1);
-      return rank(a) - rank(b) || a.key.localeCompare(b.key);
-    });
+    byDay.get(day)!.sort((a, b) => a.key.localeCompare(b.key));
   }
-
   const chosen: string[] = [];
   let round = 0;
   while (chosen.length < limit) {
@@ -2042,11 +2085,32 @@ export function autoSelectPhotos(
   return chosen;
 }
 
+/** Sort WBS codes numerically per segment, so 5.1.1.10 follows 5.1.1.9. */
+export function compareWbs(a: string, b: string): number {
+  const pa = a.split(".");
+  const pb = b.split(".");
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = Number(pa[i]);
+    const nb = Number(pb[i]);
+    if (Number.isNaN(na) || Number.isNaN(nb)) {
+      const c = (pa[i] ?? "").localeCompare(pb[i] ?? "");
+      if (c) return c;
+      continue;
+    }
+    if (na !== nb) return na - nb;
+  }
+  return 0;
+}
+
 /**
- * Which photos the report prints, as keys in date order.
+ * Which photos the report prints, in the order they print.
  *
- * Returns KEYS rather than rows so the one place that decides does not depend on
- * how the caller shapes a photo. A saved choice wins; a key that no longer
+ * Activity photos come first, in WBS order, so the page reads down the schedule
+ * the same way the rest of the report does - not in upload order, and not in
+ * date order, which scattered Basin 1 and Basin 2 either side of the debris
+ * haul. General site shots follow, by date.
+ *
+ * A saved choice wins over the automatic selection. A key that no longer
  * matches a candidate is dropped rather than printed as a gap, because a photo
  * can be deleted from its inspection after the report was drafted.
  */
@@ -2061,6 +2125,9 @@ export function selectPhotoKeys(
     .sort((a, b) => {
       const x = byKey.get(a)!;
       const y = byKey.get(b)!;
+      if (x.taskKey && y.taskKey) return compareWbs(x.taskKey, y.taskKey) || a.localeCompare(b);
+      if (x.taskKey) return -1;
+      if (y.taskKey) return 1;
       return x.day === y.day ? a.localeCompare(b) : x.day < y.day ? -1 : 1;
     });
 }
