@@ -2615,6 +2615,7 @@ export type Database = {
           project_id: string
           schedule_risks: string | null
           security_concerns: string | null
+          photo_keys: Json
           photo_note: string | null
           position_note: string | null
           safety_summary: string | null
@@ -2647,6 +2648,7 @@ export type Database = {
           project_id: string
           schedule_risks?: string | null
           security_concerns?: string | null
+          photo_keys?: Json
           photo_note?: string | null
           position_note?: string | null
           safety_summary?: string | null
@@ -2679,6 +2681,7 @@ export type Database = {
           project_id?: string
           schedule_risks?: string | null
           security_concerns?: string | null
+          photo_keys?: Json
           photo_note?: string | null
           position_note?: string | null
           safety_summary?: string | null

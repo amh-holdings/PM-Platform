@@ -31,11 +31,13 @@ import {
   deriveWorkThisWeek,
   isSwppp,
   positionSentence,
+  selectPhotoKeys,
   type ContractorRow,
   type Derived,
   type EquipmentRow,
   type ManHours,
   type MilestoneKey,
+  type PhotoCandidate,
   type ProjectPosition,
   type WeeklyOverrides,
 } from "@/lib/weekly-report";
@@ -112,8 +114,14 @@ export type WeeklyReportView = {
   position: Derived<ProjectPosition>;
   /** The derived Project Position box as the prose that prints. */
   positionText: string;
-  /** Photos from the period's approved field reports, newest last. */
+  /** The photos that will print, in date order. */
   photos: WeeklyPhoto[];
+  /** Every photo available for the period, for the picker. */
+  photoCandidates: WeeklyPhoto[];
+  /** Keys currently chosen. Empty means the automatic spread is in use. */
+  photoSelection: string[];
+  /** True when nobody has chosen, so the automatic spread is being used. */
+  photoAuto: boolean;
   weather: Derived<string>;
   swppp: Derived<string | null>;
   workThisWeek: Derived<string>;
@@ -145,11 +153,7 @@ export type WeeklyReportView = {
   extraOverridesAvailable: boolean;
 };
 
-export type WeeklyPhoto = {
-  id: string;
-  day: string;
-  who: string;
-  caption: string | null;
+export type WeeklyPhoto = PhotoCandidate & {
   /** Signed URL. Short-lived, so it is generated per render, never stored. */
   url: string | null;
 };
@@ -163,6 +167,7 @@ const EMPTY_OVERRIDES: WeeklyOverrides = {
   safety_summary: null,
   photo_note: null,
   position_note: null,
+  photo_keys: [],
   weather_summary: null,
   work_this_week: null,
   lookahead_note: null,
@@ -185,7 +190,7 @@ const BASE_REPORT_COLS =
 
 /** The columns 0042 adds. Selected separately so a missing 0042 degrades the
  *  three new boxes to read-only instead of taking the whole page down. */
-const EXTRA_REPORT_COLS = "safety_summary, photo_note, position_note";
+const EXTRA_REPORT_COLS = "safety_summary, photo_note, position_note, photo_keys";
 const REPORT_COLS = `${BASE_REPORT_COLS}, ${EXTRA_REPORT_COLS}`;
 
 /** Postgres `undefined_column`, and the PostgREST parse error it surfaces as. */
@@ -409,41 +414,156 @@ export async function loadWeeklyReport(
       .order("sort_order", { ascending: true, nullsFirst: false });
     tasks = (base.data ?? []) as never;
   }
-  // Dimension's form asks for photos in its own footer and the platform has
-  // been holding them against each field report the whole time. The bucket is
-  // private, so the rows are useless without a signed URL - generated per
-  // render and never stored, because they expire.
-  const photoRows = dprIds.length
-    ? ((
-        await supabase
+  // Dimension's form asks for photos in its own footer, and the platform has
+  // been holding them the whole time - just not where this first looked.
+  //
+  // The original version read `public.photos`, the table 0014 created for an
+  // in-DPR uploader. It has never held a row on ANY project, so the report said
+  // "no photos" every week while the site was being photographed daily. The
+  // photos that exist belong to the two features people actually use:
+  // inspection photos (bucket `inspection-photos`) and CM daily log photos
+  // (bucket `dpr-photos`). One Sweet Springs week holds 64 of them. `photos` is
+  // still read, so an in-DPR upload would show up if that uploader is ever used.
+  //
+  // The buckets are private, so a row is useless without a signed URL -
+  // generated per render and never stored, because they expire.
+  const periodInspections = (inspectionRes.data ?? []).filter((i) => {
+    const r = i as { decided_at: string | null; submitted_at: string | null; created_at: string | null };
+    const when = (r.decided_at ?? r.submitted_at ?? r.created_at ?? "").slice(0, 10);
+    return when >= period.start && when <= period.end;
+  }) as { id?: string; title?: string | null; decided_at: string | null; submitted_at: string | null; created_at: string | null }[];
+
+  const inspectionIds = periodInspections.map((i) => i.id).filter(Boolean) as string[];
+  const inspectionMeta = new Map(
+    periodInspections
+      .filter((i) => i.id)
+      .map((i) => [
+        i.id!,
+        {
+          title: i.title ?? "Inspection",
+          day: (i.decided_at ?? i.submitted_at ?? i.created_at ?? "").slice(0, 10),
+        },
+      ]),
+  );
+  const logMeta = new Map(
+    (logRes.data ?? []).map((l) => [
+      (l as { id?: string }).id ?? "",
+      (l as { log_date: string }).log_date,
+    ]),
+  );
+  const logIds = Array.from(logMeta.keys()).filter(Boolean);
+
+  const [inspPhotoRes, cmPhotoRes, dprPhotoRes] = await Promise.all([
+    inspectionIds.length
+      ? supabase
+          .from("inspection_photos")
+          .select("id, inspection_id, side, caption, storage_path, taken_at, created_at")
+          .in("inspection_id", inspectionIds)
+      : Promise.resolve({ data: [] }),
+    logIds.length
+      ? supabase
+          .from("cm_daily_log_photos")
+          .select("id, cm_daily_log_id, caption, storage_path, created_at")
+          .in("cm_daily_log_id", logIds)
+      : Promise.resolve({ data: [] }),
+    dprIds.length
+      ? supabase
           .from("photos")
           .select("id, dpr_id, caption, storage_path, taken_at, created_at")
           .in("dpr_id", dprIds)
-          .order("taken_at", { ascending: true })
-      ).data ?? [])
-    : [];
+      : Promise.resolve({ data: [] }),
+  ]);
 
-  let photos: WeeklyPhoto[] = [];
-  if (photoRows.length) {
-    const paths = photoRows.map((r) => r.storage_path);
-    const signed = await supabase.storage
-      .from("dpr-photos")
-      .createSignedUrls(paths, 60 * 60);
-    const urlByPath = new Map(
-      (signed.data ?? []).map((r) => [r.path ?? "", r.signedUrl ?? null]),
-    );
-    photos = photoRows.map((r) => {
-      const dpr = dprs.find((d) => d.id === r.dpr_id);
-      return {
-        id: r.id,
-        day: (r.taken_at ?? r.created_at ?? dpr?.report_date ?? "").slice(0, 10),
-        who:
-          subs.find((sb) => sb.id === dpr?.subcontractor_id)?.company_name ?? "Field report",
-        caption: r.caption,
-        url: urlByPath.get(r.storage_path) ?? null,
-      };
+  type Pending = PhotoCandidate & { bucket: string; path: string };
+  const pending: Pending[] = [];
+
+  for (const ph of (inspPhotoRes.data ?? []) as {
+    id: string; inspection_id: string; side: string; caption: string | null;
+    storage_path: string; taken_at: string | null; created_at: string | null;
+  }[]) {
+    const meta = inspectionMeta.get(ph.inspection_id);
+    pending.push({
+      key: `insp:${ph.id}`,
+      day: (ph.taken_at ?? ph.created_at ?? "").slice(0, 10) || meta?.day || period.end,
+      // The side matters to the reader: an AHC photo is our own verification,
+      // a sub photo is what they submitted for it.
+      who: `${meta?.title ?? "Inspection"} (${ph.side === "ahc" ? "AHC" : "sub"})`,
+      caption: ph.caption,
+      source: "inspection",
+      bucket: "inspection-photos",
+      path: ph.storage_path,
     });
   }
+
+  for (const ph of (cmPhotoRes.data ?? []) as {
+    id: string; cm_daily_log_id: string; caption: string | null;
+    storage_path: string; created_at: string | null;
+  }[]) {
+    pending.push({
+      key: `cmlog:${ph.id}`,
+      day: logMeta.get(ph.cm_daily_log_id) ?? (ph.created_at ?? "").slice(0, 10) ?? period.end,
+      who: "CM daily log",
+      caption: ph.caption,
+      source: "cmlog",
+      bucket: "dpr-photos",
+      path: ph.storage_path,
+    });
+  }
+
+  for (const ph of (dprPhotoRes.data ?? []) as {
+    id: string; dpr_id: string | null; caption: string | null;
+    storage_path: string; taken_at: string | null; created_at: string | null;
+  }[]) {
+    const dpr = dprs.find((d) => d.id === ph.dpr_id);
+    pending.push({
+      key: `dpr:${ph.id}`,
+      day: (ph.taken_at ?? ph.created_at ?? "").slice(0, 10) || dpr?.report_date || period.end,
+      who: subs.find((sb) => sb.id === dpr?.subcontractor_id)?.company_name ?? "Field report",
+      caption: ph.caption,
+      source: "dpr",
+      bucket: "dpr-photos",
+      path: ph.storage_path,
+    });
+  }
+
+  // One signing call per bucket, not per photo.
+  const signedByKey = new Map<string, string | null>();
+  await Promise.all(
+    Array.from(new Set(pending.map((x) => x.bucket))).map(async (bucket) => {
+      const rows = pending.filter((x) => x.bucket === bucket);
+      const signed = await supabase.storage
+        .from(bucket)
+        .createSignedUrls(rows.map((r) => r.path), 60 * 60);
+      const byPath = new Map((signed.data ?? []).map((r) => [r.path ?? "", r.signedUrl ?? null]));
+      for (const r of rows) signedByKey.set(r.key, byPath.get(r.path) ?? null);
+    }),
+  );
+
+  const photoCandidates: WeeklyPhoto[] = pending
+    // Only photos taken INSIDE the reported week. An inspection approved on the
+    // 19th can carry a photo the sub took on the 4th, and printing that on a
+    // weekly progress report claims a fortnight-old pile as this week's work.
+    // The inspection date is the fallback when a photo has no timestamp of its
+    // own, so this filters on what the photo actually depicts.
+    .filter((x) => x.day >= period.start && x.day <= period.end)
+    .map((x) => ({
+      key: x.key,
+      day: x.day,
+      who: x.who,
+      caption: x.caption,
+      source: x.source,
+      url: signedByKey.get(x.key) ?? null,
+    }))
+    .sort((a, b) => (a.day === b.day ? a.key.localeCompare(b.key) : a.day < b.day ? -1 : 1));
+
+  const photoSelection = ((o.photo_keys ?? []) as unknown[]).filter(
+    (k): k is string => typeof k === "string",
+  );
+  const byPhotoKey = new Map(photoCandidates.map((c) => [c.key, c]));
+  const photos = selectPhotoKeys(photoCandidates, photoSelection)
+    .map((k) => byPhotoKey.get(k))
+    .filter((c): c is WeeklyPhoto => Boolean(c));
+  const photoAuto = photoSelection.length === 0;
 
   const project = projectRes.data;
   const workWeek = (project?.work_week ?? 5) === 6 ? 6 : 5;
@@ -584,6 +704,9 @@ export async function loadWeeklyReport(
     position,
     positionText: positionSentence(position.value),
     photos,
+    photoCandidates,
+    photoSelection,
+    photoAuto,
     weather: deriveWeather(dprs as never, logs as never, (delayRes.data ?? []) as never),
     swppp: deriveSwppp(swpppInspections as never, period.end),
     workThisWeek: deriveWorkThisWeek(

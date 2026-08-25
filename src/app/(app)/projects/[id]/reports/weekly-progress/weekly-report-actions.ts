@@ -46,6 +46,7 @@ export type WeeklyFormInput = {
   safetySummary: string;
   positionNote: string;
   photoNote: string;
+  photoKeys: string[];
   weatherSummary: string;
   workThisWeek: string;
   lookaheadNote: string;
@@ -139,6 +140,10 @@ export async function saveWeeklyReport(input: WeeklyFormInput): Promise<WeeklyRe
             safety_summary: over(input.safetySummary, view.safety.value),
             position_note: over(input.positionNote, view.positionText),
             photo_note: input.photoNote.trim() || null,
+            // An empty array means "no choice made", which is what puts the
+            // report back on the automatic spread. A selection that happens to
+            // match the automatic one is still stored - the human confirmed it.
+            photo_keys: input.photoKeys as unknown as Json,
           }
         : {}),
       weather_summary: over(input.weatherSummary, view.weather.value),
@@ -198,6 +203,7 @@ export async function issueWeeklyReport(input: {
     contractors: view.contractors,
     equipment: view.equipment,
     manHours: view.manHours.value,
+    photos: view.photos,
     milestones: Object.fromEntries(
       Object.entries(view.milestones).map(([k, v]) => [k, v.value]),
     ),

@@ -21,7 +21,9 @@ import {
   addDays,
   coverageGaps,
   defaultPeriod,
+  autoSelectPhotos,
   deriveEnvironment,
+  selectPhotoKeys,
   deriveManHours,
   deriveProjectPosition,
   deriveSafety,
@@ -844,6 +846,50 @@ function unit() {
 
     const empty = deriveProjectPosition([], { plannedFinish: null, projectedFinish: null, finishSlipDays: 0 }, [], []);
     check("POS-12 no schedule means no invented percentage", empty.value.pctComplete === null && empty.basis.includes("no durationed work"), empty.basis);
+  }
+
+  // ---- choosing the photos ----
+  //
+  // The photo page first read `public.photos`, which has never held a row on any
+  // project, so it reported "no photos" every week while the site was being
+  // photographed daily. The photos live on inspections and CM daily logs, and
+  // one real Sweet Springs week holds 64 of them - far too many to put in front
+  // of the owner, and "the first eight by timestamp" is whatever got uploaded
+  // on Monday rather than a selection.
+  {
+    const mk = (key: string, day: string, source: "inspection" | "cmlog" | "dpr") =>
+      ({ key, day, who: source, caption: null, source });
+    // Five worked days: Mon has 20 photos, the rest have 2 each.
+    const many = [
+      ...Array.from({ length: 20 }, (_, i) => mk(`cmlog:mon${i}`, "2026-08-17", "cmlog")),
+      ...["2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21"].flatMap((d) => [
+        mk(`cmlog:${d}a`, d, "cmlog"),
+        mk(`insp:${d}b`, d, "inspection"),
+      ]),
+    ];
+
+    const auto = autoSelectPhotos(many);
+    check("PHO-01 the automatic selection is capped", auto.length === 8, String(auto.length));
+    // The point of the round robin: Monday's twenty must not crowd out the week.
+    const days = new Set(auto.map((k) => many.find((m) => m.key === k)!.day));
+    check("PHO-02 every day with photos is represented", days.size === 5, JSON.stringify(Array.from(days)));
+    check("PHO-03 one day cannot swamp the selection", auto.filter((k) => k.includes("mon")).length <= 2, JSON.stringify(auto));
+    // Inspection photos evidence a specific activity, so they lead within a day.
+    check("PHO-04 an inspection photo is preferred over a general site shot", auto.includes("insp:2026-08-18b"), JSON.stringify(auto));
+
+    // A human choice wins outright, in date order, however it was clicked.
+    const chosen = selectPhotoKeys(many, ["insp:2026-08-20b", "cmlog:mon3"]);
+    check("PHO-05 a saved choice wins over the automatic spread", chosen.length === 2);
+    check("PHO-06 the chosen photos print in date order", chosen[0] === "cmlog:mon3" && chosen[1] === "insp:2026-08-20b", JSON.stringify(chosen));
+
+    // A photo deleted from its inspection after the report was drafted must not
+    // print as a gap on the owner's page.
+    const stale = selectPhotoKeys(many, ["cmlog:mon3", "insp:deleted"]);
+    check("PHO-07 a key with no photo behind it is dropped, not printed as a gap", stale.length === 1 && stale[0] === "cmlog:mon3", JSON.stringify(stale));
+
+    check("PHO-08 no photos at all selects nothing rather than throwing", autoSelectPhotos([]).length === 0);
+    const few = [mk("insp:only", "2026-08-19", "inspection")];
+    check("PHO-09 fewer photos than the cap takes them all", autoSelectPhotos(few).length === 1);
   }
 
   // ---- coverage gaps ----

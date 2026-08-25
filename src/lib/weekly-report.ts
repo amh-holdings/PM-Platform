@@ -147,6 +147,7 @@ export type WeeklyOverrides = {
   security_concerns: string | null;
   safety_summary: string | null;
   photo_note: string | null;
+  photo_keys: string[];
   position_note: string | null;
   weather_summary: string | null;
   work_this_week: string | null;
@@ -1512,6 +1513,9 @@ export function deriveWorkThisWeek(
   const label = new Map(commodities.map((c) => [c.id, c]));
   const totals = new Map<string, number>();
   for (const row of production) {
+    // Confirmed only. A proposed figure has not been stood behind by anyone and
+    // this document goes to the owner.
+    if (!row.confirmed_at) continue;
     totals.set(row.commodity_id, (totals.get(row.commodity_id) ?? 0) + Number(row.quantity));
   }
   const quantityLines = Array.from(totals.entries())
@@ -1841,6 +1845,8 @@ export function deriveProjectPosition(
   const byId = new Map(commodities.map((c) => [c.id, c]));
   const toDate = new Map<string, number>();
   for (const row of productionToDate) {
+    // Confirmed only, same rule as the weekly totals.
+    if (!row.confirmed_at) continue;
     toDate.set(row.commodity_id, (toDate.get(row.commodity_id) ?? 0) + Number(row.quantity));
   }
 
@@ -1969,4 +1975,92 @@ export function positionSentence(p: ProjectPosition): string {
     }
   }
   return bits.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Choosing the photos
+// ---------------------------------------------------------------------------
+
+export type PhotoCandidate = {
+  /** "<source>:<id>", stable across weeks so a choice survives a reload. */
+  key: string;
+  day: string;
+  /** Where it came from, in words the reader recognises. */
+  who: string;
+  caption: string | null;
+  source: "inspection" | "cmlog" | "dpr";
+};
+
+/** How many photos the report prints when nobody has chosen. */
+export const PHOTO_AUTO_LIMIT = 8;
+
+/**
+ * The automatic selection, used until somebody makes a choice.
+ *
+ * One week on Sweet Springs holds 64 photos - 47 on the CM's daily logs and 17
+ * against inspections. Taking the first eight by timestamp is not a selection,
+ * it is whatever got uploaded on Monday, so this takes them round-robin across
+ * the days that HAVE photos: five worked days and a limit of eight gives every
+ * day one before any day gets a second, which is the spread somebody would have
+ * picked by hand.
+ *
+ * Inspection photos come first within a day. They were taken to evidence a
+ * specific activity, so they carry more for the owner than a general site shot.
+ */
+export function autoSelectPhotos(
+  candidates: PhotoCandidate[],
+  limit = PHOTO_AUTO_LIMIT,
+): string[] {
+  const byDay = new Map<string, PhotoCandidate[]>();
+  for (const c of candidates) {
+    const bucket = byDay.get(c.day) ?? [];
+    bucket.push(c);
+    byDay.set(c.day, bucket);
+  }
+  const days = Array.from(byDay.keys()).sort();
+  for (const day of days) {
+    byDay.get(day)!.sort((a, b) => {
+      const rank = (x: PhotoCandidate) => (x.source === "inspection" ? 0 : 1);
+      return rank(a) - rank(b) || a.key.localeCompare(b.key);
+    });
+  }
+
+  const chosen: string[] = [];
+  let round = 0;
+  while (chosen.length < limit) {
+    let tookOne = false;
+    for (const day of days) {
+      const bucket = byDay.get(day)!;
+      if (round >= bucket.length) continue;
+      chosen.push(bucket[round].key);
+      tookOne = true;
+      if (chosen.length >= limit) break;
+    }
+    if (!tookOne) break;
+    round++;
+  }
+  return chosen;
+}
+
+/**
+ * Which photos the report prints, as keys in date order.
+ *
+ * Returns KEYS rather than rows so the one place that decides does not depend on
+ * how the caller shapes a photo. A saved choice wins; a key that no longer
+ * matches a candidate is dropped rather than printed as a gap, because a photo
+ * can be deleted from its inspection after the report was drafted.
+ */
+export function selectPhotoKeys(
+  candidates: PhotoCandidate[],
+  saved: string[],
+): string[] {
+  const byKey = new Map(candidates.map((c) => [c.key, c]));
+  const keys = saved.length ? saved : autoSelectPhotos(candidates);
+  return keys
+    .filter((k) => byKey.has(k))
+    .sort((a, b) => {
+      const x = byKey.get(a)!;
+      const y = byKey.get(b)!;
+      return x.day === y.day ? a.localeCompare(b) : x.day < y.day ? -1 : 1;
+    });
 }

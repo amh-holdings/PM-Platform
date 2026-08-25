@@ -65,6 +65,11 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
   const [safety, setSafety] = useState(saved?.safety_summary ?? view.safety.value);
   const [positionNote, setPositionNote] = useState(saved?.position_note ?? view.positionText);
   const [photoNote, setPhotoNote] = useState(saved?.photo_note ?? "");
+  // Seeded with whatever will print - the saved choice, or the automatic spread
+  // - so the picker opens showing the report as it stands rather than empty.
+  const [photoKeys, setPhotoKeys] = useState<string[]>(() =>
+    view.photos.map((p) => p.key),
+  );
   const [weather, setWeather] = useState(saved?.weather_summary ?? view.weather.value);
   const [swppp, setSwppp] = useState(saved?.swppp_inspection_date ?? view.swppp.value ?? "");
   const [work, setWork] = useState(saved?.work_this_week ?? view.workThisWeek.value);
@@ -99,6 +104,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
         safetySummary: safety,
         positionNote,
         photoNote,
+        photoKeys,
         weatherSummary: weather,
         workThisWeek: work,
         lookaheadNote,
@@ -491,16 +497,56 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
       {/* ---- Photos ---- */}
       <Section
         title="Photos"
-        note="Every photo on the period's approved field reports, printed on its own page. Dimension's form asks for them and the platform has been holding them all along."
+        note="Every photo taken against this period's inspections and CM daily logs. Pick the ones the owner should see - they print two to a row on their own page."
       >
-        {view.photos.length === 0 ? (
+        {view.photoCandidates.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No photos on this period&apos;s approved field reports, so no photo
-            page will print. Photos uploaded against a field report appear here
-            once that report is approved.
+            No photos were uploaded against this period&apos;s inspections or CM
+            daily logs, so no photo page will print.
           </p>
         ) : (
           <>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm">
+                <span className="font-medium">{photoKeys.length}</span>
+                <span className="text-muted-foreground">
+                  {" "}
+                  of {view.photoCandidates.length} selected
+                </span>
+                {view.photoAuto && (
+                  <span className="ml-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide">
+                    Auto
+                  </span>
+                )}
+              </p>
+              {!issued && (
+                <div className="flex items-center gap-3 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setPhotoKeys(view.photoCandidates.map((p) => p.key))}
+                    className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPhotoKeys([])}
+                    className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {view.photoAuto && (
+              <p className="text-xs text-muted-foreground">
+                Nobody has chosen for this week, so the report is showing an
+                automatic spread across the days that have photos. Adjust it
+                below and save to make it a decision.
+              </p>
+            )}
+
             <Field
               label="Note at the top of the photo page"
               hint="Optional. Leave empty and the page prints as a plain photo sheet."
@@ -514,32 +560,57 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
                 placeholder="Front entrance culvert installation, 20-21 Aug."
               />
             </Field>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {view.photos.map((ph) => (
-                <figure key={ph.id} className="overflow-hidden rounded-md border">
-                  {ph.url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={ph.url}
-                      alt={ph.caption ?? "Site photo"}
-                      className="h-24 w-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-24 items-center justify-center text-xs text-muted-foreground">
-                      unavailable
+
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+              {view.photoCandidates.map((ph) => {
+                const on = photoKeys.includes(ph.key);
+                return (
+                  <button
+                    key={ph.key}
+                    type="button"
+                    disabled={issued}
+                    onClick={() =>
+                      setPhotoKeys((keys) =>
+                        keys.includes(ph.key)
+                          ? keys.filter((k) => k !== ph.key)
+                          : [...keys, ph.key],
+                      )
+                    }
+                    className={cn(
+                      "overflow-hidden rounded-md border text-left transition-opacity",
+                      on ? "border-foreground ring-1 ring-foreground" : "opacity-60 hover:opacity-100",
+                    )}
+                  >
+                    <div className="relative">
+                      {ph.url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={ph.url}
+                          alt={ph.caption ?? "Site photo"}
+                          className="h-24 w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-24 items-center justify-center text-xs text-muted-foreground">
+                          unavailable
+                        </div>
+                      )}
+                      <span
+                        className={cn(
+                          "absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full border text-[9px] font-bold",
+                          on ? "bg-foreground text-background" : "bg-background/80",
+                        )}
+                      >
+                        {on ? photoKeys.indexOf(ph.key) + 1 : ""}
+                      </span>
                     </div>
-                  )}
-                  <figcaption className="border-t px-1 py-0.5 text-[10px] leading-tight text-muted-foreground">
-                    {shortDay(ph.day)}
-                    {ph.caption ? ` - ${ph.caption}` : ""}
-                  </figcaption>
-                </figure>
-              ))}
+                    <span className="block border-t px-1 py-0.5 text-[10px] leading-tight text-muted-foreground">
+                      {shortDay(ph.day)} - {ph.who}
+                      {ph.caption ? ` - ${ph.caption}` : ""}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
-            <p className="text-xs text-muted-foreground">
-              {view.photos.length} photo{view.photos.length === 1 ? "" : "s"} will
-              print, two to a row.
-            </p>
           </>
         )}
       </Section>

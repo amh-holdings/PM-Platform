@@ -325,7 +325,7 @@ export default async function WeeklyProgressPrintPage({
           )}
           <div className="grid grid-cols-2 gap-2 p-2">
             {view.photos.map((ph) => (
-              <figure key={ph.id} className="break-inside-avoid border border-neutral-300">
+              <figure key={ph.key} className="break-inside-avoid border border-neutral-300">
                 {ph.url ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
