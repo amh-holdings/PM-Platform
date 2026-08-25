@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import Link from "next/link";
 
 import { guardCapability } from "@/lib/roles-server";
@@ -52,7 +53,7 @@ export default async function WeeklyProgressPrintPage({
   const lookaheadTotal = r.lookahead.reduce((n, w) => n + w.tasks.length, 0);
 
   return (
-    <div className="mx-auto max-w-4xl bg-white p-2 text-black print:p-0">
+    <div className="mx-auto max-w-4xl bg-white p-2 text-black [print-color-adjust:exact] print:p-0">
       <div className="mb-3 flex items-center justify-between print:hidden">
         <Link
           href={`/projects/${params.id}/reports/weekly-progress?week=${weekEnding}`}
@@ -132,6 +133,10 @@ export default async function WeeklyProgressPrintPage({
                 )}
               </tbody>
             </table>
+            <p className="mt-0.5 text-[8.5px] text-neutral-600">
+              Headcount is the peak day on site during the period. Total effort
+              for the week is reported as man-hours below.
+            </p>
           </div>
         </div>
 
@@ -212,51 +217,90 @@ export default async function WeeklyProgressPrintPage({
 
         <Row label="Work This Week" value={r.workThisWeek || "N/A"} wide multiline />
 
-        <div className="flex border-b border-neutral-400">
-          <Cell head>3 Week Look Ahead:</Cell>
-          <div className="flex-1 px-2 py-1">
-            {r.lookaheadNote && (
-              <p className="mb-1 whitespace-pre-wrap">{r.lookaheadNote}</p>
-            )}
-            {lookaheadTotal === 0 ? (
-              <p>No work is projected in the three weeks after this period.</p>
-            ) : (
-              <div className="space-y-1">
-                {r.lookahead.map((w) => (
-                  <div key={w.weekStart} className="break-inside-avoid">
-                    <p className="text-[10px] font-bold uppercase">{w.label}</p>
-                    {w.tasks.length === 0 ? (
-                      <p className="text-[10px]">No scheduled work.</p>
-                    ) : (
-                      <table className="w-full text-[10px]">
-                        <tbody>
-                          {w.tasks.map((t) => (
-                            <tr key={t.wbs} className="align-top">
-                              <td className="w-16 py-px pr-1">{t.wbs}</td>
-                              <td className="py-px pr-1">{t.name}</td>
-                              <td className="w-28 py-px pr-1">{t.assignedTo ?? ""}</td>
-                              <td className="w-32 whitespace-nowrap py-px pr-1">
-                                {dimensionDate(t.start)} - {dimensionDate(t.end)}
-                              </td>
-                              <td className="w-24 py-px">
-                                {[
-                                  t.critical ? "critical" : null,
-                                  t.finishing ? "completes" : null,
-                                  t.continuing ? "continuing" : null,
-                                ]
-                                  .filter(Boolean)
-                                  .join(", ")}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+        <div className="border-b border-neutral-400">
+          <div className="flex">
+            <Cell head>3 Week Look Ahead:</Cell>
+            <div className="flex-1 px-2 py-1">
+              {r.lookaheadNote ? (
+                <p className="whitespace-pre-wrap">{r.lookaheadNote}</p>
+              ) : (
+                <p className="text-neutral-600">
+                  Activities scheduled for the three weeks following this
+                  reporting period, from the project schedule.
+                </p>
+              )}
+            </div>
           </div>
+
+          {lookaheadTotal === 0 ? (
+            <p className="px-2 pb-1 text-[10px]">
+              No work is projected in the three weeks after this period.
+            </p>
+          ) : (
+            <div className="px-2 pb-2">
+              <table className="w-full border-collapse text-[9.5px]">
+                <thead>
+                  <tr className="bg-[#1f4e79] text-white [print-color-adjust:exact]">
+                    <Th className="w-14">WBS</Th>
+                    <Th>Activity</Th>
+                    <Th className="w-28">Responsible</Th>
+                    <Th className="w-20">Start</Th>
+                    <Th className="w-20">Finish</Th>
+                    <Th className="w-16">% Comp</Th>
+                    <Th className="w-24">Status</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.lookahead.map((w) => (
+                    <Fragment key={w.weekStart}>
+                      <tr className="bg-[#bdd7ee] [print-color-adjust:exact]">
+                        <td
+                          colSpan={7}
+                          className="border border-neutral-500 px-1 py-0.5 font-bold uppercase tracking-wide"
+                        >
+                          {w.label}
+                        </td>
+                      </tr>
+                      {w.tasks.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={7}
+                            className="border border-neutral-500 px-1 py-0.5 italic"
+                          >
+                            No scheduled work.
+                          </td>
+                        </tr>
+                      ) : (
+                        w.tasks.map((t) => (
+                          <tr key={t.wbs} className="align-top">
+                            <Td>{t.wbs}</Td>
+                            <Td className="text-left">{t.name}</Td>
+                            <Td className="text-left">{t.assignedTo ?? "-"}</Td>
+                            <Td>{dimensionDate(t.start)}</Td>
+                            <Td>{dimensionDate(t.end)}</Td>
+                            <Td>{t.pctComplete != null ? `${t.pctComplete}%` : "-"}</Td>
+                            <Td className={t.critical ? "font-bold" : undefined}>
+                              {[
+                                t.critical ? "Critical" : null,
+                                t.finishing ? "Completes" : null,
+                                t.continuing ? "Continuing" : null,
+                              ]
+                                .filter(Boolean)
+                                .join(", ") || "Scheduled"}
+                            </Td>
+                          </tr>
+                        ))
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-0.5 text-[8.5px] text-neutral-600">
+                Critical = on the schedule&apos;s critical path. Completes = the
+                activity finishes within that week.
+              </p>
+            </div>
+          )}
         </div>
 
         <Row label="Open Schedule Risks" value={r.risks || "N/A"} wide multiline />
@@ -323,7 +367,7 @@ export default async function WeeklyProgressPrintPage({
 
 function Band({ children }: { children: React.ReactNode }) {
   return (
-    <div className="border-b border-neutral-400 bg-[#bdd7ee] py-0.5 text-center text-[11px] font-bold uppercase">
+    <div className="border-b border-neutral-400 bg-[#bdd7ee] py-0.5 text-center text-[11px] font-bold uppercase [print-color-adjust:exact]">
       {children}
     </div>
   );
@@ -374,6 +418,36 @@ function Row({
       </div>
       {children}
     </div>
+  );
+}
+
+function Th({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <th
+      className={`border border-neutral-500 px-1 py-0.5 text-center font-bold ${className ?? ""}`}
+    >
+      {children}
+    </th>
+  );
+}
+
+function Td({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <td className={`border border-neutral-500 px-1 py-0.5 text-center ${className ?? ""}`}>
+      {children}
+    </td>
   );
 }
 

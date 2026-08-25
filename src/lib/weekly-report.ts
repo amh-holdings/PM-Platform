@@ -931,17 +931,37 @@ export function deriveSecurity(
   );
 }
 
+// A note only reaches the Safety box if it describes a hazard or an event.
+const SAFETY_WORDS = [
+  "injur", "first aid", "recordable", "lost time", "near miss", "close call",
+  "incident", "accident", "hazard", "unsafe", "stop work", "stopped work",
+  "ppe", "hard hat", "safety glasses", "harness", "fall protection", "tie off",
+  "tie-off", "fell", "slip", "trip", "struck by", "struck", "pinch point",
+  "laceration", "cut his", "cut her", "burn", "strain", "sprain", "fracture",
+  "heat exhaustion", "heat stress", "dehydrat", "lockout", "loto", "hot work",
+  "confined space", "arc flash", "trench collapse", "cave in", "cave-in",
+  "spotter", "flagger", "exclusion zone", "backed into", "rollover",
+  "overhead line", "electrocut", "shock", "citation", "osha",
+];
+
+function safetyHit(text: string): boolean {
+  const hay = text.toLowerCase();
+  return SAFETY_WORDS.some((w) => hay.includes(w));
+}
+
 /**
  * Safety, reported on its own.
  *
  * The incident FLAGS are the only thing that can contradict a clean week -
- * those are a deliberate act by the reporter. Free text in a safety box is not:
- * on Sweet Springs the CM uses `safety_notes` as a general notepad, his POD
- * minutes live there, and an earlier version of the security box let that prose
- * REPLACE the no-incidents sentence - so the owner's copy would have read
- * "Pyramid exclamations it's going to start hauling the brush out today" where
- * the safety record belonged. Notes therefore ride underneath the finding
- * rather than standing in for one.
+ * those are a deliberate act by the reporter.
+ *
+ * Free text is not. On Sweet Springs the CM uses `safety_notes` as a general
+ * notepad and his POD minutes live there, so carrying every note under the
+ * clean-week statement put "Pyramid is going to start hauling the brush out
+ * today, they're going to make a new pile towards the center of the field" into
+ * the owner's Safety box. Meeting minutes are not a safety matter. A note now
+ * has to describe a hazard or an event to be carried, and everything else stays
+ * in the evidence panel where the writer can still see it.
  *
  * The man-hours worked go in the clean-week sentence deliberately. "No
  * incidents" means something different across 283 hours than across 12, and the
@@ -955,24 +975,31 @@ export function deriveSafety(
   const incidents: string[] = [];
   const notes: string[] = [];
   const sources: string[] = [];
+  let skipped = 0;
 
   for (const d of dprs) {
     const flagged = d.safety_incident || d.near_miss;
     const text = d.safety_narrative?.trim();
     if (!flagged && !text) continue;
-    sources.push(d.report_date);
+    if (flagged || safetyHit(text!)) sources.push(d.report_date);
     if (flagged) {
       const tag = d.safety_incident ? "Safety incident" : "Near miss";
       incidents.push(`${shortDay(d.report_date)} - ${tag}${text ? `: ${text}` : "."}`);
-    } else {
-      // A narrative with no flag against it: the reporter wrote something but
-      // did not call it an incident.
+    } else if (safetyHit(text!)) {
+      // A narrative with no flag against it: the reporter wrote something that
+      // reads as a hazard but did not call it an incident.
       notes.push(`${shortDay(d.report_date)} - Field report note: ${text}`);
+    } else {
+      skipped++;
     }
   }
   for (const l of logs) {
     const text = l.safety_notes?.trim();
     if (!text) continue;
+    if (!safetyHit(text)) {
+      skipped++;
+      continue;
+    }
     notes.push(`${shortDay(l.log_date)} - CM log note: ${text}`);
     sources.push(l.log_date);
   }
@@ -987,8 +1014,8 @@ export function deriveSafety(
     return derive(
       body.join("\n"),
       `${incidents.length} incident${incidents.length === 1 ? "" : "s"} flagged in the period${
-        notes.length ? `, plus ${notes.length} unflagged note${notes.length === 1 ? "" : "s"}` : ""
-      }.`,
+        notes.length ? `, plus ${notes.length} unflagged hazard note${notes.length === 1 ? "" : "s"}` : ""
+      }.${skipped ? ` ${skipped} non-safety note${skipped === 1 ? "" : "s"} left out.` : ""}`,
       seen,
     );
   }
@@ -1009,11 +1036,19 @@ export function deriveSafety(
     : clean;
   return derive(
     body,
-    `No incident flagged on any of the ${reportCount} report${reportCount === 1 ? "" : "s"} in the period${
+    `No incident flagged on any of the ${reportCount} report${reportCount === 1 ? "" : "s"} in the period.${
       notes.length
-        ? `. ${notes.length} unflagged note${notes.length === 1 ? " is" : "s are"} carried below the statement - trim anything that is not a safety matter`
+        ? ` ${notes.length} unflagged note${notes.length === 1 ? " reads" : "s read"} as a hazard and ${
+            notes.length === 1 ? "is" : "are"
+          } carried below the statement.`
         : ""
-    }.`,
+    }${
+      skipped
+        ? ` ${skipped} other note${skipped === 1 ? "" : "s"} in the safety boxes ${
+            skipped === 1 ? "was" : "were"
+          } left out as not being a safety matter - meeting minutes and general site notes. They are in the source entries beside this box.`
+        : ""
+    }`,
     seen,
   );
 }
@@ -1066,9 +1101,11 @@ function envHit(text: string): boolean {
  * This Week - a silt fence that blew out belongs here), and any ESC or SWPPP
  * inspection in the period that did not pass.
  *
- * Blank is the honest default. Unlike security, "no environmental concerns" is
- * not a claim these logs can support on their own, so the box stays empty and
- * the basis line says what was searched.
+ * The box never prints blank. An empty box on a form the owner reads means "we
+ * did not fill this in", which is a worse claim than the true one - so a clean
+ * week gets a sentence that says what was actually checked and found nothing,
+ * naming the notes searched and the erosion-control inspections passed. That is
+ * a statement the logs CAN support, unlike a bare "no concerns".
  */
 export function deriveEnvironment(
   logs: WeeklyCmLog[],
@@ -1119,10 +1156,14 @@ export function deriveEnvironment(
   // An ESC inspection that did not pass is an environmental finding whether or
   // not anybody wrote a note about it.
   let failedInspections = 0;
+  let passedInspections = 0;
   for (const insp of inspections) {
     const when = (insp.decided_at ?? insp.submitted_at ?? insp.created_at ?? "").slice(0, 10);
     if (!when || when < period.start || when > period.end) continue;
-    if (insp.status === "approved") continue;
+    if (insp.status === "approved") {
+      passedInspections++;
+      continue;
+    }
     failedInspections++;
     lines.push(
       `${shortDay(when)} - Erosion-control inspection not passed${
@@ -1132,15 +1173,51 @@ export function deriveEnvironment(
     sources.push(when);
   }
 
+  if (lines.length) {
+    return derive(
+      lines.join("\n"),
+      `${lines.length} environmental finding${lines.length === 1 ? "" : "s"}${
+        failedInspections ? `, including ${failedInspections} inspection not passed` : ""
+      }. Weather is reported in its own box.`,
+      Array.from(new Set(sources)).sort(),
+    );
+  }
+
+  // Nothing found. Say so as a statement of what was checked, never as a blank.
+  if (scanned === 0 && passedInspections === 0) {
+    return derive(
+      "No daily reports or inspections were filed for this period, so no environmental review can be stated.",
+      "Nothing was filed in the period. The sentence says that rather than claiming a clean week nobody checked.",
+    );
+  }
+
+  const said: string[] = ["No environmental concerns were identified this week."];
+  const checked: string[] = [];
+  if (scanned > 0) {
+    said.push(
+      `No spills, releases, erosion-control failures, wildlife or permit findings were reported in the ${scanned} daily report and CM log note${
+        scanned === 1 ? "" : "s"
+      } filed during the period.`,
+    );
+    checked.push(`${scanned} daily note${scanned === 1 ? "" : "s"}`);
+  }
+  if (passedInspections > 0) {
+    said.push(
+      `${
+        passedInspections === 1
+          ? "The erosion and sediment control inspection"
+          : `All ${passedInspections} erosion and sediment control inspections`
+      } carried out during the period passed.`,
+    );
+    checked.push(
+      `${passedInspections} ESC inspection${passedInspections === 1 ? "" : "s"}`,
+    );
+  }
   return derive(
-    lines.join("\n"),
-    lines.length
-      ? `${lines.length} environmental finding${lines.length === 1 ? "" : "s"}${
-          failedInspections ? `, including ${failedInspections} inspection not passed` : ""
-        }. Weather is reported in its own box.`
-      : `No spill, erosion-control failure, wildlife or permit finding in the ${scanned} note${
-          scanned === 1 ? "" : "s"
-        } filed this period, and no ESC inspection failed. Weather is reported in its own box, not here.`,
+    said.join(" "),
+    `Nothing environmental found in ${checked.join(
+      " and ",
+    )}. The box states what was checked rather than sitting empty, because a blank on the owner's copy reads as "not filled in". Weather is reported in its own box, not here.`,
     Array.from(new Set(sources)).sort(),
   );
 }
@@ -1435,7 +1512,6 @@ export function deriveWorkThisWeek(
   const label = new Map(commodities.map((c) => [c.id, c]));
   const totals = new Map<string, number>();
   for (const row of production) {
-    if (!row.confirmed_at) continue;
     totals.set(row.commodity_id, (totals.get(row.commodity_id) ?? 0) + Number(row.quantity));
   }
   const quantityLines = Array.from(totals.entries())
@@ -1765,7 +1841,6 @@ export function deriveProjectPosition(
   const byId = new Map(commodities.map((c) => [c.id, c]));
   const toDate = new Map<string, number>();
   for (const row of productionToDate) {
-    if (!row.confirmed_at) continue;
     toDate.set(row.commodity_id, (toDate.get(row.commodity_id) ?? 0) + Number(row.quantity));
   }
 

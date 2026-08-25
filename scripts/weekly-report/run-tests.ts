@@ -613,8 +613,16 @@ function unit() {
     ];
     const period = { start: "2026-08-17", end: "2026-08-23" };
     const clean = deriveEnvironment(wet, dprs, [{ dpr_id: "d1", cause_code: "weather", hours_lost: 8, narrative: "Rained out" }], [], period);
-    check("ENV-01 a wet week is not an environmental concern", clean.value === "", clean.value);
+    // A wet week is weather, not an environmental concern - but the box must
+    // never print blank on a form the owner reads, so a clean week gets a
+    // sentence stating what was checked.
+    check("ENV-01 a wet week is not reported as an environmental concern", !clean.value.includes("muddy") && !clean.value.includes("Wet"), clean.value);
+    check("ENV-01b the box is never blank", clean.value.startsWith("No environmental concerns were identified"), clean.value);
+    check("ENV-01c the sentence names what was searched", clean.value.includes("5 daily report and CM log notes filed during the period"), clean.value);
     check("ENV-02 the basis says where weather is reported", clean.basis.includes("own box"), clean.basis);
+    // With nothing filed at all there is no clean week to claim.
+    const nothing = deriveEnvironment([], [], [], [], period);
+    check("ENV-02b with nothing filed it does not claim a clean week", !nothing.value.includes("No environmental concerns were identified") && nothing.value.includes("no environmental review"), nothing.value);
 
     const spill = deriveEnvironment(
       [{ ...wet[0], safety_notes: "Hydraulic fluid leak from the excavator, absorbent pads down." }],
@@ -624,7 +632,7 @@ function unit() {
 
     // Installing erosion control is progress. A failure of it is a finding.
     const install = deriveEnvironment([], [mkDpr("e1", "2026-08-18", SUB_A, "Silt fence is starting installation.", 6)], [], [], period);
-    check("ENV-04 installing a silt fence is not a concern", install.value === "", install.value);
+    check("ENV-04 installing a silt fence is not a concern", !install.value.includes("starting installation"), install.value);
     const failed = deriveEnvironment([], [mkDpr("e2", "2026-08-18", SUB_A, "Silt fence washed out at basin 2.", 6)], [], [], period);
     check("ENV-05 a silt fence that failed is a concern", failed.value.includes("washed out"), failed.value);
 
@@ -635,7 +643,8 @@ function unit() {
     const goodInsp = deriveEnvironment([], [], [], [
       { inspection_type: null, title: "5.1.1.6 Construct Basin 1 ESC", inspector_name: null, status: "approved", submitted_at: null, decided_at: "2026-08-19T12:00:00Z", created_at: null },
     ], period);
-    check("ENV-07 an ESC inspection that passed is not a concern", goodInsp.value === "");
+    check("ENV-07 an ESC inspection that passed is not a concern", !goodInsp.value.includes("not passed"), goodInsp.value);
+    check("ENV-07b a passed inspection is counted as evidence of the clean week", goodInsp.value.includes("The erosion and sediment control inspection carried out during the period passed."), goodInsp.value);
   }
 
   // Weather delay hours have to land somewhere now that Environment does not
@@ -728,6 +737,29 @@ function unit() {
       { log_date: "2026-08-18", progress_summary: null, site_conditions: null, safety_notes: "POD meeting. Discussed hauling brush out today.", weather_conditions: null, temp_high: null, temp_low: null },
     ]);
     check("SAF-07 the CM's notepad prose is not a security finding", !notepad.value.includes("POD meeting"), notepad.value);
+
+    // The real Sweet Springs entry. The CM uses safety_notes as a general
+    // notepad, so carrying every note under the clean-week statement put his
+    // POD minutes into the owner's Safety box.
+    const podLog = [{
+      log_date: "2026-08-19", progress_summary: null, site_conditions: null,
+      safety_notes: "POD meeting notes\nPyramid is going to start hauling the brush out today. They're going to make a new pile towards the center of the field and work on getting the entrance and the Rough in Road.",
+      weather_conditions: null, temp_high: null, temp_low: null,
+    }];
+    const podSafety = deriveSafety(hourly, podLog, mh.value);
+    check("SAF-08 POD meeting minutes are not carried into the safety box", !podSafety.value.includes("POD meeting") && !podSafety.value.includes("Rough in Road"), podSafety.value);
+    check("SAF-08b the clean-week statement still stands alone", podSafety.value.startsWith("No injuries") && !podSafety.value.includes("Noted in the logs"), podSafety.value);
+    check("SAF-08c the basis says what was left out and where to find it", podSafety.basis.includes("left out as not being a safety matter"), podSafety.basis);
+
+    // A note that genuinely reads as a hazard is still carried.
+    const hazardLog = [{
+      log_date: "2026-08-19", progress_summary: null, site_conditions: null,
+      safety_notes: "Excavator working under the overhead line at the entrance, spotter assigned.",
+      weather_conditions: null, temp_high: null, temp_low: null,
+    }];
+    const hazard = deriveSafety(hourly, hazardLog, mh.value);
+    check("SAF-09 a genuine hazard note is still carried", hazard.value.includes("overhead line"), hazard.value);
+    check("SAF-09b and it rides under the clean statement, not instead of it", hazard.value.startsWith("No injuries"), hazard.value);
   }
 
   // ---- where the project stands ----
