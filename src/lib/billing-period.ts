@@ -11,20 +11,32 @@
 // and may only export async functions.
 
 /**
- * The month the page opens on: the CURRENT calendar month.
+ * Calendar fallback for a project that has never billed: the current month.
  *
- * This defaulted to the last full month on the reasoning that AFPs bill in
- * arrears. Sweet Springs does not work that way - AFP 12 covers 1-31 August and
- * was submitted on 20 August, AFP 8 covers November and went out on 21 November,
- * AFP 7 closed its period on the day it was submitted. The application is
- * assembled during the month it bills, so opening on last month showed a period
- * that had already been billed and buried the live one behind a click.
+ * This is NOT the right default for a project with billing history - the period
+ * to open on is the one the next AFP will cover, which depends on what has
+ * already been billed, not on what the calendar says. Use resolveBillingPeriod()
+ * in billing-period-resolve.ts, which falls back here when there is no history.
  *
  * Anything that turns a period into a schedule as-of date must go through
  * progressAsOf(), not periodEndOf() - see below.
  */
 export function defaultBillingPeriod(today: Date = new Date()): string {
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+/** The month following a YYYY-MM-DD date, as YYYY-MM-01. */
+export function monthAfter(dateIso: string): string {
+  const [y, m] = dateIso.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
+}
+
+/** Whole months from `from` to `to`, negative when `to` is earlier. */
+export function monthsBetween(from: string, to: string): number {
+  const [fy, fm] = from.split("-").map(Number);
+  const [ty, tm] = to.split("-").map(Number);
+  return (ty - fy) * 12 + (tm - fm);
 }
 
 /** Last calendar day of the month a YYYY-MM-01 string names. */

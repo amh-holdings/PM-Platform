@@ -3,6 +3,8 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { guardCapability } from "@/lib/roles-server";
 import { nextAppNumber } from "@/lib/afp-number";
+import { periodEndOf } from "@/lib/billing-period";
+import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 
 import { NewPayAppForm } from "./new-pay-app-form";
 
@@ -12,39 +14,24 @@ export default async function NewPayAppPage({ params }: { params: Params }) {
   await guardCapability("viewPayApps");
   const supabase = createClient();
 
-  const [{ data: project }, { data: lastApp }, defaultAppNumber] =
-    await Promise.all([
-      supabase
-        .from("projects")
-        .select("retainage_pct_default")
-        .eq("id", params.id)
-        .maybeSingle(),
-      supabase
-        .from("pay_applications")
-        .select("app_number, period_end")
-        .eq("project_id", params.id)
-        .order("period_end", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      // Scans pay_applications AND the billing_entries.afp_number history, so
-      // a project whose pre-app AFPs live only as free text still gets the
-      // right next number. See src/lib/afp-number.ts.
-      nextAppNumber(supabase, params.id),
-    ]);
-
-  // Default period: the month before the current one (AFPs bill in arrears),
-  // or the month following the last app's period_end when one exists.
-  const now = new Date();
-  const prevMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1));
-  let defaultStart = `${prevMonth.getUTCFullYear()}-${String(prevMonth.getUTCMonth() + 1).padStart(2, "0")}-01`;
-  if (lastApp?.period_end) {
-    const [y, m] = lastApp.period_end.split("-").map(Number);
-    const next = new Date(Date.UTC(y, m, 1));
-    defaultStart = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-01`;
-  }
-  const [sy, sm] = defaultStart.split("-").map(Number);
-  const lastDay = new Date(Date.UTC(sy, sm, 0)).getUTCDate();
-  const defaultEnd = `${sy}-${String(sm).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  // Default period: the month the next AFP covers. That rule used to live here
+  // inline while the Billing page used a calendar default, so the two pages
+  // disagreed about which month was in play. Both call the same resolver now,
+  // which also ignores drafts and refuses to propose a period out of a dormant
+  // stretch. See src/lib/billing-period-resolve.ts.
+  const [{ data: project }, defaultAppNumber, defaultStart] = await Promise.all([
+    supabase
+      .from("projects")
+      .select("retainage_pct_default")
+      .eq("id", params.id)
+      .maybeSingle(),
+    // Scans pay_applications AND the billing_entries.afp_number history, so
+    // a project whose pre-app AFPs live only as free text still gets the
+    // right next number. See src/lib/afp-number.ts.
+    nextAppNumber(supabase, params.id),
+    resolveBillingPeriod(supabase, params.id),
+  ]);
+  const defaultEnd = periodEndOf(defaultStart);
 
   return (
     <div className="space-y-4">

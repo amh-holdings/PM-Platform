@@ -14,7 +14,8 @@ import {
   type Confidence,
   type ProgressEstimate,
 } from "@/lib/progress";
-import { defaultBillingPeriod, progressAsOf } from "@/lib/billing-period";
+import { progressAsOf } from "@/lib/billing-period";
+import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -173,7 +174,7 @@ export async function computeBillingSuggestions(
   // Progress is evaluated as of the end of the period being billed, or today if
   // the period has not closed yet. See progressAsOf - a period end in the future
   // would let date interpolation bill work that has not happened.
-  const period = periodMonth ?? defaultBillingPeriod();
+  const period = periodMonth ?? (await resolveBillingPeriod(auth.supabase, projectId));
   const nextMonthIso = period;
   const todayIso = progressAsOf(period);
 
@@ -527,7 +528,7 @@ export async function getBillThisPeriodRows(
   // One period at a time. This used to be "current month + next month", which
   // both mixed two months into one application and made a closed month
   // unbillable once the calendar rolled over.
-  const period = periodMonth ?? defaultBillingPeriod();
+  const period = periodMonth ?? (await resolveBillingPeriod(auth.supabase, projectId));
   const thisMonthIso = period;
   const nextMonthIsoLocal = period;
   const todayIso = progressAsOf(period);

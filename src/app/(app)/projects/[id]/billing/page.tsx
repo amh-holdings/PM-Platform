@@ -16,11 +16,8 @@ import { BillingPoLinkForm } from "../billing-po-link-form";
 import { BillThisPeriodPanel } from "./bill-this-period-panel";
 import { BillingPeriodSelector } from "./billing-period-selector";
 import { LinkCatalogProvider, type TaskOption } from "./link-catalog";
-import {
-  defaultBillingPeriod,
-  periodEndOf,
-  periodLabel,
-} from "@/lib/billing-period";
+import { periodEndOf, periodLabel } from "@/lib/billing-period";
+import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 
 type Params = { id: string };
 
@@ -43,7 +40,10 @@ export default async function ProjectBillingPage({
   await guardCapability("viewBilling");
   const supabase = createClient();
 
-  const period = searchParams?.period ?? defaultBillingPeriod();
+  // Not the calendar month - the month the next AFP covers. See
+  // resolveBillingPeriod.
+  const period =
+    searchParams?.period ?? (await resolveBillingPeriod(supabase, params.id));
   const periodEnd = periodEndOf(period);
 
   const [
