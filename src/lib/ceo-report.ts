@@ -288,7 +288,14 @@ export function computeProgress(
   asOf: string,
   checks: CeoCheck[],
 ): Progress {
-  const leaves = leavesOf(tasks);
+  // Milestones are events, not work, and they are excluded from percent
+  // complete on purpose. A contract milestone carries no duration, and
+  // `durationWeighted` gives a task with no duration the AVERAGE weight of the
+  // others rather than none - so dropping four completion milestones into the
+  // schedule would silently push percent complete down as if a third of the
+  // job had appeared out of nowhere. They belong in the dates section, where
+  // the question is "will we hit it", not "how much of it is built".
+  const leaves = leavesOf(tasks).filter((t) => !t.is_milestone);
 
   const actual = durationWeighted(
     leaves.map((t) => ({ pct: taskPct(t), durationDays: t.duration_days })),
@@ -479,6 +486,17 @@ export type KeyDate = {
   /** Days from the as-of date. Negative is in the past. */
   daysAway: number | null;
   done: boolean;
+  /**
+   * Days between the last of the scheduled WORK and this milestone. Positive
+   * means the work is projected to finish after the date - the milestone is
+   * threatened. Null when there is no work finish to compare against, or when
+   * the milestone is already met.
+   *
+   * This is the comparison a completion date exists for. "Substantial
+   * Completion 15 March" on its own is a diary entry; "Substantial Completion
+   * 15 March, work currently lands 2 April, 18 days late" is a decision.
+   */
+  vsWorkFinish: number | null;
 };
 
 export type Dates = {
@@ -494,8 +512,14 @@ export type Dates = {
   daysRemaining: number | null;
   /** Share of the schedule window elapsed. */
   timeElapsedPct: number | null;
+  /** Completion milestones, earliest first. */
   milestones: KeyDate[];
+  /** Contract dates held on the project record (NTP, COD). */
   contract: KeyDate[];
+  /** The last of the scheduled WORK, milestones excluded. */
+  workFinish: string | null;
+  /** Milestones the current work finish already runs past. */
+  threatened: KeyDate[];
 };
 
 export function computeDates(
@@ -509,6 +533,16 @@ export function computeDates(
   const start = starts[0] ?? null;
   const finish = finishes[finishes.length - 1] ?? null;
 
+  // The end of the WORK, with milestones taken out. A completion milestone
+  // dated beyond the last activity would otherwise become the project's finish
+  // and hide the fact that the work lands earlier - or, worse, later.
+  const workFinishes = leaves
+    .filter((t) => !t.is_milestone)
+    .map((t) => t.end_date)
+    .filter((d): d is string => !!d)
+    .sort();
+  const workFinish = workFinishes[workFinishes.length - 1] ?? null;
+
   const baseFinishes = leaves
     .map((t) => t.baseline_end)
     .filter((d): d is string => !!d)
@@ -517,13 +551,18 @@ export function computeDates(
 
   const milestones: KeyDate[] = tasks
     .filter((t) => t.is_milestone && t.end_date)
-    .map((t) => ({
-      label: t.task_name ?? t.wbs_code ?? "Milestone",
-      date: t.end_date,
-      source: "milestone" as const,
-      daysAway: daysBetweenIso(asOf, t.end_date as string),
-      done: taskPct(t) >= 100,
-    }))
+    .map((t) => {
+      const done = taskPct(t) >= 100;
+      return {
+        label: t.task_name ?? t.wbs_code ?? "Milestone",
+        date: t.end_date,
+        source: "milestone" as const,
+        daysAway: daysBetweenIso(asOf, t.end_date as string),
+        done,
+        vsWorkFinish:
+          done || !workFinish ? null : daysBetweenIso(t.end_date as string, workFinish),
+      };
+    })
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
 
   const contract: KeyDate[] = [
@@ -531,11 +570,16 @@ export function computeDates(
     { label: "Commercial operation", date: project.cod_date, source: "contract" as const },
   ]
     .filter((d) => d.date)
-    .map((d) => ({
-      ...d,
-      daysAway: daysBetweenIso(asOf, d.date as string),
-      done: (d.date as string) <= asOf,
-    }));
+    .map((d) => {
+      const done = (d.date as string) <= asOf;
+      return {
+        ...d,
+        daysAway: daysBetweenIso(asOf, d.date as string),
+        done,
+        vsWorkFinish:
+          done || !workFinish ? null : daysBetweenIso(d.date as string, workFinish),
+      };
+    });
 
   const elapsed =
     start && finish && daysBetweenIso(start, finish) > 0
@@ -555,6 +599,10 @@ export function computeDates(
     timeElapsedPct: elapsed == null ? null : round2(elapsed),
     milestones,
     contract,
+    workFinish,
+    threatened: [...contract, ...milestones].filter(
+      (k) => k.vsWorkFinish != null && k.vsWorkFinish > 0,
+    ),
   };
 }
 
@@ -654,6 +702,35 @@ export function buildCeoReport(input: CeoReportInput): CeoReport {
     });
   }
 
+  // Completion dates are the obligations the contract is judged on, and a
+  // report that silently omits them reads as though there are none.
+  if (dates.milestones.length === 0) {
+    checks.push({
+      id: "no-completion-milestones",
+      label: "No completion milestones are recorded",
+      severity: "blocker",
+      detail:
+        "Mechanical Completion, Substantial Completion, Placed in Service and Final Completion " +
+        "are line items on the schedule of values but carry no dates anywhere in the platform, " +
+        "so this report cannot say whether the job is tracking to hit them. Add them to the " +
+        "schedule as milestones and they appear here automatically.",
+    });
+  }
+
+  // A milestone the work already runs past is the most consequential thing this
+  // report can surface, so each one is raised on its own rather than summarised.
+  for (const k of dates.threatened) {
+    checks.push({
+      id: `milestone-threatened-${k.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      label: `${k.label} is at risk`,
+      severity: "blocker",
+      detail:
+        `${k.label} is dated ${longDate(k.date)}, but the scheduled work does not finish until ` +
+        `${longDate(dates.workFinish)} - ${k.vsWorkFinish} days past it. Measured off the ` +
+        `schedule as it stands today, so it moves as the schedule does.`,
+    });
+  }
+
   if (input.photos.length === 0) {
     checks.push({
       id: "no-photos",
@@ -745,6 +822,22 @@ export function headlineFor(progress: Progress, dates: Dates): string {
       `${progress.late.length} task${progress.late.length === 1 ? " is" : "s are"} past ` +
         `${progress.late.length === 1 ? "its" : "their"} finish date, the oldest by ` +
         `${progress.late[0].daysLate} days.`,
+    );
+  }
+
+  // Completion dates lead the closing sentence when one is threatened: it is the
+  // only thing on this report with a contractual consequence attached.
+  if (dates.threatened.length > 0) {
+    const worst = dates.threatened.reduce((a, b) =>
+      (b.vsWorkFinish ?? 0) > (a.vsWorkFinish ?? 0) ? b : a,
+    );
+    parts.push(
+      `${worst.label} is dated ${longDate(worst.date)} and the work is not projected to finish ` +
+        `until ${longDate(dates.workFinish)} - ${worst.vsWorkFinish} days past it.`,
+    );
+  } else if (dates.milestones.length === 0) {
+    parts.push(
+      "No completion milestones are on record, so nothing here speaks to the contract dates.",
     );
   }
 

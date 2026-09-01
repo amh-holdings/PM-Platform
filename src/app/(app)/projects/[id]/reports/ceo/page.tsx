@@ -189,14 +189,28 @@ export default async function CeoReportPage({
           />
         </div>
 
-        {(d.milestones.length > 0 || d.contract.length > 0) && (
-          <div className="mt-3 overflow-x-auto rounded-md border">
+      </section>
+
+      <section>
+        <SectionTitle>Completion milestones</SectionTitle>
+        {d.milestones.length === 0 && d.contract.length === 0 ? (
+          <div className="rounded-md border border-amber-500/60 bg-amber-50 p-4 text-sm dark:bg-amber-950/20">
+            <p className="font-medium">No completion dates are on record.</p>
+            <p className="mt-1 text-muted-foreground">
+              Mechanical Completion, Substantial Completion, Placed in Service and Final Completion
+              are line items on the schedule of values but carry no dates. Add them to the schedule
+              as milestones and they appear here, measured against the projected finish of the work.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-md border">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
-                  <Th className="text-left">Key date</Th>
-                  <Th className="text-right">Date</Th>
+                  <Th className="text-left">Milestone</Th>
+                  <Th className="text-right">Contract date</Th>
                   <Th className="text-right">Away</Th>
+                  <Th className="text-right">Work finishes</Th>
                   <Th className="text-right">Status</Th>
                 </tr>
               </thead>
@@ -206,13 +220,36 @@ export default async function CeoReportPage({
                     <Td className="text-left font-medium">{k.label}</Td>
                     <Td className="text-right tabular-nums">{formatDate(k.date)}</Td>
                     <Td className="text-right tabular-nums text-muted-foreground">
-                      {k.daysAway == null ? "-" : `${Math.abs(k.daysAway)} days ${k.daysAway < 0 ? "ago" : ""}`}
+                      {k.daysAway == null
+                        ? "-"
+                        : `${Math.abs(k.daysAway)} days ${k.daysAway < 0 ? "ago" : ""}`}
                     </Td>
-                    <Td className="text-right">{k.done ? "Done" : "Upcoming"}</Td>
+                    <Td
+                      className={`text-right tabular-nums ${
+                        k.vsWorkFinish != null && k.vsWorkFinish > 0
+                          ? "text-amber-700 dark:text-amber-400"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {k.vsWorkFinish == null
+                        ? "-"
+                        : k.vsWorkFinish > 0
+                          ? `${k.vsWorkFinish} days late`
+                          : `${Math.abs(k.vsWorkFinish)} days early`}
+                    </Td>
+                    <Td className="text-right">
+                      {k.done ? "Met" : k.vsWorkFinish != null && k.vsWorkFinish > 0 ? "At risk" : "On track"}
+                    </Td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {d.workFinish && (
+              <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+                &quot;Work finishes&quot; compares each date against {formatDate(d.workFinish)}, the last
+                of the scheduled work with milestones excluded.
+              </p>
+            )}
           </div>
         )}
       </section>

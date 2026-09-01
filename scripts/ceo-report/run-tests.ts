@@ -221,6 +221,56 @@ function progressTests() {
     check("a passed contract date reads as done", withContract.contract[0].done === true);
   }
 
+  console.log("\nCompletion milestones");
+  {
+    // Work runs 8/01-8/31. Substantial Completion is dated BEFORE the work
+    // finishes, so it is threatened; Final Completion sits after it.
+    const withMs = [
+      ...TASKS,
+      task({ wbs_code: "11.00", task_name: "Substantial Completion", is_milestone: true, duration_days: 0, start_date: "2026-08-25", end_date: "2026-08-25" }),
+      task({ wbs_code: "12.00", task_name: "Final Completion", is_milestone: true, duration_days: 0, start_date: "2026-09-30", end_date: "2026-09-30" }),
+    ];
+
+    // The bug this guards: durationWeighted gives a zero-duration task the
+    // AVERAGE weight of the others, so counting milestones as work would drag
+    // percent complete down as if new scope had appeared.
+    const bare = computeProgress(TASKS, "2026-08-21", []);
+    const withMilestones = computeProgress(withMs, "2026-08-21", []);
+    check("milestones do not change percent complete", near(withMilestones.actualPct, bare.actualPct),
+      `${bare.actualPct} -> ${withMilestones.actualPct}`);
+    check("milestones are not counted as tasks", withMilestones.leafCount === bare.leafCount);
+
+    const d = computeDates(PROJECT, withMs, "2026-08-21");
+    check("work finish excludes milestones", d.workFinish === "2026-08-31", `got ${d.workFinish}`);
+    check("project finish still includes them", d.finish === "2026-09-30", `got ${d.finish}`);
+    check("milestones are listed earliest first", d.milestones.map((m) => m.label)[0] === "Substantial Completion");
+    check("a milestone the work runs past is flagged late",
+      d.milestones[0].vsWorkFinish === 6, `got ${d.milestones[0].vsWorkFinish}`);
+    check("a milestone after the work reads early",
+      d.milestones[1].vsWorkFinish === -30, `got ${d.milestones[1].vsWorkFinish}`);
+    check("threatened lists only the ones at risk",
+      d.threatened.length === 1 && d.threatened[0].label === "Substantial Completion");
+
+    const r = buildCeoReport(input({ tasks: withMs }));
+    check("a threatened milestone is a blocker",
+      r.checks.some((c) => c.id === "milestone-threatened-substantial-completion" && c.severity === "blocker"));
+    check("the headline names the threatened milestone",
+      r.headline.includes("Substantial Completion is dated") && r.headline.includes("6 days past it"), r.headline);
+
+    const none = buildCeoReport(input());
+    check("no completion dates at all is a blocker",
+      none.checks.some((c) => c.id === "no-completion-milestones" && c.severity === "blocker"));
+    check("the headline says so when none are recorded",
+      none.headline.includes("No completion milestones are on record"));
+
+    const met = computeDates(
+      PROJECT,
+      [...TASKS, task({ wbs_code: "4.00", task_name: "Permits Received", is_milestone: true, status: "Complete", pct_complete: 100, duration_days: 0, start_date: "2026-08-05", end_date: "2026-08-05" })],
+      "2026-08-21",
+    );
+    check("a met milestone is not reported at risk", met.milestones[0].done && met.milestones[0].vsWorkFinish === null);
+  }
+
   console.log("\nPhotographs");
   {
     const candidates = [
