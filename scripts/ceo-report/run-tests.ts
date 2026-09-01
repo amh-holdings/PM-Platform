@@ -27,6 +27,7 @@ import {
   planWindow,
   selectPhotos,
   taskPct,
+  COMPLETION_MILESTONES,
   type CeoCheck,
   type CeoPhoto,
   type CeoReportInput,
@@ -213,11 +214,13 @@ function progressTests() {
       [...TASKS, task({ wbs_code: "9.0", task_name: "Mechanical Completion", is_milestone: true, end_date: "2026-12-01" })],
       "2026-08-21",
     );
-    check("milestones are listed with their distance", withMs.milestones.length === 1 && withMs.milestones[0].daysAway === 102,
-      `got ${withMs.milestones[0]?.daysAway}`);
+    const mech = withMs.milestones.find((m) => m.label === "Mechanical Completion")!;
+    check("an authored milestone is listed with its distance", mech.daysAway === 102, `got ${mech.daysAway}`);
 
     const withContract = computeDates({ ...PROJECT, ntp_date: "2026-07-01", cod_date: "2027-06-01" }, TASKS, "2026-08-21");
-    check("contract dates appear when recorded", withContract.contract.length === 2);
+    check("NTP is the only contract row - COD folds into Placed in Service",
+      withContract.contract.length === 1 && withContract.contract[0].label === "Notice to proceed",
+      withContract.contract.map((c) => c.label).join("|"));
     check("a passed contract date reads as done", withContract.contract[0].done === true);
   }
 
@@ -241,13 +244,21 @@ function progressTests() {
     check("milestones are not counted as tasks", withMilestones.leafCount === bare.leafCount);
 
     const d = computeDates(PROJECT, withMs, "2026-08-21");
+    const byLabel = (l: string) => d.milestones.find((m) => m.label === l)!;
     check("work finish excludes milestones", d.workFinish === "2026-08-31", `got ${d.workFinish}`);
     check("project finish still includes them", d.finish === "2026-09-30", `got ${d.finish}`);
-    check("milestones are listed earliest first", d.milestones.map((m) => m.label)[0] === "Substantial Completion");
+    check("all five completion milestones always render",
+      COMPLETION_MILESTONES.every((m) => d.milestones.some((x) => x.label === m.label)),
+      d.milestones.map((m) => m.label).join(" | "));
+    check("an authored milestone fills its row by name",
+      byLabel("Substantial Completion").date === "2026-08-25");
+    check("an unauthored milestone stays blank",
+      byLabel("Mechanical Completion").date === null && byLabel("Mechanical Completion").daysAway === null);
     check("a milestone the work runs past is flagged late",
-      d.milestones[0].vsWorkFinish === 6, `got ${d.milestones[0].vsWorkFinish}`);
+      byLabel("Substantial Completion").vsWorkFinish === 6, `got ${byLabel("Substantial Completion").vsWorkFinish}`);
     check("a milestone after the work reads early",
-      d.milestones[1].vsWorkFinish === -30, `got ${d.milestones[1].vsWorkFinish}`);
+      byLabel("Final Completion").vsWorkFinish === -30, `got ${byLabel("Final Completion").vsWorkFinish}`);
+    check("a blank milestone is never called at risk", byLabel("Final Completion").date != null && byLabel("Mechanical Completion").vsWorkFinish === null);
     check("threatened lists only the ones at risk",
       d.threatened.length === 1 && d.threatened[0].label === "Substantial Completion");
 
@@ -258,17 +269,38 @@ function progressTests() {
       r.headline.includes("Substantial Completion is dated") && r.headline.includes("6 days past it"), r.headline);
 
     const none = buildCeoReport(input());
-    check("no completion dates at all is a blocker",
-      none.checks.some((c) => c.id === "no-completion-milestones" && c.severity === "blocker"));
-    check("the headline says so when none are recorded",
-      none.headline.includes("No completion milestones are on record"));
+    check("all five render as placeholders with no schedule milestones",
+      none.dates.milestones.length === COMPLETION_MILESTONES.length &&
+        none.dates.milestones.every((m) => m.date === null));
+    check("undated completion milestones raise a check",
+      none.checks.some((c) => c.id === "completion-dates-not-set"));
+    check("the headline says so when none are dated",
+      none.headline.includes("No completion dates are set yet"), none.headline);
+    check("COD on the project record fills Placed in Service",
+      buildCeoReport(input({ project: { ...PROJECT, cod_date: "2027-06-01" } }))
+        .dates.milestones.find((m) => m.label === "Placed in Service / COD")?.date === "2027-06-01");
+    check("COD is not also listed as a separate contract row",
+      buildCeoReport(input({ project: { ...PROJECT, cod_date: "2027-06-01" } }))
+        .dates.contract.every((c) => !/commercial/i.test(c.label)));
 
     const met = computeDates(
       PROJECT,
-      [...TASKS, task({ wbs_code: "4.00", task_name: "Permits Received", is_milestone: true, status: "Complete", pct_complete: 100, duration_days: 0, start_date: "2026-08-05", end_date: "2026-08-05" })],
+      [...TASKS, task({ wbs_code: "4.00", task_name: "Construction Permits Received", is_milestone: true, status: "Complete", pct_complete: 100, duration_days: 0, start_date: "2026-08-05", end_date: "2026-08-05" })],
       "2026-08-21",
     );
-    check("a met milestone is not reported at risk", met.milestones[0].done && met.milestones[0].vsWorkFinish === null);
+    const permits = met.milestones.find((m) => m.label === "Construction Permits Received")!;
+    check("a met milestone is not reported at risk", permits.done && permits.vsWorkFinish === null);
+
+    const extra = computeDates(
+      PROJECT,
+      [...TASKS, task({ wbs_code: "13.0", task_name: "Utility Energisation", is_milestone: true, duration_days: 0, start_date: "2026-10-01", end_date: "2026-10-01" })],
+      "2026-08-21",
+    );
+    check("a non-standard milestone is still listed",
+      extra.milestones.some((m) => m.label === "Utility Energisation"));
+    check("the canonical five come first, extras after",
+      extra.milestones.slice(0, 5).map((m) => m.label).join("|") ===
+        COMPLETION_MILESTONES.map((m) => m.label).join("|"));
   }
 
   console.log("\nPhotographs");

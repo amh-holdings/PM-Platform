@@ -522,6 +522,29 @@ export type Dates = {
   threatened: KeyDate[];
 };
 
+/**
+ * The completion milestones every EPC contract is measured on, in the order
+ * they occur. Sweet Springs carries them as schedule-of-values items 4.00,
+ * 9.00, 10.00, 11.00 and 12.00.
+ *
+ * Held here as a canonical list rather than read from the SOV so this module
+ * stays free of anything financial, and so the rows appear on a project whose
+ * SOV has not been imported yet. Matching is on the task name, so authoring a
+ * schedule milestone called "Substantial Completion" fills the row in - there
+ * is nothing to wire up.
+ */
+export const COMPLETION_MILESTONES = [
+  { key: "permits", label: "Construction Permits Received", match: /permit/i },
+  { key: "mechanical", label: "Mechanical Completion", match: /mechanical\s*completion/i },
+  {
+    key: "placed-in-service",
+    label: "Placed in Service / COD",
+    match: /placed\s*in\s*service|commercial\s*operation|\bcod\b/i,
+  },
+  { key: "substantial", label: "Substantial Completion", match: /substantial\s*completion/i },
+  { key: "final", label: "Final Completion", match: /final\s*completion/i },
+] as const;
+
 export function computeDates(
   project: CeoProjectRow,
   tasks: CeoTaskRow[],
@@ -549,25 +572,69 @@ export function computeDates(
     .sort();
   const baselineFinish = baseFinishes[baseFinishes.length - 1] ?? null;
 
-  const milestones: KeyDate[] = tasks
-    .filter((t) => t.is_milestone && t.end_date)
+  // The completion milestones always render, dated or not.
+  //
+  // They are the obligations the contract is judged on, and a report that
+  // simply omits the ones nobody has entered yet reads as though the contract
+  // has no completion dates. Showing the row with "Not set" says the opposite
+  // and much more useful thing: this is owed, and it is missing.
+  const scheduleMilestones = tasks.filter((t) => t.is_milestone && t.end_date);
+  const claimed = new Set<CeoTaskRow>();
+
+  const milestones: KeyDate[] = COMPLETION_MILESTONES.map((m) => {
+    const hit = scheduleMilestones.find((t) => !claimed.has(t) && m.match.test(t.task_name ?? ""));
+    if (hit) claimed.add(hit);
+
+    // Placed in Service is the same event the project record calls the
+    // commercial operation date, so that column fills the row when no schedule
+    // milestone has been authored for it yet.
+    const date = hit?.end_date ?? (m.key === "placed-in-service" ? project.cod_date : null);
+    if (!date) {
+      return {
+        label: m.label,
+        date: null,
+        source: "milestone" as const,
+        daysAway: null,
+        done: false,
+        vsWorkFinish: null,
+      };
+    }
+
+    const done = hit ? taskPct(hit) >= 100 : date <= asOf;
+    return {
+      label: m.label,
+      date,
+      source: "milestone" as const,
+      daysAway: daysBetweenIso(asOf, date),
+      done,
+      vsWorkFinish: done || !workFinish ? null : daysBetweenIso(date, workFinish),
+    };
+  });
+
+  // Any milestone somebody authored that is not one of the standard five still
+  // belongs on the report - the canonical list is a floor, not a filter.
+  const extras: KeyDate[] = scheduleMilestones
+    .filter((t) => !claimed.has(t))
     .map((t) => {
       const done = taskPct(t) >= 100;
+      const date = t.end_date as string;
       return {
         label: t.task_name ?? t.wbs_code ?? "Milestone",
-        date: t.end_date,
+        date,
         source: "milestone" as const,
-        daysAway: daysBetweenIso(asOf, t.end_date as string),
+        daysAway: daysBetweenIso(asOf, date),
         done,
-        vsWorkFinish:
-          done || !workFinish ? null : daysBetweenIso(t.end_date as string, workFinish),
+        vsWorkFinish: done || !workFinish ? null : daysBetweenIso(date, workFinish),
       };
     })
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
 
+  milestones.push(...extras);
+
+  // COD is deliberately absent: it is the same event as Placed in Service and
+  // is folded into that milestone row rather than listed twice.
   const contract: KeyDate[] = [
     { label: "Notice to proceed", date: project.ntp_date, source: "contract" as const },
-    { label: "Commercial operation", date: project.cod_date, source: "contract" as const },
   ]
     .filter((d) => d.date)
     .map((d) => {
@@ -704,16 +771,17 @@ export function buildCeoReport(input: CeoReportInput): CeoReport {
 
   // Completion dates are the obligations the contract is judged on, and a
   // report that silently omits them reads as though there are none.
-  if (dates.milestones.length === 0) {
+  const undated = dates.milestones.filter((m) => !m.date);
+  if (undated.length > 0) {
     checks.push({
-      id: "no-completion-milestones",
-      label: "No completion milestones are recorded",
-      severity: "blocker",
+      id: "completion-dates-not-set",
+      label: "Completion dates are not set",
+      severity: "warn",
       detail:
-        "Mechanical Completion, Substantial Completion, Placed in Service and Final Completion " +
-        "are line items on the schedule of values but carry no dates anywhere in the platform, " +
-        "so this report cannot say whether the job is tracking to hit them. Add them to the " +
-        "schedule as milestones and they appear here automatically.",
+        `${undated.length} completion milestone${undated.length === 1 ? "" : "s"} ` +
+        `(${undated.map((m) => m.label).join(", ")}) carry no date anywhere in the platform, so ` +
+        `this report cannot say whether the job is tracking to hit them. Add each one to the ` +
+        `schedule as a milestone and it fills in here automatically.`,
     });
   }
 
@@ -835,9 +903,9 @@ export function headlineFor(progress: Progress, dates: Dates): string {
       `${worst.label} is dated ${longDate(worst.date)} and the work is not projected to finish ` +
         `until ${longDate(dates.workFinish)} - ${worst.vsWorkFinish} days past it.`,
     );
-  } else if (dates.milestones.length === 0) {
+  } else if (dates.milestones.every((m) => !m.date)) {
     parts.push(
-      "No completion milestones are on record, so nothing here speaks to the contract dates.",
+      "No completion dates are set yet, so nothing here speaks to the contract milestones.",
     );
   }
 

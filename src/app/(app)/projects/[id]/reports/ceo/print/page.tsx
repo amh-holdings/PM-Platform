@@ -180,57 +180,54 @@ export default async function CeoReportPrintPage({
           <Fig label="Past finish date" value={String(p.late.length)} sub={p.late.length > 0 ? `oldest ${p.late[0].daysLate} days` : "none"} />
         </Grid>
 
-        <Band>Completion milestones</Band>
-        {keyDates.length === 0 ? (
-          <div className="border-b border-neutral-400 px-2 py-1.5">
-            No completion dates are on record. Mechanical Completion, Substantial Completion,
-            Placed in Service and Final Completion are line items on the schedule of values but
-            carry no dates, so this sheet cannot say whether the job is tracking to hit them.
-          </div>
-        ) : (
-          <>
-            <table className="w-full border-collapse">
-              <thead>
-                <tr>
-                  <Th className="text-left">Milestone</Th>
-                  <Th className="text-right">Contract date</Th>
-                  <Th className="text-right">Away</Th>
-                  <Th className="text-right">vs work finish</Th>
-                  <Th className="text-right">Status</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {keyDates.map((k) => (
-                  <tr key={`${k.source}-${k.label}`}>
-                    <Td className="text-left font-bold">{k.label}</Td>
-                    <Td className="text-right tabular-nums">{formatDate(k.date)}</Td>
-                    <Td className="text-right tabular-nums">
-                      {k.daysAway == null
-                        ? "-"
-                        : `${Math.abs(k.daysAway)} days ${k.daysAway < 0 ? "ago" : ""}`}
-                    </Td>
-                    <Td className="text-right tabular-nums font-bold">
-                      {k.vsWorkFinish == null
-                        ? "-"
-                        : k.vsWorkFinish > 0
-                          ? `${k.vsWorkFinish} days late`
-                          : `${Math.abs(k.vsWorkFinish)} days early`}
-                    </Td>
-                    <Td className="text-right">
-                      {k.done ? "Met" : k.vsWorkFinish != null && k.vsWorkFinish > 0 ? "AT RISK" : "On track"}
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {d.workFinish && (
-              <p className="border-b border-neutral-400 px-2 py-1 text-[9px]">
-                Compared against {formatDate(d.workFinish)}, the last of the scheduled work with
-                milestones excluded.
-              </p>
-            )}
-          </>
-        )}
+        {/* Completion milestones sit under Dates rather than in a band of
+            their own: they are dates, and the comparison that matters is
+            against the scheduled finish in the grid above. */}
+        <table className="w-full border-collapse">
+          <thead>
+            <tr>
+              <Th className="text-left">Completion milestone</Th>
+              <Th className="text-right">Date</Th>
+              <Th className="text-right">Away</Th>
+              <Th className="text-right">vs work finish</Th>
+              <Th className="text-right">Status</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {keyDates.map((k) => (
+              <tr key={`${k.source}-${k.label}`}>
+                <Td className="text-left font-bold">{k.label}</Td>
+                <Td className="text-right tabular-nums">{k.date ? formatDate(k.date) : "Not set"}</Td>
+                <Td className="text-right tabular-nums">
+                  {k.daysAway == null
+                    ? "-"
+                    : `${Math.abs(k.daysAway)} days ${k.daysAway < 0 ? "ago" : ""}`}
+                </Td>
+                <Td className="text-right tabular-nums font-bold">
+                  {k.vsWorkFinish == null
+                    ? "-"
+                    : k.vsWorkFinish > 0
+                      ? `${k.vsWorkFinish} days late`
+                      : `${Math.abs(k.vsWorkFinish)} days early`}
+                </Td>
+                <Td className="text-right">
+                  {!k.date
+                    ? "Not set"
+                    : k.done
+                      ? "Met"
+                      : k.vsWorkFinish != null && k.vsWorkFinish > 0
+                        ? "AT RISK"
+                        : "On track"}
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="border-b border-neutral-400 px-2 py-1 text-[9px]">
+          {d.workFinish
+            ? `Compared against ${formatDate(d.workFinish)}, the last of the scheduled work with milestones excluded.`
+            : "No scheduled work to compare these against yet."}
+        </p>
 
         {p.late.length > 0 && (
           <>
