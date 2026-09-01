@@ -12,7 +12,7 @@
 //
 // Deliberately free of server-only imports so client components can use it.
 
-import { Boxes, CalendarCheck, type LucideIcon } from "lucide-react";
+import { Boxes, Briefcase, CalendarCheck, type LucideIcon } from "lucide-react";
 
 import { can, type Capability, type EffectiveRole } from "./roles";
 
@@ -41,6 +41,30 @@ export type ProjectReport = {
 };
 
 export const PROJECT_REPORTS: ProjectReport[] = [
+  {
+    key: "ceo",
+    label: "CEO Report",
+    path: "ceo",
+    // Progress, dates and site photographs - no internal cost - so this sits
+    // behind the Schedule gate. It moves to `viewCosts` when the financial
+    // half in `ceo-report-financials.ts` is switched on.
+    cap: "viewSchedule",
+    icon: Briefcase,
+    blurb: "Where the job is against where it should be, when it lands, and what it looks like",
+    audience: "AHC leadership",
+    kind: "generated",
+    find: [
+      "ceo",
+      "executive",
+      "exec summary",
+      "status",
+      "progress",
+      "ahead",
+      "behind",
+      "leadership",
+      "board",
+    ],
+  },
   {
     key: "weekly-progress",
     label: "Weekly Progress Report",

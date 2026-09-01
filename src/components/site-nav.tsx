@@ -19,7 +19,12 @@ export async function SiteNav() {
   if (!user) return null;
 
   return (
-    <header className="sticky top-0 z-20 h-14 border-b bg-background">
+    // `print:hidden` because the report pages under this shell are printed and
+    // handed to people outside AHC. Without it the search box, the signed-in
+    // address and a "Sign out" link land on the PDF that goes to the owner or
+    // to leadership. The project rail and the page header already opt out; this
+    // bar did not, so every weekly report sent to Dimension carried it.
+    <header className="sticky top-0 z-20 h-14 border-b bg-background print:hidden">
       <div className="flex h-14 items-center justify-between gap-3 px-4 lg:px-6">
         <nav className="flex items-center gap-1 text-sm">
           <Link

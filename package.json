@@ -16,6 +16,8 @@
     "test:schedule": "tsx scripts/schedule/run-tests.ts",
     "test:commodity": "tsx scripts/commodity/run-tests.ts",
     "test:weekly-report": "tsx scripts/weekly-report/run-tests.ts",
+    "test:ceo-report": "tsx scripts/ceo-report/run-tests.ts",
+    "ceo-report:dry-run": "tsx scripts/ceo-report/dry-run.ts",
     "commodity:seed": "tsx scripts/commodity/seed-commodities.ts",
     "commodity:propose": "tsx scripts/commodity/propose-backfill.ts",
     "commodity:apply": "tsx scripts/commodity/apply-backfill.ts",
