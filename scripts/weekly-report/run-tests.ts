@@ -45,6 +45,7 @@ import {
   isSwppp,
   deriveSwppp,
 } from "@/lib/weekly-report";
+import { weeklyProvenance, type WeeklyReportView } from "@/lib/weekly-report-load";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATION = join(__dirname, "..", "..", "db", "migrations", "0041_weekly_progress_reports.sql");
@@ -931,6 +932,106 @@ function unit() {
     check("GAP-03 Saturday is a gap on a six-day week", six.includes("2026-08-22"), JSON.stringify(six));
     const holiday = coverageGaps("2026-08-17", "2026-08-23", covered, 5, new Set(["2026-08-19"]));
     check("GAP-04 a calendar holiday is not a gap", !holiday.includes("2026-08-19"), JSON.stringify(holiday));
+  }
+
+  // ---- what we wrote vs what the platform derived ----
+  // The report is red on screen where a person typed and black where it was
+  // derived. Getting that backwards is worse than not showing it at all: it
+  // would vouch for a figure nobody checked, or brand a derived number as a
+  // human decision on the sheet that goes to the owner.
+  {
+    const baseView = (over: Partial<Record<string, unknown>> | null) =>
+      ({
+        status: "draft",
+        saved: over
+          ? {
+              environment_concerns: null,
+              security_concerns: null,
+              safety_summary: null,
+              position_note: null,
+              weather_summary: null,
+              work_this_week: null,
+              schedule_risks: null,
+              swppp_inspection_date: null,
+              lookahead_note: null,
+              photo_note: null,
+              milestones: {},
+              ...over,
+            }
+          : null,
+        header: { dimensionCm: "", epcReportingManager: "", epcTeam: "", carriedFrom: null },
+        contractors: [],
+        equipment: [],
+      }) as unknown as WeeklyReportView;
+
+    const untouched = weeklyProvenance(baseView(null));
+    check(
+      "PROV-01 a report nobody has saved has nothing marked as ours",
+      untouched.manualCount === 0 && !untouched.safety && !untouched.workThisWeek,
+      JSON.stringify(untouched.manualCount),
+    );
+
+    const edited = weeklyProvenance(
+      baseView({ safety_summary: "No recordables.", work_this_week: "  " }),
+    );
+    check(
+      "PROV-02 an override marks its own box and only its own box",
+      edited.safety && !edited.environment && edited.manualCount === 1,
+      JSON.stringify({ safety: edited.safety, count: edited.manualCount }),
+    );
+    check(
+      "PROV-03 whitespace is not an override - reset-to-derived stays derived",
+      !edited.workThisWeek,
+      "work this week was blank",
+    );
+
+    // Per cell, not per row. A headcount read off the field reports sits next
+    // to an end date only we can know, and colouring the whole row would claim
+    // we vouched for the headcount too.
+    const cells = weeklyProvenance({
+      ...baseView(null),
+      contractors: [
+        { key: "sub-1", name: "Sunstall", scope: "", headcount: 12, lastOnsite: null, endDate: "2026-10-01", overridden: ["endDate"], basis: "" },
+        { key: "manual:typed", name: "Typed In", scope: "", headcount: 4, lastOnsite: null, endDate: null, overridden: [], basis: "" },
+      ],
+    } as unknown as WeeklyReportView);
+    check(
+      "PROV-04 only the cell that was typed is ours, not the whole row",
+      cells.contractors["sub-1"].length === 1 && cells.contractors["sub-1"][0] === "endDate",
+      JSON.stringify(cells.contractors["sub-1"]),
+    );
+    check(
+      "PROV-05 a hand-added contractor row is ours end to end",
+      cells.contractors["manual:typed"].includes("name") &&
+        cells.contractors["manual:typed"].includes("headcount"),
+      JSON.stringify(cells.contractors["manual:typed"]),
+    );
+
+    // An issued report reads authorship off the frozen rows, so a sub added to
+    // the project after issue is not counted against a sheet that never
+    // showed them.
+    const issued = weeklyProvenance({
+      ...baseView({}),
+      status: "issued",
+      saved: {
+        ...(baseView({}) as unknown as { saved: Record<string, unknown> }).saved,
+        issued_payload: {
+          contractors: [
+            { key: "sub-1", name: "Sunstall", scope: "", headcount: 12, lastOnsite: null, endDate: "2026-10-01", overridden: ["endDate"], basis: "" },
+          ],
+          equipment: [],
+        },
+      },
+      contractors: [
+        { key: "sub-1", name: "Sunstall", scope: "", headcount: 12, lastOnsite: null, endDate: "2026-10-01", overridden: ["endDate"], basis: "" },
+        { key: "sub-2", name: "Added Later", scope: "", headcount: 3, lastOnsite: null, endDate: null, overridden: ["headcount"], basis: "" },
+      ],
+    } as unknown as WeeklyReportView);
+    check(
+      "PROV-06 an issued report only accounts for the rows it actually printed",
+      issued.contractors["sub-1"] !== undefined && issued.contractors["sub-2"] === undefined,
+      JSON.stringify(Object.keys(issued.contractors)),
+    );
   }
 }
 
