@@ -131,6 +131,42 @@ console.log("\nMan-hours");
   check("the total is subs only", h.value.total === 40 && h.value.ahcHours === 0);
 }
 
+{
+  // Once the CM log requires AHC hours, a day nobody was on site carries a
+  // deliberate 0. That 0 is an ANSWER (it counts as recorded, it clears the
+  // gap) but it is not a WORKED DAY - counting it as one would inflate the
+  // day count on a document the owner reads.
+  const h = deriveManHours(
+    [dpr({ id: "a", report_date: "2026-08-05", total_man_hours: 72 })],
+    [],
+    [
+      log({ log_date: "2026-08-05", ahc_headcount: 1, ahc_man_hours: 9 }),
+      log({ log_date: "2026-08-06", ahc_headcount: 0, ahc_man_hours: 0 }),
+    ],
+    SUBS,
+    true,
+  );
+  check("an explicit zero clears the gap", h.gaps.length === 0, h.gaps);
+  check("an explicit zero counts as recorded", h.value.ahcRecordedDays === 2, h.value.ahcRecordedDays);
+  check("but does NOT invent a worked day", h.value.daysWorked === 1, h.value.daysWorked);
+  check("and adds nothing to the total", h.value.total === 81, h.value.total);
+  check("no phantom row on the day-by-day", h.value.perDay.length === 1, h.value.perDay);
+
+  // A zero mixed in with unanswered days must not hide them.
+  const g = deriveManHours(
+    [dpr({ id: "a", report_date: "2026-08-05", total_man_hours: 72 })],
+    [],
+    [
+      log({ log_date: "2026-08-05", ahc_headcount: 0, ahc_man_hours: 0 }),
+      log({ log_date: "2026-08-06" }),
+    ],
+    SUBS,
+    true,
+  );
+  check("an unanswered day still raises its own gap", g.gaps.length === 1 && g.gaps[0].day === "2026-08-06", g.gaps);
+  check("a partly-answered month is not collapsed", g.gaps[0].scope === "day");
+}
+
 console.log("\nIncident candidates");
 {
   const c = deriveIncidentCandidates(

@@ -15,7 +15,7 @@ export default async function CmLogListPage({ params }: { params: Params }) {
     supabase
       .from("cm_daily_logs")
       .select(
-        "id, status, log_date, weather_conditions, progress_summary, site_conditions",
+        "id, status, log_date, weather_conditions, progress_summary, site_conditions, ahc_headcount, ahc_man_hours",
       )
       .eq("project_id", params.id)
       .order("log_date", { ascending: false }),
@@ -43,8 +43,39 @@ export default async function CmLogListPage({ params }: { params: Params }) {
     );
   }
 
+  const missingAhc = rows.filter(
+    (r) => r.status === "final" && (r.ahc_headcount == null || r.ahc_man_hours == null),
+  );
+
   return (
     <div className="space-y-6">
+      {missingAhc.length > 0 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          <p className="font-medium">
+            {missingAhc.length} finalized log
+            {missingAhc.length === 1 ? "" : "s"} have no AHC hours on them.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            These were filed before AHC staff hours were required, so the
+            owner&apos;s monthly manpower report reads short for those months.
+            Reopen each one, enter the headcount and hours, and finalize again.
+            Newest first:{" "}
+            {missingAhc.slice(0, 12).map((r, i) => (
+              <span key={r.id}>
+                {i > 0 && ", "}
+                <Link
+                  href={`/projects/${params.id}/cm-log/${r.id}`}
+                  className="underline"
+                >
+                  {formatDate(r.log_date)}
+                </Link>
+              </span>
+            ))}
+            {missingAhc.length > 12 && ` and ${missingAhc.length - 12} more`}.
+          </p>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs text-muted-foreground">
@@ -63,6 +94,7 @@ export default async function CmLogListPage({ params }: { params: Params }) {
             <tr className="border-b">
               <th className="px-3 py-2 text-left font-medium">Date</th>
               <th className="px-3 py-2 text-left font-medium">Status</th>
+              <th className="px-3 py-2 text-left font-medium">AHC</th>
               <th className="px-3 py-2 text-left font-medium">Weather</th>
               <th className="px-3 py-2 text-left font-medium">Summary</th>
               <th className="px-3 py-2 text-left font-medium">Photos</th>
@@ -96,6 +128,19 @@ export default async function CmLogListPage({ params }: { params: Params }) {
                     )}
                   </td>
                   <td className="px-3 py-2 text-xs">
+                    {r.ahc_man_hours == null ? (
+                      <span className="text-amber-600 dark:text-amber-400">
+                        not entered
+                      </span>
+                    ) : (
+                      <span className="tabular-nums">
+                        {Number(r.ahc_man_hours) === 0
+                          ? "none on site"
+                          : `${r.ahc_man_hours} hrs`}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-xs">
                     {r.weather_conditions ?? "-"}
                   </td>
                   <td className="max-w-xs truncate px-3 py-2 text-xs text-muted-foreground">
@@ -110,7 +155,7 @@ export default async function CmLogListPage({ params }: { params: Params }) {
             {rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="px-3 py-6 text-center text-xs text-muted-foreground"
                 >
                   No daily logs yet. Click &quot;New Daily Log&quot; to file the

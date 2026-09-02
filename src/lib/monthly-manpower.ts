@@ -148,9 +148,10 @@ export type ManHoursBreakdown = {
   total: number;
   bySub: SubHours[];
   /**
-   * Days with an AHC entry on the CM log. Zero means nobody recorded ours, which
-   * is NOT the same claim as "AHC worked no hours" - the callers show a dash
-   * rather than a 0 on the strength of this.
+   * Days the CM log carries a deliberate AHC answer, INCLUDING the days the
+   * answer was "nobody on site". Zero means nobody recorded ours, which is not
+   * the same claim as "AHC worked no hours" - the callers show a dash rather
+   * than a 0 on the strength of this.
    */
   ahcRecordedDays: number;
   /** Days in the period that reported any hours at all. */
@@ -211,13 +212,18 @@ export function deriveManHours(
   const subName = new Map(subs.map((s) => [s.id, s.company_name]));
 
   const gaps: HoursGap[] = [];
-  const perDay = new Map<string, { sub: number; ahc: number; ahcRecorded: boolean }>();
+  const perDay = new Map<string, { sub: number; ahc: number }>();
   const bump = (day: string, key: "sub" | "ahc", n: number) => {
-    const row = perDay.get(day) ?? { sub: 0, ahc: 0, ahcRecorded: false };
+    const row = perDay.get(day) ?? { sub: 0, ahc: 0 };
     row[key] += n;
-    if (key === "ahc") row.ahcRecorded = true;
     perDay.set(day, row);
   };
+
+  // Which days carry a deliberate AHC answer, kept apart from which days
+  // contributed hours. The CM log requires these at finalize now, so a day
+  // nobody was on site carries an explicit 0 - and bumping on that 0 would
+  // invent a worked day out of a day nobody worked.
+  const ahcAnswered = new Set<string>();
 
   const tally = new Map<string, SubHours>();
   for (const d of dprs) {
@@ -272,8 +278,11 @@ export function deriveManHours(
     for (const l of logs) {
       const h = l.ahc_man_hours;
       if (h != null) {
-        ahcHours += Number(h);
-        bump(l.log_date, "ahc", Number(h));
+        ahcAnswered.add(l.log_date);
+        if (Number(h) > 0) {
+          ahcHours += Number(h);
+          bump(l.log_date, "ahc", Number(h));
+        }
       } else {
         blank.push(l.log_date);
       }
@@ -309,7 +318,7 @@ export function deriveManHours(
     .map((r) => ({ ...r, hours: round1(r.hours) }))
     .sort((a, b) => b.hours - a.hours);
 
-  const ahcRecordedDays = Array.from(perDay.values()).filter((v) => v.ahcRecorded).length;
+  const ahcRecordedDays = ahcAnswered.size;
 
   const value: ManHoursBreakdown = {
     subHours,
@@ -323,7 +332,7 @@ export function deriveManHours(
         day,
         sub: round1(v.sub),
         ahc: round1(v.ahc),
-        ahcRecorded: v.ahcRecorded,
+        ahcRecorded: ahcAnswered.has(day),
       }))
       .sort((a, b) => a.day.localeCompare(b.day)),
   };

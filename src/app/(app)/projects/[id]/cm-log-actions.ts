@@ -256,6 +256,28 @@ export async function finalizeCmLog(
   const log = await loadOwnedLog(auth.supabase, logId, projectId);
   if (!log) return { ok: false, error: "Log not found" };
 
+  // AHC hours are required to FINALIZE, not to save. A draft has to stay
+  // frictionless - the CM saves a stub in the morning and builds it through
+  // the day - but finalizing is the moment the log becomes the record for that
+  // date, and it is the last moment the number is still knowable. Nothing else
+  // in the platform records our own people's time, so a log that finalizes
+  // without it silently shortens the owner's monthly manpower total.
+  //
+  // Zero is a valid answer and "nobody on site" is how it gets entered. What is
+  // refused is NULL, which means nobody was asked.
+  const { data: hours } = await auth.supabase
+    .from("cm_daily_logs")
+    .select("ahc_headcount, ahc_man_hours")
+    .eq("id", log.id)
+    .maybeSingle();
+  if (hours && (hours.ahc_headcount == null || hours.ahc_man_hours == null)) {
+    return {
+      ok: false,
+      error:
+        "Enter AHC staff on site before finalizing - headcount and man-hours, or tick \u201CNo AHC staff on site today\u201D. Nothing else on the platform records our own hours, and the owner's monthly manpower report reads short without them.",
+    };
+  }
+
   const now = new Date().toISOString();
   const { error } = await auth.supabase
     .from("cm_daily_logs")

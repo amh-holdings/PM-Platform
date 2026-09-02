@@ -69,6 +69,9 @@ export function CmLogForm({ projectId, defaultDate, initial }: Props) {
   // that apart from a day AHC genuinely was not on site.
   const [ahcHeadcount, setAhcHeadcount] = useState(initial?.ahcHeadcount ?? "");
   const [ahcManHours, setAhcManHours] = useState(initial?.ahcManHours ?? "");
+  // A deliberate zero, entered in one click. Typing 0 into two boxes to get
+  // past a gate is how a required field turns into a fabricated number.
+  const noneOnSite = ahcHeadcount === "0" && ahcManHours === "0";
 
   // Newly staged (uploaded-but-not-recorded) photos.
   const [photos, setPhotos] = useState<StagedCmPhoto[]>([]);
@@ -77,6 +80,14 @@ export function CmLogForm({ projectId, defaultDate, initial }: Props) {
     initial?.photos ?? [],
   );
   const [removedIds, setRemovedIds] = useState<string[]>([]);
+
+  // The id of a log this form CREATED and then stayed on. Until the AHC-hours
+  // gate existed, a create was always followed by navigation, so the form never
+  // had to save twice. It does now - a refused finalize leaves the CM on the
+  // page with the row already written - and a second create would hit the one
+  // -log-per-day constraint and fail, leaving a log that can never be
+  // finalized. Once this is set, persist() updates instead.
+  const [createdId, setCreatedId] = useState<string | null>(null);
 
   function numOrNull(v: string): number | null {
     const n = Number(v);
@@ -121,9 +132,10 @@ export function CmLogForm({ projectId, defaultDate, initial }: Props) {
       setError("Pick a date for the log");
       return null;
     }
-    if (isEdit && initial) {
+    const existingId = initial?.logId ?? createdId;
+    if (existingId) {
       const res = await updateCmLog({
-        logId: initial.logId,
+        logId: existingId,
         projectId,
         ...fieldValues(),
         newPhotos: newPhotoInputs(),
@@ -148,6 +160,10 @@ export function CmLogForm({ projectId, defaultDate, initial }: Props) {
       setError(res.error);
       return null;
     }
+    // Staged photos are recorded against the log now. Clearing them stops a
+    // second save on this same form re-inserting duplicates.
+    setCreatedId(res.logId);
+    setPhotos([]);
     return res.logId;
   }
 
@@ -169,8 +185,20 @@ export function CmLogForm({ projectId, defaultDate, initial }: Props) {
   function saveAndFinalize() {
     setError(null);
     startTransition(async () => {
+      // The draft is written FIRST, then the finalize is refused. Checking
+      // before the save threw away everything typed on the form along with the
+      // refusal - the CM writes the whole log and loses it to a field he has
+      // not reached yet. The server gate in finalizeCmLog is the real
+      // enforcement; this one only saves a round trip.
       const logId = await persist();
       if (!logId) return;
+      if (numOrNull(ahcHeadcount) == null || numOrNull(ahcManHours) == null) {
+        setError(
+          "Saved as a draft. Enter AHC staff on site before finalizing - headcount and man-hours, or tick \u201CNo AHC staff on site today\u201D.",
+        );
+        router.refresh();
+        return;
+      }
       const res = await finalizeCmLog(logId, projectId);
       if (!res.ok) return setError(res.error);
       router.push(`/projects/${projectId}/cm-log/${logId}`);
@@ -254,16 +282,29 @@ export function CmLogForm({ projectId, defaultDate, initial }: Props) {
       <div className="rounded-md border border-dashed p-3">
         <Label className="text-xs">AHC staff on site today</Label>
         <p className="mb-2 mt-0.5 text-[11px] text-muted-foreground">
-          Our own people - CM, supers, QC. Nothing else records these, so the
-          owner&apos;s monthly manpower total reads low without them. Leave blank
-          if you did not count; that is not the same as zero.
+          Our own people - CM, supers, QC. Nothing else on the platform records
+          these, so the owner&apos;s monthly manpower total reads short without
+          them. Required to finalize; a draft can be saved without them.
         </p>
+        <label className="mb-2 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={noneOnSite}
+            onChange={(e) => {
+              setAhcHeadcount(e.target.checked ? "0" : "");
+              setAhcManHours(e.target.checked ? "0" : "");
+            }}
+            className="h-3.5 w-3.5"
+          />
+          No AHC staff on site today
+        </label>
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <Label className="text-xs">Headcount</Label>
             <Input
               type="number"
               min={0}
+              disabled={noneOnSite}
               value={ahcHeadcount}
               onChange={(e) => setAhcHeadcount(e.target.value)}
               placeholder="-"
@@ -275,6 +316,7 @@ export function CmLogForm({ projectId, defaultDate, initial }: Props) {
               type="number"
               min={0}
               step="0.5"
+              disabled={noneOnSite}
               value={ahcManHours}
               onChange={(e) => setAhcManHours(e.target.value)}
               placeholder="-"
