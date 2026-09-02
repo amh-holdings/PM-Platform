@@ -4,12 +4,14 @@ import Link from "next/link";
 import { guardCapability } from "@/lib/roles-server";
 import {
   loadWeeklyReport,
+  weeklyDerivedBaseline,
   weeklyProvenance,
   weeklySheet,
 } from "@/lib/weekly-report-load";
 import {
   MILESTONE_FIELDS,
   defaultWeekEnding,
+  diffWords,
   dimensionDate,
 } from "@/lib/weekly-report";
 
@@ -57,6 +59,7 @@ export default async function WeeklyProgressPrintPage({
   const view = await loadWeeklyReport(params.id, weekEnding);
   const r = weeklySheet(view);
   const prov = weeklyProvenance(view);
+  const derived = weeklyDerivedBaseline(view);
 
   const milestones = MILESTONE_FIELDS.map((f) => ({
     label: f.label,
@@ -230,16 +233,16 @@ export default async function WeeklyProgressPrintPage({
           value={r.environment || "N/A"}
           wide
           multiline
-          manual={prov.environment}
+          against={derived.environment}
         />
         <Row
           label="Security Concerns"
           value={r.security || "N/A"}
           wide
           multiline
-          manual={prov.security}
+          against={derived.security}
         />
-        <Row label="Safety" value={r.safety || "N/A"} wide multiline manual={prov.safety} />
+        <Row label="Safety" value={r.safety || "N/A"} wide multiline against={derived.safety} />
         <Row
           label="Date of Most Recent SWPPP Inspection"
           value={r.swppp ? dimensionDate(r.swppp) : "N/A"}
@@ -249,7 +252,7 @@ export default async function WeeklyProgressPrintPage({
           <RowPair
             label="Weather This Week"
             value={r.weather || "N/A"}
-            manual={prov.weather}
+            against={derived.weather}
           />
         </Row>
 
@@ -259,7 +262,7 @@ export default async function WeeklyProgressPrintPage({
           value={r.position || "N/A"}
           wide
           multiline
-          manual={prov.position}
+          against={derived.position}
         />
         <div className="flex border-b border-neutral-400">
           <Cell head>Milestone Tracking:</Cell>
@@ -285,7 +288,7 @@ export default async function WeeklyProgressPrintPage({
           value={r.workThisWeek || "N/A"}
           wide
           multiline
-          manual={prov.workThisWeek}
+          against={derived.workThisWeek}
         />
 
         <div className="border-b border-neutral-400">
@@ -379,7 +382,7 @@ export default async function WeeklyProgressPrintPage({
           value={r.risks || "N/A"}
           wide
           multiline
-          manual={prov.risks}
+          against={derived.risks}
         />
       </div>
 
@@ -473,6 +476,7 @@ function Row({
   boxed,
   multiline,
   manual,
+  against,
 }: {
   label: string;
   value: string;
@@ -482,6 +486,12 @@ function Row({
   multiline?: boolean;
   /** True when a person typed this value rather than the platform deriving it. */
   manual?: boolean;
+  /**
+   * The text the platform generated. When given, the value is rendered as a
+   * word diff against it and only the words we added or changed are marked,
+   * instead of the whole box.
+   */
+  against?: string;
 }) {
   return (
     <div className="flex border-b border-neutral-400">
@@ -495,7 +505,11 @@ function Row({
               : "w-52 px-2 py-1 text-center"
         }
       >
-        <M on={manual === true}>{multiline ? value : value || "N/A"}</M>
+        {against !== undefined ? (
+          <Edits base={against} text={multiline ? value : value || "N/A"} />
+        ) : (
+          <M on={manual === true}>{multiline ? value : value || "N/A"}</M>
+        )}
       </div>
       {children}
     </div>
@@ -536,17 +550,46 @@ function RowPair({
   label,
   value,
   manual,
+  against,
 }: {
   label: string;
   value: string;
   manual?: boolean;
+  against?: string;
 }) {
   return (
     <>
       <div className="w-52 shrink-0 px-2 py-1 text-right font-bold">{label}:</div>
       <div className="flex-1 border border-neutral-400 px-2 py-1 text-center">
-        <M on={manual === true}>{value || "N/A"}</M>
+        {against !== undefined ? (
+          <Edits base={against} text={value || "N/A"} />
+        ) : (
+          <M on={manual === true}>{value || "N/A"}</M>
+        )}
       </div>
+    </>
+  );
+}
+
+/**
+ * A box the platform wrote, with our edits marked word by word. Unchanged
+ * sentences stay black, so the sheet says which parts of the summary are still
+ * the platform's rather than reddening a paragraph because one line moved.
+ */
+function Edits({ base, text }: { base: string; text: string }) {
+  const segments = diffWords(base, text);
+  if (segments.length === 0) return <>{text}</>;
+  return (
+    <>
+      {segments.map((seg, i) =>
+        seg.added ? (
+          <span key={i} className="wr-manual">
+            {seg.text}
+          </span>
+        ) : (
+          <Fragment key={i}>{seg.text}</Fragment>
+        ),
+      )}
     </>
   );
 }

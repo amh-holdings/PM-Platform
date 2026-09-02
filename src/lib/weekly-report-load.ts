@@ -921,6 +921,24 @@ export type WeeklyProvenance = {
   manualCount: number;
 };
 
+/**
+ * What the platform WOULD have written in each narrative box, with no override
+ * applied. The print sheet diffs the box against this to show which words are
+ * ours, so it has to be the un-overridden derivation - diffing against the
+ * resolved text would compare a box with itself and mark nothing.
+ */
+export function weeklyDerivedBaseline(view: WeeklyReportView) {
+  return {
+    environment: view.environment.value,
+    security: view.security.value,
+    safety: view.safety.value,
+    weather: view.weather.value,
+    position: view.positionText,
+    workThisWeek: view.workThisWeek.value,
+    risks: view.risks.value,
+  };
+}
+
 export function weeklyProvenance(view: WeeklyReportView): WeeklyProvenance {
   const o = view.saved;
   const written = (v: string | null | undefined) => v != null && v.trim() !== "";

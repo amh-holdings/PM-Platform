@@ -45,6 +45,7 @@ import {
   isSwppp,
   deriveSwppp,
   MILESTONE_FIELDS,
+  diffWords,
 } from "@/lib/weekly-report";
 import { weeklyProvenance, type WeeklyReportView } from "@/lib/weekly-report-load";
 
@@ -933,6 +934,69 @@ function unit() {
     check("GAP-03 Saturday is a gap on a six-day week", six.includes("2026-08-22"), JSON.stringify(six));
     const holiday = coverageGaps("2026-08-17", "2026-08-23", covered, 5, new Set(["2026-08-19"]));
     check("GAP-04 a calendar holiday is not a gap", !holiday.includes("2026-08-19"), JSON.stringify(holiday));
+  }
+
+  // ---- which WORDS in a generated box are ours ----
+  // Reddening the whole paragraph because one sentence was corrected says
+  // "none of this is the platform's", which is as wrong as marking none of it.
+  {
+    const join = (segs: { text: string; added: boolean }[]) => segs.map((s) => s.text).join("");
+    const red = (segs: { text: string; added: boolean }[]) =>
+      segs.filter((s) => s.added).map((s) => s.text.trim()).join("|");
+
+    const same = diffWords("Crew poured the north footings.", "Crew poured the north footings.");
+    check("DIFF-01 an untouched box has nothing marked", red(same) === "", JSON.stringify(same));
+
+    const inserted = diffWords(
+      "Crew poured the north footings.",
+      "Crew poured the north footings. Rebar inspection passed.",
+    );
+    check(
+      "DIFF-02 only the added sentence is marked",
+      red(inserted) === "Rebar inspection passed." && join(inserted) ===
+        "Crew poured the north footings. Rebar inspection passed.",
+      JSON.stringify(inserted),
+    );
+
+    const changed = diffWords("Crew poured the north footings.", "Crew poured the south footings.");
+    check(
+      "DIFF-03 a changed word is marked and its neighbours are not",
+      red(changed) === "south" && join(changed) === "Crew poured the south footings.",
+      JSON.stringify(changed),
+    );
+
+    const deleted = diffWords("Crew poured the north footings today.", "Crew poured the north footings.");
+    check(
+      "DIFF-04 a deletion leaves nothing marked - there is no text to colour",
+      red(deleted) === "" && join(deleted) === "Crew poured the north footings.",
+      JSON.stringify(deleted),
+    );
+
+    const fromEmpty = diffWords("", "Everything here is ours.");
+    check(
+      "DIFF-05 writing into a box the platform left empty is all ours",
+      red(fromEmpty) === "Everything here is ours.",
+      JSON.stringify(fromEmpty),
+    );
+
+    // Joining the segments has to reproduce the box exactly, or the sheet that
+    // goes to the owner is not the text that was approved.
+    const messy = diffWords(
+      "Line one.\nLine two with  double  spaces.",
+      "Line one.\nLine two with  double  spaces.\nLine three added.",
+    );
+    check(
+      "DIFF-06 the segments rebuild the text character for character",
+      join(messy) === "Line one.\nLine two with  double  spaces.\nLine three added.",
+      JSON.stringify(join(messy)),
+    );
+
+    const huge = diffWords("a ".repeat(3000), "b ".repeat(3000));
+    check(
+      "DIFF-07 a pathological paste degrades to all-ours instead of hanging",
+      huge.length === 1 && huge[0].added,
+      String(huge.length),
+    );
   }
 
   // ---- what we wrote vs what the platform derived ----

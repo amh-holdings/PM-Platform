@@ -2162,3 +2162,88 @@ export function selectPhotoKeys(
       return x.day === y.day ? a.localeCompare(b) : x.day < y.day ? -1 : 1;
     });
 }
+
+// ---------------------------------------------------------------------------
+// What we changed in a box the platform wrote
+// ---------------------------------------------------------------------------
+
+/**
+ * A word-level diff of an edited narrative box against the text the platform
+ * generated, so the report can show WHICH words are ours rather than reddening
+ * the whole paragraph.
+ *
+ * Reddening the box was the honest thing to do when a box was all-or-nothing,
+ * but these boxes are edited by correcting a sentence in the middle of an
+ * otherwise good summary. Marking the whole thing then says "none of this is
+ * the platform's", which is exactly as wrong as marking none of it.
+ *
+ * Only additions are returned - a deletion has no text left on the page to
+ * colour, and a changed phrase is a deletion plus an addition, so the words
+ * that replaced it come back marked. Tokens keep their trailing whitespace so
+ * joining the segments reproduces the input exactly.
+ */
+export type DiffSegment = { text: string; added: boolean };
+
+const DIFF_TOKEN_CEILING = 2500;
+
+export function diffWords(base: string, next: string): DiffSegment[] {
+  if (!next) return [];
+  if (!base.trim()) return [{ text: next, added: true }];
+  if (base === next) return [{ text: next, added: false }];
+
+  // Punctuation is its own token, not glued to the word before it. Deleting
+  // the last word of a sentence moves the full stop onto the previous word, and
+  // gluing them together made that read as a changed word - the sheet marked
+  // "footings." as ours when all that happened was "today" being cut.
+  const tokenize = (t: string) => t.split(/(\s+|[^\w\s]+)/).filter((x) => x !== "");
+  const a = tokenize(base);
+  const b = tokenize(next);
+
+  // A pathological paste should degrade to "all of it is ours" rather than
+  // spend a second building a 25-million-cell table on a page render.
+  if (a.length > DIFF_TOKEN_CEILING || b.length > DIFF_TOKEN_CEILING) {
+    return [{ text: next, added: true }];
+  }
+
+  // Longest common subsequence over tokens. Row-by-row, keeping the full table
+  // because the backtrack needs it.
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const lcs = new Uint32Array(rows * cols);
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      lcs[i * cols + j] =
+        a[i] === b[j]
+          ? lcs[(i + 1) * cols + j + 1] + 1
+          : Math.max(lcs[(i + 1) * cols + j], lcs[i * cols + j + 1]);
+    }
+  }
+
+  const out: DiffSegment[] = [];
+  const push = (text: string, added: boolean) => {
+    const last = out[out.length - 1];
+    if (last && last.added === added) last.text += text;
+    else out.push({ text, added });
+  };
+
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      push(b[j], false);
+      i++;
+      j++;
+    } else if (lcs[(i + 1) * cols + j] >= lcs[i * cols + j + 1]) {
+      i++; // a word we deleted - nothing left on the page to mark
+    } else {
+      push(b[j], true);
+      j++;
+    }
+  }
+  while (j < b.length) push(b[j++], true);
+
+  // Whitespace between two kept words is not an edit. Without this, deleting a
+  // word leaves the space that followed it marked, and the report grows red
+  // gaps that say nothing.
+  return out.filter((s) => !(s.added && s.text.trim() === ""));
+}

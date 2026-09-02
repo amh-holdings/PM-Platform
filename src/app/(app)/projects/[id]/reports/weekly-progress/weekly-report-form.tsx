@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import {
   MILESTONE_FIELDS,
+  diffWords,
   dimensionDate,
   shortDay,
   type ContractorRow,
@@ -281,7 +282,9 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
         date the schedule does not answer. Everything else is written from the
         approved field record and the schedule - read it and correct it rather
         than typing it. A milestone turns black as soon as a schedule task
-        matches its name. The report prints in one colour either way.
+        matches its name. Edit one of the written boxes and only the words you
+        added or changed go red, not the whole paragraph. The report prints in
+        one colour either way.
       </div>
 
       {/* ---- Overview ---- */}
@@ -757,12 +760,13 @@ function DerivedBox({
   rows: number;
   evidence?: WeeklyReportView["evidence"];
 }) {
-  // Same meaning as the red on the print preview: this box is ours, not the
-  // platform's. Shown here too because this is the screen the report is
-  // actually written on - being told on the preview which boxes we wrote is one
-  // click too late to be useful while writing them.
   const edited = value.trim() !== derived.value.trim();
   const [showEvidence, setShowEvidence] = useState(false);
+  // What we changed, word by word, exactly as the report will mark it. A
+  // <textarea> cannot colour part of its own contents, so this renders under
+  // the box rather than inside it - which also means you read your edit as the
+  // owner will see it, in prose, instead of hunting for it in a monospace box.
+  const edits = edited ? diffWords(derived.value, value) : [];
 
   return (
     <div className="space-y-1.5">
@@ -795,16 +799,31 @@ function DerivedBox({
         </div>
       </div>
       <p className="text-xs text-muted-foreground">{derived.basis}</p>
+      {edited && edits.some((sg) => sg.added) && (
+        <div className="rounded-md border border-[#b91c1c]/30 bg-[#b91c1c]/[0.03] p-2 text-xs leading-relaxed">
+          <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+            On the report, with our words in red
+          </p>
+          <p className="whitespace-pre-wrap">
+            {edits.map((sg, i) =>
+              sg.added ? (
+                <span key={i} className={MINE_TEXT}>
+                  {sg.text}
+                </span>
+              ) : (
+                <span key={i}>{sg.text}</span>
+              ),
+            )}
+          </p>
+        </div>
+      )}
       <div className={cn("grid gap-3", showEvidence && "lg:grid-cols-2")}>
         <textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
           rows={rows}
           disabled={disabled}
-          className={cn(
-            "w-full rounded-md border bg-background p-2 font-mono text-xs leading-relaxed",
-            edited && "text-[#b91c1c] dark:text-[#f87171]",
-          )}
+          className="w-full rounded-md border bg-background p-2 font-mono text-xs leading-relaxed"
         />
         {showEvidence && evidence && (
           <div className="max-h-[28rem] space-y-2 overflow-y-auto rounded-md border bg-muted/30 p-2">
