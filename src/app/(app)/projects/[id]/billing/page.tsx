@@ -8,6 +8,7 @@ import {
   completionPct,
   emptyLineBillingSummary,
   formatPct,
+  remainingToFinish,
   summarizeLineBilling,
 } from "@/lib/billing-progress";
 
@@ -137,7 +138,7 @@ export default async function ProjectBillingPage({
       acc.scheduled += Number(r.scheduled_value ?? 0);
       acc.previous += p.previous;
       acc.current += p.current;
-      acc.remaining += Number(r.scheduled_value ?? 0) - p.previous - p.current;
+      acc.remaining += remainingToFinish(p, Number(r.scheduled_value ?? 0));
       return acc;
     },
     { scheduled: 0, previous: 0, current: 0, remaining: 0 },
@@ -208,7 +209,7 @@ export default async function ProjectBillingPage({
                 // through-this-period percent contradicts itself: SOV 6.02 read
                 // 0% complete in July while its August billing had already come
                 // off the balance.
-                const remaining = scheduled - p.previous - p.current;
+                const remaining = remainingToFinish(p, scheduled);
                 const isOver = remaining < 0;
                 const fullyBilled = scheduled > 0 && remaining <= 0;
                 const currentPending = p.current - p.currentBilled;

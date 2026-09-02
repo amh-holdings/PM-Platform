@@ -125,3 +125,23 @@ export function completionPct(
 export function formatPct(value: number): string {
   return `${value.toFixed(value >= 10 || value === 0 ? 0 : 1)}%`;
 }
+
+/**
+ * Balance to finish through the end of the period, rounded to the cent.
+ *
+ * Summing entry amounts in floating point leaves sub-cent noise: Sweet Springs
+ * 6.01 Mobilization is billed to the penny across AFP 11 and AFP 12, but
+ * 112267.03 + 208495.89 lands 6e-11 above the scheduled value, so a raw
+ * subtraction returned -0.0000000001. That rendered as a red "-$0" and read as
+ * an overbill on a line that is exactly complete. Rounding at the cent - the
+ * smallest unit the G703 can express - kills the noise without hiding a real
+ * overbill, and -0 is normalised to 0 so Intl does not print a minus sign.
+ */
+export function remainingToFinish(
+  summary: LineBillingSummary,
+  scheduledValue: number,
+): number {
+  const rounded =
+    Math.round((scheduledValue - summary.previous - summary.current) * 100) / 100;
+  return rounded === 0 ? 0 : rounded;
+}
