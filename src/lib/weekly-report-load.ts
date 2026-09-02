@@ -859,3 +859,114 @@ export function issuedDrift(view: WeeklyReportView): string[] {
   if ((frozen.equipment ?? []).length !== view.equipment.length) drift.push("Equipment");
   return drift;
 }
+
+/**
+ * Which boxes a human typed, and which the platform derived off the field
+ * record.
+ *
+ * The distinction already exists in the data - `saved` holds ONLY overrides, so
+ * a non-empty column there is by definition something a person wrote - it was
+ * just never surfaced on the sheet. Reviewing the report before it goes out,
+ * the first question is always "which of this did we write and which did the
+ * platform work out", and the honest answer is one lookup away.
+ *
+ * A row is manual when its override is set, not when it merely differs from the
+ * derivation: `Reset to derived` clears the override, and a box that has been
+ * reset is back to being the platform's.
+ *
+ * Deliberately reads the overrides even for an issued report. The frozen
+ * payload records the values that were sent, not who wrote them, so the
+ * overrides remain the only record of authorship.
+ */
+export type WeeklyProvenance = {
+  dimensionCm: boolean;
+  epcReportingManager: boolean;
+  epcTeam: boolean;
+  environment: boolean;
+  security: boolean;
+  safety: boolean;
+  weather: boolean;
+  position: boolean;
+  workThisWeek: boolean;
+  risks: boolean;
+  swppp: boolean;
+  lookaheadNote: boolean;
+  photoNote: boolean;
+  milestones: Record<string, boolean>;
+  /** Contractor key -> the cells a person typed, from `ContractorRow.overridden`. */
+  contractors: Record<string, string[]>;
+  equipment: Record<string, string[]>;
+  /** How many boxes in total, for the legend on the sheet. */
+  manualCount: number;
+};
+
+export function weeklyProvenance(view: WeeklyReportView): WeeklyProvenance {
+  const o = view.saved;
+  const typed = (v: string | null | undefined) => v != null && v.trim() !== "";
+
+  const milestones: Record<string, boolean> = {};
+  for (const f of MILESTONE_FIELDS) milestones[f.key] = typed(o?.milestones?.[f.key]);
+
+  // Contractor and equipment rows already carry the per-cell answer: the
+  // derivation stamps `overridden` as it merges the saved overrides in. A row
+  // typed in by hand has no derivation behind it at all, so every cell is ours.
+  //
+  // Read off the frozen rows for an issued report, because those are the rows
+  // that print - a sub added to the project after issue is not on the sheet and
+  // must not be counted in the legend.
+  const frozen = view.status === "issued" ? view.saved?.issued_payload : null;
+  const contractors: Record<string, string[]> = {};
+  for (const c of frozen?.contractors ?? view.contractors) {
+    contractors[c.key] = c.key.startsWith("manual:")
+      ? ["name", "scope", "headcount", "lastOnsite", "endDate"]
+      : c.overridden;
+  }
+  const equipment: Record<string, string[]> = {};
+  for (const e of frozen?.equipment ?? view.equipment) {
+    equipment[e.key] = e.key.startsWith("manual:") ? ["name", "quantity"] : e.overridden;
+  }
+
+  const p: WeeklyProvenance = {
+    // The three names are never derived from anything - they are typed once and
+    // carried forward, so a filled name is always a person's.
+    dimensionCm: typed(view.header.dimensionCm),
+    epcReportingManager: typed(view.header.epcReportingManager),
+    epcTeam: typed(view.header.epcTeam),
+    environment: typed(o?.environment_concerns),
+    security: typed(o?.security_concerns),
+    safety: typed(o?.safety_summary),
+    weather: typed(o?.weather_summary),
+    position: typed(o?.position_note),
+    workThisWeek: typed(o?.work_this_week),
+    risks: typed(o?.schedule_risks),
+    swppp: typed(o?.swppp_inspection_date),
+    lookaheadNote: typed(o?.lookahead_note),
+    photoNote: typed(o?.photo_note),
+    milestones,
+    contractors,
+    equipment,
+    manualCount: 0,
+  };
+
+  p.manualCount =
+    [
+      p.dimensionCm,
+      p.epcReportingManager,
+      p.epcTeam,
+      p.environment,
+      p.security,
+      p.safety,
+      p.weather,
+      p.position,
+      p.workThisWeek,
+      p.risks,
+      p.swppp,
+      p.lookaheadNote,
+      p.photoNote,
+    ].filter(Boolean).length +
+    Object.values(milestones).filter(Boolean).length +
+    Object.values(contractors).reduce((n, cells) => n + cells.length, 0) +
+    Object.values(equipment).reduce((n, cells) => n + cells.length, 0);
+
+  return p;
+}

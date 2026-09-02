@@ -68,3 +68,18 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Weekly report: what we typed vs what the platform derived.
+ *
+ * Screen only, on purpose. The sheet that goes to the owner has to be one
+ * colour - a red box on a document sent to Dimension reads as an alarm, not as
+ * "a person wrote this line". So the rule lives inside @media screen and there
+ * is nothing to remember at print time; the colour cannot reach paper or PDF
+ * even with print-color-adjust:exact set on the sheet.
+ */
+@media screen {
+  .wr-provenance .wr-manual {
+    color: #b91c1c;
+  }
+}

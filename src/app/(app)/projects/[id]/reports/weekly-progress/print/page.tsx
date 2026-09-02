@@ -2,7 +2,11 @@ import { Fragment } from "react";
 import Link from "next/link";
 
 import { guardCapability } from "@/lib/roles-server";
-import { loadWeeklyReport, weeklySheet } from "@/lib/weekly-report-load";
+import {
+  loadWeeklyReport,
+  weeklyProvenance,
+  weeklySheet,
+} from "@/lib/weekly-report-load";
 import {
   MILESTONE_FIELDS,
   defaultWeekEnding,
@@ -10,6 +14,7 @@ import {
 } from "@/lib/weekly-report";
 
 import { PrintButton } from "./print-button";
+import { M, ProvenanceShell } from "./provenance";
 
 type Params = { id: string };
 type Search = { week?: string };
@@ -32,6 +37,11 @@ const isIso = (s: string | undefined): s is string =>
 //
 // An ISSUED report prints from its frozen payload, not from a live derivation -
 // see `weeklySheet`. What was sent has to stay what was sent.
+//
+// On screen the values a person typed are red and the derived ones are black,
+// so the review question - which of this did we write? - is answered by looking
+// at it. See `weeklyProvenance` for how that is known and globals.css for why
+// none of it can reach paper.
 export default async function WeeklyProgressPrintPage({
   params,
   searchParams,
@@ -45,14 +55,17 @@ export default async function WeeklyProgressPrintPage({
   const weekEnding = isIso(searchParams.week) ? searchParams.week : defaultWeekEnding(today);
   const view = await loadWeeklyReport(params.id, weekEnding);
   const r = weeklySheet(view);
+  const prov = weeklyProvenance(view);
 
   const milestones = MILESTONE_FIELDS.map((f) => ({
     label: f.label,
     date: r.milestones[f.key] ?? null,
+    manual: prov.milestones[f.key] ?? false,
   }));
   const lookaheadTotal = r.lookahead.reduce((n, w) => n + w.tasks.length, 0);
 
   return (
+    <ProvenanceShell manualCount={prov.manualCount}>
     <div className="mx-auto max-w-4xl bg-white p-2 text-black [print-color-adjust:exact] print:p-0">
       <div className="mb-3 flex items-center justify-between print:hidden">
         <Link
@@ -87,12 +100,22 @@ export default async function WeeklyProgressPrintPage({
           <RowPair
             label="Dimension Construction Manager"
             value={r.header.dimensionCm}
+            manual={prov.dimensionCm}
           />
         </Row>
         <Row label="Period covered" value={`${dimensionDate(view.period.start)} to ${dimensionDate(view.period.end)}`}>
-          <RowPair label="EPC Reporting Manager" value={r.header.epcReportingManager} />
+          <RowPair
+            label="EPC Reporting Manager"
+            value={r.header.epcReportingManager}
+            manual={prov.epcReportingManager}
+          />
         </Row>
-        <Row label="EPC Team Members and roles" value={r.header.epcTeam} wide />
+        <Row
+          label="EPC Team Members and roles"
+          value={r.header.epcTeam}
+          wide
+          manual={prov.epcTeam}
+        />
 
         <Band>Site Resources</Band>
         <div className="flex border-b border-neutral-400">
@@ -109,21 +132,34 @@ export default async function WeeklyProgressPrintPage({
                 </tr>
               </thead>
               <tbody>
-                {r.contractors.map((c) => (
-                  <tr key={c.key} className="text-center">
-                    <td className="px-1 py-0.5 text-left">{c.name}</td>
-                    <td className="px-1 py-0.5">{c.scope || "N/A"}</td>
-                    <td className="border border-neutral-400 px-1 py-0.5">
-                      {c.headcount ?? "N/A"}
-                    </td>
-                    <td className="border border-neutral-400 px-1 py-0.5">
-                      {c.lastOnsite ? dimensionDate(c.lastOnsite) : "N/A"}
-                    </td>
-                    <td className="border border-neutral-400 px-1 py-0.5">
-                      {c.endDate ? dimensionDate(c.endDate) : "N/A"}
-                    </td>
-                  </tr>
-                ))}
+                {r.contractors.map((c) => {
+                  // Per cell, not per row: a headcount read off the field
+                  // reports sits next to an end date only we can know.
+                  const typed = prov.contractors[c.key] ?? [];
+                  return (
+                    <tr key={c.key} className="text-center">
+                      <td className="px-1 py-0.5 text-left">
+                        <M on={typed.includes("name")}>{c.name}</M>
+                      </td>
+                      <td className="px-1 py-0.5">
+                        <M on={typed.includes("scope")}>{c.scope || "N/A"}</M>
+                      </td>
+                      <td className="border border-neutral-400 px-1 py-0.5">
+                        <M on={typed.includes("headcount")}>{c.headcount ?? "N/A"}</M>
+                      </td>
+                      <td className="border border-neutral-400 px-1 py-0.5">
+                        <M on={typed.includes("lastOnsite")}>
+                          {c.lastOnsite ? dimensionDate(c.lastOnsite) : "N/A"}
+                        </M>
+                      </td>
+                      <td className="border border-neutral-400 px-1 py-0.5">
+                        <M on={typed.includes("endDate")}>
+                          {c.endDate ? dimensionDate(c.endDate) : "N/A"}
+                        </M>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {r.contractors.length === 0 && (
                   <tr>
                     <td colSpan={5} className="px-1 py-0.5 text-left">
@@ -151,14 +187,19 @@ export default async function WeeklyProgressPrintPage({
                 </tr>
               </thead>
               <tbody>
-                {r.equipment.map((e) => (
-                  <tr key={e.key} className="text-center">
-                    <td className="px-1 py-0.5 text-left">{e.name}</td>
-                    <td className="border border-neutral-400 px-1 py-0.5">
-                      {e.quantity ?? "N/A"}
-                    </td>
-                  </tr>
-                ))}
+                {r.equipment.map((e) => {
+                  const typed = prov.equipment[e.key] ?? [];
+                  return (
+                    <tr key={e.key} className="text-center">
+                      <td className="px-1 py-0.5 text-left">
+                        <M on={typed.includes("name")}>{e.name}</M>
+                      </td>
+                      <td className="border border-neutral-400 px-1 py-0.5">
+                        <M on={typed.includes("quantity")}>{e.quantity ?? "N/A"}</M>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {r.equipment.length === 0 && (
                   <tr>
                     <td colSpan={2} className="px-1 py-0.5 text-left">
@@ -183,19 +224,42 @@ export default async function WeeklyProgressPrintPage({
         </Row>
 
         <Band>Environment, Security and Safety</Band>
-        <Row label="Environment Concerns" value={r.environment || "N/A"} wide multiline />
-        <Row label="Security Concerns" value={r.security || "N/A"} wide multiline />
-        <Row label="Safety" value={r.safety || "N/A"} wide multiline />
+        <Row
+          label="Environment Concerns"
+          value={r.environment || "N/A"}
+          wide
+          multiline
+          manual={prov.environment}
+        />
+        <Row
+          label="Security Concerns"
+          value={r.security || "N/A"}
+          wide
+          multiline
+          manual={prov.security}
+        />
+        <Row label="Safety" value={r.safety || "N/A"} wide multiline manual={prov.safety} />
         <Row
           label="Date of Most Recent SWPPP Inspection"
           value={r.swppp ? dimensionDate(r.swppp) : "N/A"}
           boxed
+          manual={prov.swppp}
         >
-          <RowPair label="Weather This Week" value={r.weather || "N/A"} />
+          <RowPair
+            label="Weather This Week"
+            value={r.weather || "N/A"}
+            manual={prov.weather}
+          />
         </Row>
 
         <Band>Progress</Band>
-        <Row label="Project Position" value={r.position || "N/A"} wide multiline />
+        <Row
+          label="Project Position"
+          value={r.position || "N/A"}
+          wide
+          multiline
+          manual={prov.position}
+        />
         <div className="flex border-b border-neutral-400">
           <Cell head>Milestone Tracking:</Cell>
           <div className="flex-1 p-1">
@@ -206,7 +270,7 @@ export default async function WeeklyProgressPrintPage({
                     <td className="px-1 py-0.5 text-right">{m.label}</td>
                     <td className="px-2 py-0.5">Date expected by EPC:</td>
                     <td className="border border-neutral-400 px-2 py-0.5 text-center">
-                      {m.date ? dimensionDate(m.date) : "N/A"}
+                      <M on={m.manual}>{m.date ? dimensionDate(m.date) : "N/A"}</M>
                     </td>
                   </tr>
                 ))}
@@ -215,14 +279,20 @@ export default async function WeeklyProgressPrintPage({
           </div>
         </div>
 
-        <Row label="Work This Week" value={r.workThisWeek || "N/A"} wide multiline />
+        <Row
+          label="Work This Week"
+          value={r.workThisWeek || "N/A"}
+          wide
+          multiline
+          manual={prov.workThisWeek}
+        />
 
         <div className="border-b border-neutral-400">
           <div className="flex">
             <Cell head>3 Week Look Ahead:</Cell>
             <div className="flex-1 px-2 py-1">
               {r.lookaheadNote ? (
-                <p className="whitespace-pre-wrap">{r.lookaheadNote}</p>
+                <p className="wr-manual whitespace-pre-wrap">{r.lookaheadNote}</p>
               ) : (
                 <p className="text-neutral-600">
                   Activities scheduled for the three weeks following this
@@ -303,7 +373,13 @@ export default async function WeeklyProgressPrintPage({
           )}
         </div>
 
-        <Row label="Open Schedule Risks" value={r.risks || "N/A"} wide multiline />
+        <Row
+          label="Open Schedule Risks"
+          value={r.risks || "N/A"}
+          wide
+          multiline
+          manual={prov.risks}
+        />
       </div>
 
       <p className="mt-1 text-[10px]">
@@ -319,7 +395,7 @@ export default async function WeeklyProgressPrintPage({
             {view.projectName} - Progress Photos
           </h2>
           {r.photoNote && (
-            <p className="border-b border-neutral-400 px-2 py-1 text-[11px] whitespace-pre-wrap">
+            <p className="wr-manual border-b border-neutral-400 px-2 py-1 text-[11px] whitespace-pre-wrap">
               {r.photoNote}
             </p>
           )}
@@ -357,6 +433,7 @@ export default async function WeeklyProgressPrintPage({
           : " - DRAFT"}
       </footer>
     </div>
+    </ProvenanceShell>
   );
 }
 
@@ -394,6 +471,7 @@ function Row({
   wide,
   boxed,
   multiline,
+  manual,
 }: {
   label: string;
   value: string;
@@ -401,6 +479,8 @@ function Row({
   wide?: boolean;
   boxed?: boolean;
   multiline?: boolean;
+  /** True when a person typed this value rather than the platform deriving it. */
+  manual?: boolean;
 }) {
   return (
     <div className="flex border-b border-neutral-400">
@@ -414,7 +494,7 @@ function Row({
               : "w-52 px-2 py-1 text-center"
         }
       >
-        {multiline ? value : value || "N/A"}
+        <M on={manual === true}>{multiline ? value : value || "N/A"}</M>
       </div>
       {children}
     </div>
@@ -451,12 +531,20 @@ function Td({
   );
 }
 
-function RowPair({ label, value }: { label: string; value: string }) {
+function RowPair({
+  label,
+  value,
+  manual,
+}: {
+  label: string;
+  value: string;
+  manual?: boolean;
+}) {
   return (
     <>
       <div className="w-52 shrink-0 px-2 py-1 text-right font-bold">{label}:</div>
       <div className="flex-1 border border-neutral-400 px-2 py-1 text-center">
-        {value || "N/A"}
+        <M on={manual === true}>{value || "N/A"}</M>
       </div>
     </>
   );
