@@ -260,6 +260,8 @@ export type Database = {
       }
       cm_daily_logs: {
         Row: {
+          ahc_headcount: number | null
+          ahc_man_hours: number | null
           author_id: string | null
           created_at: string | null
           finalized_at: string | null
@@ -276,6 +278,8 @@ export type Database = {
           weather_conditions: string | null
         }
         Insert: {
+          ahc_headcount?: number | null
+          ahc_man_hours?: number | null
           author_id?: string | null
           created_at?: string | null
           finalized_at?: string | null
@@ -292,6 +296,8 @@ export type Database = {
           weather_conditions?: string | null
         }
         Update: {
+          ahc_headcount?: number | null
+          ahc_man_hours?: number | null
           author_id?: string | null
           created_at?: string | null
           finalized_at?: string | null
@@ -1389,6 +1395,88 @@ export type Database = {
             columns: ["submitted_via_link"]
             isOneToOne: false
             referencedRelation: "inspection_secure_links"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      monthly_manpower_reports: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          extra_incidents: Json
+          id: string
+          incidents: Json
+          manhours_note: string | null
+          manhours_override: number | null
+          note: string | null
+          period_end: string
+          period_month: string
+          period_start: string
+          project_id: string
+          status: string
+          submitted_at: string | null
+          submitted_by: string | null
+          submitted_payload: Json | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          extra_incidents?: Json
+          id?: string
+          incidents?: Json
+          manhours_note?: string | null
+          manhours_override?: number | null
+          note?: string | null
+          period_end: string
+          period_month: string
+          period_start: string
+          project_id: string
+          status?: string
+          submitted_at?: string | null
+          submitted_by?: string | null
+          submitted_payload?: Json | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          extra_incidents?: Json
+          id?: string
+          incidents?: Json
+          manhours_note?: string | null
+          manhours_override?: number | null
+          note?: string | null
+          period_end?: string
+          period_month?: string
+          period_start?: string
+          project_id?: string
+          status?: string
+          submitted_at?: string | null
+          submitted_by?: string | null
+          submitted_payload?: Json | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "monthly_manpower_reports_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "monthly_manpower_reports_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "monthly_manpower_reports_submitted_by_fkey"
+            columns: ["submitted_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
         ]

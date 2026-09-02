@@ -13,6 +13,7 @@
     "import:apply": "node scripts/bulk-import.mjs apply",
     "backfill-text": "node scripts/backfill-text.mjs",
     "test:inspections": "tsx scripts/qaqc/run-tests.ts",
+    "test:monthly-manpower": "tsx scripts/monthly-manpower/run-tests.ts",
     "test:schedule": "tsx scripts/schedule/run-tests.ts",
     "test:commodity": "tsx scripts/commodity/run-tests.ts",
     "test:weekly-report": "tsx scripts/weekly-report/run-tests.ts",

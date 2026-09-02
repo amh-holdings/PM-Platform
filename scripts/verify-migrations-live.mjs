@@ -45,6 +45,8 @@ const PROBES = [
   ["0041_weekly_progress_reports", "weekly_progress_reports", null],
   ["0042_weekly_report_safety_and_photos", "weekly_progress_reports", "safety_summary"],
   ["0043_weekly_report_photo_selection", "weekly_progress_reports", "photo_keys"],
+  ["0045_monthly_manpower_report", "monthly_manpower_reports", null],
+  ["0045_monthly_manpower_report (cm hours)", "cm_daily_logs", "ahc_man_hours"],
 ];
 
 // 0029 (RLS policies) and 0044 (a data update plus a dropped index) leave no

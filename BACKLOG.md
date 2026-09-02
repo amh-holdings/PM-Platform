@@ -5,6 +5,48 @@ was found, and what "fixed" looks like - so the fix can be picked up cold.
 
 ---
 
+## Weekly report cumulative man-hours disagree with its own weekly figure
+
+**Opened:** 2026-09-02, while building the Monthly Manpower and Incident Report
+**Severity:** Low - a number on an owner document, not a billing figure
+**Status:** Open. Deliberately NOT fixed in the same change, because it moves a
+figure that has already been sent to Dimension.
+
+### What breaks
+
+`deriveManHours` in `src/lib/weekly-report.ts` builds the WEEK's figure from
+three sources in order - `dprs.total_man_hours`, then the `dpr_manpower`
+regular+OT breakdown, then `crew_count x 8` with a flag. The CUMULATIVE figure
+in the same function sums `total_man_hours` alone:
+
+```ts
+const cumulative = allTimeDprs
+  .filter((d) => d.report_date <= periodEnd)
+  .reduce((n, d) => n + (d.total_man_hours != null ? Number(d.total_man_hours) : 0), 0);
+```
+
+So any day that reached the week's figure through a fallback is missing from
+cumulative, and "hours to date" reads lower than the sum of the weeks that
+built it. On Sweet Springs, August alone has one such day (27-Aug, 8 crew and no
+hours, counted at 64).
+
+The `dpr_manpower` fallback cannot be applied to cumulative as the code stands -
+`allTimeDprs` is selected as `report_date, total_man_hours, crew_count` with no
+`id`, so there is nothing to join the manpower rows to.
+
+### What "fixed" looks like
+
+Add `id` to the all-time select in `weekly-report-load.ts`, load `dpr_manpower`
+for all time, and run cumulative through the same `hoursOf()` the week uses.
+Then decide separately whether to re-issue any weekly report whose cumulative
+figure moves - the issued ones print from `issued_payload` and will not change,
+which is correct, but a draft will.
+
+The Monthly Manpower report does not have this bug; `deriveManHours` in
+`monthly-manpower.ts` runs one code path for the whole period.
+
+---
+
 ## Daily report audit / coverage alarm
 
 **Opened:** 2026-08-20, during Sweet Springs AFP 12

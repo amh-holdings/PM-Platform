@@ -12,7 +12,7 @@
 //
 // Deliberately free of server-only imports so client components can use it.
 
-import { Boxes, Briefcase, CalendarCheck, type LucideIcon } from "lucide-react";
+import { Boxes, Briefcase, CalendarCheck, HardHat, type LucideIcon } from "lucide-react";
 
 import { can, type Capability, type EffectiveRole } from "./roles";
 
@@ -82,6 +82,33 @@ export const PROJECT_REPORTS: ProjectReport[] = [
       "look ahead",
       "lookahead",
       "swppp",
+    ],
+  },
+  {
+    key: "monthly-manpower",
+    label: "Monthly Manpower and Incident Report",
+    path: "monthly-manpower",
+    cap: "viewDailyProduction",
+    icon: HardHat,
+    blurb: "The month's man-hours and every incident, ready to key into the owner's form",
+    audience: "Owner",
+    kind: "generated",
+    find: [
+      "monthly",
+      "manpower",
+      "man hours",
+      "manhours",
+      "man-hours",
+      "hours",
+      "incident",
+      "incidents",
+      "safety",
+      "near miss",
+      "first aid",
+      "recordable",
+      "lost time",
+      "asset damage",
+      "osha",
     ],
   },
   {

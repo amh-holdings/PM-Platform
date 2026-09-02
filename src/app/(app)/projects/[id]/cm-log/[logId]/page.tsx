@@ -22,7 +22,7 @@ export default async function CmLogDetailPage({
   const { data: log } = await supabase
     .from("cm_daily_logs")
     .select(
-      "id, status, finalized_at, log_date, weather_conditions, temp_high, temp_low, site_conditions, progress_summary, safety_notes",
+      "id, status, finalized_at, log_date, weather_conditions, temp_high, temp_low, site_conditions, progress_summary, safety_notes, ahc_headcount, ahc_man_hours",
     )
     .eq("id", params.logId)
     .eq("project_id", params.id)
@@ -113,6 +113,17 @@ export default async function CmLogDetailPage({
         {log.safety_notes && (
           <Block label="Safety notes">{log.safety_notes}</Block>
         )}
+        {/* Shown even when blank. These feed the owner's monthly manpower
+            total and nothing else records them, so an empty day has to be
+            visible as a gap rather than simply absent from the page. */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Field label="AHC staff">
+            {log.ahc_headcount != null ? log.ahc_headcount : "not recorded"}
+          </Field>
+          <Field label="AHC man-hours">
+            {log.ahc_man_hours != null ? log.ahc_man_hours : "not recorded"}
+          </Field>
+        </div>
       </div>
 
       {photos.length > 0 && (

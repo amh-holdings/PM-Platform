@@ -41,6 +41,12 @@ export type CmLogInput = {
   siteConditions: string | null;
   progressSummary: string | null;
   safetyNotes: string | null;
+  // AHC's own people on site that day. Null means "not recorded" and NOT zero -
+  // the Monthly Manpower report reports the difference, because a month where
+  // nobody entered the hours and a month where AHC genuinely was not on site
+  // produce the same total and are not the same claim.
+  ahcHeadcount?: number | null;
+  ahcManHours?: number | null;
   photos?: CmLogPhotoInput[];
 };
 
@@ -66,6 +72,8 @@ export async function createCmLog(input: CmLogInput): Promise<CmLogResult> {
       site_conditions: input.siteConditions,
       progress_summary: input.progressSummary,
       safety_notes: input.safetyNotes,
+      ahc_headcount: input.ahcHeadcount ?? null,
+      ahc_man_hours: input.ahcManHours ?? null,
     })
     .select("id")
     .single();
@@ -113,6 +121,8 @@ export type CmLogUpdateInput = {
   siteConditions: string | null;
   progressSummary: string | null;
   safetyNotes: string | null;
+  ahcHeadcount?: number | null;
+  ahcManHours?: number | null;
   // Photos staged (uploaded to storage) by the client since the last save.
   newPhotos?: CmLogPhotoInput[];
   // Existing photo rows the CM removed in this edit.
@@ -166,6 +176,8 @@ export async function updateCmLog(
       site_conditions: input.siteConditions,
       progress_summary: input.progressSummary,
       safety_notes: input.safetyNotes,
+      ahc_headcount: input.ahcHeadcount ?? null,
+      ahc_man_hours: input.ahcManHours ?? null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", log.id);

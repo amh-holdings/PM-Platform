@@ -34,6 +34,8 @@ export type CmLogInitial = {
   siteConditions: string;
   progress: string;
   safety: string;
+  ahcHeadcount: string;
+  ahcManHours: string;
   photos: ExistingCmPhoto[];
 };
 
@@ -62,6 +64,11 @@ export function CmLogForm({ projectId, defaultDate, initial }: Props) {
   );
   const [progress, setProgress] = useState(initial?.progress ?? "");
   const [safety, setSafety] = useState(initial?.safety ?? "");
+  // AHC's own people. Left blank rather than defaulted to 0 - blank means
+  // "not recorded", and the monthly manpower report needs to be able to tell
+  // that apart from a day AHC genuinely was not on site.
+  const [ahcHeadcount, setAhcHeadcount] = useState(initial?.ahcHeadcount ?? "");
+  const [ahcManHours, setAhcManHours] = useState(initial?.ahcManHours ?? "");
 
   // Newly staged (uploaded-but-not-recorded) photos.
   const [photos, setPhotos] = useState<StagedCmPhoto[]>([]);
@@ -96,6 +103,8 @@ export function CmLogForm({ projectId, defaultDate, initial }: Props) {
       siteConditions: siteConditions.trim() || null,
       progressSummary: progress.trim() || null,
       safetyNotes: safety.trim() || null,
+      ahcHeadcount: numOrNull(ahcHeadcount),
+      ahcManHours: numOrNull(ahcManHours),
     };
   }
 
@@ -240,6 +249,38 @@ export function CmLogForm({ projectId, defaultDate, initial }: Props) {
           className="w-full rounded-md border bg-background p-2 text-sm"
           placeholder="Toolbox talk, incidents, near misses, PPE observations."
         />
+      </div>
+
+      <div className="rounded-md border border-dashed p-3">
+        <Label className="text-xs">AHC staff on site today</Label>
+        <p className="mb-2 mt-0.5 text-[11px] text-muted-foreground">
+          Our own people - CM, supers, QC. Nothing else records these, so the
+          owner&apos;s monthly manpower total reads low without them. Leave blank
+          if you did not count; that is not the same as zero.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label className="text-xs">Headcount</Label>
+            <Input
+              type="number"
+              min={0}
+              value={ahcHeadcount}
+              onChange={(e) => setAhcHeadcount(e.target.value)}
+              placeholder="-"
+            />
+          </div>
+          <div>
+            <Label className="text-xs">Man-hours</Label>
+            <Input
+              type="number"
+              min={0}
+              step="0.5"
+              value={ahcManHours}
+              onChange={(e) => setAhcManHours(e.target.value)}
+              placeholder="-"
+            />
+          </div>
+        </div>
       </div>
 
       {isEdit && existing.length > 0 && (

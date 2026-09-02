@@ -18,7 +18,7 @@ export default async function EditCmLogPage({ params }: { params: Params }) {
   const { data: log } = await supabase
     .from("cm_daily_logs")
     .select(
-      "id, status, log_date, weather_conditions, temp_high, temp_low, site_conditions, progress_summary, safety_notes",
+      "id, status, log_date, weather_conditions, temp_high, temp_low, site_conditions, progress_summary, safety_notes, ahc_headcount, ahc_man_hours",
     )
     .eq("id", params.logId)
     .eq("project_id", params.id)
@@ -87,6 +87,8 @@ export default async function EditCmLogPage({ params }: { params: Params }) {
           siteConditions: log.site_conditions ?? "",
           progress: log.progress_summary ?? "",
           safety: log.safety_notes ?? "",
+          ahcHeadcount: log.ahc_headcount != null ? String(log.ahc_headcount) : "",
+          ahcManHours: log.ahc_man_hours != null ? String(log.ahc_man_hours) : "",
           photos,
         }}
       />
