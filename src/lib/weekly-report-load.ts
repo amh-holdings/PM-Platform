@@ -925,9 +925,15 @@ export function weeklyProvenance(view: WeeklyReportView): WeeklyProvenance {
   const o = view.saved;
   const written = (v: string | null | undefined) => v != null && v.trim() !== "";
 
-  // Always ours, whatever is or is not in the box. See (1) above.
+  // A milestone date is ours only until the schedule answers it. Name a
+  // milestone task to match and this goes black on its own, which is the point:
+  // the marking should shrink as the schedule gets built out, not stay red
+  // forever on a date the platform is now deriving. Carried forward from last
+  // week still counts as ours - that is a default nobody has re-decided.
   const milestones: Record<string, boolean> = {};
-  for (const f of MILESTONE_FIELDS) milestones[f.key] = true;
+  for (const f of MILESTONE_FIELDS) {
+    milestones[f.key] = view.milestones?.[f.key]?.source !== "schedule";
+  }
 
   // Read off the frozen rows for an issued report, because those are the rows
   // that print - a sub added to the project after issue is not on the sheet and
@@ -967,6 +973,9 @@ export function weeklyProvenance(view: WeeklyReportView): WeeklyProvenance {
     // has to be right on a document the owner keeps, and nobody can confirm it
     // from this screen. Ours to check every week.
     swppp: true,
+    // The NOTE only. The look-ahead table itself is read straight off the
+    // schedule and is not marked - see the form and the print sheet, which
+    // mark the note box rather than the section.
     lookaheadNote: true,
     milestones,
     contractors,

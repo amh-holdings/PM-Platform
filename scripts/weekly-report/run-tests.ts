@@ -44,6 +44,7 @@ import {
   dimensionDate,
   isSwppp,
   deriveSwppp,
+  MILESTONE_FIELDS,
 } from "@/lib/weekly-report";
 import { weeklyProvenance, type WeeklyReportView } from "@/lib/weekly-report-load";
 
@@ -962,6 +963,9 @@ function unit() {
         header: { dimensionCm: "", epcReportingManager: "", epcTeam: "", carriedFrom: null },
         contractors: [],
         equipment: [],
+        milestones: Object.fromEntries(
+          MILESTONE_FIELDS.map((f) => [f.key, { value: null, basis: "", sources: [] }]),
+        ),
       }) as unknown as WeeklyReportView;
 
     // The point of the marking is a worklist, so a blank report is the case
@@ -974,9 +978,30 @@ function unit() {
         untouched.epcReportingManager &&
         untouched.epcTeam &&
         untouched.swppp &&
-        untouched.lookaheadNote &&
-        Object.values(untouched.milestones).every(Boolean),
+        untouched.lookaheadNote,
       JSON.stringify(untouched.manualCount),
+    );
+
+    // The marking has to shrink as the schedule gets built out. A milestone the
+    // schedule answers is not Phil's to chase; one it does not is, and so is one
+    // merely carried forward from last week, which is a default nobody has
+    // re-decided.
+    const ms = (source: string | undefined) =>
+      weeklyProvenance({
+        ...baseView(null),
+        milestones: Object.fromEntries(
+          MILESTONE_FIELDS.map((f) => [f.key, { value: null, basis: "", sources: [], source }]),
+        ),
+      } as unknown as WeeklyReportView).milestones;
+    check(
+      "PROV-01a a milestone the schedule answers goes black",
+      Object.values(ms("schedule")).every((v) => v === false),
+      JSON.stringify(ms("schedule")),
+    );
+    check(
+      "PROV-01b a milestone carried forward or unmatched stays ours",
+      Object.values(ms("carried")).every(Boolean) && Object.values(ms("none")).every(Boolean),
+      JSON.stringify({ carried: ms("carried"), none: ms("none") }),
     );
     check(
       "PROV-02 the AI's narrative boxes are not marked until they are written over",

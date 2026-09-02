@@ -275,12 +275,13 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
 
       {/* ---- What is ours to fill in ---- */}
       <div className="rounded-md border border-[#b91c1c]/30 bg-[#b91c1c]/[0.04] px-3 py-2 text-xs">
-        <span className={cn("font-medium", MINE_LABEL)}>Red</span> marks the
-        fields AHC fills in - names, the milestone dates the owner is being
-        committed to, each sub&apos;s End Date, the SWPPP date and the look-ahead
-        note. Nothing derives those. Everything else on this page is written
-        from the approved field record, so read it and correct it rather than
-        typing it. The report prints in one colour either way.
+        <span className={cn("font-medium", MINE_LABEL)}>Red</span> marks what
+        nothing derives, so AHC has to fill it in: the names, each sub&apos;s End
+        Date, the SWPPP date, the optional look-ahead note, and any milestone
+        date the schedule does not answer. Everything else is written from the
+        approved field record and the schedule - read it and correct it rather
+        than typing it. A milestone turns black as soon as a schedule task
+        matches its name. The report prints in one colour either way.
       </div>
 
       {/* ---- Overview ---- */}
@@ -476,15 +477,17 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
 
         <Field
           label="Milestone tracking"
-          hint="Dates expected by EPC. Matched to schedule milestones by name where one exists, otherwise carried forward from last week."
-          mine
+          hint="Dates expected by EPC. A date the schedule answers is black and looks after itself - name a milestone task to match and the red goes away. Red means nothing in the schedule matches, so this one is ours."
         >
           <div className="grid gap-2 sm:grid-cols-2">
             {MILESTONE_FIELDS.map((f) => {
               const d = view.milestones[f.key];
+              // Black once the schedule answers it. Carried forward from last
+              // week is still ours - a default nobody has re-decided.
+              const mine = d?.source !== "schedule";
               return (
                 <div key={f.key} className="space-y-1">
-                  <Label className={cn("text-xs", MINE_LABEL)}>{f.label}</Label>
+                  <Label className={cn("text-xs", mine && MINE_LABEL)}>{f.label}</Label>
                   <Input
                     type="date"
                     value={milestones[f.key] ?? ""}
@@ -492,7 +495,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
                       setMilestones((m) => ({ ...m, [f.key]: e.target.value }))
                     }
                     disabled={issued}
-                    className={MINE_FIELD}
+                    className={mine ? MINE_FIELD : undefined}
                   />
                   <p className="text-[11px] leading-tight text-muted-foreground">{d?.basis}</p>
                 </div>
@@ -512,10 +515,12 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
         />
 
         <Field
-          mine
           label="3 week look ahead"
-          hint="Built from the schedule for the three weeks after this period and printed in full in its own box on the report. Anything typed here prints above the table as a note - leave it empty unless there is something to say about what is coming."
+          hint="The table below is built from the schedule for the three weeks after this period and prints in full on the report. Nothing to fill in - it is black for the same reason Site Resources is."
         >
+          <Label className={cn("text-xs", MINE_LABEL)}>
+            Optional note above the table
+          </Label>
           <textarea
             value={lookaheadNote}
             onChange={(e) => setLookaheadNote(e.target.value)}

@@ -21,10 +21,26 @@ export type Derived<T> = {
   basis: string;
   /** The days that fed it, so the form can link back to the evidence. */
   sources: string[];
+  /**
+   * Where the value came from, for callers that need to branch on it rather
+   * than just show `basis`. Optional: only the derivations that have more than
+   * one possible origin bother to set it.
+   *
+   *   schedule - the schedule answered it, so nobody has to
+   *   carried  - last week's answer, which is a default and not a decision
+   *   manual   - typed
+   *   none     - nothing answered it
+   */
+  source?: "schedule" | "carried" | "manual" | "none";
 };
 
-function derive<T>(value: T, basis: string, sources: string[] = []): Derived<T> {
-  return { value, basis, sources };
+function derive<T>(
+  value: T,
+  basis: string,
+  sources: string[] = [],
+  source?: Derived<T>["source"],
+): Derived<T> {
+  return source ? { value, basis, sources, source } : { value, basis, sources };
 }
 
 // ---------------------------------------------------------------------------
@@ -1638,20 +1654,35 @@ export function deriveMilestones(
   for (const field of MILESTONE_FIELDS) {
     const override = overrides[field.key];
     if (override) {
-      out[field.key] = derive(override, "Entered by hand.");
+      out[field.key] = derive(override, "Entered by hand.", [], "manual");
       continue;
     }
     const hit = milestones.find((t) =>
       field.match.some((m) => t.task_name.toLowerCase().includes(m)),
     );
     if (hit) {
-      out[field.key] = derive(hit.end_date, `Schedule milestone ${hit.wbs_code} ${hit.task_name}.`);
+      out[field.key] = derive(
+        hit.end_date,
+        `Schedule milestone ${hit.wbs_code} ${hit.task_name}.`,
+        [],
+        "schedule",
+      );
       continue;
     }
     const carried = carriedForward[field.key];
     out[field.key] = carried
-      ? derive(carried, "Carried forward from last week's report - no matching schedule milestone.")
-      : derive(null, "No schedule milestone matches this name and no prior report to carry forward.");
+      ? derive(
+          carried,
+          "Carried forward from last week's report - no matching schedule milestone.",
+          [],
+          "carried",
+        )
+      : derive(
+          null,
+          "No schedule milestone matches this name and no prior report to carry forward.",
+          [],
+          "none",
+        );
   }
   return out;
 }
