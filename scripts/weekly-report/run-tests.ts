@@ -964,23 +964,36 @@ function unit() {
         equipment: [],
       }) as unknown as WeeklyReportView;
 
+    // The point of the marking is a worklist, so a blank report is the case
+    // that matters most: nothing has been typed and every field Phil owns must
+    // still be red.
     const untouched = weeklyProvenance(baseView(null));
     check(
-      "PROV-01 a report nobody has saved has nothing marked as ours",
-      untouched.manualCount === 0 && !untouched.safety && !untouched.workThisWeek,
+      "PROV-01 a report nobody has saved still marks every field that is Phil's",
+      untouched.dimensionCm &&
+        untouched.epcReportingManager &&
+        untouched.epcTeam &&
+        untouched.swppp &&
+        untouched.lookaheadNote &&
+        Object.values(untouched.milestones).every(Boolean),
       JSON.stringify(untouched.manualCount),
+    );
+    check(
+      "PROV-02 the AI's narrative boxes are not marked until they are written over",
+      !untouched.safety && !untouched.workThisWeek && !untouched.environment,
+      JSON.stringify({ safety: untouched.safety, work: untouched.workThisWeek }),
     );
 
     const edited = weeklyProvenance(
       baseView({ safety_summary: "No recordables.", work_this_week: "  " }),
     );
     check(
-      "PROV-02 an override marks its own box and only its own box",
-      edited.safety && !edited.environment && edited.manualCount === 1,
-      JSON.stringify({ safety: edited.safety, count: edited.manualCount }),
+      "PROV-03 rewriting a generated box makes that box ours, and only that box",
+      edited.safety && !edited.environment && !edited.risks,
+      JSON.stringify({ safety: edited.safety, env: edited.environment }),
     );
     check(
-      "PROV-03 whitespace is not an override - reset-to-derived stays derived",
+      "PROV-04 whitespace is not a rewrite - reset-to-derived stays derived",
       !edited.workThisWeek,
       "work this week was blank",
     );
@@ -996,12 +1009,19 @@ function unit() {
       ],
     } as unknown as WeeklyReportView);
     check(
-      "PROV-04 only the cell that was typed is ours, not the whole row",
-      cells.contractors["sub-1"].length === 1 && cells.contractors["sub-1"][0] === "endDate",
+      "PROV-05 End Date is Phil's on every row - the platform cannot know a commercial date",
+      cells.contractors["sub-1"].includes("endDate") &&
+        cells.contractors["manual:typed"].includes("endDate"),
+      JSON.stringify(cells.contractors),
+    );
+    check(
+      "PROV-06 a headcount read off the field reports is not marked with it",
+      !cells.contractors["sub-1"].includes("headcount") &&
+        !cells.contractors["sub-1"].includes("lastOnsite"),
       JSON.stringify(cells.contractors["sub-1"]),
     );
     check(
-      "PROV-05 a hand-added contractor row is ours end to end",
+      "PROV-07 a hand-added contractor row is ours end to end",
       cells.contractors["manual:typed"].includes("name") &&
         cells.contractors["manual:typed"].includes("headcount"),
       JSON.stringify(cells.contractors["manual:typed"]),
@@ -1028,7 +1048,7 @@ function unit() {
       ],
     } as unknown as WeeklyReportView);
     check(
-      "PROV-06 an issued report only accounts for the rows it actually printed",
+      "PROV-08 an issued report only accounts for the rows it actually printed",
       issued.contractors["sub-1"] !== undefined && issued.contractors["sub-2"] === undefined,
       JSON.stringify(Object.keys(issued.contractors)),
     );

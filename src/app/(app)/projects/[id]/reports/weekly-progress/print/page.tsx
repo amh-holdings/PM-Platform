@@ -38,10 +38,11 @@ const isIso = (s: string | undefined): s is string =>
 // An ISSUED report prints from its frozen payload, not from a live derivation -
 // see `weeklySheet`. What was sent has to stay what was sent.
 //
-// On screen the values a person typed are red and the derived ones are black,
-// so the review question - which of this did we write? - is answered by looking
-// at it. See `weeklyProvenance` for how that is known and globals.css for why
-// none of it can reach paper.
+// On screen the boxes that are Phil's to fill in are red and the derived ones
+// are black, so "what is still mine to do on this report" is answered by
+// looking at it. First sheet only - the photo page has nothing to fill in. See
+// `weeklyProvenance` for what counts and globals.css for why none of it can
+// reach paper.
 export default async function WeeklyProgressPrintPage({
   params,
   searchParams,
@@ -395,7 +396,7 @@ export default async function WeeklyProgressPrintPage({
             {view.projectName} - Progress Photos
           </h2>
           {r.photoNote && (
-            <p className="wr-manual border-b border-neutral-400 px-2 py-1 text-[11px] whitespace-pre-wrap">
+            <p className="border-b border-neutral-400 px-2 py-1 text-[11px] whitespace-pre-wrap">
               {r.photoNote}
             </p>
           )}

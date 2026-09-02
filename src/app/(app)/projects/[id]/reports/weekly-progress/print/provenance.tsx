@@ -3,13 +3,13 @@
 import { useState } from "react";
 
 /**
- * Wraps the sheet so the "we typed this" colouring can be switched off.
+ * Wraps the sheet so the fill-in marking can be switched off.
  *
- * The toggle exists because the preview does two jobs. Checking the report
- * before it goes out, you want to see which lines are ours; proof-reading how
- * it will land on the owner's desk, the colour is noise. Both are one click
- * apart, and neither changes what prints - the colour rule is inside
- * `@media screen` in globals.css.
+ * The toggle exists because the preview does two jobs. Working through the
+ * report, you want to see which boxes are still yours; proof-reading how it
+ * will land on the owner's desk, the colour is noise. Both are one click apart,
+ * and neither changes what prints - the colour rule is inside `@media screen`
+ * in globals.css.
  */
 export function ProvenanceShell({
   manualCount,
@@ -30,17 +30,18 @@ export function ProvenanceShell({
             onChange={(e) => setOn(e.target.checked)}
             className="h-3 w-3"
           />
-          <span>Show what we filled in</span>
+          <span>Show what I fill in</span>
         </label>
         <span className="text-neutral-600">
           {on ? (
             <>
-              <span className="font-medium text-[#b91c1c]">Red</span> is typed by
-              us - {manualCount} {manualCount === 1 ? "entry" : "entries"}.
-              Everything in black the platform derived from the field record.
+              <span className="font-medium text-[#b91c1c]">Red</span> is yours to
+              fill in or check - {manualCount}{" "}
+              {manualCount === 1 ? "field" : "fields"} on this sheet. Black is
+              derived from the field record.
             </>
           ) : (
-            <>Colouring off. The sheet reads as it will be received.</>
+            <>Marking off. The sheet reads as it will be received.</>
           )}
         </span>
         <span className="ml-auto text-neutral-500">Prints black either way.</span>

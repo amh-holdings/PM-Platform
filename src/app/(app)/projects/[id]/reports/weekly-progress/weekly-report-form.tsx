@@ -43,6 +43,14 @@ type Props = {
 // and writing it while hunting back through seven days of field reports in
 // another tab is how the box ends up written from memory.
 
+/**
+ * The boxes that are Phil's to fill in, marked the same red as the print
+ * preview. Applied by field, not by whether anything has been typed: a blank
+ * milestone date is exactly the one that needs finding, so it has to be red
+ * while it is still blank.
+ */
+const MINE = "text-[#b91c1c] dark:text-[#f87171]";
+
 export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -293,6 +301,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
               onChange={(e) => setDimensionCm(e.target.value)}
               disabled={issued}
               placeholder="Matt Clark"
+              className={MINE}
             />
           </Field>
           <Field label="EPC Reporting Manager">
@@ -301,6 +310,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
               onChange={(e) => setEpcManager(e.target.value)}
               disabled={issued}
               placeholder="Phil Horwitch"
+              className={MINE}
             />
           </Field>
           <div className="sm:col-span-2">
@@ -310,7 +320,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
                 onChange={(e) => setEpcTeam(e.target.value)}
                 rows={2}
                 disabled={issued}
-                className="w-full rounded-md border bg-background p-2 text-sm"
+                className={cn("w-full rounded-md border bg-background p-2 text-sm", MINE)}
                 placeholder="Project Manager: Mark Wooley"
               />
             </Field>
@@ -411,6 +421,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
               value={swppp}
               onChange={(e) => setSwppp(e.target.value)}
               disabled={issued}
+              className={MINE}
             />
           </Field>
           <div>
@@ -463,6 +474,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
                       setMilestones((m) => ({ ...m, [f.key]: e.target.value }))
                     }
                     disabled={issued}
+                    className={MINE}
                   />
                   <p className="text-[11px] leading-tight text-muted-foreground">{d?.basis}</p>
                 </div>
@@ -490,7 +502,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
             onChange={(e) => setLookaheadNote(e.target.value)}
             rows={2}
             disabled={issued}
-            className="w-full rounded-md border bg-background p-2 text-sm"
+            className={cn("w-full rounded-md border bg-background p-2 text-sm", MINE)}
             placeholder="Optional note, e.g. Panel delivery confirmed for the week of 7-Sep."
           />
           <LookaheadPreview view={view} />
@@ -904,7 +916,7 @@ function ContractorTable({
                     value={row.endDate ?? ""}
                     onChange={(e) => set(i, { endDate: e.target.value || null })}
                     disabled={disabled}
-                    className="h-8"
+                    className={cn("h-8", MINE)}
                   />
                 </td>
                 <td className="px-2 py-1.5">

@@ -877,22 +877,28 @@ export function issuedDrift(view: WeeklyReportView): string[] {
 }
 
 /**
- * Which boxes a human typed, and which the platform derived off the field
- * record.
+ * Which boxes on the sheet are Phil's to fill in.
  *
- * The distinction already exists in the data - `saved` holds ONLY overrides, so
- * a non-empty column there is by definition something a person wrote - it was
- * just never surfaced on the sheet. Reviewing the report before it goes out,
- * the first question is always "which of this did we write and which did the
- * platform work out", and the honest answer is one lookup away.
+ * Red is a WORKLIST, not a diff. It answers "what do I still have to do to
+ * this report" at a glance, so the answer cannot depend on whether anything
+ * has been typed yet - a blank report where every box is still the platform's
+ * is exactly the report that most needs the marking.
  *
- * A row is manual when its override is set, not when it merely differs from the
- * derivation: `Reset to derived` clears the override, and a box that has been
- * reset is back to being the platform's.
+ * Two things are marked:
  *
- * Deliberately reads the overrides even for an issued report. The frozen
- * payload records the values that were sent, not who wrote them, so the
- * overrides remain the only record of authorship.
+ *   1. Fields the platform CANNOT know. Names, the milestone dates the owner is
+ *      being committed to, a sub's contractual end date. These are commercial
+ *      facts that live in Phil's head or in a contract, not in the field
+ *      record, so they are red every week whether or not last week's answer
+ *      carried forward. A carried-forward date is a default, not a decision.
+ *
+ *   2. A derived box that has been written over. Rewriting the AI's summary
+ *      makes that prose ours, and the sheet should say so.
+ *
+ * Everything else - the narrative boxes as generated, man-hours, headcount, the
+ * look-ahead table, the photo page - is derived and stays black. And the photo
+ * page is left alone entirely: this is a marking for the sheet being filled in,
+ * and the photo page has nothing on it to fill.
  */
 export type WeeklyProvenance = {
   dimensionCm: boolean;
@@ -907,35 +913,37 @@ export type WeeklyProvenance = {
   risks: boolean;
   swppp: boolean;
   lookaheadNote: boolean;
-  photoNote: boolean;
   milestones: Record<string, boolean>;
-  /** Contractor key -> the cells a person typed, from `ContractorRow.overridden`. */
+  /** Contractor key -> the cells that are Phil's on that row. */
   contractors: Record<string, string[]>;
   equipment: Record<string, string[]>;
-  /** How many boxes in total, for the legend on the sheet. */
+  /** How many boxes are marked, for the legend. */
   manualCount: number;
 };
 
 export function weeklyProvenance(view: WeeklyReportView): WeeklyProvenance {
   const o = view.saved;
-  const typed = (v: string | null | undefined) => v != null && v.trim() !== "";
+  const written = (v: string | null | undefined) => v != null && v.trim() !== "";
 
+  // Always ours, whatever is or is not in the box. See (1) above.
   const milestones: Record<string, boolean> = {};
-  for (const f of MILESTONE_FIELDS) milestones[f.key] = typed(o?.milestones?.[f.key]);
+  for (const f of MILESTONE_FIELDS) milestones[f.key] = true;
 
-  // Contractor and equipment rows already carry the per-cell answer: the
-  // derivation stamps `overridden` as it merges the saved overrides in. A row
-  // typed in by hand has no derivation behind it at all, so every cell is ours.
-  //
   // Read off the frozen rows for an issued report, because those are the rows
   // that print - a sub added to the project after issue is not on the sheet and
   // must not be counted in the legend.
   const frozen = view.status === "issued" ? view.saved?.issued_payload : null;
+
+  // End Date is the one column on this table the platform cannot derive: it is
+  // a commercial date. Headcount and last-onsite are read off the field
+  // reports, so they stay black unless somebody corrected them.
   const contractors: Record<string, string[]> = {};
   for (const c of frozen?.contractors ?? view.contractors) {
-    contractors[c.key] = c.key.startsWith("manual:")
+    const cells = new Set<string>(c.key.startsWith("manual:")
       ? ["name", "scope", "headcount", "lastOnsite", "endDate"]
-      : c.overridden;
+      : c.overridden);
+    cells.add("endDate");
+    contractors[c.key] = Array.from(cells);
   }
   const equipment: Record<string, string[]> = {};
   for (const e of frozen?.equipment ?? view.equipment) {
@@ -943,21 +951,23 @@ export function weeklyProvenance(view: WeeklyReportView): WeeklyProvenance {
   }
 
   const p: WeeklyProvenance = {
-    // The three names are never derived from anything - they are typed once and
-    // carried forward, so a filled name is always a person's.
-    dimensionCm: typed(view.header.dimensionCm),
-    epcReportingManager: typed(view.header.epcReportingManager),
-    epcTeam: typed(view.header.epcTeam),
-    environment: typed(o?.environment_concerns),
-    security: typed(o?.security_concerns),
-    safety: typed(o?.safety_summary),
-    weather: typed(o?.weather_summary),
-    position: typed(o?.position_note),
-    workThisWeek: typed(o?.work_this_week),
-    risks: typed(o?.schedule_risks),
-    swppp: typed(o?.swppp_inspection_date),
-    lookaheadNote: typed(o?.lookahead_note),
-    photoNote: typed(o?.photo_note),
+    dimensionCm: true,
+    epcReportingManager: true,
+    epcTeam: true,
+    // The narrative boxes the platform writes. Black as generated, ours once
+    // written over.
+    environment: written(o?.environment_concerns),
+    security: written(o?.security_concerns),
+    safety: written(o?.safety_summary),
+    weather: written(o?.weather_summary),
+    position: written(o?.position_note),
+    workThisWeek: written(o?.work_this_week),
+    risks: written(o?.schedule_risks),
+    // Derived from the period's inspections when one was logged, but the date
+    // has to be right on a document the owner keeps, and nobody can confirm it
+    // from this screen. Ours to check every week.
+    swppp: true,
+    lookaheadNote: true,
     milestones,
     contractors,
     equipment,
@@ -978,7 +988,6 @@ export function weeklyProvenance(view: WeeklyReportView): WeeklyProvenance {
       p.risks,
       p.swppp,
       p.lookaheadNote,
-      p.photoNote,
     ].filter(Boolean).length +
     Object.values(milestones).filter(Boolean).length +
     Object.values(contractors).reduce((n, cells) => n + cells.length, 0) +
