@@ -368,6 +368,18 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
         </Banner>
       )}
 
+      {view.extraOverridesAvailable && !view.photoSelectionAvailable && (
+        <Banner tone="warn">
+          <p className="font-medium">Migration 0043 has not been applied.</p>
+          <p className="mt-1">
+            The photo picker below works and the report still prints the
+            automatic spread, but a choice cannot be remembered until{" "}
+            <code>db/migrations/0043_weekly_report_photo_selection.sql</code> is
+            run in the Supabase SQL editor.
+          </p>
+        </Banner>
+      )}
+
       {/* ---- Environment, security and safety ---- */}
       <Section
         title="Environment, security and safety"
@@ -706,6 +718,10 @@ function DerivedBox({
   rows: number;
   evidence?: WeeklyReportView["evidence"];
 }) {
+  // Same meaning as the red on the print preview: this box is ours, not the
+  // platform's. Shown here too because this is the screen the report is
+  // actually written on - being told on the preview which boxes we wrote is one
+  // click too late to be useful while writing them.
   const edited = value.trim() !== derived.value.trim();
   const [showEvidence, setShowEvidence] = useState(false);
 
@@ -746,7 +762,10 @@ function DerivedBox({
           onChange={(e) => onChange(e.target.value)}
           rows={rows}
           disabled={disabled}
-          className="w-full rounded-md border bg-background p-2 font-mono text-xs leading-relaxed"
+          className={cn(
+            "w-full rounded-md border bg-background p-2 font-mono text-xs leading-relaxed",
+            edited && "text-[#b91c1c] dark:text-[#f87171]",
+          )}
         />
         {showEvidence && evidence && (
           <div className="max-h-[28rem] space-y-2 overflow-y-auto rounded-md border bg-muted/30 p-2">

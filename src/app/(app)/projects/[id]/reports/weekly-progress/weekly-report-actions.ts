@@ -140,11 +140,18 @@ export async function saveWeeklyReport(input: WeeklyFormInput): Promise<WeeklyRe
             safety_summary: over(input.safetySummary, view.safety.value),
             position_note: over(input.positionNote, view.positionText),
             photo_note: input.photoNote.trim() || null,
-            // An empty array means "no choice made", which is what puts the
-            // report back on the automatic spread. A selection that happens to
-            // match the automatic one is still stored - the human confirmed it.
-            photo_keys: input.photoKeys as unknown as Json,
           }
+        : {}),
+      // 0043's column, gated separately. It was inside the block above, which
+      // meant an upsert on a database with 0042 but not 0043 named a column
+      // that does not exist and failed WHOLE - taking every other edit on the
+      // form with it.
+      //
+      // An empty array means "no choice made", which is what puts the report
+      // back on the automatic spread. A selection that happens to match the
+      // automatic one is still stored - the human confirmed it.
+      ...(view.photoSelectionAvailable
+        ? { photo_keys: input.photoKeys as unknown as Json }
         : {}),
       weather_summary: over(input.weatherSummary, view.weather.value),
       work_this_week: over(input.workThisWeek, view.workThisWeek.value),

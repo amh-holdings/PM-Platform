@@ -43,6 +43,16 @@ const PROBES = [
   ["0039_sub_dpr_drafts (updated_at)", "dprs", "updated_at"],
   ["0040_production_proposals", "daily_production", "confirmed_at"],
   ["0041_weekly_progress_reports", "weekly_progress_reports", null],
+  ["0042_weekly_report_safety_and_photos", "weekly_progress_reports", "safety_summary"],
+  ["0043_weekly_report_photo_selection", "weekly_progress_reports", "photo_keys"],
+];
+
+// 0029 (RLS policies) and 0044 (a data update plus a dropped index) leave no
+// artifact PostgREST can see. Both are written to be safe to re-run, so the
+// answer for them is always "run it", not "probe it".
+const UNPROBEABLE = [
+  ["0029_sub_read_schedule_and_subs", "SELECT policies for the sub roles"],
+  ["0044_production_no_confirmation_gate", "backfill + drop index"],
 ];
 
 const out = [];
@@ -55,3 +65,20 @@ console.table(out);
 const missing = out.filter((o) => o.live !== "LIVE");
 console.log(missing.length ? `\n${missing.length} unapplied:` : "\nEverything probed is live.");
 missing.forEach((m) => console.log(`  - ${m.migration}  (${m.probe})`));
+
+// 0044 has one observable consequence even though the migration itself does
+// not: no daily_production row should be left unconfirmed once it has run.
+const un = await sb
+  .from("daily_production")
+  .select("id", { count: "exact", head: true })
+  .is("confirmed_at", null);
+console.log(
+  un.error
+    ? `\ndaily_production unconfirmed: could not read (${un.error.message})`
+    : `\ndaily_production rows still unconfirmed: ${un.count} ${
+        un.count === 0 ? "(consistent with 0044 having run)" : "(0044 has NOT run)"
+      }`,
+);
+
+console.log("\nNot probeable from here, safe to re-run either way:");
+UNPROBEABLE.forEach(([n, what]) => console.log(`  - ${n}  (${what})`));

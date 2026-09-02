@@ -151,6 +151,8 @@ export type WeeklyReportView = {
   scheduleFlagsAvailable: boolean;
   /** False when migration 0042 is not applied, so the new boxes cannot save. */
   extraOverridesAvailable: boolean;
+  /** False when migration 0043 is not applied, so a photo choice cannot save. */
+  photoSelectionAvailable: boolean;
 };
 
 export type WeeklyPhoto = PhotoCandidate & {
@@ -190,8 +192,15 @@ const BASE_REPORT_COLS =
 
 /** The columns 0042 adds. Selected separately so a missing 0042 degrades the
  *  three new boxes to read-only instead of taking the whole page down. */
-const EXTRA_REPORT_COLS = "safety_summary, photo_note, position_note, photo_keys";
-const REPORT_COLS = `${BASE_REPORT_COLS}, ${EXTRA_REPORT_COLS}`;
+const EXTRA_REPORT_COLS = "safety_summary, photo_note, position_note";
+/** The column 0043 adds. Its own tier, because 0042 and 0043 were applied
+ *  separately in the real database and lumping them together meant a missing
+ *  0043 took 0042's three boxes down with it - Safety, Project position and the
+ *  photo note silently stopped saving, under a banner blaming a migration that
+ *  had in fact been applied. Each migration degrades only its own feature. */
+const PHOTO_SELECTION_COLS = "photo_keys";
+const REPORT_COLS = `${BASE_REPORT_COLS}, ${EXTRA_REPORT_COLS}, ${PHOTO_SELECTION_COLS}`;
+const REPORT_COLS_NO_PHOTO_KEYS = `${BASE_REPORT_COLS}, ${EXTRA_REPORT_COLS}`;
 
 /** Postgres `undefined_column`, and the PostgREST parse error it surfaces as. */
 function isMissingColumn(error: { code?: string } | null): boolean {
@@ -207,21 +216,27 @@ export async function loadWeeklyReport(
   // The saved row for this week, and the one before it. The previous week is
   // not decoration: it carries the header names and the agreed milestone dates
   // forward, which is what makes week two onward a five-minute job.
+  // Three tiers, narrowest last: everything, then without 0043's photo_keys,
+  // then the 0041 base. Each step down disables one feature rather than the
+  // page.
   let extraOverridesAvailable = true;
-  let savedRes = await supabase
-    .from("weekly_progress_reports")
-    .select(REPORT_COLS)
-    .eq("project_id", projectId)
-    .eq("week_ending", weekEnding)
-    .maybeSingle();
-  if (isMissingColumn(savedRes.error)) {
-    extraOverridesAvailable = false;
-    savedRes = await supabase
+  let photoSelectionAvailable = true;
+  const readSaved = (cols: string) =>
+    supabase
       .from("weekly_progress_reports")
-      .select(BASE_REPORT_COLS)
+      .select(cols)
       .eq("project_id", projectId)
       .eq("week_ending", weekEnding)
       .maybeSingle();
+
+  let savedRes = await readSaved(REPORT_COLS);
+  if (isMissingColumn(savedRes.error)) {
+    photoSelectionAvailable = false;
+    savedRes = await readSaved(REPORT_COLS_NO_PHOTO_KEYS);
+  }
+  if (isMissingColumn(savedRes.error)) {
+    extraOverridesAvailable = false;
+    savedRes = await readSaved(BASE_REPORT_COLS);
   }
 
   // 0041 not applied yet: the page still renders the derived report, it just
@@ -754,6 +769,7 @@ export async function loadWeeklyReport(
     })),
     scheduleFlagsAvailable,
     extraOverridesAvailable,
+    photoSelectionAvailable,
   };
 }
 
