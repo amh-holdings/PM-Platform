@@ -143,9 +143,15 @@ export default async function ProjectPayAppsPage({ params }: { params: Params })
           </thead>
           <tbody>
             {rows.map((r) => {
-              // Any negative figure makes the whole application a credit.
-              const credit =
+              // Negative completed or due means the application gives money
+              // back. Negative retainage alone is a release of retainage held
+              // on earlier applications, which is a different event - both are
+              // worth spotting from a scan of the App # column, so label them
+              // apart rather than calling everything a credit.
+              const givesBack =
                 isNegative(r.amount_due) || isNegative(r.total_completed);
+              const retainageRelease = isNegative(r.total_retainage);
+              const flag = givesBack || retainageRelease;
               return (
                 <tr
                   key={r.id}
@@ -154,7 +160,7 @@ export default async function ProjectPayAppsPage({ params }: { params: Params })
                   <td
                     className={cn(
                       "px-3 py-2 font-mono font-medium",
-                      credit && "text-red-700",
+                      flag && "text-red-700",
                     )}
                   >
                     <Link
@@ -163,9 +169,9 @@ export default async function ProjectPayAppsPage({ params }: { params: Params })
                     >
                       {r.app_number}
                     </Link>
-                    {credit && (
-                      <span className="ml-1.5 rounded bg-red-100 px-1.5 py-0.5 font-sans text-[10px] font-medium uppercase tracking-wide text-red-900">
-                        Credit
+                    {flag && (
+                      <span className="ml-1.5 whitespace-nowrap rounded bg-red-100 px-1.5 py-0.5 font-sans text-[10px] font-medium uppercase tracking-wide text-red-900">
+                        {givesBack ? "Credit" : "Retainage release"}
                       </span>
                     )}
                   </td>
