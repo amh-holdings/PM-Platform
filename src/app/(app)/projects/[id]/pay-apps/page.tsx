@@ -19,6 +19,15 @@ const STATUS_TONE: Record<string, string> = {
 // lib/ceo-report-financials so the two views of the money agree.
 const OUTSTANDING_STATUSES = new Set(["submitted", "approved", "pending"]);
 
+/**
+ * A revision application that gives money back (AFP3R and the like) carries
+ * negative figures. It reads as an ordinary application in a scan of the
+ * table, so flag the number and every negative cell in red.
+ */
+function isNegative(value: number | null | undefined): boolean {
+  return Number(value ?? 0) < 0;
+}
+
 export default async function ProjectPayAppsPage({ params }: { params: Params }) {
   await guardCapability("viewPayApps");
   const supabase = createClient();
@@ -100,13 +109,20 @@ export default async function ProjectPayAppsPage({ params }: { params: Params })
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
             Remaining due from client
           </div>
-          <div className="mt-1 text-2xl font-semibold text-amber-700">
+          <div
+            className={cn(
+              "mt-1 text-2xl font-semibold",
+              totalOutstanding < 0 ? "text-red-700" : "text-amber-700",
+            )}
+          >
             {formatCurrency(totalOutstanding)}
           </div>
           <div className="mt-0.5 text-xs text-muted-foreground">
-            {outstandingRows.length === 0
-              ? "Nothing outstanding"
-              : `${outstandingRows.length} pay app${outstandingRows.length === 1 ? "" : "s"} billed, not paid`}
+            {totalOutstanding < 0
+              ? "Credits exceed what is billed - owed back to the client"
+              : outstandingRows.length === 0
+                ? "Nothing outstanding"
+                : `${outstandingRows.length} pay app${outstandingRows.length === 1 ? "" : "s"} billed, not paid`}
           </div>
         </div>
       </div>
@@ -126,46 +142,79 @@ export default async function ProjectPayAppsPage({ params }: { params: Params })
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-b last:border-0 hover:bg-muted/30">
-                <td className="px-3 py-2 font-mono font-medium">
-                  <Link
-                    href={`/projects/${params.id}/pay-apps/${r.id}`}
-                    className="hover:underline"
-                  >
-                    {r.app_number}
-                  </Link>
-                </td>
-                <td className="px-3 py-2 text-xs">
-                  {formatDate(r.period_start)} - {formatDate(r.period_end)}
-                </td>
-                <td className="px-3 py-2">
-                  <span
+            {rows.map((r) => {
+              // Any negative figure makes the whole application a credit.
+              const credit =
+                isNegative(r.amount_due) || isNegative(r.total_completed);
+              return (
+                <tr
+                  key={r.id}
+                  className="border-b last:border-0 hover:bg-muted/30"
+                >
+                  <td
                     className={cn(
-                      "inline-flex rounded-full px-2 py-0.5 text-xs font-medium capitalize",
-                      STATUS_TONE[r.status ?? ""] ?? "bg-muted",
+                      "px-3 py-2 font-mono font-medium",
+                      credit && "text-red-700",
                     )}
                   >
-                    {r.status}
-                  </span>
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums">
-                  {formatCurrency(Number(r.total_completed ?? 0))}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums">
-                  {formatCurrency(Number(r.total_retainage ?? 0))}
-                </td>
-                <td className="px-3 py-2 text-right font-semibold tabular-nums">
-                  {formatCurrency(Number(r.amount_due ?? 0))}
-                </td>
-                <td className="px-3 py-2 text-xs text-muted-foreground">
-                  {r.submitted_at ? formatDate(r.submitted_at) : "-"}
-                </td>
-                <td className="px-3 py-2 text-xs text-muted-foreground">
-                  {r.paid_at ? formatDate(r.paid_at) : "-"}
-                </td>
-              </tr>
-            ))}
+                    <Link
+                      href={`/projects/${params.id}/pay-apps/${r.id}`}
+                      className="hover:underline"
+                    >
+                      {r.app_number}
+                    </Link>
+                    {credit && (
+                      <span className="ml-1.5 rounded bg-red-100 px-1.5 py-0.5 font-sans text-[10px] font-medium uppercase tracking-wide text-red-900">
+                        Credit
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-xs">
+                    {formatDate(r.period_start)} - {formatDate(r.period_end)}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={cn(
+                        "inline-flex rounded-full px-2 py-0.5 text-xs font-medium capitalize",
+                        STATUS_TONE[r.status ?? ""] ?? "bg-muted",
+                      )}
+                    >
+                      {r.status}
+                    </span>
+                  </td>
+                  <td
+                    className={cn(
+                      "px-3 py-2 text-right tabular-nums",
+                      isNegative(r.total_completed) && "text-red-700",
+                    )}
+                  >
+                    {formatCurrency(Number(r.total_completed ?? 0))}
+                  </td>
+                  <td
+                    className={cn(
+                      "px-3 py-2 text-right tabular-nums",
+                      isNegative(r.total_retainage) && "text-red-700",
+                    )}
+                  >
+                    {formatCurrency(Number(r.total_retainage ?? 0))}
+                  </td>
+                  <td
+                    className={cn(
+                      "px-3 py-2 text-right font-semibold tabular-nums",
+                      isNegative(r.amount_due) && "text-red-700",
+                    )}
+                  >
+                    {formatCurrency(Number(r.amount_due ?? 0))}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-muted-foreground">
+                    {r.submitted_at ? formatDate(r.submitted_at) : "-"}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-muted-foreground">
+                    {r.paid_at ? formatDate(r.paid_at) : "-"}
+                  </td>
+                </tr>
+              );
+            })}
             {rows.length === 0 && (
               <tr>
                 <td
