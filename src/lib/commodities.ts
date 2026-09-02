@@ -236,7 +236,11 @@ export const COMMODITIES: CommoditySpec[] = [
     sovItem: "8.01",
     contractSovItem: "8.01",
     rollupRowId: 5389806978994052,
-    placeholderTotal: 500,
+    // Contract quantity, not a placeholder: Sunstall subcontract Exhibit B
+    // line 2, "drive approximately 412 piles to the required embedment"
+    // (executed 2026-08-20). The live row is marked total_verified so a
+    // re-seed keeps it.
+    placeholderTotal: 412,
   },
   {
     key: "racking",
@@ -247,6 +251,10 @@ export const COMMODITIES: CommoditySpec[] = [
     sovItem: "8.01",
     contractSovItem: "8.01",
     rollupRowId: 3138007165308804,
+    // STILL A PLACEHOLDER. The Sunstall SOV gives pile and module counts but no
+    // racking row/table count, and this number is the denominator on SOV 8.01
+    // ($319,317.44). Needs the tracker row count off the FTC Solar layout
+    // before any racking percentage from this commodity can be trusted.
     placeholderTotal: 100,
   },
   {
@@ -258,7 +266,9 @@ export const COMMODITIES: CommoditySpec[] = [
     sovItem: "8.02",
     contractSovItem: "8.02",
     rollupRowId: 7641606792679300,
-    placeholderTotal: 12000,
+    // Contract quantity, not a placeholder: Sunstall subcontract Exhibit B
+    // line 4, "install approximately 2,356 modules" (executed 2026-08-20).
+    placeholderTotal: 2356,
   },
   {
     key: "cab_string_wire",

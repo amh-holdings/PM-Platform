@@ -53,7 +53,13 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
 
   // ---- Next-bill projection, as of today ----
   const [{ data: production }, { data: firstDpr }] = await Promise.all([
-    db.from("daily_production").select("commodity_id, quantity").eq("project_id", params.id),
+    // All tracker production, matching loadEvidence in sub-billing-run.ts. What
+    // the approved field record says was installed is what the next bill is
+    // projected from.
+    db
+      .from("daily_production")
+      .select("commodity_id, quantity")
+      .eq("project_id", params.id),
     db
       .from("dprs")
       .select("report_date")

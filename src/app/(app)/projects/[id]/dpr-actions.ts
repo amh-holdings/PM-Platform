@@ -1,10 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { TablesUpdate } from "@/lib/database.types";
+import { proposeProductionForReport } from "@/lib/production-proposal-run";
+import type { Database, TablesUpdate } from "@/lib/database.types";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -350,6 +352,19 @@ export async function submitDpr(input: DprSubmitInput): Promise<DprActionResult>
 // AHC users approve a submitted DPR. This applies the proposed task changes
 // to schedule_tasks, sets dprs.status='approved', and stamps last_dpr_at on
 // each affected task so the dashboard can show recency.
+//
+// IT ALSO FILLS THE COMMODITY TRACKER, and it has to.
+// There are two ways a Field Report reaches 'approved': the pin-by-pin review
+// in field-report-actions.ts, and this one. Only that one filled the tracker,
+// so any report approved from the DPR review screen produced NO commodity
+// production at all - the day read as zero work to the owner's weekly report
+// and to bill verification, with nothing on any screen saying why. Sweet
+// Springs 2026-08-24 is exactly that: an approved report, a CM log describing
+// basin construction, and a blank row.
+//
+// Approval is approval whichever button was pressed, so the same hook runs
+// here. Both paths call the one shared implementation - a second catch-up rule
+// would be a second source of truth for the owner's sheet.
 export async function approveDpr(
   dprId: string,
   projectId: string,
@@ -413,11 +428,20 @@ export async function approveDpr(
     .eq("id", dprId);
   if (stampErr) return { ok: false, error: stampErr.message };
 
+  // Never throws and never rolls the approval back - a tracker fill is laid on
+  // top of a decision that already stands. Same contract as the other path.
+  const proposal = await proposeProductionForReport(
+    createAdminClient() as unknown as SupabaseClient<Database>,
+    { projectId, dprId },
+  );
+  if (proposal.error) console.error("[production-proposal]", dprId, proposal.error);
+
   revalidatePath(`/projects/${projectId}`, "layout");
   revalidatePath(`/projects/${projectId}/dprs`);
   revalidatePath(`/projects/${projectId}/dprs/${dprId}`);
   revalidatePath(`/projects/${projectId}/billing`);
   revalidatePath(`/projects/${projectId}/costs`);
+  revalidatePath(`/projects/${projectId}/reports/commodity-tracker`);
   return { ok: true, appliedTaskCount: applied };
 }
 

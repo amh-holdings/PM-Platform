@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>QC Field-Report Test - Subcontractor Guide</title>
+<style>
+  :root{
+    --ink:#14181f; --muted:#5b6472; --line:#e2e6ec; --bg:#ffffff;
+    --brand:#0f3d2e; --brand2:#15694f; --amber:#b7791f; --amberbg:#fef3d6;
+    --red:#b42318; --redbg:#fde8e6; --green:#15803d; --greenbg:#e7f6ec;
+    --blue:#1d4ed8; --bluebg:#eef2ff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink); font-size:12.5px; line-height:1.5;}
+  .page{padding:0 6mm 10mm}
+  h1,h2,h3{line-height:1.2; margin:0}
+  a{color:var(--brand2); text-decoration:none}
+
+  /* Cover */
+  .cover{background:linear-gradient(135deg,var(--brand),var(--brand2));
+    color:#fff; padding:16mm 12mm 12mm; border-radius:0 0 14px 14px; margin-bottom:8mm}
+  .eyebrow{font-size:11px; letter-spacing:.14em; text-transform:uppercase; opacity:.85; font-weight:600}
+  .cover h1{font-size:30px; margin:8px 0 4px; font-weight:800; letter-spacing:-.01em}
+  .cover .sub{font-size:15px; opacity:.92; margin-bottom:16px}
+  .badge{display:inline-block; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.3);
+    padding:5px 12px; border-radius:999px; font-size:12px; font-weight:600}
+  .cover-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px 18px; margin-top:16px; max-width:520px}
+  .cover-grid div{font-size:12.5px}
+  .cover-grid b{display:block; font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; opacity:.8; font-weight:600; margin-bottom:1px}
+
+  h2{font-size:17px; color:var(--brand); margin:18px 0 8px; padding-bottom:5px; border-bottom:2px solid var(--line)}
+  h3{font-size:13.5px; margin:14px 0 5px}
+  p{margin:6px 0}
+  .lead{font-size:13.5px; color:#2a3140}
+
+  .card{border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin:10px 0; background:#fbfcfd}
+  .cred{display:grid; grid-template-columns:auto 1fr; gap:4px 14px; font-size:13px}
+  .cred b{color:var(--muted); font-weight:600}
+  code{background:#f1f3f6; padding:1px 6px; border-radius:5px; font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px}
+
+  table{width:100%; border-collapse:collapse; margin:10px 0; font-size:12px}
+  th,td{border:1px solid var(--line); padding:7px 9px; text-align:left; vertical-align:top}
+  th{background:#f3f6f4; color:var(--brand); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.04em}
+  td .n{font-weight:700; color:var(--brand2)}
+
+  .step{display:flex; gap:12px; margin:12px 0; page-break-inside:avoid}
+  .step .num{flex:0 0 28px; height:28px; background:var(--brand); color:#fff; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px}
+  .step .body{flex:1}
+  .step .body h3{margin:2px 0 3px}
+  figure{margin:8px 0 0; page-break-inside:avoid}
+  figure img{width:100%; border:1px solid var(--line); border-radius:8px; display:block}
+  figcaption{font-size:10.5px; color:var(--muted); margin-top:4px}
+  .fig-narrow{max-width:70%}
+
+  .callout{border-radius:10px; padding:11px 14px; margin:12px 0; page-break-inside:avoid}
+  .callout h3{margin:0 0 5px; font-size:13px}
+  .c-amber{background:var(--amberbg); border:1px solid #f0d99a}
+  .c-amber h3{color:var(--amber)}
+  .c-blue{background:var(--bluebg); border:1px solid #cfd8fb}
+  .c-blue h3{color:var(--blue)}
+  .c-green{background:var(--greenbg); border:1px solid #bfe4cb}
+  .c-green h3{color:var(--green)}
+  ul{margin:6px 0; padding-left:20px}
+  li{margin:3px 0}
+  .pill{display:inline-block; padding:1px 8px; border-radius:999px; font-size:10.5px; font-weight:700}
+  .p-amber{background:var(--amberbg); color:var(--amber)}
+  .p-green{background:var(--greenbg); color:var(--green)}
+  .p-red{background:var(--redbg); color:var(--red)}
+  .pb{page-break-before:always}
+  .foot{margin-top:16px; padding-top:8px; border-top:1px solid var(--line); font-size:10.5px; color:var(--muted)}
+  .logbox{border:1px dashed #c3cbd6; border-radius:8px; padding:10px 12px; background:#fff}
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="eyebrow">AHC PM Platform &nbsp;&middot;&nbsp; Quality Control Test</div>
+  <h1>Field Report Test Guide</h1>
+  <div class="sub">Your role: <b>Subcontractor Foreman (Civil)</b></div>
+  <span class="badge">Tester: Zarina &nbsp;&middot;&nbsp; 3-day run: Jul 21 - 23, 2026</span>
+  <div class="cover-grid">
+    <div><b>Website</b> pm-platform-nine.vercel.app</div>
+    <div><b>Your login</b> sub-civil@ahc.test</div>
+    <div><b>Password</b> SubCivil2026!</div>
+    <div><b>Works on</b> phone, tablet or laptop</div>
+  </div>
+</div>
+
+<div class="page">
+
+<p class="lead">Thanks for helping us test the field-reporting side of our project platform. For the next three days,
+please use it the way a real civil subcontractor foreman would: at the end of each work "day," file one field report
+covering what your crew did, mark it on the site plan, and add photos. Our Construction Manager (Mark) will review
+and approve your work. We are hunting for anything confusing, broken, or slow. There are no wrong answers here - if
+something feels off, that is exactly what we want to know.</p>
+
+<div class="card">
+  <h3 style="margin-top:0">Before you start</h3>
+  <div class="cred">
+    <b>Open</b><div><code>https://pm-platform-nine.vercel.app</code></div>
+    <b>Email</b><div><code>sub-civil@ahc.test</code></div>
+    <b>Password</b><div><code>SubCivil2026!</code></div>
+    <b>Project</b><div>Use <b>Test Project - Cash Flow</b> for everything.</div>
+  </div>
+  <p style="margin-bottom:0; font-size:11.5px; color:var(--muted)">On the sign-in screen, click <b>"Sign in with a password instead,"</b>
+  then enter the email and password above. Please change the password after the test.</p>
+</div>
+
+<h2>What you are testing: the daily loop</h2>
+<p>Every work day is one report. You describe the day, drop pins on the site plan for the work you did, attach photos,
+and submit. That is it. Here is the full walk-through - do it in order the first time.</p>
+
+<div class="step">
+  <div class="num">1</div>
+  <div class="body">
+    <h3>Sign in</h3>
+    <p>Go to the website, choose <b>Sign in with a password instead</b>, and log in with your email and password.</p>
+    <figure class="fig-narrow"><img src="assets/login.jpg" alt="Sign in screen"><figcaption>The sign-in screen. Use the password option, not the magic link.</figcaption></figure>
+  </div>
+</div>
+
+<div class="step">
+  <div class="num">2</div>
+  <div class="body">
+    <h3>Open the project and start a report</h3>
+    <p>Open <b>Test Project - Cash Flow</b>, go to the <b>Field Reports</b> tab, and click <b>New Field Report</b> (top right).</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="num">3</div>
+  <div class="body">
+    <h3>Fill in the day details</h3>
+    <p>Set the <b>report date</b>, <b>crew count</b>, and <b>hours per day</b> (total man-hours calculates itself).
+    Add the <b>weather</b> and a short <b>work narrative</b> of what the crew accomplished.</p>
+    <figure><img src="assets/sub_day_details.jpg" alt="Day details form"><figcaption>Day details. Man-hours fills in automatically from crew count times hours.</figcaption></figure>
+  </div>
+</div>
+
+<div class="step">
+  <div class="num">4</div>
+  <div class="body">
+    <h3>Say who is filing, then mark the work on the map</h3>
+    <p>Under <b>Work done - mark it on the map</b>, pick <b>Civil</b> in the "Subcontractor filing this report" dropdown.
+    Then <b>tap the site plan</b> wherever your crew worked - a pin drops. You can switch sheets (C1-01, C2-01, and so on)
+    to mark work on a different plan.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="num">5</div>
+  <div class="body">
+    <h3>Fill in the pin and attach a photo</h3>
+    <p>Each pin is one piece of work tied to a schedule item. Pick the <b>WBS / schedule item</b>, a <b>status</b>,
+    <b>% complete</b>, and the <b>installed quantity</b> with its unit (LF, EA, and so on). <b>Add at least one photo</b>,
+    then click <b>Save pin</b>. A saved pin turns green and shows <span class="pill p-green">Saved</span>.</p>
+    <figure><img src="assets/sub_pin_editor.jpg" alt="Pin editor"><figcaption>Filling in a pin: WBS item, status, % complete, installed quantity, a photo, then Save pin. All the starred fields are required.</figcaption></figure>
+  </div>
+</div>
+
+<div class="step">
+  <div class="num">6</div>
+  <div class="body">
+    <h3>(Optional) Log equipment, deliveries, delays, or safety</h3>
+    <p>Below the map you can add <b>equipment on site</b>, <b>deliveries</b>, <b>delays</b>, and any <b>safety incident or near miss</b>.
+    Skip these on day 1 if you want, but please exercise them by day 2.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="num">7</div>
+  <div class="body">
+    <h3>Submit</h3>
+    <p>Click <b>Submit Field Report</b>. Your report now shows <span class="pill p-amber">Submitted</span> and moves to Mark for review.</p>
+    <figure><img src="assets/sub_after_submit.jpg" alt="Field reports list after submitting"><figcaption>After submitting, your report appears in the Field Reports list marked Submitted.</figcaption></figure>
+  </div>
+</div>
+
+<div class="callout c-blue">
+  <h3>What happens next</h3>
+  <p style="margin:0">Mark (the Construction Manager) reviews each pin, attaches his own verification photo, and either <b>approves</b>
+  or <b>rejects</b> it. If he <b>rejects</b> a pin, it bounces back to you with a reason - fix it and re-submit. When he approves,
+  your reported progress flows onto the project schedule. You do not need to do anything to trigger his review.</p>
+</div>
+
+<h2 class="pb">Your 3-day test plan</h2>
+<p>Aim for a few reports each day so we cover the normal loop plus the messy real-world cases. File reports on
+different dates (you can back-date the report date) so we can test how corrections behave.</p>
+
+<table>
+  <thead><tr><th style="width:64px">Day</th><th>What to do</th><th>What we are checking</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><span class="n">Day 1</span><br>Jul 21</td>
+      <td>File one clean report end-to-end: day details, one pin with a photo, submit. Then check the Field Reports list shows it as Submitted.</td>
+      <td>The basic loop works and is easy to follow the first time without help.</td>
+    </tr>
+    <tr>
+      <td><span class="n">Day 2</span><br>Jul 22</td>
+      <td>File a report with <b>two or three pins</b> on different parts of the plan. Add an <b>equipment</b> row, a <b>delivery</b>, and a <b>delay</b>. On one report, tick <b>Near miss</b> and write a safety note. Try <b>editing a saved pin</b> before submitting.</td>
+      <td>The extra sections work, editing a pin works, and safety flags are obvious.</td>
+    </tr>
+    <tr>
+      <td><span class="n">Day 3</span><br>Jul 23</td>
+      <td>File a <b>correction</b>: report the same schedule item again on a later date with a <b>lower % complete</b> than before. Try marking work across <b>two different sheets</b> in one report. Re-submit anything Mark rejected.</td>
+      <td>Corrections and rejections flow back cleanly, and multi-sheet reports hold together.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout c-amber">
+  <h3>Please try to break it</h3>
+  <ul>
+    <li>Try to <b>submit without saving a pin</b>, or save a pin with a required field blank. Does it stop you clearly?</li>
+    <li>Enter a <b>% complete over 100</b>, or a negative quantity. What happens?</li>
+    <li>File <b>two reports for the same date</b>. Does it warn you?</li>
+    <li>Drop a pin, then <b>Remove</b> it. Add several photos to one pin, then delete one.</li>
+    <li>Do the whole thing <b>on your phone</b> - is anything too small, cut off, or hard to tap?</li>
+    <li>Start a report, leave, and come back. Is your draft still there?</li>
+  </ul>
+</div>
+
+<h2>How to report anything you find</h2>
+<p>When something is confusing, broken, or just annoying, jot it down. The more detail the better. For each issue, note:</p>
+<table>
+  <thead><tr><th style="width:26px">#</th><th>Date / time</th><th>What you were doing</th><th>What you expected</th><th>What actually happened</th><th>Phone or computer?</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>2</td><td></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>3</td><td></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>4</td><td></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>5</td><td></td><td></td><td></td><td></td><td></td></tr>
+  </tbody>
+</table>
+<p style="font-size:11.5px; color:var(--muted)">A screenshot is worth a thousand words - on most phones, press the side + volume buttons; on a Mac, Shift+Cmd+4.
+Send your notes and screenshots to Phil at the end of each day.</p>
+
+<div class="foot">AHC PM Platform - Quality Control Test - Subcontractor guide for Zarina. Test environment only; use the Test Project - Cash Flow project.</div>
+
+</div>
+</body>
+</html>

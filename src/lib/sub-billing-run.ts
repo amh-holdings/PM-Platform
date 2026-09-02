@@ -8,6 +8,7 @@
 // implementation is the point.
 
 import {
+  approvedToDateByItem,
   runBillChecks,
   verifyLine,
   type BillHeader,
@@ -52,6 +53,13 @@ export async function loadEvidence(
       .select("commodity_id, quantity, production_date")
       .eq("project_id", projectId)
       .lte("production_date", asOf),
+      // EVERY ROW ON THE TRACKER COUNTS, whoever put it there. The tracker is a
+      // report of the approved field record, not a second approval gate on top
+      // of it, and this query is verification evidence rather than the bill
+      // itself: it computes what the record says was installed so a variance
+      // against what the sub billed can be flagged. Filtering rows out here did
+      // not make a bill safer, it made an approved day read as no work done and
+      // flagged an honest sub for over-billing.
   ]);
 
   const installed = new Map<string, number>();
@@ -124,21 +132,40 @@ export async function runVerificationCore(
   const lines = lineRows ?? [];
   const sovLines = (sovRows ?? []) as unknown as SovLine[];
 
-  // Continuity runs against whatever we last recorded, approved or not.
+  // Continuity runs against everything we have recorded EXCEPT rejected
+  // applications. A bill AHC refused is not the accepted starting point for
+  // the bill that replaces it. Every remaining application is pulled, not just
+  // the newest, because approved-to-date is a sum across all of them.
   const { data: priorRows } = await db
     .from("sub_pay_apps")
     .select("id, app_number, period_end, billed_to_date, approved_this_period, status")
     .eq("subcontractor_id", app.subcontractor_id)
     .lt("app_number", app.app_number)
-    .order("app_number", { ascending: false })
-    .limit(1);
+    .neq("status", "rejected")
+    .order("app_number", { ascending: false });
   let prior: PriorBill | null = null;
   if (priorRows?.[0]) {
-    const { data: pl } = await db
-      .from("sub_pay_app_lines")
-      .select("item_number, total_completed")
-      .eq("sub_pay_app_id", priorRows[0].id);
-    prior = { ...priorRows[0], lines: pl ?? [] } as PriorBill;
+    const [{ data: latestLines }, { data: allLines }] = await Promise.all([
+      db
+        .from("sub_pay_app_lines")
+        .select("item_number, total_completed")
+        .eq("sub_pay_app_id", priorRows[0].id),
+      db
+        .from("sub_pay_app_lines")
+        .select("item_number, this_period, materials_stored, approved_this_period")
+        .in("sub_pay_app_id", priorRows.map((p) => p.id)),
+    ]);
+    const approvedByItem = approvedToDateByItem(allLines ?? []);
+    let approvedToDate = 0;
+    approvedByItem.forEach((v) => {
+      approvedToDate += v;
+    });
+    prior = {
+      ...priorRows[0],
+      lines: latestLines ?? [],
+      approvedByItem,
+      approvedToDate: Math.round(approvedToDate * 100) / 100,
+    } as PriorBill;
   }
 
   // ---- Pass 1: arithmetic and continuity ----

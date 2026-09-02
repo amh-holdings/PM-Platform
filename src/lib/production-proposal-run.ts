@@ -10,6 +10,15 @@
 // resubmitFieldReportPin. Nothing here is reachable without an approval that
 // passed its own role check first.
 //
+// WHAT A PROPOSED ROW IS
+// It is filed production, not a question. An approved Field Report is the
+// project's record of the day, and the tracker's job is to report that record -
+// so the row lands confirmed and flows straight to the owner's sheet and to
+// bill verification. `source = 'field_report'` and `proposal_basis` preserve
+// how the figure was reached; Phil corrects it on the tracker like any other
+// number. The one thing that still distinguishes machine from human is rate
+// calibration, in loadConfirmedHistory below.
+//
 // WHY IT NEVER THROWS
 // A proposal is a convenience laid on top of a decision that already stands.
 // If it fails, the CM's approval must not roll back and the review board must
@@ -48,11 +57,17 @@ export type ProposalRunResult = {
 
 /**
  * Assemble the evidence for every date on a project that already has a
- * CONFIRMED percent on record, so a daily rate can be calibrated from it.
+ * HUMAN-AUTHORED percent on record, so a daily rate can be calibrated from it.
  *
- * Deliberately reads confirmed rows only. Calibrating off other proposals would
- * let one machine estimate justify the next, and the whole series would drift
+ * Deliberately reads `manual` and `backfill` rows only - the figures Phil typed
+ * on the tracker and the reviewed historical reconstruction. `field_report`
+ * rows are the proposer's own past output, and calibrating off those would let
+ * one machine estimate justify the next: the rate is a fixed point under its
+ * own output, so the series would coast on whatever it last guessed and drift
  * away from the last number a human actually stood behind.
+ *
+ * This is the ONLY thing that still cares who produced a number. Nothing about
+ * billing or the owner push does - see loadEvidence in sub-billing-run.ts.
  */
 async function loadConfirmedHistory(
   admin: Admin,
@@ -72,7 +87,7 @@ async function loadConfirmedHistory(
     .select("commodity_id, production_date, quantity")
     .eq("project_id", projectId)
     .in("commodity_id", pctIds)
-    .not("confirmed_at", "is", null)
+    .in("source", ["manual", "backfill"])
     .gt("quantity", 0);
   if (!rows?.length) return empty;
 
@@ -174,9 +189,9 @@ export async function proposeProductionForReport(
     const commodities: ProposalCommodity[] = commodityRows ?? [];
     if (commodities.length === 0) return { written: 0, notes, error: null };
 
-    // Never touch a day that is already on the tracker. Whether those rows were
-    // confirmed by Phil or proposed by an earlier run, they are the current
-    // answer for that date and a second approval must not restate it.
+    // Never touch a day that is already on the tracker. Whether Phil typed those
+    // rows or an earlier run proposed them, they are the current answer for that
+    // date and a second approval must not restate it.
     const { data: existing } = await admin
       .from("daily_production")
       .select("commodity_id")
@@ -236,7 +251,17 @@ export async function proposeProductionForReport(
         source: "field_report" as const,
         dpr_id: input.dprId,
         proposal_basis: v.basis,
-        confirmed_at: null,
+        // FILED, NOT PENDING. The CM's approval of the report IS the approval
+        // of the day's production - the tracker reports what the approved
+        // record says, it does not hold a second opinion about it. So the row
+        // lands live: it counts toward the owner's sheet and toward bill
+        // verification from the moment the report is approved.
+        //
+        // `source` and `proposal_basis` still say exactly where the number came
+        // from and how it was reached, so nothing about the audit trail is lost
+        // by not making Phil click. He overrides on the tracker like any other
+        // figure, and that override is what becomes 'manual'.
+        confirmed_at: new Date().toISOString(),
       }));
 
     for (const f of result.flags) notes.push(`${f.commodityKey}: ${f.note}`);

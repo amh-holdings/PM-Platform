@@ -50,23 +50,34 @@ export default async function ProductionPage({
 
   const supabase = createClient();
 
-  // The default window reaches back far enough to include everything still
-  // waiting on a decision. A fixed 14 days quietly hid the problem this page
-  // was built to surface: when the tracker had gone weeks without an entry, the
-  // untouched days were off the bottom of the range and it looked idle rather
-  // than behind. An explicit ?from/?to always wins.
+  // The default window reaches back far enough to include the oldest approved
+  // report that still has nothing on the tracker. A fixed 14 days quietly hid
+  // the problem this page was built to surface: when the tracker had gone weeks
+  // without an entry, the untouched days were off the bottom of the range and it
+  // looked idle rather than behind. An explicit ?from/?to always wins.
   const fallback = defaultRange();
   let defaultFrom = fallback.from;
   if (!isIsoDate(searchParams.from)) {
-    const { data: oldestPending } = await supabase
-      .from("daily_production")
-      .select("production_date")
-      .eq("project_id", params.id)
-      .is("confirmed_at", null)
-      .order("production_date", { ascending: true })
-      .limit(1);
-    const pendingFrom = oldestPending?.[0]?.production_date;
-    if (pendingFrom && pendingFrom < defaultFrom) defaultFrom = pendingFrom;
+    const [{ data: oldestApproved }, { data: filedDates }] = await Promise.all([
+      supabase
+        .from("dprs")
+        .select("report_date")
+        .eq("project_id", params.id)
+        .eq("status", "approved")
+        .lt("report_date", defaultFrom)
+        .order("report_date", { ascending: true })
+        .limit(60),
+      supabase
+        .from("daily_production")
+        .select("production_date")
+        .eq("project_id", params.id)
+        .lt("production_date", defaultFrom),
+    ]);
+    const filed = new Set((filedDates ?? []).map((r) => r.production_date));
+    const firstGap = (oldestApproved ?? [])
+      .map((r) => r.report_date)
+      .find((d) => !filed.has(d));
+    if (firstGap && firstGap < defaultFrom) defaultFrom = firstGap;
   }
 
   const from = isIsoDate(searchParams.from) ? searchParams.from : defaultFrom;
@@ -134,23 +145,23 @@ export default async function ProductionPage({
 
   const keyById = new Map(commodities.map((c) => [c.id, c.key]));
   const values: Record<string, Record<string, number>> = {};
-  // Rows an approved Field Report proposed that nobody has stood behind yet.
-  // Kept separate from `values` so the grid can show them as a question rather
-  // than as filed production.
-  const proposed: Record<string, Record<string, string>> = {};
+  // How each auto-filled figure was reached. These rows are filed production
+  // like any other - this map is the reasoning behind them, surfaced so a
+  // number can be judged rather than just read, not a queue awaiting sign-off.
+  const autoBasis: Record<string, Record<string, string>> = {};
   let syncedCount = 0;
-  let proposedCount = 0;
+  let autoFilledCount = 0;
   for (const row of productionRes.data ?? []) {
     const key = keyById.get(row.commodity_id);
     if (!key) continue;
     values[row.production_date] ??= {};
     values[row.production_date][key] = Number(row.quantity);
     if (row.synced_at) syncedCount += 1;
-    if (row.confirmed_at == null) {
-      proposed[row.production_date] ??= {};
-      proposed[row.production_date][key] =
-        row.proposal_basis ?? "Proposed from the day's approved Field Report.";
-      proposedCount += 1;
+    if (row.source === "field_report") {
+      autoBasis[row.production_date] ??= {};
+      autoBasis[row.production_date][key] =
+        row.proposal_basis ?? "Filled from the day's approved Field Report.";
+      autoFilledCount += 1;
     }
   }
 
@@ -178,18 +189,16 @@ export default async function ProductionPage({
   // percent scopes show true progress rather than a slice of it.
   const { data: allRows } = await supabase
     .from("daily_production")
-    .select("commodity_id, quantity, confirmed_at")
+    .select("commodity_id, quantity")
     .eq("project_id", params.id);
-  // Confirmed and pending are totalled apart on purpose. The percent-complete
-  // the owner sees has to be the figure someone stood behind; unconfirmed
-  // proposals are shown next to it as a pending delta, never folded into it.
+  // One total. Every row on the tracker is filed production, so the percent the
+  // owner sees is the percent this page shows - there is no second figure held
+  // back behind it.
   const projectTotals: Record<string, number> = {};
-  const projectPending: Record<string, number> = {};
   for (const row of allRows ?? []) {
     const key = keyById.get(row.commodity_id);
     if (!key) continue;
-    const bucket = row.confirmed_at == null ? projectPending : projectTotals;
-    bucket[key] = (bucket[key] ?? 0) + Number(row.quantity);
+    projectTotals[key] = (projectTotals[key] ?? 0) + Number(row.quantity);
   }
 
   return (
@@ -198,8 +207,8 @@ export default async function ProductionPage({
         <div>
           <p className="text-xs text-muted-foreground">
             The owner&apos;s deliverable. Daily quantities, not running totals.
-            Pull the dates you need, fill them from the field reports alongside,
-            and save.
+            Approved field reports fill themselves in here. Pull the dates you
+            need, correct anything the report got wrong, and save.
           </p>
         </div>
       </div>
@@ -209,14 +218,13 @@ export default async function ProductionPage({
         commodities={commodities}
         dates={dates}
         initialValues={values}
-        proposed={proposed}
+        autoBasis={autoBasis}
         evidence={evidence}
         projectTotals={projectTotals}
-        projectPending={projectPending}
         range={range}
         canEdit={canEdit}
         syncedCount={syncedCount}
-        proposedCount={proposedCount}
+        autoFilledCount={autoFilledCount}
       />
     </div>
   );

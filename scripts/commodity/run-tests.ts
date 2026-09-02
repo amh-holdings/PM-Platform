@@ -40,11 +40,15 @@ const MIGRATIONS = [
   // 0036 corrects the ownership model: daily production is AHC's deliverable to
   // the owner, filed by Phil, NOT something the subcontractor enters.
   "0036_daily_production_phil_only.sql",
-  // 0040 adds the confirmation flag that separates a machine proposal from a
-  // number Phil filed. Applying it here proves the backfill statement and the
-  // partial index actually run, not just that the file exists.
+  // 0040 added a confirmation flag; 0044 retires it. Both are applied here so
+  // the retirement is proved to run against the schema 0040 actually left
+  // behind - including dropping the partial index it created.
   "0040_production_proposals.sql",
+  "0044_production_no_confirmation_gate.sql",
 ].map((f) => join(__dirname, "..", "..", "db", "migrations", f));
+
+// Application source, for the checks that assert a call site exists.
+const SRC = join(__dirname, "..", "..", "src");
 
 // ---- tiny test runner ----
 let passed = 0;
@@ -601,22 +605,28 @@ async function main() {
     JSON.stringify(pinned.values)
   );
 
-  // ---------- integration: the confirmation flag ----------
+  // ---------- integration: provenance, not a gate ----------
+  // The tracker reports the approved field record. An approved report's
+  // production is filed the moment it is approved - it is not held pending a
+  // second sign-off - so these tests assert the row is LIVE and that the only
+  // thing provenance still changes is rate calibration.
   const { rows: confCols } = await db.query<{ column_name: string }>(
     `select column_name from information_schema.columns
       where table_name = 'daily_production'
         and column_name in ('confirmed_at','confirmed_by','proposal_basis')`
   );
   check(
-    "CONF-01 migration 0040 adds the confirmation columns",
+    "CONF-01 the provenance columns exist",
     confCols.length === 3,
     `got ${confCols.map((c) => c.column_name).join(",")}`
   );
 
+  // Written exactly as proposeProductionForReport writes it.
   await db.query(
     `insert into public.daily_production
-       (project_id, commodity_id, production_date, quantity, source, proposal_basis)
-     values ($1, $2, '2026-08-25', 3.5, 'field_report', '5 loads, crew 6')`,
+       (project_id, commodity_id, production_date, quantity, source,
+        proposal_basis, confirmed_at)
+     values ($1, $2, '2026-08-25', 3.5, 'field_report', '5 loads, crew 6', now())`,
     [P1, pilesP1]
   );
   const { rows: pending } = await db.query<{ count: string }>(
@@ -624,22 +634,66 @@ async function main() {
       where confirmed_at is null and production_date = '2026-08-25'`
   );
   check(
-    "CONF-02 a proposed row lands unconfirmed",
-    pending[0].count === "1",
-    `got ${pending[0].count}`
+    "CONF-02 an approved report's production lands filed, not pending",
+    pending[0].count === "0",
+    `${pending[0].count} row(s) landed unconfirmed`
   );
 
-  // The whole safety story: this is the filter billing applies.
+  // The regression this whole change exists to prevent: an approved day reading
+  // as no work done because nobody clicked a button.
   const { rows: billable } = await db.query<{ total: string }>(
     `select coalesce(sum(quantity),0)::text as total from public.daily_production
-      where commodity_id = $1 and confirmed_at is not null`,
+      where commodity_id = $1`,
     [pilesP1]
   );
   check(
-    "CONF-03 an unconfirmed proposal is invisible to the billing filter",
-    !billable[0].total.startsWith("3.5"),
+    "CONF-03 an approved report's production counts toward billing evidence",
+    Number(billable[0].total) >= 3.5,
     `billable total is ${billable[0].total}`
   );
+
+  // Provenance still matters in exactly one place: the proposer calibrates its
+  // daily rate from human-authored rows only. Feeding its own past output back
+  // in would let one estimate justify the next.
+  const { rows: calib } = await db.query<{ total: string }>(
+    `select coalesce(sum(quantity),0)::text as total from public.daily_production
+      where commodity_id = $1 and source in ('manual','backfill')`,
+    [pilesP1]
+  );
+  check(
+    "CONF-04 rate calibration excludes the proposer's own rows",
+    !calib.some((r) => Number(r.total) >= 3.5),
+    `calibration total is ${calib[0].total}, which includes the field_report row`
+  );
+
+  // ---------- every approval path fills the tracker ----------
+  // A Field Report reaches 'approved' from two places. For a while only one of
+  // them proposed production, so a report approved from the DPR review screen
+  // filled nothing and the day read as zero work to the owner and to billing -
+  // silently, because a blank row looks the same as a quiet day. Sweet Springs
+  // 2026-08-24 was that bug in the wild.
+  //
+  // This is a source check rather than a behavioural one on purpose: the defect
+  // was a MISSING CALL SITE, which no amount of testing the proposer itself
+  // would ever have caught.
+  const APPROVAL_PATHS = [
+    join(SRC, "app/(app)/projects/[id]/dpr-actions.ts"),
+    join(SRC, "app/(app)/projects/[id]/field-report-actions.ts"),
+  ];
+  for (const file of APPROVAL_PATHS) {
+    const name = file.split("/").pop();
+    let src = "";
+    try {
+      src = readFileSync(file, "utf8");
+    } catch {
+      src = "";
+    }
+    check(
+      `PATH-${name} approving a report proposes the day's production`,
+      src.includes("proposeProductionForReport"),
+      `${name} sets a report to approved but never calls proposeProductionForReport`
+    );
+  }
 
   // ---------- summary ----------
   console.log(`\n${passed} passed, ${failed} failed`);

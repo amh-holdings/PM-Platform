@@ -32,15 +32,14 @@ type Props = {
   commodities: Commodity[];
   dates: string[];
   initialValues: Record<string, Record<string, number>>;
-  /** date -> commodity key -> why this number was proposed. */
-  proposed: Record<string, Record<string, string>>;
+  /** date -> commodity key -> how this auto-filled number was reached. */
+  autoBasis: Record<string, Record<string, string>>;
   evidence: Record<string, Evidence>;
   projectTotals: Record<string, number>;
-  projectPending: Record<string, number>;
   range: { from: string; to: string };
   canEdit: boolean;
   syncedCount: number;
-  proposedCount: number;
+  autoFilledCount: number;
 };
 
 const CATEGORY_LABEL = {
@@ -70,14 +69,13 @@ export function ProductionGrid({
   commodities,
   dates,
   initialValues,
-  proposed,
+  autoBasis,
   evidence,
   projectTotals,
-  projectPending,
   range,
   canEdit,
   syncedCount,
-  proposedCount,
+  autoFilledCount,
 }: Props) {
   const router = useRouter();
 
@@ -96,11 +94,11 @@ export function ProductionGrid({
     return v == null ? "" : String(v);
   }
 
-  // A cell is a live proposal only until Phil touches it: once he types, the
-  // number is his and the amber treatment would be misleading.
-  function proposalBasis(date: string, key: string): string | null {
+  // The report's reasoning stands only until Phil types over it: once he does,
+  // the number is his and attributing it to the report would be misleading.
+  function reportBasis(date: string, key: string): string | null {
     if (edits.has(cellKey(date, key))) return null;
-    return proposed[date]?.[key] ?? null;
+    return autoBasis[date]?.[key] ?? null;
   }
 
   function patch(date: string, key: string, value: string) {
@@ -120,9 +118,6 @@ export function ProductionGrid({
     if (showAll) return commodities;
     const withData = commodities.filter((c) => {
       if ((projectTotals[c.key] ?? 0) > 0) return true;
-      // A scope whose first-ever production is still an unconfirmed proposal
-      // has to get a column, or the thing awaiting review is invisible.
-      if ((projectPending[c.key] ?? 0) > 0) return true;
       return dates.some((d) => {
         const v = currentValue(d, c.key);
         return v !== "" && Number(v) > 0;
@@ -130,7 +125,7 @@ export function ProductionGrid({
     });
     return withData.length > 0 ? withData : commodities.slice(0, 5);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commodities, showAll, projectTotals, projectPending, dates, edits, initialValues]);
+  }, [commodities, showAll, projectTotals, dates, edits, initialValues]);
 
   const windowTotals = useMemo(() => {
     const out: Record<string, number> = {};
@@ -161,18 +156,6 @@ export function ProductionGrid({
 
   const dirtyCount = edits.size;
 
-  // Proposals sitting on the dates currently pulled up. Confirming is a save of
-  // the same numbers, so the button doubles as "I agree with all of these".
-  const pendingInView = useMemo(() => {
-    let n = 0;
-    for (const d of dates) {
-      for (const c of activeCommodities) {
-        if (!edits.has(cellKey(d, c.key)) && proposed[d]?.[c.key] != null) n += 1;
-      }
-    }
-    return n;
-  }, [dates, activeCommodities, proposed, edits]);
-
   function applyRange() {
     router.push(`/projects/${projectId}/production?from=${from}&to=${to}`);
   }
@@ -180,8 +163,11 @@ export function ProductionGrid({
   async function onSave() {
     setError(null);
     setSaved(null);
-    if (dirtyCount + pendingInView === 0) return;
+    if (dirtyCount === 0) return;
     setSaving(true);
+    // Only what Phil actually typed. Auto-filled cells are already filed, so
+    // sweeping them into the save would rewrite untouched rows as his and cost
+    // the tracker the provenance that says the report produced them.
     const cells = Array.from(edits.entries()).map(([k, raw]) => {
       const [productionDate, commodityKey] = k.split("|");
       return {
@@ -190,18 +176,6 @@ export function ProductionGrid({
         quantity: raw.trim() === "" ? 0 : Number(raw),
       };
     });
-    // Untouched proposals go up with the edits. Leaving them behind would mean
-    // correcting one cell silently confirmed nothing else, and the amber would
-    // still be sitting there after a save that looked like it cleared the day.
-    for (const d of dates) {
-      for (const c of activeCommodities) {
-        if (edits.has(cellKey(d, c.key))) continue;
-        if (proposed[d]?.[c.key] == null) continue;
-        const v = initialValues[d]?.[c.key];
-        if (v == null) continue;
-        cells.push({ productionDate: d, commodityKey: c.key, quantity: v });
-      }
-    }
     const res = await saveDailyProduction({ projectId, cells });
     setSaving(false);
     if (!res.ok) {
@@ -210,7 +184,7 @@ export function ProductionGrid({
     }
     setEdits(new Map());
     setSaved(
-      `Filed ${res.written} value${res.written === 1 ? "" : "s"}. They now count toward billing and the owner push.`,
+      `Filed ${res.written} correction${res.written === 1 ? "" : "s"}.`,
     );
     router.refresh();
   }
@@ -258,15 +232,13 @@ export function ProductionGrid({
               <Button
                 type="button"
                 onClick={onSave}
-                disabled={saving || dirtyCount + pendingInView === 0}
+                disabled={saving || dirtyCount === 0}
               >
                 {saving
                   ? "Saving..."
                   : dirtyCount > 0
                     ? `Save ${dirtyCount} change${dirtyCount === 1 ? "" : "s"}`
-                    : pendingInView > 0
-                      ? `Confirm ${pendingInView} proposed`
-                      : "Saved"}
+                    : "Saved"}
               </Button>
             )}
           </div>
@@ -277,14 +249,15 @@ export function ProductionGrid({
             Read-only. The daily production report is filed by Phil.
           </p>
         )}
-        {proposedCount > 0 && (
-          <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
-            <span className="font-medium">
-              {proposedCount} value{proposedCount === 1 ? "" : "s"} proposed from
-              approved Field Reports.
+        {autoFilledCount > 0 && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">
+              {autoFilledCount} value{autoFilledCount === 1 ? "" : "s"} filled
+              from approved Field Reports.
             </span>{" "}
-            Shown in amber below. Hover a cell for the reasoning. They are held
-            out of billing and out of the owner&apos;s sheet until you save them.
+            Marked below. Hover a cell for how the figure was reached, or open
+            the day&apos;s report on the right. They are already counted - type
+            over any that reads wrong.
           </p>
         )}
         {uncoveredDays.length > 0 && (
@@ -353,7 +326,7 @@ export function ProductionGrid({
                       </span>
                     </td>
                     {activeCommodities.map((c) => {
-                      const basis = proposalBasis(date, c.key);
+                      const basis = reportBasis(date, c.key);
                       return (
                         <td key={c.key} className="px-1 py-1">
                           <input
@@ -363,7 +336,7 @@ export function ProductionGrid({
                             inputMode="decimal"
                             aria-label={
                               basis
-                                ? `${c.label} on ${date}, proposed and awaiting confirmation`
+                                ? `${c.label} on ${date}, filled from the approved field report`
                                 : `${c.label} on ${date}`
                             }
                             title={basis ?? undefined}
@@ -374,8 +347,11 @@ export function ProductionGrid({
                             className={cn(
                               "h-8 w-24 rounded-md border bg-background px-2 text-right text-sm tabular-nums",
                               "focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60",
-                              basis &&
-                                "border-amber-500/70 bg-amber-500/10 text-amber-900 dark:text-amber-200",
+                              // Filed from the report, not pending on anyone. A
+                              // dotted underline says "there is a story behind
+                              // this figure, hover it" without the alarm colour
+                              // that used to mean "unbilled until you click".
+                              basis && "border-dashed border-muted-foreground/50",
                               edits.has(cellKey(date, c.key)) &&
                                 "border-foreground/60 bg-accent/40",
                             )}
@@ -424,13 +400,13 @@ export function ProductionGrid({
                               {ev?.cm || "none"}
                             </p>
                           </div>
-                          {Object.keys(proposed[date] ?? {}).length > 0 && (
+                          {Object.keys(autoBasis[date] ?? {}).length > 0 && (
                             <div>
                               <span className="font-medium text-foreground">
-                                How these numbers were proposed
+                                How these numbers were reached
                               </span>
                               <ul className="mt-0.5 space-y-1">
-                                {Object.entries(proposed[date] ?? {}).map(
+                                {Object.entries(autoBasis[date] ?? {}).map(
                                   ([key, basis]) => (
                                     <li key={key}>
                                       <span className="font-medium">
@@ -465,11 +441,10 @@ export function ProductionGrid({
               </tr>
               <tr className="bg-muted/20 text-xs text-muted-foreground">
                 <td className="sticky left-0 z-10 bg-muted/20 px-3 py-2 uppercase tracking-wide">
-                  Project to date (confirmed)
+                  Project to date
                 </td>
                 {activeCommodities.map((c) => {
                   const total = projectTotals[c.key] ?? 0;
-                  const pending = projectPending[c.key] ?? 0;
                   const target = c.totalQuantity;
                   const pct =
                     c.uom === "%"
@@ -480,14 +455,6 @@ export function ProductionGrid({
                   return (
                     <td key={c.key} className="px-3 py-2 text-right tabular-nums">
                       {Math.round(total * 100) / 100}
-                      {pending > 0 && (
-                        <span
-                          className="ml-1 text-amber-700 dark:text-amber-300"
-                          title="Proposed from approved reports, not yet confirmed. Excluded from this percentage."
-                        >
-                          +{Math.round(pending * 100) / 100}
-                        </span>
-                      )}
                       {pct != null && (
                         <div
                           className={cn(

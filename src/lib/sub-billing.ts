@@ -103,6 +103,15 @@ export type PriorBill = {
   approved_this_period: number | null;
   status: string;
   lines: { item_number: string; total_completed: number | null }[];
+  /**
+   * Cumulative approved-to-date per item across every prior application that
+   * counts as history. This, not the as-billed total, is what the next bill's
+   * previous column must open from. Optional so callers that have not been
+   * updated fall back to the old as-billed comparison rather than breaking.
+   */
+  approvedByItem?: Map<string, number>;
+  /** Sum of approvedByItem, for the header-level carry-forward check. */
+  approvedToDate?: number | null;
 };
 
 export type SubContext = {
@@ -119,8 +128,50 @@ export type SubContext = {
 
 const n = (v: number | null | undefined) => Number(v ?? 0);
 const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
+const round2 = (v: number) => Math.round(v * 100) / 100;
 const money = (v: number) =>
   v.toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+/**
+ * Cumulative approved-to-date per SOV item, across a set of prior applications.
+ *
+ * This is what the next bill's "from previous" column must be seeded with.
+ * Seeding it from the as-billed total instead lets anything AHC disallowed
+ * become payable on the following bill: approve $60,000 against a $100,000
+ * request and the sub's next application legitimately opens at $100,000
+ * previously billed, every arithmetic check passes, and the $40,000 is
+ * conceded without anyone deciding to concede it.
+ *
+ * Two deliberate details:
+ *
+ *   - A line with no recorded decision (approved_this_period null) falls back
+ *     to the amount billed. Absent a decision nothing has been disallowed, and
+ *     reading silence as a zero would understate the baseline and re-open work
+ *     the sub has already been paid for.
+ *   - Stored material carries forward as billed. It is not what the CM
+ *     percentage-verifies, so it has no approved figure of its own; dropping it
+ *     would let the sub re-bill material that has already been paid.
+ *
+ * Rejected applications are excluded by the caller, not here - see the history
+ * split in recordSubBill.
+ */
+export function approvedToDateByItem(
+  priorLines: Array<{
+    item_number: string;
+    this_period: number | null;
+    materials_stored?: number | null;
+    approved_this_period?: number | null;
+  }>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const l of priorLines) {
+    const work =
+      l.approved_this_period != null ? n(l.approved_this_period) : n(l.this_period);
+    const carried = work + n(l.materials_stored);
+    out.set(l.item_number, round2((out.get(l.item_number) ?? 0) + carried));
+  }
+  return out;
+}
 
 // How much of a multi-task line a given task represents. Planned duration
 // first, then the date span, then an equal share when the schedule says
@@ -399,13 +450,39 @@ export function runBillChecks(args: {
             { expected: n(prior.billed_to_date), actual: n(header.billed_previous) }),
     );
 
-    const priorByItem = new Map(prior.lines.map((l) => [l.item_number, n(l.total_completed)]));
+    // What the sub has billed to date and what AHC has approved to date stop
+    // being the same number the moment anything is disallowed. The gap is not
+    // payable, and it has to be stated rather than quietly conceded on the next
+    // application - which is exactly what seeding from the as-billed total did.
+    if (prior.approvedToDate != null) {
+      const gap = round2(n(prior.billed_to_date) - n(prior.approvedToDate));
+      out.push(
+        gap <= ROUNDING_TOLERANCE
+          ? check("approved_carryforward", "Approved to date matches billed to date", "warning", "pass",
+              `${money(n(prior.approvedToDate))} approved against ${money(n(prior.billed_to_date))} billed through app ${prior.app_number}. Nothing outstanding.`,
+              { expected: n(prior.billed_to_date), actual: n(prior.approvedToDate) })
+          : check("approved_carryforward", "Approved to date matches billed to date", "warning", "warn",
+              `${money(gap)} of previously billed work has never been approved. This bill opens from the approved figure of ${money(n(prior.approvedToDate))}, not the ${money(n(prior.billed_to_date))} the sub has billed. Expect them to dispute the previous column.`,
+              { expected: n(prior.billed_to_date), actual: n(prior.approvedToDate) }),
+      );
+    }
+
+    // The previous column must open from approved-to-date. Only where no
+    // approved figure was ever recorded does it fall back to as-billed.
+    const priorBilledByItem = new Map(
+      prior.lines.map((l) => [l.item_number, n(l.total_completed)]),
+    );
+    const priorApproved = prior.approvedByItem ?? null;
     for (const line of lines) {
-      const expected = priorByItem.get(line.item_number) ?? 0;
+      const expected = priorApproved
+        ? priorApproved.get(line.item_number) ?? 0
+        : priorBilledByItem.get(line.item_number) ?? 0;
       if (!near(n(line.from_previous), expected, EXACT_TOLERANCE)) {
         out.push(
           check("prior_line_continuity", "Line previous ties to the last bill", "error", "fail",
-            `Line ${line.item_number} carries ${money(n(line.from_previous))} as previously billed; app ${prior.app_number} left it at ${money(expected)}.`,
+            priorApproved
+              ? `Line ${line.item_number} carries ${money(n(line.from_previous))} as previously billed; AHC has approved ${money(expected)} on it to date.`
+              : `Line ${line.item_number} carries ${money(n(line.from_previous))} as previously billed; app ${prior.app_number} left it at ${money(expected)}.`,
             { expected, actual: n(line.from_previous), lineItemNumber: line.item_number }),
         );
       }

@@ -57,3 +57,9 @@ scripts/_*.ts
 *.tsbuildinfo
 next-env.d.ts
 .env*
+
+# Generated deliverables and raw table dumps. Same reason as db/reference/:
+# these carry Sweet Springs billing figures and owner names, and they are
+# outputs, not source - regenerate them from the scripts instead.
+/reports/
+scripts/_backups/

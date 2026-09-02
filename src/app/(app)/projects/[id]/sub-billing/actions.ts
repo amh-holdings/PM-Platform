@@ -6,7 +6,7 @@ import { subBillingClient } from "@/lib/sub-billing-db";
 import { createClient } from "@/lib/supabase/server";
 import { can, toEffectiveRole, type Capability } from "@/lib/roles";
 import { runVerificationCore } from "@/lib/sub-billing-run";
-import type { BillHeader, BillLine, SovLine } from "@/lib/sub-billing";
+import { approvedToDateByItem, type BillHeader, type BillLine, type SovLine } from "@/lib/sub-billing";
 import type { SubPayAppStatus } from "@/lib/sub-billing.types";
 
 export type ActionResult =
@@ -90,28 +90,41 @@ export async function recordSubBill(
     return { ok: false, error: "This subcontractor has no SOV loaded yet" };
   }
 
-  // Prior application: the most recent one, whatever its status. Continuity
-  // has to run against what we actually last recorded, not only approved ones.
-  const { data: priorRows } = await db
+  // The application history for this sub answers two different questions, and
+  // they need two different answers:
+  //
+  //   numbering  - the next number follows the highest we have ever recorded,
+  //                rejected applications included. A rejected app 3 still
+  //                consumed the number 3, and reusing it collides on the
+  //                unique key.
+  //   continuity - the baseline this bill opens from must EXCLUDE rejected
+  //                applications. A bill AHC refused is not history, and
+  //                letting it set the previously-billed floor hands back the
+  //                exact amount that was refused.
+  const { data: historyRows } = await db
     .from("sub_pay_apps")
     .select("id, app_number, period_end, billed_to_date, retainage_to_date, approved_this_period, status")
     .eq("subcontractor_id", subcontractorId)
-    .order("app_number", { ascending: false })
-    .limit(1);
-  const priorApp = priorRows?.[0] ?? null;
+    .order("app_number", { ascending: true });
+  const history = historyRows ?? [];
+  const latestApp = history.length > 0 ? history[history.length - 1] : null;
+  const accepted = history.filter((a) => a.status !== "rejected");
+  const priorApp = accepted.length > 0 ? accepted[accepted.length - 1] : null;
 
-  let priorLines: { item_number: string; total_completed: number | null }[] = [];
-  if (priorApp) {
+  // Seed the previous column from what AHC APPROVED to date, never from what
+  // the sub billed. See approvedToDateByItem() for why, and for how a line
+  // carrying no recorded decision is handled.
+  let priorByItem = new Map<string, number>();
+  if (accepted.length > 0) {
     const { data } = await db
       .from("sub_pay_app_lines")
-      .select("item_number, total_completed")
-      .eq("sub_pay_app_id", priorApp.id);
-    priorLines = data ?? [];
+      .select("item_number, this_period, materials_stored, approved_this_period")
+      .in("sub_pay_app_id", accepted.map((a) => a.id));
+    priorByItem = approvedToDateByItem(data ?? []);
   }
-  const priorByItem = new Map(priorLines.map((l) => [l.item_number, Number(l.total_completed ?? 0)]));
   const priorRetainageHeld = Number(priorApp?.retainage_to_date ?? 0);
 
-  const appNumber = optNum(formData.get("app_number")) ?? (priorApp ? priorApp.app_number + 1 : 1);
+  const appNumber = optNum(formData.get("app_number")) ?? (latestApp ? latestApp.app_number + 1 : 1);
   const retainagePct = optNum(formData.get("retainage_pct")) ?? Number(sub.retainage_pct ?? 0);
   const rate = retainagePct / 100;
 

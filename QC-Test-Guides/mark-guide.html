@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>QC Field-Report Test - Construction Manager Guide</title>
+<style>
+  :root{
+    --ink:#14181f; --muted:#5b6472; --line:#e2e6ec; --bg:#ffffff;
+    --brand:#0b2e4f; --brand2:#155e93; --amber:#b7791f; --amberbg:#fef3d6;
+    --red:#b42318; --redbg:#fde8e6; --green:#15803d; --greenbg:#e7f6ec;
+    --blue:#1d4ed8; --bluebg:#eef2ff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink); font-size:12.5px; line-height:1.5;}
+  .page{padding:0 6mm 10mm}
+  h1,h2,h3{line-height:1.2; margin:0}
+  a{color:var(--brand2); text-decoration:none}
+
+  .cover{background:linear-gradient(135deg,var(--brand),var(--brand2));
+    color:#fff; padding:16mm 12mm 12mm; border-radius:0 0 14px 14px; margin-bottom:8mm}
+  .eyebrow{font-size:11px; letter-spacing:.14em; text-transform:uppercase; opacity:.85; font-weight:600}
+  .cover h1{font-size:30px; margin:8px 0 4px; font-weight:800; letter-spacing:-.01em}
+  .cover .sub{font-size:15px; opacity:.92; margin-bottom:16px}
+  .badge{display:inline-block; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.3);
+    padding:5px 12px; border-radius:999px; font-size:12px; font-weight:600}
+  .cover-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px 18px; margin-top:16px; max-width:520px}
+  .cover-grid div{font-size:12.5px}
+  .cover-grid b{display:block; font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; opacity:.8; font-weight:600; margin-bottom:1px}
+
+  h2{font-size:17px; color:var(--brand); margin:18px 0 8px; padding-bottom:5px; border-bottom:2px solid var(--line)}
+  h3{font-size:13.5px; margin:14px 0 5px}
+  p{margin:6px 0}
+  .lead{font-size:13.5px; color:#2a3140}
+
+  .card{border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin:10px 0; background:#fbfcfd}
+  .cred{display:grid; grid-template-columns:auto 1fr; gap:4px 14px; font-size:13px}
+  .cred b{color:var(--muted); font-weight:600}
+  code{background:#f1f3f6; padding:1px 6px; border-radius:5px; font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px}
+
+  table{width:100%; border-collapse:collapse; margin:10px 0; font-size:12px}
+  th,td{border:1px solid var(--line); padding:7px 9px; text-align:left; vertical-align:top}
+  th{background:#eef4f9; color:var(--brand); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.04em}
+  td .n{font-weight:700; color:var(--brand2)}
+
+  .step{display:flex; gap:12px; margin:12px 0; page-break-inside:avoid}
+  .step .num{flex:0 0 28px; height:28px; background:var(--brand); color:#fff; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px}
+  .step .body{flex:1}
+  .step .body h3{margin:2px 0 3px}
+  .row2{display:flex; gap:12px; align-items:flex-start}
+  .row2 .txt{flex:1}
+  figure{margin:8px 0 0; page-break-inside:avoid}
+  figure img{width:100%; border:1px solid var(--line); border-radius:8px; display:block}
+  figcaption{font-size:10.5px; color:var(--muted); margin-top:4px}
+  .fig-narrow{max-width:60%}
+
+  .callout{border-radius:10px; padding:11px 14px; margin:12px 0; page-break-inside:avoid}
+  .callout h3{margin:0 0 5px; font-size:13px}
+  .c-amber{background:var(--amberbg); border:1px solid #f0d99a}
+  .c-amber h3{color:var(--amber)}
+  .c-blue{background:var(--bluebg); border:1px solid #cfd8fb}
+  .c-blue h3{color:var(--blue)}
+  .c-green{background:var(--greenbg); border:1px solid #bfe4cb}
+  .c-green h3{color:var(--green)}
+  ul{margin:6px 0; padding-left:20px}
+  li{margin:3px 0}
+  .pill{display:inline-block; padding:1px 8px; border-radius:999px; font-size:10.5px; font-weight:700}
+  .p-amber{background:var(--amberbg); color:var(--amber)}
+  .p-green{background:var(--greenbg); color:var(--green)}
+  .p-red{background:var(--redbg); color:var(--red)}
+  .dot{display:inline-block; width:9px; height:9px; border-radius:50%; vertical-align:middle; margin-right:3px}
+  .pb{page-break-before:always}
+  .foot{margin-top:16px; padding-top:8px; border-top:1px solid var(--line); font-size:10.5px; color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="eyebrow">AHC PM Platform &nbsp;&middot;&nbsp; Quality Control Test</div>
+  <h1>Field Report Review Guide</h1>
+  <div class="sub">Your role: <b>Construction Manager</b></div>
+  <span class="badge">Tester: Mark &nbsp;&middot;&nbsp; 3-day run: Jul 21 - 23, 2026</span>
+  <div class="cover-grid">
+    <div><b>Website</b> pm-platform-nine.vercel.app</div>
+    <div><b>Your login</b> cm-demo@ahc.test</div>
+    <div><b>Password</b> CMdemo2026!</div>
+    <div><b>Best on</b> laptop or tablet</div>
+  </div>
+</div>
+
+<div class="page">
+
+<p class="lead">Thanks for helping us test the QC review side of our project platform. For the next three days, play the
+Construction Manager: subcontractors file daily field reports, and your job is to review each piece of work, verify it
+with your own photo, and approve or reject it. Approved work drives the project schedule. You also file your own CM
+daily log. We want to know anything that is confusing, wrong, or slower than it should be.</p>
+
+<div class="card">
+  <h3 style="margin-top:0">Before you start</h3>
+  <div class="cred">
+    <b>Open</b><div><code>https://pm-platform-nine.vercel.app</code></div>
+    <b>Email</b><div><code>cm-demo@ahc.test</code></div>
+    <b>Password</b><div><code>CMdemo2026!</code></div>
+    <b>Project</b><div>Use <b>Test Project - Cash Flow</b> for everything.</div>
+  </div>
+  <p style="margin-bottom:0; font-size:11.5px; color:var(--muted)">On the sign-in screen, click <b>"Sign in with a password instead."</b>
+  There are already a couple of submitted example reports waiting, so you can start reviewing on day 1. Please change the password after the test.</p>
+</div>
+
+<h2>What you are testing: the review loop</h2>
+<p>Subs file reports; each report has one or more pins on the site plan. You open each pin, check the sub's photo and
+reported progress, add your own verification photo, and approve or reject. Here is the full walk-through.</p>
+
+<div class="step">
+  <div class="num">1</div>
+  <div class="body">
+    <h3>Sign in and open the Review Board</h3>
+    <p>Log in, open <b>Test Project - Cash Flow</b>, and go to the <b>Field Reports</b> tab. As the CM you get a
+    <b>Review Board</b>: every report plotted on the site plan as a colored dot, plus a queue on the right.</p>
+    <p style="margin:4px 0"><span class="dot" style="background:#16a34a"></span><b>Green</b> = approved &nbsp;
+      <span class="dot" style="background:#f59e0b"></span><b>Amber</b> = pending your review &nbsp;
+      <span class="dot" style="background:#dc2626"></span><b>Red</b> = rejected (back with the sub)</p>
+    <figure><img src="assets/cm_review_board.jpg" alt="Review Board"><figcaption>The Review Board. Click an amber dot or a report in the queue to open and review it.</figcaption></figure>
+  </div>
+</div>
+
+<div class="step">
+  <div class="num">2</div>
+  <div class="body">
+    <h3>Open a pending report</h3>
+    <p>Click a report. You will see the crew, man-hours, weather, safety flag, the work narrative, and every pin on the
+    plan. Pending pins are amber. Click a work item in the <b>Subcontractor work</b> list to review it.</p>
+    <figure><img src="assets/cm_report_detail.jpg" alt="Report detail"><figcaption>A submitted report with one pending (amber) work pin. Review progress shows 0 of 1 approved.</figcaption></figure>
+  </div>
+</div>
+
+<div class="step">
+  <div class="num">3</div>
+  <div class="body">
+    <div class="row2">
+      <div class="txt">
+        <h3>Verify, then approve or reject</h3>
+        <p>The panel shows exactly what approving will do -
+        <b>"Approving applies: In Progress &middot; 40% &middot; 280 LF"</b> - plus the sub's submitted photo.</p>
+        <p><b>You must attach your own AHC verification photo before Approve turns on.</b> This is intentional:
+        no approval without your own proof. Add an optional note, then <b>Approve</b>.</p>
+        <p>To send work back, click <b>Reject</b> and give a reason. It returns to the sub as
+        <span class="pill p-red">Rejected</span> and does <b>not</b> move the schedule.</p>
+      </div>
+      <figure style="flex:0 0 40%; margin-top:0"><img src="assets/cm_approve_panel.jpg" alt="Review panel"><figcaption>Approve is disabled until you add a verification photo.</figcaption></figure>
+    </div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="num">4</div>
+  <div class="body">
+    <h3>Confirm it drove the schedule</h3>
+    <p>Open the <b>Schedule</b> tab and find the task you just approved. Its <b>% complete</b> and <b>installed quantity</b>
+    should now match the approved report, sourced from the field report.</p>
+    <figure><img src="assets/cm_schedule.jpg" alt="Schedule tab"><figcaption>Approved progress flows onto the schedule automatically.</figcaption></figure>
+  </div>
+</div>
+
+<div class="step">
+  <div class="num">5</div>
+  <div class="body">
+    <h3>File your own CM daily log</h3>
+    <p>Go to <b>My Daily Log</b> then <b>New CM Daily Log</b>. Record weather, site conditions, progress, safety, and
+    optional photos. This is your independent record - it is separate from the sub review cycle.</p>
+    <figure><img src="assets/cm_daily_log.jpg" alt="New CM daily log form"><figcaption>The CM daily log is your own record, not part of the sub approval loop.</figcaption></figure>
+  </div>
+</div>
+
+<h2 class="pb">Your 3-day test plan</h2>
+<p>Review whatever the subs file, and deliberately exercise the tricky progress cases below. If the sub has not filed
+yet on a given day, review the pre-loaded example reports and ping them.</p>
+
+<table>
+  <thead><tr><th style="width:64px">Day</th><th>What to do</th><th>What we are checking</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><span class="n">Day 1</span><br>Jul 21</td>
+      <td>Review a pending report end-to-end: approve one pin (with a verification photo) and <b>reject</b> a second pin with a reason. Confirm the approved value shows on the Schedule and the rejected one does not.</td>
+      <td>The core approve / reject loop works and the verification-photo gate holds.</td>
+    </tr>
+    <tr>
+      <td><span class="n">Day 2</span><br>Jul 22</td>
+      <td>File your own <b>CM daily log</b>. Approve a report that includes equipment / deliveries / delays and confirm they read clearly. Open a report flagged with a <b>safety incident or near miss</b> - is it obvious on the board and in the report?</td>
+      <td>Supporting sections and safety flags are clear and reviewable.</td>
+    </tr>
+    <tr>
+      <td><span class="n">Day 3</span><br>Jul 23</td>
+      <td>Run the progress-integrity checks in the box below. Use <b>Print / PDF</b> on a finished report. Skim the whole <b>Review Board</b> - do the dot colors and counts match reality?</td>
+      <td>The schedule always reflects the latest approved truth, and reporting/export works.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout c-amber">
+  <h3>Please try to break it - progress integrity</h3>
+  <p style="margin:4px 0">These are the cases that matter most. The schedule must always hold the <b>latest-dated approved</b> value.</p>
+  <ul>
+    <li>Approve a report, then approve an <b>older-dated</b> report on the same task. The schedule must <b>not</b> drag backward to the older value.</li>
+    <li>Approve a task, then approve a <b>later report that lowers</b> the % (a correction). The schedule <b>should</b> follow it down.</li>
+    <li><b>Reject</b> a pin and confirm the schedule does <b>not</b> move until something is approved.</li>
+    <li>Try to <b>Approve without a verification photo</b> - it should stay blocked.</li>
+    <li>Approve, then reopen the same report - is the state clearly "approved" and locked?</li>
+  </ul>
+</div>
+
+<h2>How to report anything you find</h2>
+<p>For each issue, capture enough that we can reproduce it. A screenshot helps a lot.</p>
+<table>
+  <thead><tr><th style="width:26px">#</th><th>Date / time</th><th>Report (date + sub)</th><th>What you did</th><th>What you expected</th><th>What actually happened</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>2</td><td></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>3</td><td></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>4</td><td></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>5</td><td></td><td></td><td></td><td></td><td></td></tr>
+  </tbody>
+</table>
+<p style="font-size:11.5px; color:var(--muted)">On a Mac, Shift+Cmd+4 grabs a screenshot. Send your notes and screenshots to Phil at the end of each day.</p>
+
+<div class="foot">AHC PM Platform - Quality Control Test - Construction Manager guide for Mark. Test environment only; use the Test Project - Cash Flow project.</div>
+
+</div>
+</body>
+</html>

@@ -13,11 +13,12 @@ import { createClient } from "@/lib/supabase/server";
 //
 // Values are DAILY, not cumulative - that is what the owner's form asks for.
 //
-// SAVING IS CONFIRMING (migration 0040)
-// An approved Field Report now auto-proposes its day's production, and those
-// rows land with confirmed_at = null: visible on the tracker, excluded from
-// billing and from the owner push. Saving here is the act that stands behind a
-// number, so every cell written from this action is stamped confirmed.
+// SAVING IS CORRECTING
+// An approved Field Report fills its own day's production and those rows are
+// live immediately - the tracker reports the approved record, it does not gate
+// it. So this action is not an approval step; it is Phil overriding a figure
+// the report got wrong. Rows written here become `manual`, which is also what
+// the proposer calibrates its daily rate from, so every correction teaches it.
 
 export type ProductionCell = {
   productionDate: string;
