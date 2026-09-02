@@ -15,6 +15,10 @@ const STATUS_TONE: Record<string, string> = {
   paid: "bg-blue-100 text-blue-900",
 };
 
+// Billed and sitting with the owner. Mirrors OUTSTANDING_STATUSES in
+// lib/ceo-report-financials so the two views of the money agree.
+const OUTSTANDING_STATUSES = new Set(["submitted", "approved", "pending"]);
+
 export default async function ProjectPayAppsPage({ params }: { params: Params }) {
   await guardCapability("viewPayApps");
   const supabase = createClient();
@@ -43,6 +47,15 @@ export default async function ProjectPayAppsPage({ params }: { params: Params })
   const totalPaid = rows
     .filter((r) => r.status === "paid")
     .reduce((s, r) => s + Number(r.amount_due ?? 0), 0);
+  // Billed to the client but not yet collected. Drafts are excluded - they
+  // have not been sent, so the client does not owe them yet.
+  const outstandingRows = rows.filter((r) =>
+    OUTSTANDING_STATUSES.has((r.status ?? "").toLowerCase()),
+  );
+  const totalOutstanding = outstandingRows.reduce(
+    (s, r) => s + Number(r.amount_due ?? 0),
+    0,
+  );
 
   return (
     <div className="space-y-6">
@@ -60,7 +73,7 @@ export default async function ProjectPayAppsPage({ params }: { params: Params })
         </Button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-md border bg-card p-3">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
             Total pay apps
@@ -81,6 +94,19 @@ export default async function ProjectPayAppsPage({ params }: { params: Params })
           </div>
           <div className="mt-1 text-2xl font-semibold text-emerald-700">
             {formatCurrency(totalPaid)}
+          </div>
+        </div>
+        <div className="rounded-md border bg-card p-3">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">
+            Remaining due from client
+          </div>
+          <div className="mt-1 text-2xl font-semibold text-amber-700">
+            {formatCurrency(totalOutstanding)}
+          </div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            {outstandingRows.length === 0
+              ? "Nothing outstanding"
+              : `${outstandingRows.length} pay app${outstandingRows.length === 1 ? "" : "s"} billed, not paid`}
           </div>
         </div>
       </div>
