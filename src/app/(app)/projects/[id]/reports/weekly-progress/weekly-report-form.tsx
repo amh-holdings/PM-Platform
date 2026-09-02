@@ -44,12 +44,18 @@ type Props = {
 // another tab is how the box ends up written from memory.
 
 /**
- * The boxes that are Phil's to fill in, marked the same red as the print
- * preview. Applied by field, not by whether anything has been typed: a blank
- * milestone date is exactly the one that needs finding, so it has to be red
- * while it is still blank.
+ * The boxes AHC fills in, as opposed to the ones the platform writes from the
+ * field record.
+ *
+ * The mark is on the LABEL and the BORDER, not only on the value. Colouring
+ * the typed text alone was invisible in the case that matters: an empty field
+ * has no text to colour, and an empty field is precisely the one still waiting
+ * on somebody. MINE_TEXT still tints a value once there is one, so a filled box
+ * reads as ours at a glance too.
  */
-const MINE = "text-[#b91c1c] dark:text-[#f87171]";
+const MINE_TEXT = "text-[#b91c1c] dark:text-[#f87171]";
+const MINE_LABEL = "text-[#b91c1c] dark:text-[#f87171]";
+const MINE_FIELD = cn(MINE_TEXT, "border-[#b91c1c]/50 dark:border-[#f87171]/50");
 
 export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
   const router = useRouter();
@@ -267,6 +273,16 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
         {error && <span className="text-xs text-destructive">{error}</span>}
       </div>
 
+      {/* ---- What is ours to fill in ---- */}
+      <div className="rounded-md border border-[#b91c1c]/30 bg-[#b91c1c]/[0.04] px-3 py-2 text-xs">
+        <span className={cn("font-medium", MINE_LABEL)}>Red</span> marks the
+        fields AHC fills in - names, the milestone dates the owner is being
+        committed to, each sub&apos;s End Date, the SWPPP date and the look-ahead
+        note. Nothing derives those. Everything else on this page is written
+        from the approved field record, so read it and correct it rather than
+        typing it. The report prints in one colour either way.
+      </div>
+
       {/* ---- Overview ---- */}
       <Section title="Overview">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -295,32 +311,32 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
               />
             </div>
           </Field>
-          <Field label="Dimension Construction Manager">
+          <Field label="Dimension Construction Manager" mine>
             <Input
               value={dimensionCm}
               onChange={(e) => setDimensionCm(e.target.value)}
               disabled={issued}
               placeholder="Matt Clark"
-              className={MINE}
+              className={MINE_FIELD}
             />
           </Field>
-          <Field label="EPC Reporting Manager">
+          <Field label="EPC Reporting Manager" mine>
             <Input
               value={epcManager}
               onChange={(e) => setEpcManager(e.target.value)}
               disabled={issued}
               placeholder="Phil Horwitch"
-              className={MINE}
+              className={MINE_FIELD}
             />
           </Field>
           <div className="sm:col-span-2">
-            <Field label="EPC team members and roles">
+            <Field label="EPC team members and roles" mine>
               <textarea
                 value={epcTeam}
                 onChange={(e) => setEpcTeam(e.target.value)}
                 rows={2}
                 disabled={issued}
-                className={cn("w-full rounded-md border bg-background p-2 text-sm", MINE)}
+                className={cn("w-full rounded-md border bg-background p-2 text-sm", MINE_FIELD)}
                 placeholder="Project Manager: Mark Wooley"
               />
             </Field>
@@ -415,13 +431,14 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
           <Field
             label="Date of most recent SWPPP inspection"
             hint={view.swppp.basis}
+            mine
           >
             <Input
               type="date"
               value={swppp}
               onChange={(e) => setSwppp(e.target.value)}
               disabled={issued}
-              className={MINE}
+              className={MINE_FIELD}
             />
           </Field>
           <div>
@@ -460,13 +477,14 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
         <Field
           label="Milestone tracking"
           hint="Dates expected by EPC. Matched to schedule milestones by name where one exists, otherwise carried forward from last week."
+          mine
         >
           <div className="grid gap-2 sm:grid-cols-2">
             {MILESTONE_FIELDS.map((f) => {
               const d = view.milestones[f.key];
               return (
                 <div key={f.key} className="space-y-1">
-                  <Label className="text-xs">{f.label}</Label>
+                  <Label className={cn("text-xs", MINE_LABEL)}>{f.label}</Label>
                   <Input
                     type="date"
                     value={milestones[f.key] ?? ""}
@@ -474,7 +492,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
                       setMilestones((m) => ({ ...m, [f.key]: e.target.value }))
                     }
                     disabled={issued}
-                    className={MINE}
+                    className={MINE_FIELD}
                   />
                   <p className="text-[11px] leading-tight text-muted-foreground">{d?.basis}</p>
                 </div>
@@ -494,6 +512,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
         />
 
         <Field
+          mine
           label="3 week look ahead"
           hint="Built from the schedule for the three weeks after this period and printed in full in its own box on the report. Anything typed here prints above the table as a note - leave it empty unless there is something to say about what is coming."
         >
@@ -502,7 +521,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
             onChange={(e) => setLookaheadNote(e.target.value)}
             rows={2}
             disabled={issued}
-            className={cn("w-full rounded-md border bg-background p-2 text-sm", MINE)}
+            className={cn("w-full rounded-md border bg-background p-2 text-sm", MINE_FIELD)}
             placeholder="Optional note, e.g. Panel delivery confirmed for the week of 7-Sep."
           />
           <LookaheadPreview view={view} />
@@ -670,15 +689,18 @@ function Section({
 function Field({
   label,
   hint,
+  mine,
   children,
 }: {
   label: string;
   hint?: string;
+  /** AHC fills this one in - the platform has no way to derive it. */
+  mine?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-sm">{label}</Label>
+      <Label className={cn("text-sm", mine && MINE_LABEL)}>{label}</Label>
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
       {children}
     </div>
@@ -855,7 +877,9 @@ function ContractorTable({
               <th className="px-2 py-1.5 text-left font-medium">Scope</th>
               <th className="px-2 py-1.5 text-left font-medium">Headcount</th>
               <th className="px-2 py-1.5 text-left font-medium">Last onsite</th>
-              <th className="px-2 py-1.5 text-left font-medium">End date</th>
+              <th className={cn("px-2 py-1.5 text-left font-medium", MINE_LABEL)}>
+                End date
+              </th>
               <th className="w-8" />
             </tr>
           </thead>
@@ -916,7 +940,7 @@ function ContractorTable({
                     value={row.endDate ?? ""}
                     onChange={(e) => set(i, { endDate: e.target.value || null })}
                     disabled={disabled}
-                    className={cn("h-8", MINE)}
+                    className={cn("h-8", MINE_FIELD)}
                   />
                 </td>
                 <td className="px-2 py-1.5">
