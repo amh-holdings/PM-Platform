@@ -1,0 +1,412 @@
+[
+  {
+    "id": "316ed3ca-65ea-4477-aa4c-aad0666f0ff0",
+    "wbs_code": "5.1",
+    "task_name": "Civil Construction",
+    "start_date": "2026-07-27",
+    "end_date": "2027-05-31",
+    "duration_days": 210,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "daf5f9ce-56df-469f-be28-c14e913ef9be",
+    "wbs_code": "5.1.1",
+    "task_name": "Phase 1",
+    "start_date": "2026-07-27",
+    "end_date": "2026-09-10",
+    "duration_days": 33,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "5ac1979e-a2a7-4bcc-a83a-60b8bb16a3fd",
+    "wbs_code": "5.1.1.1",
+    "task_name": "Partition off Limits of Disturbance",
+    "start_date": "2026-07-27",
+    "end_date": "2026-07-28",
+    "duration_days": 2,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "36aea8bf-0e4d-4cbe-b82b-0fc3abb40ce3",
+    "wbs_code": "5.1.1.10",
+    "task_name": "Laydown Yard",
+    "start_date": "2026-09-02",
+    "end_date": "2026-09-09",
+    "duration_days": 5,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "be5daf61-ac3f-4d29-8432-2c55e78010e0",
+    "wbs_code": "5.1.1.11",
+    "task_name": "County Inspection",
+    "start_date": "2026-09-10",
+    "end_date": "2026-09-10",
+    "duration_days": 1,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "29b5c6b8-aba8-4d05-a198-da6929708861",
+    "wbs_code": "5.1.1.2",
+    "task_name": "Install Temporary Construction Entrance",
+    "start_date": "2026-07-27",
+    "end_date": "2026-07-28",
+    "duration_days": 2,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "77220be4-4776-497c-9499-8fd05aa46ef7",
+    "wbs_code": "5.1.1.3",
+    "task_name": "Initial Clearing for ESC ONLY",
+    "start_date": "2026-07-29",
+    "end_date": "2026-08-25",
+    "duration_days": 20,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "20a791fc-7a76-4401-98b6-f2d748781023",
+    "wbs_code": "5.1.1.4",
+    "task_name": "Debris Removal and Offsite Haul",
+    "start_date": "2026-07-29",
+    "end_date": "2026-08-25",
+    "duration_days": 20,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "d73b9042-639b-4665-b00c-fde3fc0da93f",
+    "wbs_code": "5.1.1.5",
+    "task_name": "Silt/Rock Fence Install",
+    "start_date": "2026-08-12",
+    "end_date": "2026-08-12",
+    "duration_days": 1,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "fc37ae89-5bb7-4d01-badc-dcc09475908c",
+    "wbs_code": "5.1.1.6",
+    "task_name": "Construct Basin 1 ESC",
+    "start_date": "2026-08-13",
+    "end_date": "2026-08-21",
+    "duration_days": 7,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "312919ea-6776-4b35-ba03-d29ff7e36b1f",
+    "wbs_code": "5.1.1.7",
+    "task_name": "Construct Basin 2 ESC",
+    "start_date": "2026-08-13",
+    "end_date": "2026-08-21",
+    "duration_days": 7,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "9b163da2-8fba-47a2-a8ad-bc2f16ce9510",
+    "wbs_code": "5.1.1.8",
+    "task_name": "Construct Construction Entrance",
+    "start_date": "2026-08-24",
+    "end_date": "2026-08-25",
+    "duration_days": 2,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "eb73a4e0-0996-4843-9f46-69509ae807bb",
+    "wbs_code": "5.1.1.9",
+    "task_name": "Rough Road",
+    "start_date": "2026-08-26",
+    "end_date": "2026-09-01",
+    "duration_days": 5,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "aeb9e12c-2123-4367-ad38-a2db5a62f843",
+    "wbs_code": "5.1.2",
+    "task_name": "Fencing Installation",
+    "start_date": "2026-09-11",
+    "end_date": "2026-09-16",
+    "duration_days": 4,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "9961c05b-7c5d-47da-a244-bffdf2175ec4",
+    "wbs_code": "5.1.3",
+    "task_name": "Phase 2",
+    "start_date": "2026-09-11",
+    "end_date": "2026-11-19",
+    "duration_days": 48,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "0b94b7f8-6cf1-440f-acc3-cfe392599164",
+    "wbs_code": "5.1.3.1",
+    "task_name": "Full Site Clearing",
+    "start_date": "2026-09-11",
+    "end_date": "2026-09-28",
+    "duration_days": 12,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "ce9f1d2c-902c-4c9b-b0bf-09a6b9ca094c",
+    "wbs_code": "5.1.3.2",
+    "task_name": "Site Grading",
+    "start_date": "2026-09-29",
+    "end_date": "2026-10-20",
+    "duration_days": 15,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "6cf14b77-91bc-4b4d-8724-74d7aab393c4",
+    "wbs_code": "5.1.3.3",
+    "task_name": "Build Basin 1",
+    "start_date": "2026-10-21",
+    "end_date": "2026-10-27",
+    "duration_days": 5,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "f5086fee-4a17-49f2-b247-7c00e189bb46",
+    "wbs_code": "5.1.3.4",
+    "task_name": "Build Basin 2",
+    "start_date": "2026-10-28",
+    "end_date": "2026-11-04",
+    "duration_days": 6,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "1de85c26-da54-4705-a6fe-12aae29443b7",
+    "wbs_code": "5.1.3.5",
+    "task_name": "Basin 1 Final Grading / Stabilization and Seeding",
+    "start_date": "2026-10-28",
+    "end_date": "2026-10-29",
+    "duration_days": 2,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "5337a3af-731c-4d9b-8880-a841bb5a817b",
+    "wbs_code": "5.1.3.6",
+    "task_name": "Basin 2 Final Grading / Stabilization and Seeding",
+    "start_date": "2026-11-05",
+    "end_date": "2026-11-06",
+    "duration_days": 2,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "fb241c4a-ecd3-40e4-b5a8-6a6345d3066d",
+    "wbs_code": "5.1.3.7",
+    "task_name": "Convert Sediment Basins to Stormwater Ponds",
+    "start_date": "2026-11-09",
+    "end_date": "2026-11-17",
+    "duration_days": 6,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "9efdabbf-cee9-4560-9ba8-be25a451ce99",
+    "wbs_code": "5.1.3.8",
+    "task_name": "Permanent Seeding",
+    "start_date": "2026-11-18",
+    "end_date": "2026-11-19",
+    "duration_days": 2,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "737f74bf-2178-4f91-8858-e4269e40208f",
+    "wbs_code": "5.1.4",
+    "task_name": "Permit Closeout",
+    "start_date": "2027-05-31",
+    "end_date": "2027-05-31",
+    "duration_days": 1,
+    "baseline_end": null,
+    "baseline_label": null
+  },
+  {
+    "id": "980debe4-d21f-45fe-a541-630b4b98eb72",
+    "wbs_code": "5.2",
+    "task_name": "Mechanical",
+    "start_date": "2026-10-30",
+    "end_date": "2026-11-18",
+    "duration_days": 13,
+    "baseline_end": "2026-11-18",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "1a206a13-8123-4a4b-85b7-76b2291947f8",
+    "wbs_code": "5.2.1",
+    "task_name": "Array Layout and Marking",
+    "start_date": "2026-10-30",
+    "end_date": "2026-10-30",
+    "duration_days": 1,
+    "baseline_end": "2026-10-30",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "951d4bbe-989b-4852-8cbf-c1f5fc28c391",
+    "wbs_code": "5.2.10",
+    "task_name": "Racking Inspection",
+    "start_date": "2026-11-06",
+    "end_date": "2026-11-13",
+    "duration_days": 5,
+    "baseline_end": "2026-11-13",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "821cb1bf-a277-4b9a-bfbb-9ffdae18c6c0",
+    "wbs_code": "5.2.11",
+    "task_name": "Racking Remediation",
+    "start_date": "2026-11-16",
+    "end_date": "2026-11-17",
+    "duration_days": 2,
+    "baseline_end": "2026-11-17",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "0cfbb52d-2feb-45cb-96b5-4f51c2daefc4",
+    "wbs_code": "5.2.12",
+    "task_name": "Module Unloading",
+    "start_date": "2026-11-05",
+    "end_date": "2026-11-05",
+    "duration_days": 1,
+    "baseline_end": "2026-11-05",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "25cd03d0-1a96-4eed-a13a-b57f368b87f1",
+    "wbs_code": "5.2.13",
+    "task_name": "Module Staging",
+    "start_date": "2026-11-05",
+    "end_date": "2026-11-05",
+    "duration_days": 1,
+    "baseline_end": "2026-11-05",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "d5666092-7e37-496f-9e6c-017cba64cf1f",
+    "wbs_code": "5.2.14",
+    "task_name": "Module Installation",
+    "start_date": "2026-11-10",
+    "end_date": "2026-11-17",
+    "duration_days": 5,
+    "baseline_end": "2026-11-17",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "b14f35a6-e354-4aa2-87d4-0779ccb3bd1a",
+    "wbs_code": "5.2.15",
+    "task_name": "Module Inspection",
+    "start_date": "2026-11-10",
+    "end_date": "2026-11-17",
+    "duration_days": 5,
+    "baseline_end": "2026-11-17",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "667bf968-4201-4993-b5c0-cf8228b85cc3",
+    "wbs_code": "5.2.16",
+    "task_name": "QA/QC Closeout",
+    "start_date": "2026-11-16",
+    "end_date": "2026-11-18",
+    "duration_days": 3,
+    "baseline_end": "2026-11-18",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "6b0d0142-7d6e-40a0-a88f-6b4ad0f94fdb",
+    "wbs_code": "5.2.2",
+    "task_name": "Pile Unloading",
+    "start_date": "2026-11-02",
+    "end_date": "2026-11-02",
+    "duration_days": 1,
+    "baseline_end": "2026-11-02",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "6b750a03-5f13-419a-b3e6-19868c8306ae",
+    "wbs_code": "5.2.3",
+    "task_name": "Pile Staging",
+    "start_date": "2026-11-02",
+    "end_date": "2026-11-02",
+    "duration_days": 1,
+    "baseline_end": "2026-11-02",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "1e320a83-6d01-4aa8-a60b-b4819c7a8224",
+    "wbs_code": "5.2.4",
+    "task_name": "Pile Driving",
+    "start_date": "2026-11-03",
+    "end_date": "2026-11-06",
+    "duration_days": 4,
+    "baseline_end": "2026-11-06",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "ea02edab-ae22-436d-944f-16129f62c587",
+    "wbs_code": "5.2.5",
+    "task_name": "Pile Installation Inspection",
+    "start_date": "2026-11-03",
+    "end_date": "2026-11-06",
+    "duration_days": 4,
+    "baseline_end": "2026-11-06",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "f0ce9543-e406-4b8f-8b08-0dfa1c537e7c",
+    "wbs_code": "5.2.6",
+    "task_name": "Pile Remediation",
+    "start_date": "2026-11-09",
+    "end_date": "2026-11-13",
+    "duration_days": 4,
+    "baseline_end": "2026-11-13",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "20831e84-df02-4612-a968-297a5a302fcc",
+    "wbs_code": "5.2.7",
+    "task_name": "Racking Unloading",
+    "start_date": "2026-11-03",
+    "end_date": "2026-11-04",
+    "duration_days": 2,
+    "baseline_end": "2026-11-04",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "63b17eb6-ecaf-4a04-a1a1-9117031ba31e",
+    "wbs_code": "5.2.8",
+    "task_name": "Staging for Racking to the field",
+    "start_date": "2026-11-03",
+    "end_date": "2026-11-04",
+    "duration_days": 2,
+    "baseline_end": "2026-11-04",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  },
+  {
+    "id": "8c9cf519-31e3-4276-95da-91ddc20210e9",
+    "wbs_code": "5.2.9",
+    "task_name": "Racking Assembly",
+    "start_date": "2026-11-06",
+    "end_date": "2026-11-13",
+    "duration_days": 5,
+    "baseline_end": "2026-11-13",
+    "baseline_label": "Mechanical subcontract award 2026-08-20"
+  }
+]
