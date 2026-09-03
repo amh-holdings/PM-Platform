@@ -496,9 +496,9 @@ export async function reviewRejectInspection(input: {
 // approved subcontractor pin for that WBS. That keeps the schedule and billing
 // on the most recent approved report no matter what order pins are approved in:
 // clearing an older report out of the review backlog after a newer one must not
-// drag the number backward, while a genuine approved correction (a later report
-// that lowers the value) is still honored. Rejected pins never count. Best
-// effort: a schedule-write failure does not roll back the approval (the
+// drag the number backward. Rejected pins never count. Percent is the exception
+// to latest-dated-wins and ratchets upward - see the note at the patch below.
+// Best effort: a schedule-write failure does not roll back the approval (the
 // decision already stands); it just isn't reflected on the schedule.
 async function applyPinProgressToSchedule(
   auth: Authed,
@@ -549,12 +549,51 @@ async function applyPinProgressToSchedule(
     return ta < tb ? 1 : ta > tb ? -1 : 0;
   })[0];
 
+  // Percent ratchets; status and quantity do not.
+  //
+  // Civil progress is measured in percent only - there are no target quantities
+  // on 5.1.x - so the forecast rests entirely on this number, and it was being
+  // driven backwards. A percent field asks for work-to-date, but foremen were
+  // reading it as the day's work: Basin 1 ESC ran 15 -> 20 -> 90 and then fell
+  // to 2 on 2026-08-28, Basin 2 ESC 75 -> 1, Debris Removal 90 -> 10. Since the
+  // latest-dated pin governs, each of those replaced a real number with a
+  // smaller one and pushed the projected finish out for work already done.
+  //
+  // Work already approved does not become un-done, so an approved SUB pin can
+  // raise the number and never lower it. Latest-dated still decides status and
+  // installed quantity, and still decides the percent whenever it is an
+  // increase - so a normal report behaves exactly as before.
+  //
+  // The downward path is deliberately AHC's: editing the task sets it outright
+  // and stamps status_source 'manual'. That keeps a correction an explicit act
+  // by the party that owns the number instead of a side effect of a typo in the
+  // field. dpr-actions.ts approveDpr() writes the pin it was given directly and
+  // is not on this path.
+  //
+  // The floor is the task's CURRENT percent, deliberately not the high-water
+  // mark of its pin history. A CM re-scoping a task legitimately lowers it -
+  // 90% of the old Basin 1 ESC really is 5% of the re-scoped one - and a floor
+  // built from old pins would resurrect the superseded number on the next
+  // approval and silently undo the correction. Current-value means the last
+  // word, whoever had it, becomes the floor.
+  const { data: task } = await auth.supabase
+    .from("schedule_tasks")
+    .select("pct_complete")
+    .eq("id", taskId)
+    .maybeSingle();
+  const currentPct = task?.pct_complete != null ? Number(task.pct_complete) : null;
+
   const patch: TablesUpdate<"schedule_tasks"> = {
     status_source: "dpr",
     last_dpr_at: new Date().toISOString(),
   };
   if (governing.task_new_status) patch.status = governing.task_new_status;
-  if (governing.task_new_pct != null) patch.pct_complete = governing.task_new_pct;
+  if (governing.task_new_pct != null) {
+    patch.pct_complete =
+      currentPct != null
+        ? Math.max(currentPct, governing.task_new_pct)
+        : governing.task_new_pct;
+  }
   if (governing.quantity != null) patch.installed_quantity = governing.quantity;
 
   await auth.supabase

@@ -493,6 +493,26 @@ export function DprForm({
       prev.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)),
     );
   }
+  // Picking the WBS item carries its CURRENT percent into the box, the way the
+  // task-update flow already does. The field asks for the task's total percent
+  // to date, but it used to open blank on a pin, so a foreman reporting a day's
+  // work read "% complete" as "how much of today is done" and typed 5. Because
+  // the latest-dated approved pin governs, that 5 replaced a 90 outright:
+  // Basin 1 ESC fell 90% -> 2% on 2026-08-28 and Debris Removal 90% -> 10% on
+  // 2026-08-20. Showing the number they are revising is what makes it a
+  // cumulative field rather than a daily one.
+  function selectWorkPinTask(rowId: string, taskId: string) {
+    const t = tasks.find((x) => x.id === taskId);
+    patchWorkPin(rowId, {
+      wbsTaskId: taskId,
+      ...(t
+        ? {
+            newPct: t.currentPct != null ? String(t.currentPct) : "",
+            newStatus: t.currentStatus === "Complete" ? "Complete" : "In Progress",
+          }
+        : {}),
+    });
+  }
   function removeWorkPin(rowId: string) {
     setWorkPins((prev) => prev.filter((r) => r.rowId !== rowId));
   }
@@ -1069,11 +1089,7 @@ export function DprForm({
                             </Label>
                             <select
                               value={p.wbsTaskId}
-                              onChange={(e) =>
-                                patchWorkPin(p.rowId, {
-                                  wbsTaskId: e.target.value,
-                                })
-                              }
+                              onChange={(e) => selectWorkPinTask(p.rowId, e.target.value)}
                               className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
                             >
                               <option value="">- Select the work item -</option>
@@ -1125,7 +1141,9 @@ export function DprForm({
                               </select>
                             </div>
                             <div>
-                              <Label className="text-[10px]">% complete *</Label>
+                              <Label className="text-[10px]">
+                                Total % of this task done to date *
+                              </Label>
                               <Input
                                 type="number"
                                 min="0"
@@ -1138,6 +1156,24 @@ export function DprForm({
                                 }
                                 placeholder="0-100"
                               />
+                              {(() => {
+                                const t = tasks.find((x) => x.id === p.wbsTaskId);
+                                if (!t || t.currentPct == null) return null;
+                                const entered = Number(p.newPct);
+                                const lower =
+                                  p.newPct.trim() !== "" &&
+                                  Number.isFinite(entered) &&
+                                  entered < t.currentPct;
+                                return (
+                                  <p
+                                    className={`mt-1 text-[10px] ${lower ? "text-destructive" : "text-muted-foreground"}`}
+                                  >
+                                    {lower
+                                      ? `Was ${t.currentPct}% - this lowers it. Enter the total done, not today's work.`
+                                      : `Was ${t.currentPct}% before today`}
+                                  </p>
+                                );
+                              })()}
                             </div>
                             <div>
                               <Label className="text-[10px]">
