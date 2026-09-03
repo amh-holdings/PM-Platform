@@ -122,9 +122,19 @@ export function ScheduleWorkspace({
     return m;
   }, [tasks]);
 
-  const [scopeFilter, setScopeFilter] = useState<string>(
-    scopeCounts.get("Civil") ? "Civil" : "",
-  );
+  // Default to Civil ONLY while civil is the only construction discipline in
+  // the schedule. That was a safe shortcut when 5.1 was all that existed, but
+  // it silently hid the whole 5.2 mechanical branch the day it was imported -
+  // the tasks loaded, the counts were right, and the grid showed nothing,
+  // which reads as "the import failed" rather than "a filter is on". Any
+  // second discipline present means the honest default is everything, and this
+  // self-corrects as 5.3 and 5.4 land.
+  const [scopeFilter, setScopeFilter] = useState<string>(() => {
+    const disciplines = (["Civil", "Mechanical", "Electrical"] as const).filter(
+      (d) => scopeCounts.get(d),
+    );
+    return disciplines.length === 1 && disciplines[0] === "Civil" ? "Civil" : "";
+  });
 
   // CPM runs over EVERY task, always. Running it over the scope filter dropped
   // any predecessor pointing outside the filter, because a link to an unknown
