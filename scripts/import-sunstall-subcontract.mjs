@@ -71,9 +71,8 @@ const LINES = [
     "Locate and mark pile positions and drive ~412 piles to embedment, incl. receiving and handling of Contractor-furnished pile material. Exhibit B: 'Earned by piles driven and verified to tolerance' - so the piles commodity (412 ea) is the direct measure.",
   ],
   [
-    "3", "Racking Installation", 45000.00, "schedule",
-    ["5.2.7", "5.2.8", "5.2.9", "5.2.10", "5.2.11"], [],
-    "Receive, offload and stage Contractor-furnished racking and install all tracker structural components. Exhibit B earns this 'by structure set, aligned and torqued', which is the racking commodity - but that commodity's total is still the seeded placeholder (100 rows) with no count anywhere in the SOV. A placeholder denominator would produce a wrong percentage, so this line runs off the schedule tasks until the tracker row count is confirmed, then should switch to commodity.",
+    "3", "Racking Installation", 45000.00, "commodity", [], ["racking"],
+    "Receive, offload and stage Contractor-furnished racking and install all tracker structural components on the driven pile foundations. Exhibit B: 'Earned by structure set, aligned and torqued', which is the racking commodity. The SOV gives no row count, but the FTC BOM does: 60 tracker rows, confirmed by 60 slew drives, 60 row controllers, 60 W6x25 drive posts, and the torque-beam solve (16 int-2s + 24 int-1s + 12 ext-2s + 8 ext-1s). The same breakdown reproduces the SOV's 412 piles exactly, which is what makes the row count trustworthy.",
   ],
   [
     "4", "Modules Installation", 45000.00, "commodity", [], ["modules"],
@@ -154,7 +153,7 @@ const flags = [
   `Zero retention. Article 4 carries no retainage clause at all. Pyramid is held at 5%. Written as 0% because that is the executed text - if 5% was intended, it needs a change order, not a silent default.`,
   `Mobilization ($33,293.33, 20% of the subcontract) is due on the Effective Date 2026-08-20, which has already passed, while mobilization to site is not scheduled until 2026-10-30. Check whether this has already been invoiced.`,
   `Line 4 bundles closeout, as-builts, demob and broom-clean into a line earned by modules installed. With 0% retention there is no holdback left once the last module is secured.`,
-  `Line 3 runs off schedule tasks, not the racking commodity, because the racking total is still the seeded placeholder. Switch it to commodity once the tracker row count is confirmed.`,
+  `Modules: the executed SOV says ~2,356 but the FTC BOM's module rail / cam plate / python clip counts all come to 2,616. Line 4 is a $45,000 lump sum priced against 2,356, so an 11% larger array is a change-order conversation, not a quiet absorption. Confirm which layout is current.`,
   `Contractor identity is inconsistent in the executed document. The recital names American Helios Constructors, LLC as Contractor, but the Section 14.5 notice block reads "If to Contractor: Wellhead Projects, Inc." and Exhibit A refers to material "provided prefabricated and drilled as needed by Wellhead". Reads as carry-over from Sunstall's proposal to Wellhead. Notices sent under this agreement currently address the wrong entity.`,
   `Section 4.3(a) has a blank where the payment window belongs. Net 30 is inferred from the postmark sentence, which is the only number in the clause.`,
 ];

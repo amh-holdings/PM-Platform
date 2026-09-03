@@ -251,11 +251,15 @@ export const COMMODITIES: CommoditySpec[] = [
     sovItem: "8.01",
     contractSovItem: "8.01",
     rollupRowId: 3138007165308804,
-    // STILL A PLACEHOLDER. The Sunstall SOV gives pile and module counts but no
-    // racking row/table count, and this number is the denominator on SOV 8.01
-    // ($319,317.44). Needs the tracker row count off the FTC Solar layout
-    // before any racking percentage from this commodity can be trusted.
-    placeholderTotal: 100,
+    // Contract quantity, not a placeholder. The Sunstall SOV omits the racking
+    // count, but the FTC BOM (03_Engineering/BOM_Single_Lines/SS_BOM_Working_Copy.xlsx)
+    // gives per-row-type part counts, and the torque beams solve it:
+    // 16 int-2s + 24 int-1s + 12 ext-2s + 8 ext-1s = 60 rows. Three one-per-row
+    // parts agree exactly - 60 slew drives, 60 row controllers, 60 W6x25 drive
+    // posts - and the same breakdown reproduces the SOV's 412 piles
+    // (60 drive + 352 passive), which is what makes the row count trustworthy.
+    // The live row is marked total_verified so a re-seed keeps it.
+    placeholderTotal: 60,
   },
   {
     key: "modules",
