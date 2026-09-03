@@ -111,7 +111,12 @@ export function PhotoUploader({
   initialPhotos,
   onChange,
 }: Props) {
+  // Two inputs, not one: a lone input carrying capture="environment" makes iOS
+  // and Android open the camera directly and never offer the photo library, so
+  // a sub who shot the work earlier has no way to attach it. The library picker
+  // must stay capture-free.
   const inputRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   // Seeded, not empty. New uploads append to what is already on the record.
   // Both initialisers run per mount, so if this remounts it re-seeds from the
   // parent's current photos rather than resurrecting a stale list.
@@ -231,20 +236,38 @@ export function PhotoUploader({
 
   return (
     <div className="space-y-2">
-      <button
-        type="button"
-        onClick={() => inputRef.current?.click()}
-        className="w-full rounded-md border-2 border-dashed bg-card px-3 py-4 text-center text-xs text-muted-foreground hover:border-foreground/30"
-      >
-        Add {side === "ahc" ? "AHC verification" : ""} photos (tap to choose or
-        take a picture)
-      </button>
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="rounded-md border-2 border-dashed bg-card px-3 py-4 text-center text-xs text-muted-foreground hover:border-foreground/30"
+        >
+          Choose {side === "ahc" ? "AHC verification" : ""} photos
+        </button>
+        <button
+          type="button"
+          onClick={() => cameraRef.current?.click()}
+          className="rounded-md border-2 border-dashed bg-card px-3 py-4 text-center text-xs text-muted-foreground hover:border-foreground/30"
+        >
+          Take a photo
+        </button>
+      </div>
       <input
         ref={inputRef}
         type="file"
         accept="image/*"
-        capture="environment"
         multiple
+        className="hidden"
+        onChange={(e) => {
+          Array.from(e.target.files ?? []).forEach((f) => void uploadOne(f));
+          e.target.value = "";
+        }}
+      />
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
         className="hidden"
         onChange={(e) => {
           Array.from(e.target.files ?? []).forEach((f) => void uploadOne(f));
