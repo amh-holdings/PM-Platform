@@ -358,3 +358,102 @@ async function loadCommittedPercent(
   }
   return out;
 }
+
+// ===== Pull, not push =====
+//
+// The approval hook above is the push half: approve a report, the day fills.
+// It is the right shape and it is kept, but it has one property that made the
+// tracker unreliable for eight days in August - when it fails there is nothing
+// to see. It runs inside the CM's approval, it must never roll that approval
+// back, so its failure is a swallowed console line and a blank cell. The
+// tracker then looks idle rather than broken, which is indistinguishable from a
+// day nobody worked.
+//
+// So the tracker also pulls. Opening the page fills any approved day in the
+// window that has nothing on it, from the same evidence and through the same
+// proposer. That makes the report self-healing: whatever the push half missed -
+// a failed hook, an approval that happened before this code shipped, a report
+// approved while the service role was misconfigured - is picked up the next
+// time anyone opens the page.
+//
+// This runs on the VIEWER'S client, not the service role. daily_production is
+// phil-only for writes (migration 0036) and the tracker is Phil's page, so his
+// own session already carries the grant. That is deliberate: the push half
+// needs the service role because the approver is the CM, and a missing service
+// role is exactly what broke it. The pull half depends on nothing but the
+// session that is already reading the page.
+export type ProductionSyncResult = {
+  /** Dates that had nothing and now have production. */
+  daysFilled: string[];
+  rowsWritten: number;
+  /** Approved days still blank after the run, and why. */
+  daysUnfilled: { date: string; reason: string }[];
+  error: string | null;
+};
+
+export async function syncProductionFromReports(
+  client: Admin,
+  input: { projectId: string; from: string; to: string },
+): Promise<ProductionSyncResult> {
+  const empty: ProductionSyncResult = {
+    daysFilled: [],
+    rowsWritten: 0,
+    daysUnfilled: [],
+    error: null,
+  };
+  try {
+    const [{ data: reports, error: repErr }, { data: filed }] = await Promise.all([
+      client
+        .from("dprs")
+        .select("id, report_date")
+        .eq("project_id", input.projectId)
+        .eq("status", "approved")
+        .gte("report_date", input.from)
+        .lte("report_date", input.to)
+        .order("report_date", { ascending: true }),
+      client
+        .from("daily_production")
+        .select("production_date")
+        .eq("project_id", input.projectId)
+        .gte("production_date", input.from)
+        .lte("production_date", input.to),
+    ]);
+    if (repErr) return { ...empty, error: repErr.message };
+
+    const has = new Set((filed ?? []).map((r) => r.production_date));
+    const gaps = (reports ?? []).filter((r) => !has.has(r.report_date));
+    if (gaps.length === 0) return empty;
+
+    const daysFilled: string[] = [];
+    const daysUnfilled: ProductionSyncResult["daysUnfilled"] = [];
+    let rowsWritten = 0;
+
+    // One day at a time, in date order. Each proposal calibrates its rate off
+    // what is already filed, so a day filled now informs the next one - the same
+    // order the push half would have filled them in.
+    for (const gap of gaps) {
+      const result = await proposeProductionForReport(client, {
+        projectId: input.projectId,
+        dprId: gap.id,
+      });
+      if (result.error) {
+        daysUnfilled.push({ date: gap.report_date, reason: result.error });
+        continue;
+      }
+      if (result.written > 0) {
+        daysFilled.push(gap.report_date);
+        rowsWritten += result.written;
+      } else {
+        daysUnfilled.push({
+          date: gap.report_date,
+          reason:
+            result.notes[0] ??
+            "The report carries no quantity this tracker knows how to read. Enter the day by hand.",
+        });
+      }
+    }
+    return { daysFilled, rowsWritten, daysUnfilled, error: null };
+  } catch (e) {
+    return { ...empty, error: e instanceof Error ? e.message : "Sync failed" };
+  }
+}

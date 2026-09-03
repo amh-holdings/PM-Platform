@@ -2,6 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { guardCapability, getEffectiveRole } from "@/lib/roles-server";
 import { can } from "@/lib/roles";
+import { syncProductionFromReports } from "@/lib/production-proposal-run";
 
 import { ProductionGrid } from "./production-grid";
 
@@ -83,6 +84,26 @@ export default async function ProductionPage({
   const from = isIsoDate(searchParams.from) ? searchParams.from : defaultFrom;
   const to = isIsoDate(searchParams.to) ? searchParams.to : fallback.to;
   const range = from <= to ? { from, to } : { from: to, to: from };
+
+  // OPENING THE REPORT BRINGS IT UP TO DATE.
+  //
+  // Every approved day in the window that has nothing on it gets filled from
+  // its Field Report before the page reads anything, so what renders below is
+  // current as of this click rather than as of the last time the approval hook
+  // happened to work. See syncProductionFromReports for why the tracker pulls
+  // as well as being pushed to.
+  //
+  // Runs on Phil's own session - he is the only role that may write production
+  // (migration 0036), and he is the only one who sees this page in edit mode.
+  // A viewer who cannot write simply reads what is already filed.
+  const sync = canEdit
+    ? await syncProductionFromReports(supabase, {
+        projectId: params.id,
+        from: range.from,
+        to: range.to,
+      })
+    : null;
+
   const [commoditiesRes, productionRes, dprRes, cmLogRes] = await Promise.all([
     supabase
       .from("commodities")
@@ -207,11 +228,63 @@ export default async function ProductionPage({
         <div>
           <p className="text-xs text-muted-foreground">
             The owner&apos;s deliverable. Daily quantities, not running totals.
-            Approved field reports fill themselves in here. Pull the dates you
-            need, correct anything the report got wrong, and save.
+            Approved field reports fill themselves in here every time you open
+            this page. Pull the dates you need, correct anything the report got
+            wrong, and save.
           </p>
         </div>
       </div>
+
+      {/* What opening the page just did. Silence here used to be ambiguous -
+          a blank day looked the same whether nobody worked or the fill had
+          failed. Now the page says which it was. */}
+      {sync?.error && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          <p className="font-medium">
+            Could not bring the tracker up to date.
+          </p>
+          <p className="mt-1">
+            {sync.error}. The days below are whatever was already filed, so
+            treat this report as stale until this clears.
+          </p>
+        </div>
+      )}
+
+      {sync && sync.daysFilled.length > 0 && (
+        <div className="rounded-md border border-primary/40 bg-primary/5 p-3 text-sm">
+          <p className="font-medium">
+            Brought up to date: filled {sync.rowsWritten}{" "}
+            {sync.rowsWritten === 1 ? "figure" : "figures"} across{" "}
+            {sync.daysFilled.length}{" "}
+            {sync.daysFilled.length === 1 ? "day" : "days"} from approved field
+            reports.
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            {sync.daysFilled.join(", ")}. Hover a filled cell to see how the
+            number was reached, and correct anything the report got wrong.
+          </p>
+        </div>
+      )}
+
+      {sync && sync.daysUnfilled.length > 0 && (
+        <div className="rounded-md border bg-card p-3 text-sm">
+          <p className="font-medium">
+            {sync.daysUnfilled.length}{" "}
+            {sync.daysUnfilled.length === 1
+              ? "approved day is"
+              : "approved days are"}{" "}
+            still blank.
+          </p>
+          <ul className="mt-1 space-y-1 text-muted-foreground">
+            {sync.daysUnfilled.map((d) => (
+              <li key={d.date}>
+                <span className="font-medium text-foreground">{d.date}</span> -{" "}
+                {d.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <ProductionGrid
         projectId={params.id}

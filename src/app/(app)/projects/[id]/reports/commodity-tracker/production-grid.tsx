@@ -64,6 +64,38 @@ function isWeekend(iso: string): boolean {
   return d === 0 || d === 6;
 }
 
+/**
+ * Why a day on the tracker is empty, and whose move it is.
+ *
+ * Four different situations used to render as the same blank row: an approved
+ * day nobody has valued, a report still in the CM's queue, a report returned to
+ * the sub, and a day with no report at all. Only the first is Phil's to act on,
+ * and it was indistinguishable from the three that are not - which is how a
+ * report sitting returned for a week reads as "quiet week on site".
+ *
+ * `mine` drives the colour: red for the day Phil must fill, grey for a day that
+ * is waiting on somebody else. Returns null for an approved day that already
+ * carries production.
+ */
+export function blankDayReason(
+  reportStatus: string | null,
+): { label: string; mine: boolean } | null {
+  switch (reportStatus) {
+    case "approved":
+      // The alarm this page exists for. An approved report is work that
+      // happened, and a blank row is the owner being told it did not.
+      return { label: "nothing filed", mine: true };
+    case "submitted":
+      return { label: "awaiting CM review", mine: false };
+    case "returned":
+      return { label: "returned to sub", mine: false };
+    case "draft":
+      return { label: "sub has not filed", mine: false };
+    default:
+      return { label: "no field report", mine: false };
+  }
+}
+
 export function ProductionGrid({
   projectId,
   commodities,
@@ -311,6 +343,14 @@ export function ProductionGrid({
                 const ev = evidence[date];
                 const hasReport = Boolean(ev?.sub || ev?.cm);
                 const open = openDate === date;
+                // A blank row used to mean four different things and show one
+                // of them. Say which, and say whose move it is: red is Phil's
+                // to act on, grey is somebody else's.
+                const blank = commodities.some(
+                  (c) => currentValue(date, c.key) !== "",
+                )
+                  ? null
+                  : blankDayReason(ev?.reportStatus ?? null);
                 return (
                   <tr
                     key={date}
@@ -360,12 +400,18 @@ export function ProductionGrid({
                       );
                     })}
                     <td className="max-w-[26rem] px-3 py-1.5 text-xs text-muted-foreground">
-                      {ev?.reportStatus === "approved" &&
-                        !commodities.some((c) => currentValue(date, c.key) !== "") && (
-                          <span className="mr-1 rounded bg-destructive/15 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-destructive">
-                            nothing filed
-                          </span>
-                        )}
+                      {blank && (
+                        <span
+                          className={cn(
+                            "mr-1 rounded px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                            blank.mine
+                              ? "bg-destructive/15 text-destructive"
+                              : "bg-muted text-muted-foreground",
+                          )}
+                        >
+                          {blank.label}
+                        </span>
+                      )}
                       {hasReport ? (
                         <button
                           type="button"
