@@ -10,6 +10,7 @@ import {
   COST_CATEGORIES,
   canTransition,
   countsTowardContract,
+  nextCoNumber,
   parsePastedCostLines,
   priceBuildup,
   type CoStatus,
@@ -630,12 +631,18 @@ export async function updateCoFormFields(
       tax_pct: input.taxPct,
       mech_completion_delta_days: input.mechCompletionDeltaDays,
       subst_completion_delta_days: input.substCompletionDeltaDays,
-      // schedule_impact_days predates the two-date split; keep it as the
-      // larger of the two so older dashboards keep reporting something sane.
-      schedule_impact_days: Math.max(
-        input.mechCompletionDeltaDays ?? 0,
-        input.substCompletionDeltaDays ?? 0,
-      ),
+      // schedule_impact_days predates the two-date split; mirror the larger of
+      // the two so older dashboards keep reporting something sane. Only when a
+      // delta was actually given - deriving from two blanks used to silently
+      // zero a value entered elsewhere.
+      ...(input.mechCompletionDeltaDays != null || input.substCompletionDeltaDays != null
+        ? {
+            schedule_impact_days: Math.max(
+              input.mechCompletionDeltaDays ?? 0,
+              input.substCompletionDeltaDays ?? 0,
+            ),
+          }
+        : {}),
       exhibit_e_impact: input.exhibitEImpact,
       capacity_ratio_impact: input.capacityRatioImpact,
       design_basis_impact: input.designBasisImpact,
@@ -775,4 +782,91 @@ export async function addCostLinesFromPaste(
   await resyncCoTotals(auth.supabase, input.changeOrderId);
   revalidateCo(input.projectId, input.changeOrderId);
   return { ok: true, added: parsed.lines.length, skipped: parsed.skipped };
+}
+
+/**
+ * Creates an empty draft CO and hands back its id so the caller can go
+ * straight to the detail page.
+ *
+ * There is no create form. Everything a change order needs - the cost
+ * buildup, the backup, the dates, the narrative - lives on the detail page,
+ * and a separate screen in front of it only collected values that page
+ * immediately replaced. The number is assigned from the project's existing
+ * sequence and stays editable there.
+ */
+export async function createDraftChangeOrder(
+  projectId: string,
+): Promise<{ ok: true; coId: string; coNumber: string } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+  const db = coClient(auth.supabase);
+
+  const { data: existing } = await db
+    .from("change_orders")
+    .select("co_number")
+    .eq("project_id", projectId);
+
+  const taken = new Set((existing ?? []).map((r) => r.co_number));
+  let coNumber = nextCoNumber((existing ?? []).map((r) => r.co_number));
+  // nextCoNumber is max + 1 so a collision means a number outside the pattern
+  // already holds the slot. Walk forward rather than failing in the user's face.
+  for (let guard = 0; taken.has(coNumber) && guard < 50; guard++) {
+    coNumber = nextCoNumber([...Array.from(taken), coNumber]);
+  }
+
+  const { data, error } = await db
+    .from("change_orders")
+    .insert({ project_id: projectId, co_number: coNumber, status: "draft", co_value: 0 })
+    .select("id")
+    .single();
+  if (error || !data) return { ok: false, error: error?.message ?? "Could not create" };
+
+  revalidatePath(`/projects/${projectId}/change-orders`);
+  revalidatePath(`/projects/${projectId}`, "layout");
+  return { ok: true, coId: data.id, coNumber };
+}
+
+/** Renames a CO. Kept separate because the number is the owner-facing key. */
+export async function updateCoNumber(
+  coId: string,
+  projectId: string,
+  coNumber: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+  const trimmed = coNumber.trim();
+  if (!trimmed) return { ok: false, error: "CO number is required" };
+
+  const db = coClient(auth.supabase);
+  const { data: co } = await db
+    .from("change_orders")
+    .select("billing_line_id")
+    .eq("id", coId)
+    .maybeSingle();
+
+  const { error } = await db
+    .from("change_orders")
+    .update({ co_number: trimmed })
+    .eq("id", coId);
+  if (error) {
+    return {
+      ok: false,
+      error: error.message.includes("duplicate")
+        ? `${trimmed} is already used by another change order on this project`
+        : error.message,
+    };
+  }
+
+  // The SOV line is titled by CO number, so it has to follow the rename or the
+  // G703 and the change order stop agreeing.
+  if (co?.billing_line_id) {
+    await db
+      .from("billing_lines")
+      .update({ item_number: trimmed })
+      .eq("id", co.billing_line_id);
+  }
+
+  revalidateCo(projectId, coId);
+  revalidatePath(`/projects/${projectId}/billing`);
+  return { ok: true };
 }

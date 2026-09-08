@@ -522,3 +522,42 @@ export function parsePastedCostLines(
 
   return { lines, skipped, usedHeader };
 }
+
+/* ------------------------------------------------------------------ */
+/* Numbering                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Picks the next CO number for a project by following whatever convention the
+ * existing ones already use - prefix, separator and zero padding included.
+ *
+ * Always max + 1, never the first gap. Sweet Springs runs CO-01, CO-02, CO-04,
+ * CO-05, CO-06: the missing CO-03 is a number that was used and withdrawn, not
+ * a slot to reuse. Handing it out again would put two different scopes under
+ * one number in the owner's records.
+ */
+export function nextCoNumber(existing: string[]): string {
+  let bestPrefix = "CO-";
+  let bestWidth = 2;
+  let max = 0;
+  let sawAny = false;
+
+  for (const raw of existing) {
+    const m = /^(.*?)(\d+)\s*$/.exec((raw ?? "").trim());
+    if (!m) continue;
+    const [, prefix, digits] = m;
+    const value = Number(digits);
+    if (!Number.isFinite(value)) continue;
+    sawAny = true;
+    if (value >= max) {
+      max = value;
+      bestPrefix = prefix;
+      bestWidth = digits.length;
+    }
+  }
+
+  const next = max + 1;
+  // Keep the existing padding, but never truncate once the count outgrows it.
+  const width = sawAny ? bestWidth : 2;
+  return `${bestPrefix}${String(next).padStart(width, "0")}`;
+}

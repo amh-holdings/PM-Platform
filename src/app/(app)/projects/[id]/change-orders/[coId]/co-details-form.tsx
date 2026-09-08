@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import type { ChangeOrderDetail } from "@/lib/change-order-load";
 import {
   updateCoFormFields,
+  updateCoNumber,
   updateProjectContractFacts,
 } from "../../change-orders-actions";
 
@@ -47,11 +48,15 @@ function toIntOrNull(v: string): number | null {
 
 export function CoDetailsForm({ co, contractFacts, canEditProject }: Props) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  // A freshly created CO has an auto-assigned number and nothing else. It
+  // lands straight on this page, so open the section holding its number and
+  // description rather than hiding them behind "Edit".
+  const [open, setOpen] = useState(!co.description && !co.reason);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
+  const [coNumber, setCoNumber] = useState(co.coNumber);
   const [description, setDescription] = useState(s(co.description));
   const [reason, setReason] = useState(s(co.reason));
   const [dateOfCo, setDateOfCo] = useState(s(co.dateOfChangeOrder));
@@ -77,6 +82,15 @@ export function CoDetailsForm({ co, contractFacts, canEditProject }: Props) {
     setError(null);
     setSaved(false);
     setBusy(true);
+
+    if (coNumber.trim() !== co.coNumber) {
+      const numRes = await updateCoNumber(co.id, co.projectId, coNumber);
+      if (!numRes.ok) {
+        setBusy(false);
+        setError(numRes.error);
+        return;
+      }
+    }
 
     const coRes = await updateCoFormFields(co.id, co.projectId, {
       description: description.trim() || null,
@@ -140,6 +154,20 @@ export function CoDetailsForm({ co, contractFacts, canEditProject }: Props) {
       {open && (
         <div className="space-y-5 border-t p-4">
           <Group title="This change order">
+            <Field
+              label="CO number"
+              hint="Assigned from the project sequence. Renaming also retitles its SOV line"
+            >
+              <input
+                value={coNumber}
+                onChange={(e) => setCoNumber(e.target.value)}
+                className={inputCls}
+                placeholder="CO-07"
+              />
+            </Field>
+            <Field label="Date of change order">
+              <input type="date" value={dateOfCo} onChange={(e) => setDateOfCo(e.target.value)} className={inputCls} />
+            </Field>
             <Field label="Description" wide>
               <textarea
                 value={description}
@@ -159,9 +187,6 @@ export function CoDetailsForm({ co, contractFacts, canEditProject }: Props) {
                 className={inputCls}
                 placeholder="Owner directive, differing site condition, design change..."
               />
-            </Field>
-            <Field label="Date of change order">
-              <input type="date" value={dateOfCo} onChange={(e) => setDateOfCo(e.target.value)} className={inputCls} />
             </Field>
             <Field label="Default markup %" hint="Applies to lines that do not set their own">
               <input value={profitPct} onChange={(e) => setProfitPct(e.target.value)} inputMode="decimal" className={cn(inputCls, "text-right")} placeholder="10" />

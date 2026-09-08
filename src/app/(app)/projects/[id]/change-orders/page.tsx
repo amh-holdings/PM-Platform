@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { Button } from "@/components/ui/button";
+import { NewChangeOrderButton } from "./new-co-button";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
@@ -115,11 +115,7 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
             its own SOV line and bills on the next AFP.
           </p>
         </div>
-        <Button asChild>
-          <Link href={`/projects/${params.id}/change-orders/new`}>
-            New change order
-          </Link>
-        </Button>
+        <NewChangeOrderButton projectId={params.id} />
       </div>
 
       <div className={cn("grid gap-3", showCosts ? "sm:grid-cols-4" : "sm:grid-cols-2")}>
@@ -265,7 +261,8 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
             {rows.length === 0 && (
               <tr>
                 <td colSpan={showCosts ? 10 : 7} className="px-3 py-6 text-center text-xs text-muted-foreground">
-                  No change orders yet. Click &quot;New change order&quot; to add the first one.
+                  No change orders yet. &quot;New change order&quot; opens a numbered draft ready
+                  for its cost buildup.
                 </td>
               </tr>
             )}

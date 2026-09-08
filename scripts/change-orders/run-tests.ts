@@ -15,6 +15,7 @@ import {
   canTransition,
   countsTowardContract,
   deriveExhibitH,
+  nextCoNumber,
   parsePastedCostLines,
   priceBuildup,
   type CostLine,
@@ -447,6 +448,28 @@ section("Bulk paste - rows that cannot be used");
 {
   const r = parsePastedCostLines("Sitework\t1\tls\t1000", "labor");
   eq("the default category applies when none is given", r.lines[0].category, "labor");
+}
+
+
+section("Numbering");
+
+{
+  eq("the first CO on a project", nextCoNumber([]), "CO-01");
+  eq("follows the existing sequence", nextCoNumber(["CO-01", "CO-02"]), "CO-03");
+  // Sweet Springs is missing CO-03. That number was used and withdrawn, so
+  // handing it out again would put two scopes under one number for the owner.
+  eq(
+    "skips gaps rather than reusing them",
+    nextCoNumber(["CO-01", "CO-02", "CO-04", "CO-05", "CO-06"]),
+    "CO-07",
+  );
+  eq("order of the input does not matter", nextCoNumber(["CO-06", "CO-01"]), "CO-07");
+  eq("keeps a different prefix", nextCoNumber(["PCO 1", "PCO 2"]), "PCO 3");
+  eq("keeps three-digit padding", nextCoNumber(["CO-001"]), "CO-002");
+  eq("padding does not truncate past its width", nextCoNumber(["CO-99"]), "CO-100");
+  eq("ignores entries with no number", nextCoNumber(["Draft CO", "CO-04"]), "CO-05");
+  eq("falls back cleanly when nothing is numbered", nextCoNumber(["Draft"]), "CO-01");
+  eq("tolerates whitespace", nextCoNumber([" CO-07 "]), "CO-08");
 }
 
 // ============================================================================

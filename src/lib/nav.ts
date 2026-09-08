@@ -318,13 +318,6 @@ export const PROJECT_ACTIONS: NavAction[] = [
     find: ["afp", "g702", "billing"],
   },
   {
-    key: "new-change-order",
-    label: "New change order",
-    path: "change-orders/new",
-    cap: "viewChangeOrders",
-    find: ["co", "extra"],
-  },
-  {
     key: "new-po",
     label: "New purchase order",
     path: "procurement/new",
