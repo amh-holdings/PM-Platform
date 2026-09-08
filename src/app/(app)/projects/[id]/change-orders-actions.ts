@@ -387,8 +387,12 @@ export async function deleteCostLine(
 export type RecordCoAttachmentInput = {
   projectId: string;
   changeOrderId: string;
-  /** null attaches the file to the CO as a whole rather than to one line. */
-  costLineId: string | null;
+  /**
+   * Always a cost line. Backup hangs off the line it justifies - there is no
+   * change order level attachment, because a document with no line to explain
+   * is a document the owner has to be told about separately.
+   */
+  costLineId: string;
   kind: string;
   fileName: string;
   storagePath: string;
@@ -404,6 +408,9 @@ export async function recordCoAttachment(
   if (!auth.ok) return auth;
   if (!ATTACHMENT_KINDS.includes(input.kind as (typeof ATTACHMENT_KINDS)[number])) {
     return { ok: false, error: `Unknown attachment kind: ${input.kind}` };
+  }
+  if (!input.costLineId) {
+    return { ok: false, error: "Backup must be attached to a cost line" };
   }
 
   const db = coClient(auth.supabase);

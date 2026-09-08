@@ -11,7 +11,6 @@ import { CO_STATUS_LABELS, type CoStatus } from "@/lib/change-order-pricing";
 
 import { DOCUMENT_BUCKET } from "../../documents-constants";
 import { CoLineEditor } from "./co-line-editor";
-import { CoAttachments } from "./co-attachments";
 import { CoBuildupEditor } from "./co-buildup-editor";
 import { CoHeaderEdit } from "./co-header-edit";
 import { CoWorkflow } from "./co-workflow";
@@ -64,7 +63,6 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
     ...a,
     signedUrl: urlByPath.get(a.storagePath) ?? null,
   }));
-  const coLevelAttachments = attachments.filter((a) => !a.costLineId);
 
   // A CO is locked once the owner has it, because editing priced scope out
   // from under a submitted number is how the SOV and the signed form drift
@@ -182,21 +180,6 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
           lockReason={lockReason}
         />
       )}
-
-      <section className="rounded-lg border bg-card p-4 shadow-sm">
-        <h3 className="text-sm font-semibold">Change order level backup</h3>
-        <p className="mb-2 mt-0.5 text-xs text-muted-foreground">
-          Owner directives, RFIs, and cover documents that back the whole change order rather than
-          one cost line.
-        </p>
-        <CoAttachments
-          projectId={params.id}
-          changeOrderId={params.coId}
-          costLineId={null}
-          attachments={coLevelAttachments}
-          defaultKind="directive"
-        />
-      </section>
 
       <ExhibitHPanel
         exhibitH={exhibitH}

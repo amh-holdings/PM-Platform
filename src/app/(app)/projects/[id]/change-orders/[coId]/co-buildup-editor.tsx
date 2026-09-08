@@ -240,7 +240,8 @@ export function CoBuildupEditor({
         <div>
           <h3 className="text-sm font-semibold">Cost buildup</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Every cost that makes up this change order. Attach the quote that backs each line.
+            Every cost that makes up this change order. Click a line&apos;s Backup badge to
+            attach the quote, ticket or directive behind it.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-2">

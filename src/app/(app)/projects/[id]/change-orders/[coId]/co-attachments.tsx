@@ -18,8 +18,8 @@ import { deleteCoAttachment, recordCoAttachment } from "../../change-orders-acti
 type Props = {
   projectId: string;
   changeOrderId: string;
-  /** null = backup for the whole CO rather than one cost line. */
-  costLineId: string | null;
+  /** The cost line this backup justifies. Every attachment belongs to one. */
+  costLineId: string;
   attachments: CoAttachment[];
   defaultKind?: AttachmentKind;
   /** Only the per-line uploader inside a locked buildup passes this. */
@@ -119,9 +119,7 @@ export function CoAttachments({
   return (
     <div className={cn("space-y-2", compact ? "text-xs" : "text-sm")}>
       {attachments.length === 0 && (
-        <p className="text-xs text-muted-foreground">
-          {costLineId ? "No quote attached to this line yet." : "No change order level backup yet."}
-        </p>
+        <p className="text-xs text-muted-foreground">No document attached to this line yet.</p>
       )}
 
       {attachments.length > 0 && (
