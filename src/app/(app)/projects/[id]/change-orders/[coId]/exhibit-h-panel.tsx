@@ -1,12 +1,20 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { cn } from "@/lib/utils";
 import { formatCurrency, formatDate } from "@/lib/format";
 import type { ExhibitH } from "@/lib/change-order-pricing";
+import { updateCoFormFields } from "../../change-orders-actions";
 
-type Props = { exhibitH: ExhibitH };
+type Props = {
+  exhibitH: ExhibitH;
+  coId: string;
+  projectId: string;
+  mechDeltaDays: number | null;
+  substDeltaDays: number | null;
+};
 
 /**
  * Every value Exhibit H asks for, computed and laid out in the order the form
@@ -16,8 +24,32 @@ type Props = { exhibitH: ExhibitH };
  * Dimension's document; the platform's job is to make sure the numbers he
  * types into it are right and tie out to the contract.
  */
-export function ExhibitHPanel({ exhibitH: h }: Props) {
+export function ExhibitHPanel({
+  exhibitH: h,
+  coId,
+  projectId,
+  mechDeltaDays,
+  substDeltaDays,
+}: Props) {
+  const router = useRouter();
   const [copied, setCopied] = useState<string | null>(null);
+  const [mech, setMech] = useState(mechDeltaDays == null ? "" : String(mechDeltaDays));
+  const [subst, setSubst] = useState(substDeltaDays == null ? "" : String(substDeltaDays));
+  const [busy, setBusy] = useState(false);
+
+  const dirty =
+    mech !== (mechDeltaDays == null ? "" : String(mechDeltaDays)) ||
+    subst !== (substDeltaDays == null ? "" : String(substDeltaDays));
+
+  async function saveDeltas() {
+    setBusy(true);
+    await updateCoFormFields(coId, projectId, {
+      mechCompletionDeltaDays: toIntOrNull(mech),
+      substCompletionDeltaDays: toIntOrNull(subst),
+    });
+    setBusy(false);
+    router.refresh();
+  }
 
   function copy(key: string, value: string) {
     void navigator.clipboard.writeText(value);
@@ -46,8 +78,15 @@ export function ExhibitHPanel({ exhibitH: h }: Props) {
       {h.missing.length > 0 && (
         <div className="border-b border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
           <strong>Not enough contract data to fill the form completely.</strong> Missing:{" "}
-          {h.missing.join(", ")}. Fill them in under &ldquo;Change order details and contract
-          facts&rdquo; below.
+          {h.missing.join(", ")}.{" "}
+          {h.missing.some((m) => m !== "Date of change order") && (
+            <a
+              href={`/projects/${projectId}/edit`}
+              className="underline underline-offset-2"
+            >
+              Set the contract terms on the project
+            </a>
+          )}
           {h.originalContractPriceIsFallback && (
             <div className="mt-1">
               Line 1 is currently showing the project&apos;s CURRENT contract value as a stand-in.
@@ -134,15 +173,11 @@ export function ExhibitHPanel({ exhibitH: h }: Props) {
           onCopy={copy}
           copied={copied}
         />
-        <Row
+        <DeltaRow
           label="Mechanical - change by"
-          value={
-            h.mechanical.deltaDays == null
-              ? "unchanged"
-              : `${h.mechanical.direction} by ${Math.abs(h.mechanical.deltaDays)} days`
-          }
-          onCopy={copy}
-          copied={copied}
+          value={mech}
+          onChange={setMech}
+          direction={h.mechanical.direction}
         />
         <Row
           label="Guaranteed Mechanical Completion Date (revised)"
@@ -157,15 +192,11 @@ export function ExhibitHPanel({ exhibitH: h }: Props) {
           onCopy={copy}
           copied={copied}
         />
-        <Row
+        <DeltaRow
           label="Substantial - change by"
-          value={
-            h.substantial.deltaDays == null
-              ? "unchanged"
-              : `${h.substantial.direction} by ${Math.abs(h.substantial.deltaDays)} days`
-          }
-          onCopy={copy}
-          copied={copied}
+          value={subst}
+          onChange={setSubst}
+          direction={h.substantial.direction}
         />
         <Row
           label="Guaranteed Substantial Completion Date (revised)"
@@ -175,7 +206,58 @@ export function ExhibitHPanel({ exhibitH: h }: Props) {
           accent
         />
       </dl>
+
+      {dirty && (
+        <div className="flex items-center justify-end gap-2 border-t bg-muted/20 px-4 py-2">
+          <span className="mr-auto text-[11px] text-muted-foreground">
+            Positive days push the date out.
+          </span>
+          <button
+            type="button"
+            onClick={saveDeltas}
+            disabled={busy}
+            className="rounded bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50"
+          >
+            {busy ? "Saving..." : "Save schedule impact"}
+          </button>
+        </div>
+      )}
     </section>
+  );
+}
+
+function toIntOrNull(v: string): number | null {
+  if (!v.trim()) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+function DeltaRow({
+  label,
+  value,
+  onChange,
+  direction,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  direction: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-2">
+      <span className="min-w-0 flex-1 text-xs text-muted-foreground">{label}</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        inputMode="numeric"
+        placeholder="0"
+        aria-label={label}
+        className="h-7 w-20 rounded border border-input bg-background px-2 text-right text-sm tabular-nums"
+      />
+      <span className="w-12 shrink-0 text-right text-[11px] text-muted-foreground">
+        {direction === "unchanged" ? "days" : direction}
+      </span>
+    </div>
   );
 }
 

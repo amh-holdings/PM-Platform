@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
+import { coClient } from "@/lib/database.types.co";
 
 import { AutoFillButton } from "../auto-fill-button";
 import { ProjectEditForm } from "./project-edit-form";
@@ -8,13 +9,13 @@ import { ProjectEditForm } from "./project-edit-form";
 type Params = { id: string };
 
 export default async function ProjectEditPage({ params }: { params: Params }) {
-  const supabase = createClient();
+  const supabase = coClient(createClient());
   const aiEnabled = Boolean(
     process.env.RELAY_URL && process.env.RELAY_SHARED_SECRET,
   );
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name, client, status, contract_value, ntp_date, cod_date, zip_code, owner_payment_terms_days, retainage_pct_default, retainage_release_event")
+    .select("id, name, client, status, contract_value, ntp_date, cod_date, zip_code, owner_payment_terms_days, retainage_pct_default, retainage_release_event, original_contract_value, agreement_date, guaranteed_mechanical_completion_date, guaranteed_substantial_completion_date")
     .eq("id", params.id)
     .maybeSingle();
 

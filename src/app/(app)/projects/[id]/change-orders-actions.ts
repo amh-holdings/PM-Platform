@@ -595,22 +595,26 @@ export async function transitionCoStatus(
   return { ok: true, warning };
 }
 
+/**
+ * A partial patch, because these fields no longer live on one form.
+ *
+ * There used to be a "details and contract facts" section holding all of them
+ * plus the project's contract terms. It was a screen's worth of inputs sitting
+ * between the buildup and the Exhibit H figures, most of it duplicating what
+ * the contract already says. Each field now sits next to the thing it changes
+ * - rates on the buildup, schedule deltas on the Exhibit H panel, identity in
+ * the page header - so each of those saves its own slice through here.
+ */
 export type CoFormFieldsInput = {
-  description: string | null;
-  reason: string | null;
-  dateOfChangeOrder: string | null;
-  profitPct: number | null;
-  bondPct: number | null;
-  taxPct: number | null;
-  mechCompletionDeltaDays: number | null;
-  substCompletionDeltaDays: number | null;
-  exhibitEImpact: string | null;
-  capacityRatioImpact: string | null;
-  designBasisImpact: string | null;
-  otherImpacts: string | null;
+  description?: string | null;
+  dateOfChangeOrder?: string | null;
+  profitPct?: number | null;
+  bondPct?: number | null;
+  taxPct?: number | null;
+  mechCompletionDeltaDays?: number | null;
+  substCompletionDeltaDays?: number | null;
 };
 
-/** The narrative and rate fields that feed Exhibit H. */
 export async function updateCoFormFields(
   coId: string,
   projectId: string,
@@ -620,81 +624,47 @@ export async function updateCoFormFields(
   if (!auth.ok) return auth;
   const db = coClient(auth.supabase);
 
+  const patch: Record<string, unknown> = {};
+  if ("description" in input) patch.description = input.description;
+  if ("dateOfChangeOrder" in input) patch.date_of_change_order = input.dateOfChangeOrder;
+  if ("profitPct" in input) patch.profit_pct = input.profitPct;
+  if ("bondPct" in input) patch.bond_pct = input.bondPct;
+  if ("taxPct" in input) patch.tax_pct = input.taxPct;
+
+  const touchesSchedule =
+    "mechCompletionDeltaDays" in input || "substCompletionDeltaDays" in input;
+  if ("mechCompletionDeltaDays" in input)
+    patch.mech_completion_delta_days = input.mechCompletionDeltaDays;
+  if ("substCompletionDeltaDays" in input)
+    patch.subst_completion_delta_days = input.substCompletionDeltaDays;
+
+  // schedule_impact_days predates the two-date split; mirror the larger of the
+  // two so older dashboards keep reporting something sane. Only when a delta
+  // was actually given - deriving it from two blanks silently zeroed a value
+  // entered elsewhere.
+  if (
+    touchesSchedule &&
+    (input.mechCompletionDeltaDays != null || input.substCompletionDeltaDays != null)
+  ) {
+    patch.schedule_impact_days = Math.max(
+      input.mechCompletionDeltaDays ?? 0,
+      input.substCompletionDeltaDays ?? 0,
+    );
+  }
+
+  if (Object.keys(patch).length === 0) return { ok: true };
+
   const { error } = await db
     .from("change_orders")
-    .update({
-      description: input.description,
-      reason: input.reason,
-      date_of_change_order: input.dateOfChangeOrder,
-      profit_pct: input.profitPct,
-      bond_pct: input.bondPct,
-      tax_pct: input.taxPct,
-      mech_completion_delta_days: input.mechCompletionDeltaDays,
-      subst_completion_delta_days: input.substCompletionDeltaDays,
-      // schedule_impact_days predates the two-date split; mirror the larger of
-      // the two so older dashboards keep reporting something sane. Only when a
-      // delta was actually given - deriving from two blanks used to silently
-      // zero a value entered elsewhere.
-      ...(input.mechCompletionDeltaDays != null || input.substCompletionDeltaDays != null
-        ? {
-            schedule_impact_days: Math.max(
-              input.mechCompletionDeltaDays ?? 0,
-              input.substCompletionDeltaDays ?? 0,
-            ),
-          }
-        : {}),
-      exhibit_e_impact: input.exhibitEImpact,
-      capacity_ratio_impact: input.capacityRatioImpact,
-      design_basis_impact: input.designBasisImpact,
-      other_impacts: input.otherImpacts,
-    })
+    .update(patch as TablesUpdate<"change_orders">)
     .eq("id", coId);
   if (error) return { ok: false, error: error.message };
 
   // Markup lives on the CO, so changing it re-prices every inheriting line.
-  await resyncCoTotals(auth.supabase, coId);
+  if ("profitPct" in input || "bondPct" in input || "taxPct" in input) {
+    await resyncCoTotals(auth.supabase, coId);
+  }
   revalidateCo(projectId, coId);
-  return { ok: true };
-}
-
-export type ProjectContractFactsInput = {
-  originalContractValue: number | null;
-  agreementDate: string | null;
-  guaranteedMechanicalCompletionDate: string | null;
-  guaranteedSubstantialCompletionDate: string | null;
-  contractorLegalName: string | null;
-  contractorSignatoryName: string | null;
-  contractorSignatoryTitle: string | null;
-};
-
-/**
- * The Exhibit H header facts, which belong to the project rather than any one
- * CO: original contract price, agreement date, the two guaranteed completion
- * dates, and who signs for AHC.
- */
-export async function updateProjectContractFacts(
-  projectId: string,
-  input: ProjectContractFactsInput,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const auth = await assertAhcUser();
-  if (!auth.ok) return auth;
-  const db = coClient(auth.supabase);
-
-  const { error } = await db
-    .from("projects")
-    .update({
-      original_contract_value: input.originalContractValue,
-      agreement_date: input.agreementDate,
-      guaranteed_mechanical_completion_date: input.guaranteedMechanicalCompletionDate,
-      guaranteed_substantial_completion_date: input.guaranteedSubstantialCompletionDate,
-      contractor_legal_name: input.contractorLegalName,
-      contractor_signatory_name: input.contractorSignatoryName,
-      contractor_signatory_title: input.contractorSignatoryTitle,
-    })
-    .eq("id", projectId);
-  if (error) return { ok: false, error: error.message };
-
-  revalidatePath(`/projects/${projectId}`, "layout");
   return { ok: true };
 }
 

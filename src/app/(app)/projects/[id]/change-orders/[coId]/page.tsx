@@ -3,10 +3,9 @@ import { notFound } from "next/navigation";
 
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
-import { formatCurrency, formatDate } from "@/lib/format";
+import { formatCurrency } from "@/lib/format";
 import { can } from "@/lib/roles";
 import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
-import { coClient } from "@/lib/database.types.co";
 import { loadChangeOrder } from "@/lib/change-order-load";
 import { CO_STATUS_LABELS, type CoStatus } from "@/lib/change-order-pricing";
 
@@ -14,7 +13,7 @@ import { DOCUMENT_BUCKET } from "../../documents-constants";
 import { CoLineEditor } from "./co-line-editor";
 import { CoAttachments } from "./co-attachments";
 import { CoBuildupEditor } from "./co-buildup-editor";
-import { CoDetailsForm } from "./co-details-form";
+import { CoHeaderEdit } from "./co-header-edit";
 import { CoWorkflow } from "./co-workflow";
 import { ExhibitHPanel } from "./exhibit-h-panel";
 import { ResyncTotalsButton } from "./resync-totals-button";
@@ -43,22 +42,12 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
   const { effective } = await getEffectiveRole();
   const showCosts = can(effective, "viewCosts");
 
-  const db = coClient(supabase);
-  const [{ data: projectRow }, { data: sovLines }] = await Promise.all([
-    db
-      .from("projects")
-      .select(
-        "original_contract_value, agreement_date, guaranteed_mechanical_completion_date, guaranteed_substantial_completion_date, contractor_legal_name, contractor_signatory_name, contractor_signatory_title",
-      )
-      .eq("id", params.id)
-      .maybeSingle(),
-    supabase
-      .from("billing_lines")
-      .select("id, item_number, description, scheduled_value, sort_order")
-      .eq("change_order_id", params.coId)
-      .order("sort_order", { ascending: true, nullsFirst: false })
-      .order("item_number"),
-  ]);
+  const { data: sovLines } = await supabase
+    .from("billing_lines")
+    .select("id, item_number, description, scheduled_value, sort_order")
+    .eq("change_order_id", params.coId)
+    .order("sort_order", { ascending: true, nullsFirst: false })
+    .order("item_number");
 
   // Backup files live in a private bucket, so hand the client short-lived
   // signed links rather than raw paths.
@@ -102,9 +91,9 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         <div className="mt-1 flex flex-wrap items-baseline justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold">{co.coNumber}</h2>
-            {co.description && (
-              <p className="mt-1 text-xs text-muted-foreground">{co.description}</p>
-            )}
+            <p className="mt-1 text-xs text-muted-foreground">
+              {co.description ?? "No description yet"}
+            </p>
           </div>
           <span
             className={cn(
@@ -115,6 +104,17 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
             {CO_STATUS_LABELS[co.status as CoStatus] ?? co.status}
           </span>
         </div>
+        {showCosts && (
+          <div className="mt-2">
+            <CoHeaderEdit
+              coId={co.id}
+              projectId={params.id}
+              coNumber={co.coNumber}
+              description={co.description}
+              dateOfChangeOrder={co.dateOfChangeOrder}
+            />
+          </div>
+        )}
       </div>
 
       <CoWorkflow
@@ -198,43 +198,13 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         />
       </section>
 
-      <ExhibitHPanel exhibitH={exhibitH} />
-
-      {showCosts && (
-        <CoDetailsForm
-          co={co}
-          contractFacts={{
-            originalContractValue:
-              projectRow?.original_contract_value == null
-                ? null
-                : Number(projectRow.original_contract_value),
-            agreementDate: projectRow?.agreement_date ?? null,
-            guaranteedMechanicalCompletionDate:
-              projectRow?.guaranteed_mechanical_completion_date ?? null,
-            guaranteedSubstantialCompletionDate:
-              projectRow?.guaranteed_substantial_completion_date ?? null,
-            contractorLegalName: projectRow?.contractor_legal_name ?? null,
-            contractorSignatoryName: projectRow?.contractor_signatory_name ?? null,
-            contractorSignatoryTitle: projectRow?.contractor_signatory_title ?? null,
-          }}
-          canEditProject
-        />
-      )}
-
-      <section className="grid gap-3 sm:grid-cols-3">
-        <SmallCell label="Submitted" value={co.submittedAt ? formatDate(co.submittedAt) : "-"} />
-        <SmallCell label="Approved" value={co.approvedAt ? formatDate(co.approvedAt) : "-"} />
-        <SmallCell
-          label="Schedule impact"
-          value={
-            co.mechCompletionDeltaDays == null && co.substCompletionDeltaDays == null
-              ? co.scheduleImpactDays != null
-                ? `${co.scheduleImpactDays} days`
-                : "-"
-              : `Mech ${co.mechCompletionDeltaDays ?? 0}d / Subst ${co.substCompletionDeltaDays ?? 0}d`
-          }
-        />
-      </section>
+      <ExhibitHPanel
+        exhibitH={exhibitH}
+        coId={co.id}
+        projectId={params.id}
+        mechDeltaDays={co.mechCompletionDeltaDays}
+        substDeltaDays={co.substCompletionDeltaDays}
+      />
 
       {co.notes && (
         <section className="rounded-lg border bg-muted/30 p-3 text-sm">
@@ -256,15 +226,6 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         linesTotal={linesTotal}
         drift={(buildup.lines.length > 0 ? buildup.billable : co.coValue) - linesTotal}
       />
-    </div>
-  );
-}
-
-function SmallCell({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border bg-card p-3">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-1 text-sm">{value}</div>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import { coClient } from "@/lib/database.types.co";
 import { PROJECT_STATUS_OPTIONS, type ProjectStatus } from "./constants";
 
 export type CreateProjectState = {
@@ -114,7 +115,7 @@ export async function updateProject(
   };
 
   const supabase = createClient();
-  const { error } = await supabase
+  const { error } = await coClient(supabase)
     .from("projects")
     .update({
       name: name.trim(),
@@ -127,6 +128,17 @@ export async function updateProject(
       owner_payment_terms_days: parseIntField(formData.get("owner_payment_terms_days")),
       retainage_pct_default: parseFloatField(formData.get("retainage_pct_default")),
       retainage_release_event: parseEnumField(formData.get("retainage_release_event")),
+      // Exhibit H header facts. original_contract_value is the price at
+      // execution and never moves; contract_value above is the current one and
+      // grows as change orders are approved.
+      original_contract_value: parseFloatField(formData.get("original_contract_value")),
+      agreement_date: parseDate(formData.get("agreement_date")),
+      guaranteed_mechanical_completion_date: parseDate(
+        formData.get("guaranteed_mechanical_completion_date"),
+      ),
+      guaranteed_substantial_completion_date: parseDate(
+        formData.get("guaranteed_substantial_completion_date"),
+      ),
     })
     .eq("id", projectId);
 

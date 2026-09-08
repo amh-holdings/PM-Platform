@@ -32,6 +32,10 @@ export type ProjectEditValues = {
   owner_payment_terms_days: number | null;
   retainage_pct_default: number | null;
   retainage_release_event: string | null;
+  original_contract_value: number | null;
+  agreement_date: string | null;
+  guaranteed_mechanical_completion_date: string | null;
+  guaranteed_substantial_completion_date: string | null;
 };
 
 const RETAINAGE_RELEASE_OPTIONS = [
@@ -189,6 +193,60 @@ export function ProjectEditForm({ project }: { project: ProjectEditValues }) {
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-md border bg-muted/30 p-4">
+        <h3 className="text-sm font-semibold">Contract terms</h3>
+        <p className="text-xs text-muted-foreground">
+          The figures a change order form is built from. The original price is what the
+          agreement was signed at and never moves - the contract value above is the current
+          one and grows as change orders are approved.
+        </p>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="original_contract_value">Original contract price (USD)</Label>
+            <Input
+              id="original_contract_value"
+              name="original_contract_value"
+              defaultValue={project.original_contract_value ?? ""}
+              placeholder="e.g. 2507500.00"
+            />
+            <p className="text-[10px] text-muted-foreground">
+              Before any change order
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="agreement_date">Date of agreement</Label>
+            <Input
+              id="agreement_date"
+              name="agreement_date"
+              type="date"
+              defaultValue={project.agreement_date ?? ""}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="guaranteed_mechanical_completion_date">
+              Guaranteed Mechanical Completion
+            </Label>
+            <Input
+              id="guaranteed_mechanical_completion_date"
+              name="guaranteed_mechanical_completion_date"
+              type="date"
+              defaultValue={project.guaranteed_mechanical_completion_date ?? ""}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="guaranteed_substantial_completion_date">
+              Guaranteed Substantial Completion
+            </Label>
+            <Input
+              id="guaranteed_substantial_completion_date"
+              name="guaranteed_substantial_completion_date"
+              type="date"
+              defaultValue={project.guaranteed_substantial_completion_date ?? ""}
+            />
           </div>
         </div>
       </div>

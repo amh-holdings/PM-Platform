@@ -18,6 +18,7 @@ import {
   addCostLinesFromPaste,
   deleteCostLine,
   saveCostLine,
+  updateCoFormFields,
 } from "../../change-orders-actions";
 import { CoAttachments } from "./co-attachments";
 
@@ -107,6 +108,30 @@ export function CoBuildupEditor({
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasted, setPasted] = useState("");
   const [pasteResult, setPasteResult] = useState<string | null>(null);
+  const [rates, setRates] = useState({
+    markup: defaultMarkupPct == null ? "" : String(defaultMarkupPct),
+    bond: bondPct == null ? "" : String(bondPct),
+    tax: taxPct == null ? "" : String(taxPct),
+  });
+  const [ratesBusy, setRatesBusy] = useState(false);
+
+  const ratesDirty =
+    rates.markup !== (defaultMarkupPct == null ? "" : String(defaultMarkupPct)) ||
+    rates.bond !== (bondPct == null ? "" : String(bondPct)) ||
+    rates.tax !== (taxPct == null ? "" : String(taxPct));
+
+  async function saveRates() {
+    setError(null);
+    setRatesBusy(true);
+    const res = await updateCoFormFields(changeOrderId, projectId, {
+      profitPct: toNumOrNull(rates.markup),
+      bondPct: toNumOrNull(rates.bond),
+      taxPct: toNumOrNull(rates.tax),
+    });
+    setRatesBusy(false);
+    if (!res.ok) setError(res.error);
+    else router.refresh();
+  }
 
   const buildup = useMemo(
     () => priceBuildup({ lines, defaultMarkupPct, bondPct, taxPct }),
@@ -218,11 +243,45 @@ export function CoBuildupEditor({
             Every cost that makes up this change order. Attach the quote that backs each line.
           </p>
         </div>
-        {missingBackup > 0 && (
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900">
-            {missingBackup} line{missingBackup > 1 ? "s" : ""} with no backup attached
-          </span>
-        )}
+        <div className="flex flex-wrap items-end gap-2">
+          {missingBackup > 0 && (
+            <span className="mr-2 self-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900">
+              {missingBackup} line{missingBackup > 1 ? "s" : ""} with no backup attached
+            </span>
+          )}
+          {!readOnly && (
+            <>
+              <Rate
+                label="Markup %"
+                title="Applied to lines that do not set their own"
+                value={rates.markup}
+                onChange={(v) => setRates((r) => ({ ...r, markup: v }))}
+              />
+              <Rate
+                label="Bond %"
+                title="Of cost + markup. Blank for none"
+                value={rates.bond}
+                onChange={(v) => setRates((r) => ({ ...r, bond: v }))}
+              />
+              <Rate
+                label="Tax %"
+                title="Of cost + markup. Blank for none"
+                value={rates.tax}
+                onChange={(v) => setRates((r) => ({ ...r, tax: v }))}
+              />
+              {ratesDirty && (
+                <button
+                  type="button"
+                  onClick={saveRates}
+                  disabled={ratesBusy}
+                  className="h-7 rounded bg-primary px-2 text-xs text-primary-foreground disabled:opacity-50"
+                >
+                  {ratesBusy ? "Applying..." : "Apply rates"}
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {locked && (
@@ -512,6 +571,31 @@ export function CoBuildupEditor({
         are treated as pass-through cost, not margin.
       </div>
     </section>
+  );
+}
+
+function Rate({
+  label,
+  title,
+  value,
+  onChange,
+}: {
+  label: string;
+  title: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="flex flex-col" title={title}>
+      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        inputMode="decimal"
+        placeholder="-"
+        className="h-7 w-16 rounded border border-input bg-background px-1.5 text-right text-xs"
+      />
+    </label>
   );
 }
 
