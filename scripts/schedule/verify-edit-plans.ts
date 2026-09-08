@@ -123,13 +123,24 @@ line(`\nDrag and drop: ${dropOk} valid, ${dropRefused} refused, ${dropReparent} 
 line(`  same-parent drops that renamed something (must be 0): ${renamedOnSameParent}`);
 
 // A worked re-parenting drop, with the full rename set.
-const from = tasks.find((t) => t.wbs_code.startsWith("5.1.2."))!;
-const onto = tasks.find((t) => t.wbs_code.startsWith("5.1.1."))!;
-const dropDemo = planDrop(tasks, [from.wbs_code], onto.wbs_code, "after");
-line(`\nWorked example - drag ${from.wbs_code} onto ${onto.wbs_code}:`);
-line(`  re-parents: ${dropDemo.reparents}`);
-for (const r of dropDemo.renames) line(`  ${r.from} -> ${r.to}`);
-for (const w of dropDemo.predecessorRewrites) line(`  repoint ${w.wbs_code}: ${w.predecessors}`);
+// Both ends are looked up rather than asserted: the live schedule is edited,
+// and hard-coding "there is a 5.1.2.x row" crashed the whole verifier - which
+// runs the round-trip import check below - the day 5.1.2 became a leaf.
+const from = tasks.find(
+  (t) => t.wbs_code.split(".").length >= 4 && !t.wbs_code.startsWith("5.1.1."),
+);
+const onto = tasks.find(
+  (t) => t.wbs_code.startsWith("5.1.1.") && t.wbs_code !== from?.wbs_code,
+);
+if (!from || !onto) {
+  line("\nWorked example - skipped: no cross-branch pair in this schedule.");
+} else {
+  const dropDemo = planDrop(tasks, [from.wbs_code], onto.wbs_code, "after");
+  line(`\nWorked example - drag ${from.wbs_code} onto ${onto.wbs_code}:`);
+  line(`  re-parents: ${dropDemo.reparents}`);
+  for (const r of dropDemo.renames) line(`  ${r.from} -> ${r.to}`);
+  for (const w of dropDemo.predecessorRewrites) line(`  repoint ${w.wbs_code}: ${w.predecessors}`);
+}
 
 // --- shifting the whole schedule two weeks ---------------------------------
 const shifted = tasks.map((t) => shiftDates(t, 10, 5)).filter(Boolean);
