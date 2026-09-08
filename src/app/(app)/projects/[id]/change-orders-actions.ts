@@ -10,6 +10,7 @@ import {
   COST_CATEGORIES,
   canTransition,
   countsTowardContract,
+  parsePastedCostLines,
   priceBuildup,
   type CoStatus,
   type CostCategory,
@@ -707,4 +708,71 @@ function revalidateCo(projectId: string, coId: string) {
   revalidatePath(`/projects/${projectId}/change-orders/${coId}`);
   revalidatePath(`/projects/${projectId}/change-orders`);
   revalidatePath(`/projects/${projectId}`, "layout");
+}
+
+export type AddCostLinesInput = {
+  projectId: string;
+  changeOrderId: string;
+  /** Raw spreadsheet paste. Parsed server side so the rules live in one place. */
+  pasted: string;
+  defaultCategory: CostCategory;
+};
+
+/**
+ * Adds many cost lines in one go from a spreadsheet paste.
+ *
+ * A CO buildup is assembled in Excel before it ever reaches this app, so
+ * retyping it a row at a time is the slow path. Rows that could not be read
+ * come back named rather than dropped - a buildup that silently loses a line
+ * gets submitted short.
+ */
+export async function addCostLinesFromPaste(
+  input: AddCostLinesInput,
+): Promise<
+  | { ok: true; added: number; skipped: Array<{ row: number; text: string; reason: string }> }
+  | { ok: false; error: string }
+> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const parsed = parsePastedCostLines(input.pasted, input.defaultCategory);
+  if (parsed.lines.length === 0) {
+    return {
+      ok: false,
+      error:
+        parsed.skipped.length > 0
+          ? `No usable rows. First problem: row ${parsed.skipped[0].row} - ${parsed.skipped[0].reason}`
+          : "Nothing to add",
+    };
+  }
+
+  const db = coClient(auth.supabase);
+  const { data: maxRow } = await db
+    .from("change_order_cost_lines")
+    .select("sort_order")
+    .eq("change_order_id", input.changeOrderId)
+    .order("sort_order", { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+  let sort = (maxRow?.sort_order ?? 0) + 10;
+
+  const { error } = await db.from("change_order_cost_lines").insert(
+    parsed.lines.map((l) => ({
+      change_order_id: input.changeOrderId,
+      project_id: input.projectId,
+      category: l.category,
+      description: l.description,
+      vendor_name: l.vendorName,
+      quantity: l.quantity,
+      unit: l.unit,
+      unit_cost: l.unitCost,
+      markup_pct: l.markupPct,
+      sort_order: (sort += 10) - 10,
+    })),
+  );
+  if (error) return { ok: false, error: error.message };
+
+  await resyncCoTotals(auth.supabase, input.changeOrderId);
+  revalidateCo(input.projectId, input.changeOrderId);
+  return { ok: true, added: parsed.lines.length, skipped: parsed.skipped };
 }

@@ -22,7 +22,7 @@ type Props = {
   costLineId: string | null;
   attachments: CoAttachment[];
   defaultKind?: AttachmentKind;
-  /** Disables upload and delete once the CO is locked. */
+  /** Only the per-line uploader inside a locked buildup passes this. */
   readOnly?: boolean;
   compact?: boolean;
 };

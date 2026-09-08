@@ -15,6 +15,7 @@ import {
   canTransition,
   countsTowardContract,
   deriveExhibitH,
+  parsePastedCostLines,
   priceBuildup,
   type CostLine,
   type ExhibitHProject,
@@ -338,6 +339,114 @@ section("Workflow");
   eq("only approved counts toward contract", countsTowardContract("approved"), true);
   eq("submitted does not count toward contract", countsTowardContract("submitted"), false);
   eq("rejected does not count toward contract", countsTowardContract("rejected"), false);
+}
+
+
+section("Bulk paste - column mapping");
+
+{
+  // The common case: copy straight out of Excel, tabs between cells.
+  const r = parsePastedCostLines(
+    [
+      "Description\tQty\tUnit\tUnit Cost\tMarkup",
+      "Racking storage\t3\tmo\t$1,250.00\t10",
+      "Transformer storage\t3\tmo\t$980.50\t",
+    ].join("\n"),
+  );
+  eq("the header row is detected", r.usedHeader, true);
+  eq("both data rows parse", r.lines.length, 2);
+  eq("nothing is skipped", r.skipped.length, 0);
+  eq("currency formatting is stripped", r.lines[0].unitCost, 1250);
+  eq("quantity parses", r.lines[0].quantity, 3);
+  eq("unit carries through", r.lines[0].unit, "mo");
+  eq("markup parses", r.lines[0].markupPct, 10);
+  eq("a blank markup inherits rather than reading as zero", r.lines[1].markupPct, null);
+}
+
+{
+  // Column order must come from the header, not from position.
+  const r = parsePastedCostLines(
+    ["Unit Cost\tDescription\tQty", "500\tPile driving\t12"].join("\n"),
+  );
+  eq("reordered columns still map", r.lines[0].description, "Pile driving");
+  eq("reordered unit cost maps", r.lines[0].unitCost, 500);
+  eq("reordered quantity maps", r.lines[0].quantity, 12);
+}
+
+{
+  // Header aliases, because nobody labels the column "unitCost".
+  const r = parsePastedCostLines(
+    ["Item\tQuantity\tUOM\tRate\tOH&P\tSubcontractor\tType",
+     "Trenching\t100\tlf\t42.50\t5\tACME Civil\tsub"].join("\n"),
+  );
+  eq("alias headers map", r.lines[0].description, "Trenching");
+  eq("rate maps to unit cost", r.lines[0].unitCost, 42.5);
+  eq("OH&P maps to markup", r.lines[0].markupPct, 5);
+  eq("vendor maps", r.lines[0].vendorName, "ACME Civil");
+  eq("category alias resolves", r.lines[0].category, "subcontractor");
+}
+
+section("Bulk paste - headerless and messy input");
+
+{
+  // No header, so fall back to the documented positional order.
+  const r = parsePastedCostLines("Crane rental\t2\tday\t3500");
+  eq("no header is detected", r.usedHeader, false);
+  eq("the first row is treated as data, not a header", r.lines.length, 1);
+  eq("positional description", r.lines[0].description, "Crane rental");
+  eq("positional unit cost", r.lines[0].unitCost, 3500);
+}
+
+{
+  const r = parsePastedCostLines("Lump sum scope,,,\t\t\t7500");
+  eq("a blank quantity defaults to one", r.lines[0].quantity, 1);
+}
+
+{
+  // CSV with a comma inside a quoted description must not split.
+  const r = parsePastedCostLines('"Racking, delivered and stored",3,mo,1250');
+  eq("a quoted comma does not split the row", r.lines[0].description, "Racking, delivered and stored");
+  eq("the following columns still line up", r.lines[0].unitCost, 1250);
+}
+
+{
+  // Credits show up as parentheses in every estimating package.
+  const r = parsePastedCostLines("Deleted fencing\t1\tls\t(4,200.00)");
+  eq("parentheses read as a credit", r.lines[0].unitCost, -4200);
+}
+
+section("Bulk paste - rows that cannot be used");
+
+{
+  // A row that cannot be read must be reported. Dropping it silently is how a
+  // change order goes to the owner short a line.
+  const r = parsePastedCostLines(
+    [
+      "Description\tQty\tUnit\tUnit Cost",
+      "Good line\t1\tls\t100",
+      "\t5\tea\t50",
+      "No price here\t1\tls\tTBD",
+      "",
+      "Another good one\t2\tea\t25",
+    ].join("\n"),
+  );
+  eq("only the readable rows become lines", r.lines.length, 2);
+  eq("both bad rows are reported", r.skipped.length, 2);
+  eq("the missing description is named", r.skipped[0].reason, "No description");
+  eq("the unreadable price is named", r.skipped[1].reason, "No readable unit cost");
+  eq("skipped rows report their real row number", r.skipped[0].row, 3);
+  eq("blank rows are ignored, not reported", r.skipped.length, 2);
+}
+
+{
+  const r = parsePastedCostLines("");
+  eq("empty input parses to nothing", r.lines.length, 0);
+  eq("empty input reports nothing skipped", r.skipped.length, 0);
+}
+
+{
+  const r = parsePastedCostLines("Sitework\t1\tls\t1000", "labor");
+  eq("the default category applies when none is given", r.lines[0].category, "labor");
 }
 
 // ============================================================================

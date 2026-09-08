@@ -24,7 +24,6 @@ type ContractFacts = {
 type Props = {
   co: ChangeOrderDetail;
   contractFacts: ContractFacts;
-  readOnly: boolean;
   /** Contract facts are project-wide, so only offer them where they belong. */
   canEditProject: boolean;
 };
@@ -46,7 +45,7 @@ function toIntOrNull(v: string): number | null {
   return Number.isFinite(x) ? Math.trunc(x) : null;
 }
 
-export function CoDetailsForm({ co, contractFacts, readOnly, canEditProject }: Props) {
+export function CoDetailsForm({ co, contractFacts, canEditProject }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -145,7 +144,7 @@ export function CoDetailsForm({ co, contractFacts, readOnly, canEditProject }: P
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                disabled={readOnly}
+               
                 rows={2}
                 className={inputCls}
                 placeholder="Equipment Storage (Racking + Transformer) and Power Factors SCADA cost increase."
@@ -155,44 +154,44 @@ export function CoDetailsForm({ co, contractFacts, readOnly, canEditProject }: P
               <textarea
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                disabled={readOnly}
+               
                 rows={2}
                 className={inputCls}
                 placeholder="Owner directive, differing site condition, design change..."
               />
             </Field>
             <Field label="Date of change order">
-              <input type="date" value={dateOfCo} onChange={(e) => setDateOfCo(e.target.value)} disabled={readOnly} className={inputCls} />
+              <input type="date" value={dateOfCo} onChange={(e) => setDateOfCo(e.target.value)} className={inputCls} />
             </Field>
             <Field label="Default markup %" hint="Applies to lines that do not set their own">
-              <input value={profitPct} onChange={(e) => setProfitPct(e.target.value)} disabled={readOnly} inputMode="decimal" className={cn(inputCls, "text-right")} placeholder="10" />
+              <input value={profitPct} onChange={(e) => setProfitPct(e.target.value)} inputMode="decimal" className={cn(inputCls, "text-right")} placeholder="10" />
             </Field>
             <Field label="Bond %" hint="Of cost + markup. Leave blank for none">
-              <input value={bondPct} onChange={(e) => setBondPct(e.target.value)} disabled={readOnly} inputMode="decimal" className={cn(inputCls, "text-right")} />
+              <input value={bondPct} onChange={(e) => setBondPct(e.target.value)} inputMode="decimal" className={cn(inputCls, "text-right")} />
             </Field>
             <Field label="Tax %" hint="Of cost + markup. Leave blank for none">
-              <input value={taxPct} onChange={(e) => setTaxPct(e.target.value)} disabled={readOnly} inputMode="decimal" className={cn(inputCls, "text-right")} />
+              <input value={taxPct} onChange={(e) => setTaxPct(e.target.value)} inputMode="decimal" className={cn(inputCls, "text-right")} />
             </Field>
             <Field label="Mechanical completion, days" hint="Positive pushes the date out">
-              <input value={mechDays} onChange={(e) => setMechDays(e.target.value)} disabled={readOnly} inputMode="numeric" className={cn(inputCls, "text-right")} placeholder="0" />
+              <input value={mechDays} onChange={(e) => setMechDays(e.target.value)} inputMode="numeric" className={cn(inputCls, "text-right")} placeholder="0" />
             </Field>
             <Field label="Substantial completion, days" hint="Positive pushes the date out">
-              <input value={substDays} onChange={(e) => setSubstDays(e.target.value)} disabled={readOnly} inputMode="numeric" className={cn(inputCls, "text-right")} placeholder="0" />
+              <input value={substDays} onChange={(e) => setSubstDays(e.target.value)} inputMode="numeric" className={cn(inputCls, "text-right")} placeholder="0" />
             </Field>
           </Group>
 
           <Group title="Exhibit H narrative sections">
             <Field label="Impact on Exhibit E, including Payment Schedule" wide>
-              <textarea value={exhibitE} onChange={(e) => setExhibitE(e.target.value)} disabled={readOnly} rows={2} className={inputCls} placeholder="None." />
+              <textarea value={exhibitE} onChange={(e) => setExhibitE(e.target.value)} rows={2} className={inputCls} placeholder="None." />
             </Field>
             <Field label="Impact on Facility Capacity Ratio / performance ratio" wide>
-              <textarea value={capacity} onChange={(e) => setCapacity(e.target.value)} disabled={readOnly} rows={2} className={inputCls} placeholder="None." />
+              <textarea value={capacity} onChange={(e) => setCapacity(e.target.value)} rows={2} className={inputCls} placeholder="None." />
             </Field>
             <Field label="Impact on Design Basis" wide>
-              <textarea value={designBasis} onChange={(e) => setDesignBasis(e.target.value)} disabled={readOnly} rows={2} className={inputCls} placeholder="None." />
+              <textarea value={designBasis} onChange={(e) => setDesignBasis(e.target.value)} rows={2} className={inputCls} placeholder="None." />
             </Field>
             <Field label="Other impacts to liability or obligation" wide>
-              <textarea value={other} onChange={(e) => setOther(e.target.value)} disabled={readOnly} rows={2} className={inputCls} placeholder="None." />
+              <textarea value={other} onChange={(e) => setOther(e.target.value)} rows={2} className={inputCls} placeholder="None." />
             </Field>
           </Group>
 

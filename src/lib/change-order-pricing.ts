@@ -340,3 +340,185 @@ export function canTransition(from: string, to: string): boolean {
 export function countsTowardContract(status: string): boolean {
   return status === "approved";
 }
+
+/* ------------------------------------------------------------------ */
+/* Bulk entry                                                          */
+/* ------------------------------------------------------------------ */
+
+export type ParsedCostLine = {
+  category: CostCategory;
+  description: string;
+  vendorName: string | null;
+  quantity: number;
+  unit: string | null;
+  unitCost: number;
+  markupPct: number | null;
+};
+
+export type ParseResult = {
+  lines: ParsedCostLine[];
+  /** One entry per input row that could not be used, with the reason. */
+  skipped: Array<{ row: number; text: string; reason: string }>;
+  /** True when a header row was detected and used to map columns. */
+  usedHeader: boolean;
+};
+
+const HEADER_ALIASES: Record<string, string[]> = {
+  description: ["description", "desc", "item", "scope", "work"],
+  vendorName: ["vendor", "sub", "subcontractor", "supplier", "company"],
+  quantity: ["qty", "quantity", "count"],
+  unit: ["unit", "uom", "units"],
+  unitCost: ["unit cost", "unitcost", "rate", "unit price", "price", "cost", "each"],
+  markupPct: ["markup", "markup %", "markup%", "margin", "oh&p", "ohp"],
+  category: ["category", "type", "cat"],
+};
+
+const CATEGORY_ALIASES: Record<string, CostCategory> = {
+  labor: "labor",
+  labour: "labor",
+  material: "material",
+  materials: "material",
+  equipment: "equipment",
+  equip: "equipment",
+  rental: "equipment",
+  subcontractor: "subcontractor",
+  sub: "subcontractor",
+  subs: "subcontractor",
+  freight: "freight",
+  shipping: "freight",
+  delivery: "freight",
+  other: "other",
+};
+
+/** Strips $ , % and whitespace, and reads (123.45) as negative. */
+function parseMoney(raw: string): number | null {
+  const t = raw.trim();
+  if (!t) return null;
+  const negative = /^\(.*\)$/.test(t);
+  const cleaned = t.replace(/[()$,%\s]/g, "");
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  if (!Number.isFinite(n)) return null;
+  return negative ? -n : n;
+}
+
+function splitRow(row: string): string[] {
+  // Excel and Sheets both put tabs between cells on copy, so tabs win when
+  // present. Falling back to commas would split "Racking, delivered" in two.
+  if (row.includes("\t")) return row.split("\t").map((c) => c.trim());
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < row.length; i++) {
+    const ch = row[i];
+    if (ch === '"') {
+      if (inQuotes && row[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else inQuotes = !inQuotes;
+    } else if (ch === "," && !inQuotes) {
+      out.push(cur.trim());
+      cur = "";
+    } else cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
+}
+
+function matchHeader(cells: string[]): Record<string, number> | null {
+  const map: Record<string, number> = {};
+  cells.forEach((cell, i) => {
+    const c = cell.toLowerCase().replace(/[_-]+/g, " ").trim();
+    if (!c) return;
+    for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
+      if (map[field] != null) continue;
+      if (aliases.includes(c)) map[field] = i;
+    }
+  });
+  // A description column plus one number column is enough to trust the row as
+  // a header. Anything less and it is probably just the first data row.
+  const hasNumber = map.unitCost != null || map.quantity != null;
+  return map.description != null && hasNumber ? map : null;
+}
+
+/**
+ * Parses cost lines pasted out of a spreadsheet.
+ *
+ * A CO buildup gets assembled in Excel long before it reaches this app, so
+ * retyping it row by row is the slow path. Column order is read from a header
+ * row when there is one; otherwise it falls back to the positional order the
+ * paste box documents.
+ *
+ * Rows that cannot be read are reported rather than dropped - silently losing
+ * a line from a buildup is how a CO gets submitted short.
+ */
+export function parsePastedCostLines(
+  text: string,
+  defaultCategory: CostCategory = "material",
+): ParseResult {
+  const rows = text
+    .split(/\r?\n/)
+    .map((r) => r.replace(/\s+$/, ""))
+    .filter((r) => r.trim().length > 0);
+
+  const lines: ParsedCostLine[] = [];
+  const skipped: ParseResult["skipped"] = [];
+  if (rows.length === 0) return { lines, skipped, usedHeader: false };
+
+  const headerMap = matchHeader(splitRow(rows[0]));
+  const usedHeader = headerMap != null;
+  // Positional fallback, matching the order shown in the paste box.
+  const positional: Record<string, number> = {
+    description: 0,
+    quantity: 1,
+    unit: 2,
+    unitCost: 3,
+    markupPct: 4,
+    vendorName: 5,
+    category: 6,
+  };
+  const map = headerMap ?? positional;
+
+  const dataRows = usedHeader ? rows.slice(1) : rows;
+
+  dataRows.forEach((row, i) => {
+    const rowNumber = usedHeader ? i + 2 : i + 1;
+    const cells = splitRow(row);
+    const at = (field: string): string => {
+      const idx = map[field];
+      return idx == null ? "" : (cells[idx] ?? "");
+    };
+
+    const description = at("description").trim();
+    if (!description) {
+      skipped.push({ row: rowNumber, text: row, reason: "No description" });
+      return;
+    }
+
+    const unitCost = parseMoney(at("unitCost"));
+    if (unitCost == null) {
+      skipped.push({ row: rowNumber, text: row, reason: "No readable unit cost" });
+      return;
+    }
+
+    // A blank quantity means one of whatever it is, which is how a lump-sum
+    // quote line gets pasted.
+    const quantity = parseMoney(at("quantity")) ?? 1;
+    const markupPct = parseMoney(at("markupPct"));
+
+    const rawCategory = at("category").toLowerCase().trim();
+    const category = CATEGORY_ALIASES[rawCategory] ?? defaultCategory;
+
+    lines.push({
+      category,
+      description,
+      vendorName: at("vendorName").trim() || null,
+      quantity,
+      unit: at("unit").trim() || null,
+      unitCost,
+      markupPct,
+    });
+  });
+
+  return { lines, skipped, usedHeader };
+}

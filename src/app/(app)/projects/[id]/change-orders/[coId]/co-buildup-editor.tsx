@@ -14,7 +14,11 @@ import {
   type CostLine,
 } from "@/lib/change-order-pricing";
 import type { CoAttachment } from "@/lib/change-order-load";
-import { deleteCostLine, saveCostLine } from "../../change-orders-actions";
+import {
+  addCostLinesFromPaste,
+  deleteCostLine,
+  saveCostLine,
+} from "../../change-orders-actions";
 import { CoAttachments } from "./co-attachments";
 
 type Draft = {
@@ -36,7 +40,9 @@ type Props = {
   defaultMarkupPct: number | null;
   bondPct: number | null;
   taxPct: number | null;
-  readOnly: boolean;
+  /** True once the owner has the CO. Editing stays possible behind an unlock. */
+  locked: boolean;
+  lockReason: string;
 };
 
 const EMPTY: Draft = {
@@ -82,15 +88,25 @@ export function CoBuildupEditor({
   defaultMarkupPct,
   bondPct,
   taxPct,
-  readOnly,
+  locked,
+  lockReason,
 }: Props) {
   const router = useRouter();
+  // A locked CO is not a read-only CO. Every existing change order on a live
+  // job is already approved, and most predate the buildup entirely, so a hard
+  // block would mean their costs could never be entered at all. Make the
+  // consequence explicit instead and let the decision be made deliberately.
+  const [unlocked, setUnlocked] = useState(false);
+  const readOnly = locked && !unlocked;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [adding, setAdding] = useState(false);
   const [openBackup, setOpenBackup] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasted, setPasted] = useState("");
+  const [pasteResult, setPasteResult] = useState<string | null>(null);
 
   const buildup = useMemo(
     () => priceBuildup({ lines, defaultMarkupPct, bondPct, taxPct }),
@@ -111,7 +127,7 @@ export function CoBuildupEditor({
   // back by the owner, so surface the count rather than burying it.
   const missingBackup = lines.filter((l) => !attachmentsByLine.has(l.id)).length;
 
-  async function save(lineId?: string) {
+  async function save(lineId?: string, thenAddAnother = false) {
     setError(null);
     if (!draft.description.trim()) {
       setError("Description is required");
@@ -138,8 +154,45 @@ export function CoBuildupEditor({
       return;
     }
     setEditingId(null);
-    setAdding(false);
-    setDraft(EMPTY);
+    // Keep the row open with the category and unit carried over: a buildup is
+    // entered as a run of similar lines, not one at a time.
+    if (thenAddAnother) {
+      setAdding(true);
+      setDraft({ ...EMPTY, category: draft.category, unit: draft.unit });
+    } else {
+      setAdding(false);
+      setDraft(EMPTY);
+    }
+    router.refresh();
+  }
+
+  async function addPasted() {
+    setError(null);
+    setPasteResult(null);
+    if (!pasted.trim()) {
+      setError("Paste some rows first");
+      return;
+    }
+    setBusy(true);
+    const res = await addCostLinesFromPaste({
+      projectId,
+      changeOrderId,
+      pasted,
+      defaultCategory: draft.category,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    setPasted("");
+    setPasteResult(
+      res.skipped.length === 0
+        ? `Added ${res.added} line${res.added === 1 ? "" : "s"}.`
+        : `Added ${res.added}. Skipped ${res.skipped.length}: ` +
+          res.skipped.map((k) => `row ${k.row} (${k.reason})`).join(", "),
+    );
+    setPasteOpen(res.skipped.length > 0);
     router.refresh();
   }
 
@@ -171,6 +224,23 @@ export function CoBuildupEditor({
           </span>
         )}
       </div>
+
+      {locked && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+          <span>
+            {unlocked
+              ? `Editing an ${lockReason} change order. Saving re-prices it and updates its SOV line, which changes what bills on the next AFP.`
+              : `This change order is ${lockReason}, so the buildup is locked. Unlock it to enter or correct costs.`}
+          </span>
+          <button
+            type="button"
+            onClick={() => setUnlocked((u) => !u)}
+            className="shrink-0 rounded border border-amber-400 bg-white px-2 py-1 font-medium hover:bg-amber-100"
+          >
+            {unlocked ? "Lock again" : "Unlock to edit"}
+          </button>
+        </div>
+      )}
 
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1000px] text-sm">
@@ -327,6 +397,7 @@ export function CoBuildupEditor({
                     defaultMarkupPct={defaultMarkupPct}
                     busy={busy}
                     onSave={() => save()}
+                    onSaveAndAdd={() => save(undefined, true)}
                     onCancel={() => {
                       setAdding(false);
                       setDraft(EMPTY);
@@ -357,19 +428,80 @@ export function CoBuildupEditor({
         </div>
       )}
 
-      {!readOnly && !adding && (
-        <div className="border-t p-3">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              setAdding(true);
-              setEditingId(null);
-              setDraft(EMPTY);
-            }}
-          >
-            + Add cost line
-          </Button>
+      {!readOnly && (
+        <div className="space-y-3 border-t p-3">
+          {!adding && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setAdding(true);
+                  setEditingId(null);
+                  setDraft(EMPTY);
+                }}
+              >
+                + Add cost line
+              </Button>
+              <button
+                type="button"
+                onClick={() => setPasteOpen((o) => !o)}
+                className="rounded border px-2 py-1 text-xs hover:bg-muted"
+              >
+                {pasteOpen ? "Hide paste box" : "Paste rows from a spreadsheet"}
+              </button>
+              {pasteResult && (
+                <span className="text-xs text-muted-foreground">{pasteResult}</span>
+              )}
+            </div>
+          )}
+
+          {pasteOpen && (
+            <div className="rounded-md border bg-muted/20 p-3">
+              <p className="text-xs text-muted-foreground">
+                Copy the rows straight out of Excel and paste them here. If the first row is a
+                header it is read for column order, so any arrangement works. Without a header the
+                order is:{" "}
+                <span className="font-mono">
+                  description, qty, unit, unit cost, markup %, vendor, category
+                </span>
+                . A blank markup inherits the change order default. Anything unreadable is
+                reported, never dropped.
+              </p>
+              <textarea
+                value={pasted}
+                onChange={(e) => setPasted(e.target.value)}
+                rows={6}
+                placeholder={
+                  "Description\tQty\tUnit\tUnit Cost\tMarkup\n" +
+                  "Racking storage\t3\tmo\t$1,250.00\t10\n" +
+                  "Transformer storage\t3\tmo\t$980.50"
+                }
+                className="mt-2 w-full rounded border border-input bg-background p-2 font-mono text-xs"
+              />
+              <div className="mt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPasted("");
+                    setPasteOpen(false);
+                    setPasteResult(null);
+                  }}
+                  className="rounded border px-2 py-1 text-xs hover:bg-muted"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={addPasted}
+                  disabled={busy}
+                  className="rounded bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50"
+                >
+                  {busy ? "Adding..." : "Add these lines"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -419,6 +551,7 @@ function DraftRow({
   defaultMarkupPct,
   busy,
   onSave,
+  onSaveAndAdd,
   onCancel,
 }: {
   draft: Draft;
@@ -426,6 +559,8 @@ function DraftRow({
   defaultMarkupPct: number | null;
   busy: boolean;
   onSave: () => void;
+  /** Only offered when adding, not when editing an existing line. */
+  onSaveAndAdd?: () => void;
   onCancel: () => void;
 }) {
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
@@ -510,6 +645,16 @@ function DraftRow({
           >
             Cancel
           </button>
+          {onSaveAndAdd && (
+            <button
+              type="button"
+              onClick={onSaveAndAdd}
+              disabled={busy}
+              className="rounded border border-primary px-2 py-1 text-primary disabled:opacity-50"
+            >
+              Save and add another
+            </button>
+          )}
           <button
             type="button"
             onClick={onSave}

@@ -77,11 +77,13 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
   }));
   const coLevelAttachments = attachments.filter((a) => !a.costLineId);
 
-  // A CO is locked once the owner has it. Editing the priced scope out from
-  // under a submitted or approved number is how the SOV and the signed form
-  // drift apart.
+  // A CO is locked once the owner has it, because editing priced scope out
+  // from under a submitted number is how the SOV and the signed form drift
+  // apart. Locked is not read-only though: every CO on a live job is already
+  // approved and most predate the buildup, so the editor offers an explicit
+  // unlock rather than making their costs impossible to enter.
   const locked = ["submitted", "approved", "void"].includes(co.status);
-  const readOnly = !showCosts || locked;
+  const lockReason = CO_STATUS_LABELS[co.status as CoStatus]?.toLowerCase() ?? co.status;
 
   const linesWithBackup = new Set(attachments.filter((a) => a.costLineId).map((a) => a.costLineId));
   const linesMissingBackup = buildup.lines.filter((l) => !linesWithBackup.has(l.id)).length;
@@ -176,7 +178,8 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
           defaultMarkupPct={co.profitPct}
           bondPct={co.bondPct}
           taxPct={co.taxPct}
-          readOnly={readOnly}
+          locked={locked}
+          lockReason={lockReason}
         />
       )}
 
@@ -192,7 +195,6 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
           costLineId={null}
           attachments={coLevelAttachments}
           defaultKind="directive"
-          readOnly={locked}
         />
       </section>
 
@@ -215,7 +217,6 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
             contractorSignatoryName: projectRow?.contractor_signatory_name ?? null,
             contractorSignatoryTitle: projectRow?.contractor_signatory_title ?? null,
           }}
-          readOnly={locked}
           canEditProject
         />
       )}
