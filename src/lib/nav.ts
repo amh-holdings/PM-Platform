@@ -324,6 +324,15 @@ export const PROJECT_ACTIONS: NavAction[] = [
     cap: "viewProcurement",
     find: ["po", "procurement", "order"],
   },
+  {
+    // The edit page held the contract terms and was reachable only by typing
+    // the URL, so those fields could not be filled in at all.
+    key: "edit-project",
+    label: "Edit project settings",
+    path: "edit",
+    cap: "viewCosts",
+    find: ["contract", "retainage", "terms", "ntp", "cod", "settings", "guaranteed"],
+  },
 ];
 
 export function visibleActions(role: EffectiveRole): NavAction[] {

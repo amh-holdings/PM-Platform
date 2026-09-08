@@ -847,3 +847,69 @@ export async function updateCoNumber(
   revalidatePath(`/projects/${projectId}/billing`);
   return { ok: true };
 }
+
+export type ContractDatesInput = {
+  agreementDate?: string | null;
+  guaranteedMechanicalCompletionDate?: string | null;
+  guaranteedSubstantialCompletionDate?: string | null;
+};
+
+/**
+ * The contract dates Exhibit H adjusts, edited from the change order screen.
+ *
+ * These are project facts and they also live on the project edit page, but
+ * that page is not linked from anywhere, and the moment you need them is the
+ * moment you are filling out a change order. Interim by design: the two
+ * guaranteed completion dates should eventually come off the schedule's
+ * milestones rather than being typed at all.
+ *
+ * A partial patch so each field saves independently.
+ */
+export async function updateContractDates(
+  projectId: string,
+  input: ContractDatesInput,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const patch: {
+    agreement_date?: string | null;
+    guaranteed_mechanical_completion_date?: string | null;
+    guaranteed_substantial_completion_date?: string | null;
+  } = {};
+  if ("agreementDate" in input) patch.agreement_date = input.agreementDate ?? null;
+  if ("guaranteedMechanicalCompletionDate" in input)
+    patch.guaranteed_mechanical_completion_date =
+      input.guaranteedMechanicalCompletionDate ?? null;
+  if ("guaranteedSubstantialCompletionDate" in input)
+    patch.guaranteed_substantial_completion_date =
+      input.guaranteedSubstantialCompletionDate ?? null;
+  if (Object.keys(patch).length === 0) return { ok: true };
+
+  const { error } = await coClient(auth.supabase)
+    .from("projects")
+    .update(patch)
+    .eq("id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}`, "layout");
+  return { ok: true };
+}
+
+export type OriginalContractValueInput = { originalContractValue: number | null };
+
+/** Exhibit H line 1. Never moves as change orders are approved. */
+export async function updateOriginalContractValue(
+  projectId: string,
+  input: OriginalContractValueInput,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+  const { error } = await coClient(auth.supabase)
+    .from("projects")
+    .update({ original_contract_value: input.originalContractValue })
+    .eq("id", projectId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/projects/${projectId}`, "layout");
+  return { ok: true };
+}

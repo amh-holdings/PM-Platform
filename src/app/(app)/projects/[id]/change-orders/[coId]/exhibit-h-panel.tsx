@@ -6,7 +6,11 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { formatCurrency, formatDate } from "@/lib/format";
 import type { ExhibitH } from "@/lib/change-order-pricing";
-import { updateCoFormFields } from "../../change-orders-actions";
+import {
+  updateContractDates,
+  updateCoFormFields,
+  updateOriginalContractValue,
+} from "../../change-orders-actions";
 
 type Props = {
   exhibitH: ExhibitH;
@@ -14,6 +18,15 @@ type Props = {
   projectId: string;
   mechDeltaDays: number | null;
   substDeltaDays: number | null;
+  /**
+   * Project facts, editable here because this is where you need them. The two
+   * guaranteed dates should eventually come off the schedule's milestones
+   * instead of being typed.
+   */
+  originalContractValue: number | null;
+  agreementDate: string | null;
+  guaranteedMechanicalDate: string | null;
+  guaranteedSubstantialDate: string | null;
 };
 
 /**
@@ -30,12 +43,36 @@ export function ExhibitHPanel({
   projectId,
   mechDeltaDays,
   substDeltaDays,
+  originalContractValue,
+  agreementDate,
+  guaranteedMechanicalDate,
+  guaranteedSubstantialDate,
 }: Props) {
   const router = useRouter();
   const [copied, setCopied] = useState<string | null>(null);
   const [mech, setMech] = useState(mechDeltaDays == null ? "" : String(mechDeltaDays));
   const [subst, setSubst] = useState(substDeltaDays == null ? "" : String(substDeltaDays));
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+
+  // Project-level facts save the moment the field is left, so there is no
+  // second Save button competing with the one below.
+  async function saveDates(patch: Parameters<typeof updateContractDates>[1], key: string) {
+    setSaving(key);
+    await updateContractDates(projectId, patch);
+    setSaving(null);
+    router.refresh();
+  }
+
+  async function saveOriginal(raw: string) {
+    const cleaned = raw.replace(/[$,\s]/g, "");
+    const n = cleaned ? Number(cleaned) : null;
+    if (cleaned && !Number.isFinite(n)) return;
+    setSaving("original");
+    await updateOriginalContractValue(projectId, { originalContractValue: n });
+    setSaving(null);
+    router.refresh();
+  }
 
   const dirty =
     mech !== (mechDeltaDays == null ? "" : String(mechDeltaDays)) ||
@@ -107,11 +144,12 @@ export function ExhibitHPanel({
           onCopy={copy}
           copied={copied}
         />
-        <Row
+        <EditRow
           label="Date of agreement"
-          value={h.agreementDate ? formatDate(h.agreementDate) : "-"}
-          onCopy={copy}
-          copied={copied}
+          type="date"
+          defaultValue={agreementDate ?? ""}
+          saving={saving === "agreement"}
+          onCommit={(v) => saveDates({ agreementDate: v || null }, "agreement")}
         />
       </dl>
 
@@ -119,13 +157,14 @@ export function ExhibitHPanel({
         Adjustment to contract price
       </div>
       <dl className="divide-y text-sm">
-        <Row
+        <EditRow
           label="1. The original Contract Price was"
-          value={money(h.originalContractPrice)}
-          copyValue={raw(h.originalContractPrice)}
-          onCopy={copy}
-          copied={copied}
-          mono
+          defaultValue={originalContractValue == null ? "" : String(originalContractValue)}
+          placeholder="2507500.00"
+          hint={money(h.originalContractPrice)}
+          saving={saving === "original"}
+          onCommit={saveOriginal}
+          align="right"
         />
         <Row
           label={`2. ${line2Label}`}
@@ -167,11 +206,14 @@ export function ExhibitHPanel({
         Adjustment to dates in project schedule
       </div>
       <dl className="divide-y text-sm">
-        <Row
+        <EditRow
           label="Guaranteed Mechanical Completion Date (current)"
-          value={h.mechanical.currentDate ? formatDate(h.mechanical.currentDate) : "-"}
-          onCopy={copy}
-          copied={copied}
+          type="date"
+          defaultValue={guaranteedMechanicalDate ?? ""}
+          saving={saving === "mechDate"}
+          onCommit={(v) =>
+            saveDates({ guaranteedMechanicalCompletionDate: v || null }, "mechDate")
+          }
         />
         <DeltaRow
           label="Mechanical - change by"
@@ -186,11 +228,14 @@ export function ExhibitHPanel({
           copied={copied}
           accent
         />
-        <Row
+        <EditRow
           label="Guaranteed Substantial Completion Date (current)"
-          value={h.substantial.currentDate ? formatDate(h.substantial.currentDate) : "-"}
-          onCopy={copy}
-          copied={copied}
+          type="date"
+          defaultValue={guaranteedSubstantialDate ?? ""}
+          saving={saving === "substDate"}
+          onCommit={(v) =>
+            saveDates({ guaranteedSubstantialCompletionDate: v || null }, "substDate")
+          }
         />
         <DeltaRow
           label="Substantial - change by"
@@ -223,6 +268,57 @@ export function ExhibitHPanel({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * A value that is typed here rather than derived. Commits on blur so a project
+ * fact does not need its own Save button in a panel that mostly reads.
+ */
+function EditRow({
+  label,
+  defaultValue,
+  type,
+  placeholder,
+  hint,
+  saving,
+  onCommit,
+  align,
+}: {
+  label: string;
+  defaultValue: string;
+  type?: "date";
+  placeholder?: string;
+  hint?: string;
+  saving: boolean;
+  onCommit: (value: string) => void;
+  align?: "right";
+}) {
+  const [value, setValue] = useState(defaultValue);
+  return (
+    <div className="flex items-center gap-3 px-4 py-2">
+      <span className="min-w-0 flex-1 text-xs text-muted-foreground">{label}</span>
+      {hint && value.trim() !== "" && (
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{hint}</span>
+      )}
+      <input
+        type={type}
+        value={value}
+        placeholder={placeholder}
+        aria-label={label}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => {
+          if (value !== defaultValue) onCommit(value);
+        }}
+        className={cn(
+          "h-7 w-40 rounded border border-input bg-background px-2 text-sm",
+          align === "right" && "text-right tabular-nums",
+        )}
+      />
+      <span className="w-12 shrink-0 text-right text-[11px] text-muted-foreground">
+        {saving ? "Saving" : ""}
+      </span>
+    </div>
   );
 }
 

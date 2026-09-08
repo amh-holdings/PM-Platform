@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { formatCurrency } from "@/lib/format";
 import { can } from "@/lib/roles";
 import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
+import { coClient } from "@/lib/database.types.co";
 import { loadChangeOrder } from "@/lib/change-order-load";
 import { CO_STATUS_LABELS, type CoStatus } from "@/lib/change-order-pricing";
 
@@ -41,12 +42,21 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
   const { effective } = await getEffectiveRole();
   const showCosts = can(effective, "viewCosts");
 
-  const { data: sovLines } = await supabase
-    .from("billing_lines")
-    .select("id, item_number, description, scheduled_value, sort_order")
-    .eq("change_order_id", params.coId)
-    .order("sort_order", { ascending: true, nullsFirst: false })
-    .order("item_number");
+  const [{ data: projectRow }, { data: sovLines }] = await Promise.all([
+    coClient(supabase)
+      .from("projects")
+      .select(
+        "original_contract_value, agreement_date, guaranteed_mechanical_completion_date, guaranteed_substantial_completion_date",
+      )
+      .eq("id", params.id)
+      .maybeSingle(),
+    supabase
+      .from("billing_lines")
+      .select("id, item_number, description, scheduled_value, sort_order")
+      .eq("change_order_id", params.coId)
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("item_number"),
+  ]);
 
   // Backup files live in a private bucket, so hand the client short-lived
   // signed links rather than raw paths.
@@ -187,6 +197,14 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         projectId={params.id}
         mechDeltaDays={co.mechCompletionDeltaDays}
         substDeltaDays={co.substCompletionDeltaDays}
+        originalContractValue={
+          projectRow?.original_contract_value == null
+            ? null
+            : Number(projectRow.original_contract_value)
+        }
+        agreementDate={projectRow?.agreement_date ?? null}
+        guaranteedMechanicalDate={projectRow?.guaranteed_mechanical_completion_date ?? null}
+        guaranteedSubstantialDate={projectRow?.guaranteed_substantial_completion_date ?? null}
       />
 
       {co.notes && (
