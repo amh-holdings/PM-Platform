@@ -11,7 +11,15 @@ import { createChangeOrder } from "../../change-orders-actions";
 
 type Props = { projectId: string };
 
-const STATUSES = ["draft", "submitted", "approved", "rejected"] as const;
+// A new CO starts life as a draft. It reaches submitted or approved by moving
+// through the workflow on the detail page, which is what creates the SOV line
+// and stamps the history - so those are deliberately not offered here.
+const STATUSES = ["draft", "internal_review"] as const;
+
+const STATUS_LABELS: Record<(typeof STATUSES)[number], string> = {
+  draft: "Draft",
+  internal_review: "Internal review",
+};
 
 // Last-edited tracking lets us recompute the third value when two are present.
 type LastEdited = "cost" | "profitPct" | "billable" | null;
@@ -30,9 +38,8 @@ export function NewChangeOrderForm({ projectId }: Props) {
   const [billable, setBillable] = useState("");
   const [lastEdited, setLastEdited] = useState<LastEdited>("profitPct");
   const [scheduleDays, setScheduleDays] = useState("");
-  const [status, setStatus] = useState<(typeof STATUSES)[number]>("approved");
-  const [submittedAt, setSubmittedAt] = useState("");
-  const [approvedAt, setApprovedAt] = useState("");
+  const [status, setStatus] = useState<(typeof STATUSES)[number]>("draft");
+  const [dateOfCo, setDateOfCo] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -67,9 +74,9 @@ export function NewChangeOrderForm({ projectId }: Props) {
       setError("CO number is required");
       return;
     }
-    const billableNum = toNumber(billable);
-    if (billableNum == null || billableNum < 0) {
-      setError("Billable value is required and must be >= 0");
+    const billableNum = toNumber(billable) ?? 0;
+    if (billableNum < 0) {
+      setError("Billable value cannot be negative");
       return;
     }
     const costNum = toNumber(cost);
@@ -85,9 +92,10 @@ export function NewChangeOrderForm({ projectId }: Props) {
       profitPct: profitPctNum,
       scheduleImpactDays: scheduleDays ? Number(scheduleDays) : null,
       status,
-      submittedAt: submittedAt || null,
-      approvedAt: approvedAt || null,
+      submittedAt: null,
+      approvedAt: null,
       notes: notes.trim() || null,
+      dateOfChangeOrder: dateOfCo || null,
     });
     setSubmitting(false);
     if (!res.ok) {
@@ -117,11 +125,11 @@ export function NewChangeOrderForm({ projectId }: Props) {
             id="co-status"
             value={status}
             onChange={(e) => setStatus(e.target.value as (typeof STATUSES)[number])}
-            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm capitalize"
+            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
           >
             {STATUSES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {STATUS_LABELS[s]}
               </option>
             ))}
           </select>
@@ -144,7 +152,7 @@ export function NewChangeOrderForm({ projectId }: Props) {
           <div className="mb-2 flex items-baseline justify-between">
             <h3 className="text-sm font-semibold">Pricing</h3>
             <p className="text-[10px] text-muted-foreground">
-              Enter any two - the third auto-computes
+              Optional rough order of magnitude - the buildup replaces it
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
@@ -204,21 +212,12 @@ export function NewChangeOrderForm({ projectId }: Props) {
           />
         </div>
         <div>
-          <Label htmlFor="submitted-at">Submitted</Label>
+          <Label htmlFor="date-of-co">Date of change order</Label>
           <Input
-            id="submitted-at"
+            id="date-of-co"
             type="date"
-            value={submittedAt}
-            onChange={(e) => setSubmittedAt(e.target.value)}
-          />
-        </div>
-        <div>
-          <Label htmlFor="approved-at">Approved</Label>
-          <Input
-            id="approved-at"
-            type="date"
-            value={approvedAt}
-            onChange={(e) => setApprovedAt(e.target.value)}
+            value={dateOfCo}
+            onChange={(e) => setDateOfCo(e.target.value)}
           />
         </div>
         <div className="sm:col-span-2">
@@ -248,9 +247,11 @@ export function NewChangeOrderForm({ projectId }: Props) {
       </div>
 
       <div className="mt-4 rounded-md border border-dashed bg-background/40 p-3 text-xs text-muted-foreground">
-        Tip: after saving, the detail page lets you add multiple SOV
-        sub-lines (e.g. one line for storage, one for equipment cost
-        increase). Each appears separately on the AFP G703.
+        Next: on the detail page, build the cost up line by line and attach the
+        quote behind each one. The buildup then drives the billable value, so
+        anything entered above is only a placeholder. Submitting and approving
+        happen there too - approval is what creates this CO&apos;s SOV line and
+        puts it on the next AFP.
       </div>
     </div>
   );

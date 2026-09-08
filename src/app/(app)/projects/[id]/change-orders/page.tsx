@@ -6,13 +6,21 @@ import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { can } from "@/lib/roles";
 import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
+import { coClient } from "@/lib/database.types.co";
+import {
+  CO_STATUS_LABELS,
+  countsTowardContract,
+  type CoStatus,
+} from "@/lib/change-order-pricing";
 
 type Params = { id: string };
 
 const STATUS_TONE: Record<string, string> = {
   approved: "bg-emerald-100 text-emerald-900",
   submitted: "bg-amber-100 text-amber-900",
+  internal_review: "bg-sky-100 text-sky-900",
   rejected: "bg-destructive/10 text-destructive",
+  void: "bg-muted text-muted-foreground line-through",
   draft: "bg-muted text-muted-foreground",
 };
 
@@ -24,7 +32,9 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
   const { effective } = await getEffectiveRole();
   const showCosts = can(effective, "viewCosts");
 
-  const [{ data: cos, error }, { data: lines }] = await Promise.all([
+  const db = coClient(supabase);
+  const [{ data: cos, error }, { data: lines }, { data: costLines }, { data: backups }] =
+    await Promise.all([
     supabase
       .from("change_orders")
       .select(
@@ -37,6 +47,14 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
       .select("change_order_id, scheduled_value")
       .eq("project_id", params.id)
       .not("change_order_id", "is", null),
+    db
+      .from("change_order_cost_lines")
+      .select("id, change_order_id")
+      .eq("project_id", params.id),
+    db
+      .from("change_order_attachments")
+      .select("change_order_id, cost_line_id")
+      .eq("project_id", params.id),
   ]);
 
   if (error) {
@@ -59,18 +77,42 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
   }
 
   const rows = cos ?? [];
-  const totalCoValue = rows.reduce((s, r) => s + Number(r.co_value ?? 0), 0);
-  const totalCost = rows.reduce((s, r) => s + Number(r.cost_amount ?? 0), 0);
+
+  // Only approved change orders have moved the contract. Rolling drafts and
+  // rejected COs into the same total was harmless when everything was created
+  // as "approved"; with a real workflow it would overstate the contract.
+  const approvedRows = rows.filter((r) => countsTowardContract(r.status ?? ""));
+  const pendingRows = rows.filter((r) =>
+    ["draft", "internal_review", "submitted"].includes(r.status ?? ""),
+  );
+  const totalCoValue = approvedRows.reduce((s, r) => s + Number(r.co_value ?? 0), 0);
+  const totalCost = approvedRows.reduce((s, r) => s + Number(r.cost_amount ?? 0), 0);
   const totalProfit = totalCoValue - totalCost;
-  const approvedCount = rows.filter((r) => r.status === "approved").length;
+  const pendingValue = pendingRows.reduce((s, r) => s + Number(r.co_value ?? 0), 0);
+  const approvedCount = approvedRows.length;
+
+  // How much of each CO's priced scope has a quote behind it.
+  const linesPerCo = new Map<string, Set<string>>();
+  for (const l of costLines ?? []) {
+    if (!linesPerCo.has(l.change_order_id)) linesPerCo.set(l.change_order_id, new Set());
+    linesPerCo.get(l.change_order_id)!.add(l.id);
+  }
+  const backedLinesPerCo = new Map<string, Set<string>>();
+  for (const a of backups ?? []) {
+    if (!a.cost_line_id) continue;
+    if (!backedLinesPerCo.has(a.change_order_id))
+      backedLinesPerCo.set(a.change_order_id, new Set());
+    backedLinesPerCo.get(a.change_order_id)!.add(a.cost_line_id);
+  }
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs text-muted-foreground">
-            Approved scope changes to the prime contract. Each CO can carry
-            one or more SOV line items that get billed on subsequent AFPs.
+            Scope changes to the prime contract. Price each one with a cost buildup,
+            attach the quote behind every line, then submit. On approval the CO gets
+            its own SOV line and bills on the next AFP.
           </p>
         </div>
         <Button asChild>
@@ -87,7 +129,7 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
           </div>
           <div className="mt-1 text-2xl font-semibold">{rows.length}</div>
           <div className="mt-1 text-[10px] text-muted-foreground">
-            {approvedCount} approved
+            {approvedCount} approved &middot; {pendingRows.length} in progress
           </div>
         </div>
         {showCosts && (
@@ -112,10 +154,15 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
         )}
         <div className="rounded-md border bg-card p-3">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
-            Total billable (owner)
+            Approved (owner)
           </div>
           <div className="mt-1 text-2xl font-semibold text-emerald-700">
             {formatCurrency(totalCoValue)}
+          </div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            {pendingValue !== 0
+              ? `${formatCurrency(pendingValue)} pending approval`
+              : "Nothing pending"}
           </div>
         </div>
       </div>
@@ -133,6 +180,9 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
                 <th className="px-3 py-2 text-right font-medium">Profit %</th>
               )}
               <th className="px-3 py-2 text-right font-medium">Billable</th>
+              {showCosts && (
+                <th className="px-3 py-2 text-right font-medium">Backup</th>
+              )}
               <th className="px-3 py-2 text-right font-medium">SOV lines</th>
               <th className="px-3 py-2 text-right font-medium">Days</th>
               <th className="px-3 py-2 text-left font-medium">Status</th>
@@ -142,6 +192,8 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
           <tbody>
             {rows.map((r) => {
               const lineInfo = linesByCo.get(r.id);
+              const costLineCount = linesPerCo.get(r.id)?.size ?? 0;
+              const backedCount = backedLinesPerCo.get(r.id)?.size ?? 0;
               return (
                 <tr key={r.id} className="border-b last:border-0 hover:bg-muted/30">
                   <td className="px-3 py-2 font-mono font-medium">
@@ -168,6 +220,24 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
                   <td className="px-3 py-2 text-right font-mono tabular-nums font-semibold">
                     {formatCurrency(Number(r.co_value ?? 0))}
                   </td>
+                  {showCosts && (
+                    <td className="px-3 py-2 text-right text-xs">
+                      {costLineCount === 0 ? (
+                        <span className="text-muted-foreground">no buildup</span>
+                      ) : (
+                        <span
+                          className={cn(
+                            "inline-flex rounded px-1.5 py-0.5",
+                            backedCount === costLineCount
+                              ? "bg-emerald-100 text-emerald-900"
+                              : "bg-amber-100 text-amber-900",
+                          )}
+                        >
+                          {backedCount}/{costLineCount}
+                        </span>
+                      )}
+                    </td>
+                  )}
                   <td className="px-3 py-2 text-right text-xs">
                     {lineInfo
                       ? `${lineInfo.count} (${formatCurrency(lineInfo.total)})`
@@ -179,11 +249,11 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
                   <td className="px-3 py-2">
                     <span
                       className={cn(
-                        "inline-flex rounded-full px-2 py-0.5 text-xs font-medium capitalize",
+                        "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
                         STATUS_TONE[r.status ?? ""] ?? "bg-muted",
                       )}
                     >
-                      {r.status}
+                      {CO_STATUS_LABELS[r.status as CoStatus] ?? r.status}
                     </span>
                   </td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">
@@ -194,7 +264,7 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={showCosts ? 9 : 7} className="px-3 py-6 text-center text-xs text-muted-foreground">
+                <td colSpan={showCosts ? 10 : 7} className="px-3 py-6 text-center text-xs text-muted-foreground">
                   No change orders yet. Click &quot;New change order&quot; to add the first one.
                 </td>
               </tr>
