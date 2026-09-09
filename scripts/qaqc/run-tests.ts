@@ -36,6 +36,7 @@ import {
   basemapSrc,
 } from "@/lib/inspection-map";
 import { isLinkUsable, generateInspectionToken } from "@/lib/inspection-token";
+import { splitPinNotes, joinPinNotes } from "@/lib/pin-notes";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATION = join(__dirname, "..", "..", "db", "migrations", "0021_qaqc_inspections.sql");
@@ -395,6 +396,25 @@ async function main() {
   const t1 = generateInspectionToken();
   const t2 = generateInspectionToken();
   check("U-26 token is long & unique & url-safe", t1.length >= 40 && t1 !== t2 && /^[A-Za-z0-9_-]+$/.test(t1));
+
+  // ============ UNIT: pin notes body vs correction trail ============
+  // A rejected pin is corrected in full by the sub, and the note body is one of
+  // the editable fields. The "[Fix ...]" trail is not: it is what the CM reads
+  // to see what moved between rounds, so it has to survive an edited body.
+  console.log("\n  -- unit: pin notes --");
+  const plain = splitPinNotes("Trenched from MH-3 to MH-4.");
+  check("U-27 notes with no trail are all body", plain.body === "Trenched from MH-3 to MH-4." && plain.trail.length === 0);
+  const withTrail = splitPinNotes(
+    "Trenched from MH-3 to MH-4.\n\n[Fix 2026-09-08] wrong activity\nActivity: 5.1.1 A -> 5.1.2 B",
+  );
+  check("U-28 trail block splits off the body", withTrail.body === "Trenched from MH-3 to MH-4." && withTrail.trail.length === 1, JSON.stringify(withTrail));
+  check("U-29 trail keeps its change lines", withTrail.trail[0].includes("Activity: 5.1.1 A -> 5.1.2 B"));
+  const rewritten = joinPinNotes("Rewrote the note entirely", withTrail.trail);
+  check("U-30 an edited body cannot drop the trail", rewritten !== null && rewritten.startsWith("Rewrote the note entirely") && rewritten.includes("[Fix 2026-09-08]"), String(rewritten));
+  const twoRounds = splitPinNotes("[Fix 2026-09-01] a\n\n[Fix 2026-09-02] b");
+  check("U-31 body may be empty with several trail blocks", twoRounds.body === "" && twoRounds.trail.length === 2);
+  check("U-32 empty body + empty trail -> null, not a blank string", joinPinNotes("", []) === null);
+  check("U-33 splitPinNotes tolerates null", splitPinNotes(null).body === "" && splitPinNotes(null).trail.length === 0);
 
   await db.close();
 

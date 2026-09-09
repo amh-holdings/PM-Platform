@@ -29,6 +29,7 @@ import {
 
 import { DprPhotoUploader, type StagedPhoto } from "./dpr-photo-uploader";
 import { PICKER_GROUP_LABEL, type PickerGroup } from "@/lib/schedule-picker";
+import { UNIT_OPTIONS, WORK_STATUS_OPTIONS } from "@/lib/work-pin-options";
 
 // Field crews are on LTE at the edge of a site. A save that has not come
 // back in two minutes is not coming back, and the sub needs the buttons.
@@ -56,29 +57,7 @@ type WorkPin = {
   rowError: string | null;
 };
 
-const STATUS_OPTIONS = [
-  "Not Started",
-  "In Progress",
-  "Complete",
-  "Awaiting",
-  "Approved",
-  "Rejected",
-];
-
-// Units a work item's installed quantity can be reported in.
-const UNIT_OPTIONS = [
-  "EA",
-  "LF",
-  "SF",
-  "SY",
-  "CY",
-  "LB",
-  "TON",
-  "GAL",
-  "HR",
-  "KW",
-  "LS",
-];
+const STATUS_OPTIONS = WORK_STATUS_OPTIONS;
 
 const DELAY_CAUSE_CODES = [
   "weather",

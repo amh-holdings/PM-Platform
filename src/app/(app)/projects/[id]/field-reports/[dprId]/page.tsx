@@ -10,6 +10,7 @@ import {
 } from "@/lib/inspection-status";
 import { cn } from "@/lib/utils";
 import { INSPECTION_BUCKET } from "../../inspections/inspection-constants";
+import { buildTaskPicker, summaryCodesOf } from "@/lib/schedule-picker";
 
 import { FieldReportDraftActions } from "./field-report-draft-actions";
 import { FieldReportReview, type ReviewPin } from "./field-report-review";
@@ -71,7 +72,9 @@ export default async function FieldReportDetailPage({
       : Promise.resolve({ data: null }),
     supabase
       .from("schedule_tasks")
-      .select("id, wbs_code, task_name")
+      .select(
+        "id, wbs_code, task_name, phase, status, pct_complete, start_date, end_date, parent_wbs_code",
+      )
       .eq("project_id", params.id)
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("wbs_code", { ascending: true }),
@@ -83,12 +86,12 @@ export default async function FieldReportDetailPage({
   const pinIds = (pins ?? []).map((p) => p.id);
   const photosByPin = new Map<
     string,
-    Array<{ url: string; side: string; caption: string | null }>
+    Array<{ id: string; url: string; side: string; caption: string | null }>
   >();
   if (pinIds.length > 0) {
     const { data: photoRows } = await supabase
       .from("inspection_photos")
-      .select("inspection_id, side, storage_path, caption")
+      .select("id, inspection_id, side, storage_path, caption")
       .in("inspection_id", pinIds)
       .order("created_at");
     const paths = (photoRows ?? []).map((r) => r.storage_path);
@@ -104,23 +107,43 @@ export default async function FieldReportDetailPage({
       const url = urlByPath.get(r.storage_path);
       if (!url) continue;
       const arr = photosByPin.get(r.inspection_id) ?? [];
-      arr.push({ url, side: r.side, caption: r.caption });
+      arr.push({ id: r.id, url, side: r.side, caption: r.caption });
       photosByPin.set(r.inspection_id, arr);
     }
   }
 
-  const taskList = (tasks ?? []).map((t) => ({
-    id: t.id,
-    wbsCode: t.wbs_code,
-    taskName: t.task_name,
-  }));
+  // Two views of the schedule. The label map covers EVERY row, including
+  // summary lines, because an existing pin may already point at one and its
+  // card still has to name it. The picker is what a sub may move a rejected pin
+  // TO, so it is leaf-only and ordered by what is in play on the report date -
+  // the same list the report form offers (src/lib/schedule-picker.ts).
   const taskLabel = new Map(
-    taskList.map((t) => [t.id, `${t.wbsCode} ${t.taskName}`]),
+    (tasks ?? []).map((t) => [t.id, `${t.wbs_code} ${t.task_name}`]),
+  );
+  const summaryCodes = summaryCodesOf(tasks ?? []);
+  const taskPicker = buildTaskPicker(
+    (tasks ?? []).map((t) => ({
+      id: t.id,
+      wbsCode: t.wbs_code,
+      taskName: t.task_name,
+      phase: t.phase,
+      currentStatus: t.status,
+      currentPct: Number(t.pct_complete ?? 0) || null,
+      startDate: t.start_date,
+      endDate: t.end_date,
+    })),
+    summaryCodes,
+    dpr.report_date,
   );
 
   const reviewPins: ReviewPin[] = (pins ?? []).map((p) => ({
     id: p.id,
     title: p.title,
+    scheduleTaskId: p.schedule_task_id,
+    taskNewStatus: p.task_new_status,
+    taskNewPct: p.task_new_pct,
+    quantity: p.quantity,
+    unitOfMeasure: p.unit_of_measure,
     status: p.status as InspectionStatus,
     origin: p.origin ?? "sub",
     basemapKey: p.basemap_key,
@@ -272,6 +295,7 @@ export default async function FieldReportDetailPage({
           <FieldReportReview
             projectId={params.id}
             pins={reviewPins}
+            tasks={taskPicker}
             canReview={canReview(role)}
             canDecide={isInspectionApprover({ role })}
             canResubmit={canResubmit}

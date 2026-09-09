@@ -11,6 +11,8 @@ import {
   PHOTO_SIDE_CM,
   PHOTO_SIDE_SUB,
 } from "@/lib/inspection-status";
+import { isBasemapKey } from "@/lib/inspection-map";
+import { joinPinNotes, splitPinNotes } from "@/lib/pin-notes";
 import {
   draftStoragePaths,
   parseFieldReportDraft,
@@ -18,6 +20,7 @@ import {
 } from "@/lib/field-report-draft";
 import { submitDpr, type DprSubmitInput } from "./dpr-actions";
 import type { InspectionPhotoInput } from "./inspections/inspection-actions";
+import { INSPECTION_BUCKET } from "./inspections/inspection-constants";
 
 // Draft photo blobs are staged in the shared private DPR bucket before the
 // draft is ever saved (same convention as submitDpr).
@@ -314,34 +317,59 @@ function revalidateReport(projectId: string, dprId: string) {
 }
 
 // ===== Resubmit one pin (subcontractor) =====
-// A returned report is fixed in place, one flagged pin at a time: the sub
-// attaches a fresh photo + a note describing the fix, and that single pin goes
-// back to 'submitted' (re-entering the CM's queue) while the others are left
-// alone. The parent report's status is then re-derived from all its pins, so it
-// stays 'returned' until the LAST red pin is resubmitted, then clears itself.
+// A returned report is fixed in place, one flagged pin at a time. The sub
+// reopens the flagged card, CORRECTS IT IN FULL - which WBS activity it is
+// against, the progress it claims, the quantity, the notes, even where the pin
+// sits on the sheet - attaches photos, says what changed, and that single pin
+// goes back to 'submitted' while the others are left alone. The parent report's
+// status is then re-derived from all its pins, so it stays 'returned' until the
+// LAST red pin is resubmitted, then clears itself.
+//
+// It used to accept photos and a note only. The common rejection is "wrong
+// activity", and a photo cannot fix a wrong activity: the sub had to ask AHC to
+// delete the report so they could refile the whole day. Everything the pin
+// editor collects is editable here instead.
 //
 // Signed-in subs have no UPDATE grant on inspections/dprs (RLS is insert-only
 // for them), so - like the no-login secure-link path - this runs through the
 // service-role client after an explicit ownership check.
+
+// The correctable half of a work pin: exactly the fields the sub filled in when
+// they dropped it. Omitted keys are left as they were, so a caller that only
+// wants the old photos-and-a-note behaviour can send nothing.
+export type PinCorrection = {
+  scheduleTaskId?: string | null;
+  taskNewStatus?: string | null;
+  taskNewPct?: number | null;
+  installedQuantity?: number | null;
+  unitOfMeasure?: string | null;
+  notes?: string | null;
+  basemapKey?: string | null;
+  pinX?: number | null;
+  pinY?: number | null;
+};
 
 export async function resubmitFieldReportPin(input: {
   pinId: string;
   projectId: string;
   fixNotes: string;
   photos: InspectionPhotoInput[];
+  // Field corrections. Absent = resubmit the pin as-is.
+  corrections?: PinCorrection | null;
+  // Sub-side photos to drop (wrong picture attached). CM verification photos
+  // are never removable from here.
+  removePhotoIds?: string[];
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const auth = await getReportProfile();
   if (!auth.ok) return auth;
   if (!input.fixNotes?.trim())
     return { ok: false, error: "Describe what you fixed before resubmitting." };
-  if (!input.photos?.length)
-    return { ok: false, error: "Add a new photo before resubmitting." };
 
   const admin = createAdminClient();
   const { data: pin, error: pinErr } = await admin
     .from("inspections")
     .select(
-      "id, project_id, dpr_id, origin, status, subcontractor_id, notes, resubmission_count",
+      "id, project_id, dpr_id, origin, status, subcontractor_id, title, notes, schedule_task_id, task_new_status, task_new_pct, quantity, unit_of_measure, resubmission_count",
     )
     .eq("id", input.pinId)
     .maybeSingle();
@@ -360,16 +388,139 @@ export async function resubmitFieldReportPin(input: {
   if (!isAhc && !isOwner)
     return { ok: false, error: "Not authorized to resubmit this item" };
 
+  const c = input.corrections ?? {};
+  const patch: TablesUpdate<"inspections"> = {};
+  // Human-readable record of what actually changed, appended to the notes so
+  // the CM re-reviewing the pin can see it without diffing anything.
+  const changeLines: string[] = [];
+
+  // --- Activity (WBS task). The pin's title IS its schedule task, so a moved
+  //     pin gets a retitled card too, exactly as the report form derives it.
+  if (c.scheduleTaskId !== undefined) {
+    const nextTaskId = c.scheduleTaskId || null;
+    if (!nextTaskId)
+      return { ok: false, error: "Pick the WBS activity this work is against." };
+    if (nextTaskId !== pin.schedule_task_id) {
+      const task = await loadPinnableTask(admin, nextTaskId, input.projectId);
+      if (!task.ok) return task;
+      const oldLabel = pin.title;
+      patch.schedule_task_id = nextTaskId;
+      patch.title = task.label;
+      changeLines.push(`Activity: ${oldLabel} -> ${task.label}`);
+    }
+  }
+
+  // --- Progress claimed against that activity. These are the numbers that
+  //     reach the schedule and then the pay application, so every change is
+  //     written into the trail: the CM approving round two must be able to see
+  //     that 40% became 90% without holding round one in their head.
+  if (c.taskNewStatus !== undefined) {
+    const next = c.taskNewStatus?.trim() || null;
+    if (!next) return { ok: false, error: "Pick a status for the work item." };
+    patch.task_new_status = next;
+    if (next !== pin.task_new_status)
+      changeLines.push(`Status: ${pin.task_new_status ?? "-"} -> ${next}`);
+  }
+  if (c.taskNewPct !== undefined) {
+    const next = c.taskNewPct;
+    if (next == null || !Number.isFinite(next) || next < 0 || next > 100)
+      return { ok: false, error: "Percent complete must be between 0 and 100." };
+    patch.task_new_pct = next;
+    if (next !== pin.task_new_pct)
+      changeLines.push(`Percent complete: ${pin.task_new_pct ?? "-"}% -> ${next}%`);
+  }
+  if (c.installedQuantity !== undefined) {
+    const next = c.installedQuantity;
+    if (next == null || !Number.isFinite(next) || next < 0)
+      return { ok: false, error: "Installed quantity must be zero or more." };
+    patch.quantity = next;
+    if (next !== pin.quantity)
+      changeLines.push(`Installed qty: ${pin.quantity ?? "-"} -> ${next}`);
+  }
+  if (c.unitOfMeasure !== undefined) {
+    const next = c.unitOfMeasure?.trim() || null;
+    if (!next) return { ok: false, error: "Pick a unit for the quantity." };
+    patch.unit_of_measure = next;
+    if (next !== pin.unit_of_measure)
+      changeLines.push(`Unit: ${pin.unit_of_measure ?? "-"} -> ${next}`);
+  }
+
+  // --- Where the pin sits. Both coordinates travel together; a sheet change
+  //     without a fresh tap would leave the old sheet's coordinates behind.
+  if (c.basemapKey !== undefined || c.pinX !== undefined || c.pinY !== undefined) {
+    const key = c.basemapKey?.trim() || "";
+    if (!isBasemapKey(key))
+      return { ok: false, error: "Pick a valid drawing sheet for the pin." };
+    if (
+      c.pinX == null ||
+      c.pinY == null ||
+      !Number.isFinite(c.pinX) ||
+      !Number.isFinite(c.pinY) ||
+      c.pinX < 0 ||
+      c.pinX > 1 ||
+      c.pinY < 0 ||
+      c.pinY > 1
+    ) {
+      return { ok: false, error: "Tap the map to place the pin." };
+    }
+    patch.basemap_key = key;
+    patch.pin_x = c.pinX;
+    patch.pin_y = c.pinY;
+    changeLines.push("Pin moved on the map");
+  }
+
+  // --- Notes. The sub edits the body only. The fix trail already in the column
+  //     is carried over here rather than round-tripped through the form, so a
+  //     correction cannot erase the history the CM re-reviews against.
+  const existing = splitPinNotes(pin.notes);
+  const nextBody = c.notes !== undefined ? (c.notes ?? "").trim() : existing.body;
+
+  // --- Photos. Removals first, so the "at least one photo survives" check
+  //     below sees the real end state.
+  const removeIds = (input.removePhotoIds ?? []).filter(Boolean);
+  let removedPaths: string[] = [];
+  if (removeIds.length > 0) {
+    const { data: doomed, error: doomedErr } = await admin
+      .from("inspection_photos")
+      .select("id, storage_path, side")
+      .eq("inspection_id", pin.id)
+      .in("id", removeIds);
+    if (doomedErr) return { ok: false, error: doomedErr.message };
+    if ((doomed ?? []).some((p) => p.side === PHOTO_SIDE_CM))
+      return { ok: false, error: "CM verification photos cannot be removed." };
+    if ((doomed ?? []).length !== removeIds.length)
+      return { ok: false, error: "One of those photos is no longer on this item." };
+    removedPaths = (doomed ?? []).map((p) => p.storage_path);
+  }
+
+  const { count: subPhotoCount } = await admin
+    .from("inspection_photos")
+    .select("id", { count: "exact", head: true })
+    .eq("inspection_id", pin.id)
+    .eq("side", PHOTO_SIDE_SUB);
+  const remaining =
+    (subPhotoCount ?? 0) - removeIds.length + (input.photos?.length ?? 0);
+  if (remaining < 1) {
+    return {
+      ok: false,
+      error: "The work item needs at least one photo. Add one before resubmitting.",
+    };
+  }
+
   const now = new Date().toISOString();
   // Record the fix as a stamped line appended to the pin's notes. (No dedicated
   // sub-fix column yet; this keeps a readable, multi-round trail the CM sees on
   // re-review.)
-  const fixLine = `[Fix ${now.slice(0, 10)}] ${input.fixNotes.trim()}`;
-  const nextNotes = pin.notes ? `${pin.notes}\n\n${fixLine}` : fixLine;
+  const fixBlock = [
+    `[Fix ${now.slice(0, 10)}] ${input.fixNotes.trim()}`,
+    ...changeLines,
+  ].join("\n");
+  const nextNotes = joinPinNotes(nextBody, [...existing.trail, fixBlock]);
 
   const { error: updErr } = await admin
     .from("inspections")
     .update({
+      ...patch,
       status: "submitted",
       resubmission_count: (pin.resubmission_count ?? 0) + 1,
       submitted_at: now,
@@ -382,26 +533,73 @@ export async function resubmitFieldReportPin(input: {
     .eq("id", pin.id);
   if (updErr) return { ok: false, error: updErr.message };
 
-  const rows = input.photos.map((ph) => ({
-    inspection_id: pin.id,
-    side: PHOTO_SIDE_SUB,
-    storage_path: ph.storagePath,
-    caption: ph.caption ?? null,
-    gps_lat: ph.gpsLat ?? null,
-    gps_lng: ph.gpsLng ?? null,
-    taken_at: ph.takenAt ?? now,
-    uploaded_by: auth.userId,
-  }));
-  const { error: photoErr } = await admin
-    .from("inspection_photos")
-    .insert(rows);
-  if (photoErr) return { ok: false, error: photoErr.message };
+  if (removeIds.length > 0) {
+    const { error: delErr } = await admin
+      .from("inspection_photos")
+      .delete()
+      .eq("inspection_id", pin.id)
+      .in("id", removeIds);
+    if (delErr) return { ok: false, error: delErr.message };
+    // Best-effort: an orphaned blob is dead weight, not a correctness bug.
+    if (removedPaths.length > 0) {
+      await admin.storage.from(INSPECTION_BUCKET).remove(removedPaths);
+    }
+  }
+
+  if (input.photos?.length) {
+    const rows = input.photos.map((ph) => ({
+      inspection_id: pin.id,
+      side: PHOTO_SIDE_SUB,
+      storage_path: ph.storagePath,
+      caption: ph.caption ?? null,
+      gps_lat: ph.gpsLat ?? null,
+      gps_lng: ph.gpsLng ?? null,
+      taken_at: ph.takenAt ?? now,
+      uploaded_by: auth.userId,
+    }));
+    const { error: photoErr } = await admin
+      .from("inspection_photos")
+      .insert(rows);
+    if (photoErr) return { ok: false, error: photoErr.message };
+  }
 
   if (pin.dpr_id) {
     await rollupReportStatusAdmin(admin, pin.dpr_id, auth.userId);
     revalidateReport(input.projectId, pin.dpr_id);
   }
   return { ok: true };
+}
+
+// A pin may only point at a leaf task on this project. Pinning to a summary row
+// writes a rollup percent straight onto the schedule (see schedule-picker.ts),
+// which is why the report form hides them - the correction path has to hide
+// them too or it becomes the back door.
+async function loadPinnableTask(
+  admin: ReturnType<typeof createAdminClient>,
+  taskId: string,
+  projectId: string,
+): Promise<{ ok: true; label: string } | { ok: false; error: string }> {
+  const { data: task, error } = await admin
+    .from("schedule_tasks")
+    .select("id, project_id, wbs_code, task_name")
+    .eq("id", taskId)
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!task || task.project_id !== projectId)
+    return { ok: false, error: "That WBS activity is not on this project." };
+
+  const { count } = await admin
+    .from("schedule_tasks")
+    .select("id", { count: "exact", head: true })
+    .eq("project_id", projectId)
+    .eq("parent_wbs_code", task.wbs_code);
+  if ((count ?? 0) > 0) {
+    return {
+      ok: false,
+      error: `${task.wbs_code} is a summary line. Pick the specific work item under it.`,
+    };
+  }
+  return { ok: true, label: `${task.wbs_code} ${task.task_name}` };
 }
 
 // Re-derive a report's status from its sub pins using the service-role client.
