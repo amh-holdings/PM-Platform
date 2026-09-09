@@ -20,7 +20,7 @@ function todayIso(): string {
 export async function loadFieldReportFormData(projectId: string) {
   const supabase = createClient();
 
-  const [tasksRes, subsRes, posRes] = await Promise.all([
+  const [tasksRes, subsRes, posRes, equipRes] = await Promise.all([
     supabase
       .from("schedule_tasks")
       .select(
@@ -40,6 +40,18 @@ export async function loadFieldReportFormData(projectId: string) {
       .select("id, vendor_name, po_number, description")
       .eq("project_id", projectId)
       .order("ordered_date", { ascending: false, nullsFirst: false }),
+    // The equipment dropdown's options (migration 0047). Loaded for every sub
+    // on the job in one query and grouped client-side, rather than re-fetched
+    // when the "filing this report" select changes: it is a few rows per crew,
+    // and a round trip mid-form on jobsite signal costs more than the payload.
+    // RLS narrows this to the sub's own crew when a sub is the one asking.
+    supabase
+      .from("project_equipment")
+      .select("id, subcontractor_id, name, category, rental_company, on_rent")
+      .eq("project_id", projectId)
+      .eq("active", true)
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("name", { ascending: true }),
   ]);
 
   if (tasksRes.error) {
@@ -78,6 +90,19 @@ export async function loadFieldReportFormData(projectId: string) {
       vendorName: p.vendor_name,
       poNumber: p.po_number,
       description: p.description,
+    })),
+    // False when the 0047 table is not in the database yet. The form falls
+    // back to the old free-text equipment field rather than showing a dropdown
+    // with nothing in it, so a deploy that lands before the migration is run
+    // costs the subs their shortcut, not their ability to file a report.
+    equipmentCatalogReady: !equipRes.error,
+    equipmentCatalog: (equipRes.data ?? []).map((e) => ({
+      id: e.id,
+      subcontractorId: e.subcontractor_id,
+      name: e.name,
+      category: e.category,
+      rentalCompany: e.rental_company,
+      onRent: e.on_rent,
     })),
   } as const;
 }

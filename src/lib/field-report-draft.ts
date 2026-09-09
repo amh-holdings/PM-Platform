@@ -79,11 +79,17 @@ export type DraftManpowerRow = {
 
 export type DraftEquipmentRow = {
   rowId: string;
+  // Both added by 0047 and both deliberately loose. `equipmentId` is optional
+  // and `active` is widened to include null so a draft written before the
+  // equipment dropdown shipped still hydrates: neither change can put a value
+  // in the wrong field, which is what VERSION exists to guard against, so the
+  // version stays at 1 and nobody loses a half-finished report to the deploy.
+  equipmentId?: string;
   equipmentName: string;
   quantity: string;
   onRent: boolean;
   rentalCompany: string;
-  active: boolean;
+  active: boolean | null;
   notes: string;
 };
 

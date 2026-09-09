@@ -808,6 +808,7 @@ export type Database = {
           active: boolean
           created_at: string | null
           dpr_id: string
+          equipment_id: string | null
           equipment_name: string
           id: string
           idle_hours: number | null
@@ -821,6 +822,7 @@ export type Database = {
           active?: boolean
           created_at?: string | null
           dpr_id: string
+          equipment_id?: string | null
           equipment_name: string
           id?: string
           idle_hours?: number | null
@@ -834,6 +836,7 @@ export type Database = {
           active?: boolean
           created_at?: string | null
           dpr_id?: string
+          equipment_id?: string | null
           equipment_name?: string
           id?: string
           idle_hours?: number | null
@@ -849,6 +852,13 @@ export type Database = {
             columns: ["dpr_id"]
             isOneToOne: false
             referencedRelation: "dprs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dpr_equipment_equipment_id_fkey"
+            columns: ["equipment_id"]
+            isOneToOne: false
+            referencedRelation: "project_equipment"
             referencedColumns: ["id"]
           },
         ]
@@ -2028,6 +2038,70 @@ export type Database = {
           {
             foreignKeyName: "project_documents_uploaded_by_id_fkey"
             columns: ["uploaded_by_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_equipment: {
+        Row: {
+          active: boolean
+          category: string | null
+          created_at: string | null
+          created_by: string | null
+          id: string
+          name: string
+          on_rent: boolean
+          project_id: string
+          rental_company: string | null
+          sort_order: number | null
+          subcontractor_id: string
+        }
+        Insert: {
+          active?: boolean
+          category?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          id?: string
+          name: string
+          on_rent?: boolean
+          project_id: string
+          rental_company?: string | null
+          sort_order?: number | null
+          subcontractor_id: string
+        }
+        Update: {
+          active?: boolean
+          category?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          id?: string
+          name?: string
+          on_rent?: boolean
+          project_id?: string
+          rental_company?: string | null
+          sort_order?: number | null
+          subcontractor_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_equipment_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_equipment_subcontractor_id_fkey"
+            columns: ["subcontractor_id"]
+            isOneToOne: false
+            referencedRelation: "subcontractors"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_equipment_created_by_fkey"
+            columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]

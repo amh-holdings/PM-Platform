@@ -123,6 +123,8 @@ export default async function EditFieldReportPage({ params }: { params: Params }
         tasks={data.tasks}
         subs={data.subs}
         procurementOrders={data.procurementOrders}
+        equipmentCatalog={data.equipmentCatalog}
+        equipmentCatalogReady={data.equipmentCatalogReady}
         variant="fieldReport"
         initialDraft={draft}
         draftDprId={report.id}

@@ -7,6 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import {
+  addProjectEquipment,
+  type EquipmentCatalogEntry,
+} from "../../equipment-actions";
 import { BASEMAPS, type BasemapKey, type NormalizedPin } from "@/lib/inspection-map";
 import { submitDpr } from "../../dpr-actions";
 import {
@@ -119,6 +123,12 @@ type Props = {
   tasks: Task[];
   subs: Sub[];
   procurementOrders: Po[];
+  // The equipment dropdown's options, for every sub on the job (migration
+  // 0047). Grouped by sub here rather than re-fetched when the filing sub
+  // changes. `equipmentCatalogReady` is false when the 0047 table is not in
+  // the database yet, which drops the equipment field back to free text.
+  equipmentCatalog?: EquipmentCatalogEntry[];
+  equipmentCatalogReady?: boolean;
   // "dpr" (default) = the classic Daily Progress Report. "fieldReport" = the
   // combined daily Field Report: DPR fields PLUS work-done pins on the site map,
   // reviewed by the Construction Manager the next day.
@@ -154,11 +164,20 @@ type ManpowerRow = {
 
 type EquipmentRow = {
   rowId: string;
+  // The catalog entry picked from the dropdown. Empty on legacy/free-text
+  // rows and while the row is still blank. equipmentName is written alongside
+  // it and stays the historical record of what the report says was on site,
+  // so renaming a catalog entry later cannot rewrite a filed report.
+  equipmentId: string;
   equipmentName: string;
   quantity: string;
   onRent: boolean;
   rentalCompany: string;
-  active: boolean;
+  // null = the sub has not said yet. Nothing about an equipment row is
+  // asserted on their behalf: adding the row says the machine was on site,
+  // and this says whether it actually worked. Defaulting it to Active would
+  // put a claim in the record that nobody made.
+  active: boolean | null;
   notes: string;
 };
 
@@ -195,6 +214,8 @@ export function DprForm({
   tasks,
   subs,
   procurementOrders,
+  equipmentCatalog = [],
+  equipmentCatalogReady = false,
   variant = "dpr",
   initialDraft = null,
   draftDprId = null,
@@ -231,6 +252,10 @@ export function DprForm({
   const [reportSubId, setReportSubId] = useState(
     initialDraft?.subcontractorId ?? "",
   );
+  // Catalog options held in state, not read straight from props, so a machine
+  // added inline mid-report joins the dropdown without a page reload.
+  const [catalog, setCatalog] = useState<EquipmentCatalogEntry[]>(equipmentCatalog);
+  const [addingEquipment, setAddingEquipment] = useState<string | null>(null);
   const [sheet, setSheet] = useState<BasemapKey>(
     (initialDraft?.sheet as BasemapKey) || "C2-01",
   );
@@ -278,8 +303,13 @@ export function DprForm({
   const [manpower, setManpower] = useState<ManpowerRow[]>(
     () => initialDraft?.manpower ?? [],
   );
-  const [equipment, setEquipment] = useState<EquipmentRow[]>(
-    () => initialDraft?.equipment ?? [],
+  const [equipment, setEquipment] = useState<EquipmentRow[]>(() =>
+    (initialDraft?.equipment ?? []).map((e) => ({
+      ...e,
+      // A draft saved before the dropdown shipped has neither field.
+      equipmentId: e.equipmentId ?? "",
+      active: e.active ?? null,
+    })),
   );
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>(
     () => initialDraft?.deliveries ?? [],
@@ -392,15 +422,56 @@ export function DprForm({
       ...prev,
       {
         rowId: newRowId(),
+        equipmentId: "",
         equipmentName: "",
-        quantity: "1",
+        quantity: "",
         onRent: false,
         rentalCompany: "",
-        active: true,
+        active: null,
         notes: "",
       },
     ]);
   }
+  // Only the filing crew's own machines. On a six-sub job a shared pool would
+  // hand every foreman a dropdown full of other crews' equipment, which is the
+  // friction this dropdown exists to remove.
+  const subEquipment = catalog.filter(
+    (c) => c.subcontractorId === reportSubId,
+  );
+  // The dropdown replaces the free-text field only when there is a catalog to
+  // pick from AND a crew to scope it to. Otherwise the old text input stands,
+  // so an unapplied migration or an unpicked sub never blocks a report.
+  const useEquipmentPicker =
+    isFieldReport && equipmentCatalogReady && Boolean(reportSubId);
+
+  // Inline "add new": a foreman who turns up with an unlisted machine names it
+  // once, and it is both saved to their crew's list and selected on this row.
+  async function onAddEquipment(rowId: string) {
+    const typed = window.prompt(
+      "Add equipment to your crew's list (e.g. 40-ton crane)",
+    );
+    const name = typed?.trim();
+    if (!name) return;
+    setAddingEquipment(rowId);
+    const res = await addProjectEquipment({
+      projectId,
+      subcontractorId: reportSubId,
+      name,
+    });
+    setAddingEquipment(null);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    setCatalog((prev) =>
+      prev.some((c) => c.id === res.entry.id) ? prev : [...prev, res.entry],
+    );
+    patchEquipment(rowId, {
+      equipmentId: res.entry.id,
+      equipmentName: res.entry.name,
+    });
+  }
+
   function patchEquipment(rowId: string, patch: Partial<EquipmentRow>) {
     setEquipment((prev) =>
       prev.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)),
@@ -663,6 +734,19 @@ export function DprForm({
         setError("Mark at least one work item on the map");
         return;
       }
+      // An equipment row is a claim that the machine was on site. A row with
+      // no machine named, or with nobody having said whether it worked, is a
+      // half-made claim - reject it here rather than store it as one.
+      if (equipment.some((e) => !e.equipmentName.trim())) {
+        setError("Pick the equipment for every equipment row, or remove the row");
+        return;
+      }
+      if (equipment.some((e) => e.active === null)) {
+        setError(
+          "Mark every piece of equipment Active or Inactive before submitting",
+        );
+        return;
+      }
       if (workPins.some((p) => !p.confirmed)) {
         setError(
           "Save every pin first - each needs a WBS, status, % complete, installed quantity, and a photo.",
@@ -705,11 +789,14 @@ export function DprForm({
           notes: m.notes.trim() || null,
         })),
       equipment: equipment.map((e) => ({
+        equipmentId: e.equipmentId || null,
         equipmentName: e.equipmentName,
         quantity: Number(e.quantity) || 1,
         onRent: e.onRent,
         rentalCompany: e.rentalCompany.trim() || null,
-        active: e.active,
+        // Submit has already rejected an unset flag; the fallback keeps the
+        // classic DPR path (which has no Active control) behaving as before.
+        active: e.active ?? true,
         notes: e.notes.trim() || null,
       })),
       deliveries: deliveries.map((d) => ({
@@ -777,11 +864,14 @@ export function DprForm({
           notes: m.notes.trim() || null,
         })),
       equipment: equipment.map((e) => ({
+        equipmentId: e.equipmentId || null,
         equipmentName: e.equipmentName,
         quantity: Number(e.quantity) || 1,
         onRent: e.onRent,
         rentalCompany: e.rentalCompany.trim() || null,
-        active: e.active,
+        // Submit has already rejected an unset flag; the fallback keeps the
+        // classic DPR path (which has no Active control) behaving as before.
+        active: e.active ?? true,
         notes: e.notes.trim() || null,
       })),
       deliveries: deliveries.map((d) => ({
@@ -959,7 +1049,15 @@ export function DprForm({
               <select
                 id="fr-sub"
                 value={reportSubId}
-                onChange={(e) => setReportSubId(e.target.value)}
+                onChange={(e) => {
+                  setReportSubId(e.target.value);
+                  // Equipment belongs to a crew. Switching the filing sub
+                  // would otherwise leave rows holding the previous crew's
+                  // machine names while their dropdown reads blank - the
+                  // select cannot show an option that is no longer in scope,
+                  // but the name behind it would still submit.
+                  setEquipment([]);
+                }}
                 className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
               >
                 <option value="">- Select sub -</option>
@@ -1376,11 +1474,21 @@ export function DprForm({
             <h3 className="text-sm font-semibold">Equipment on site ({equipment.length})</h3>
             <p className="text-xs text-muted-foreground">
               {isFieldReport
-                ? "Equipment on site today. Mark each active or inactive."
+                ? useEquipmentPicker
+                  ? "Pick each machine that was on site today and say whether it worked. Nothing carries over from yesterday."
+                  : reportSubId
+                    ? "Equipment on site today. Mark each active or inactive."
+                    : "Pick the subcontractor filing this report first, then add equipment."
                 : "Owned or rented. Flag on-rent so we can track standby vs idle days."}
             </p>
           </div>
-          <Button type="button" size="sm" variant="outline" onClick={addEquipmentRow}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={addEquipmentRow}
+            disabled={isFieldReport && !reportSubId}
+          >
             Add row
           </Button>
         </div>
@@ -1396,13 +1504,47 @@ export function DprForm({
                     : "sm:grid-cols-[1fr_80px_auto_1fr_auto]",
                 )}
               >
-                <Input
-                  value={e.equipmentName}
-                  onChange={(ev) =>
-                    patchEquipment(e.rowId, { equipmentName: ev.target.value })
-                  }
-                  placeholder="e.g. 40-ton crane"
-                />
+                {useEquipmentPicker ? (
+                  <select
+                    value={e.equipmentId}
+                    disabled={addingEquipment === e.rowId}
+                    onChange={(ev) => {
+                      if (ev.target.value === "__add__") {
+                        void onAddEquipment(e.rowId);
+                        return;
+                      }
+                      const picked = subEquipment.find(
+                        (c) => c.id === ev.target.value,
+                      );
+                      patchEquipment(e.rowId, {
+                        equipmentId: picked?.id ?? "",
+                        // Copied, not referenced: this is what the filed report
+                        // says was on site, and it must survive the catalog
+                        // entry being renamed or retired later.
+                        equipmentName: picked?.name ?? "",
+                        rentalCompany: picked?.rentalCompany ?? "",
+                        onRent: picked?.onRent ?? false,
+                      });
+                    }}
+                    className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                  >
+                    <option value="">- Select equipment -</option>
+                    {subEquipment.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                    <option value="__add__">+ Add new equipment...</option>
+                  </select>
+                ) : (
+                  <Input
+                    value={e.equipmentName}
+                    onChange={(ev) =>
+                      patchEquipment(e.rowId, { equipmentName: ev.target.value })
+                    }
+                    placeholder="e.g. 40-ton crane"
+                  />
+                )}
                 <Input
                   type="number"
                   value={e.quantity}
@@ -1413,14 +1555,18 @@ export function DprForm({
                 />
                 {isFieldReport ? (
                   <select
-                    value={e.active ? "active" : "inactive"}
+                    value={e.active === null ? "" : e.active ? "active" : "inactive"}
                     onChange={(ev) =>
                       patchEquipment(e.rowId, {
-                        active: ev.target.value === "active",
+                        active:
+                          ev.target.value === ""
+                            ? null
+                            : ev.target.value === "active",
                       })
                     }
                     className="h-9 rounded-md border border-input bg-background px-2 text-xs"
                   >
+                    <option value="">- Active? -</option>
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
                   </select>

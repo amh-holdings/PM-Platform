@@ -64,6 +64,10 @@ export type DprManpowerInput = {
 };
 
 export type DprEquipmentInput = {
+  // Catalog entry this was picked from (migration 0047). Null on the classic
+  // DPR path, on legacy drafts, and whenever the catalog is unavailable -
+  // equipmentName is what the report asserts either way.
+  equipmentId?: string | null;
   equipmentName: string;
   quantity: number;
   onRent: boolean;
@@ -269,6 +273,7 @@ export async function submitDpr(input: DprSubmitInput): Promise<DprActionResult>
       .filter((e) => e.equipmentName.trim())
       .map((e) => ({
         dpr_id: dpr.id,
+        equipment_id: e.equipmentId ?? null,
         equipment_name: e.equipmentName.trim(),
         quantity: e.quantity,
         on_rent: e.onRent,

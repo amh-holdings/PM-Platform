@@ -42,6 +42,8 @@ export default async function NewFieldReportPage({
         tasks={data.tasks}
         subs={data.subs}
         procurementOrders={data.procurementOrders}
+        equipmentCatalog={data.equipmentCatalog}
+        equipmentCatalogReady={data.equipmentCatalogReady}
         variant="fieldReport"
       />
     </div>
