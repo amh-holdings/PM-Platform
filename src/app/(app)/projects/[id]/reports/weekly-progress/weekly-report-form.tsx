@@ -877,7 +877,7 @@ function ContractorTable({
               <th className="px-2 py-1.5 text-left font-medium">Contractor</th>
               <th className="px-2 py-1.5 text-left font-medium">Scope</th>
               <th className="px-2 py-1.5 text-left font-medium">Headcount</th>
-              <th className="px-2 py-1.5 text-left font-medium">Last onsite</th>
+              <th className="px-2 py-1.5 text-left font-medium">Last Date Onsite</th>
               <th className={cn("px-2 py-1.5 text-left font-medium", MINE_LABEL)}>
                 End date
               </th>
