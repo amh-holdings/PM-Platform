@@ -13,9 +13,14 @@
 // what a rename touches.
 
 import {
+  addWorkingDays,
   advance,
+  durationInWorkingDays,
   parseIso,
   retreat,
+  snapBack,
+  snapForward,
+  subWorkingDays,
   type CalendarLike,
 } from "@/lib/schedule-calendar";
 import {
@@ -643,6 +648,157 @@ export function planDrop(
     },
     true,
   );
+}
+
+// ============================================================================
+// Start, finish and duration are one fact
+// ============================================================================
+//
+// They were three independent columns, and nothing kept them in agreement. The
+// grid saved whichever cells you typed, and a dragged Gantt bar wrote the two
+// dates and left the duration where it was. `durationOf` in the CPM engine
+// then preferred the stale number, so the forecast ran on a duration the bars
+// contradicted. On Sweet Springs 12 of 71 rows had already drifted, 8 of them
+// leaf tasks the engine actually schedules.
+//
+// The fix is to stop treating them as three facts. A task has a start and a
+// finish; the duration is the working-day span between them, stored because
+// billing weights and the CPM fallback read it. Edit any one of the three and
+// the other two follow, the way every scheduling tool has always behaved:
+//
+//   duration -> keeps the start, moves the finish
+//   start    -> keeps the duration, moves the finish
+//   finish   -> keeps the start, recomputes the duration
+//
+// A milestone is the one exception. It marks an instant, carries duration 0,
+// and start and finish are the same day - so editing either date moves both
+// and the duration stays 0.
+
+export type DateTriple = {
+  start_date: string | null;
+  end_date: string | null;
+  duration_days: number | null;
+};
+
+export type DateField = "start_date" | "end_date" | "duration_days";
+
+/**
+ * Bring a task's start, finish and duration back into agreement after one of
+ * them changed. Pure, and total: an incomplete triple comes back as much
+ * resolved as it can be rather than throwing.
+ *
+ * `changed` says which field the user just touched, because the same triple
+ * resolves differently depending on that. Typing 10 into duration means "make
+ * it ten days long"; typing a finish date means "it ends here, however long
+ * that makes it".
+ */
+export function reconcileDates(
+  next: DateTriple,
+  changed: DateField,
+  cal: CalendarLike,
+  opts: { isMilestone?: boolean } = {},
+): DateTriple {
+  const milestone = !!opts.isMilestone || next.duration_days === 0;
+
+  // A milestone is an instant. Whichever date moved, both follow it, and the
+  // duration stays 0 - which is also what isMilestoneTask reads to recognise
+  // one, so overwriting it with 1 would silently turn it back into work.
+  if (milestone) {
+    const anchor =
+      changed === "end_date"
+        ? next.end_date
+        : (next.start_date ?? next.end_date);
+    if (!anchor) return { ...next, duration_days: 0 };
+    const day = snapForward(anchor, cal);
+    return { start_date: day, end_date: day, duration_days: 0 };
+  }
+
+  const dur =
+    next.duration_days != null && next.duration_days > 0
+      ? Math.round(next.duration_days)
+      : null;
+
+  if (changed === "duration_days") {
+    if (dur == null) {
+      // Duration cleared. The dates still stand on their own and the engine
+      // falls back to their span, so leave them alone rather than guessing.
+      return { ...next, duration_days: null };
+    }
+    if (next.start_date) {
+      const start = snapForward(next.start_date, cal);
+      return {
+        start_date: start,
+        end_date: addWorkingDays(start, dur, cal),
+        duration_days: dur,
+      };
+    }
+    if (next.end_date) {
+      // No start to grow from, so grow backwards off the finish instead.
+      const end = snapBack(next.end_date, cal);
+      return {
+        start_date: subWorkingDays(end, dur - 1, cal),
+        end_date: end,
+        duration_days: dur,
+      };
+    }
+    return { ...next, duration_days: dur };
+  }
+
+  if (changed === "start_date") {
+    if (!next.start_date) return { ...next, duration_days: dur };
+    const start = snapForward(next.start_date, cal);
+    // Hold the duration the task already had. When it never had one, its old
+    // span is the best statement of how long it takes.
+    const keep =
+      dur ??
+      (next.end_date && parseIso(next.end_date) >= parseIso(start)
+        ? durationInWorkingDays(start, next.end_date, cal)
+        : null);
+    if (keep == null) return { start_date: start, end_date: null, duration_days: null };
+    return {
+      start_date: start,
+      end_date: addWorkingDays(start, keep, cal),
+      duration_days: keep,
+    };
+  }
+
+  // changed === "end_date"
+  if (!next.end_date) return { ...next, duration_days: dur };
+  const end = snapBack(next.end_date, cal);
+  if (!next.start_date) {
+    if (dur == null) return { start_date: null, end_date: end, duration_days: null };
+    return {
+      start_date: subWorkingDays(end, dur - 1, cal),
+      end_date: end,
+      duration_days: dur,
+    };
+  }
+  const start = snapForward(next.start_date, cal);
+  // Dragging a finish back past its own start is a resize to one day, not a
+  // negative-length task. The Gantt already clamps this way on its resize
+  // handle; doing it here means the grid agrees.
+  if (parseIso(end) < parseIso(start)) {
+    return { start_date: start, end_date: start, duration_days: 1 };
+  }
+  return {
+    start_date: start,
+    end_date: end,
+    duration_days: durationInWorkingDays(start, end, cal),
+  };
+}
+
+/**
+ * The duration a stored row should carry, or null when it cannot be known.
+ * Used by the backfill and by the health check that stops this drifting again.
+ */
+export function durationFromDates(
+  t: { start_date?: string | null; end_date?: string | null; is_milestone?: boolean | null; duration_days?: number | null },
+  cal: CalendarLike,
+): number | null {
+  if (t.is_milestone || t.duration_days === 0) return 0;
+  if (!t.start_date || !t.end_date) return null;
+  if (parseIso(t.end_date) < parseIso(t.start_date)) return null;
+  return durationInWorkingDays(t.start_date, t.end_date, cal);
 }
 
 // ============================================================================

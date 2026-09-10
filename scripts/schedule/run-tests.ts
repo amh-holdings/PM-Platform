@@ -40,6 +40,8 @@ import {
   planMove,
   planOutdent,
   orderRenames,
+  reconcileDates,
+  durationFromDates,
   rewritePredecessors,
   shiftDates,
   splitPredecessorToken,
@@ -513,7 +515,57 @@ section("Schedule health - DCMA checks");
   eq("logic check counts the unlinked task", logic.affected.length, 1);
   check("logic check names it", logic.affected.some((a) => a.wbs === "9"));
   check("a score comes out", health.score >= 0 && health.score <= 100, String(health.score));
-  eq("all 14 checks run", health.checks.length, 14);
+  // 14 DCMA checks plus our own duration-against-dates check, which is not
+  // part of the standard but is the one that catches a Gantt bar and a
+  // forecast describing different schedules.
+  eq("all 15 checks run", health.checks.length, 15);
+  check(
+    "the duration check is one of them",
+    health.checks.some((c) => c.id === "duration_vs_dates"),
+  );
+}
+
+{
+  // Duration against dates. A 1-day task whose window runs a fortnight is the
+  // shape that actually occurs on site - a culvert waiting on an inspection -
+  // and the point of the check is that it reports the gap rather than picking
+  // a winner.
+  const tasks: CpmInput[] = [
+    task({ wbs_code: "1", start_date: "2026-09-01", end_date: "2026-09-14", duration_days: 1 }),
+    task({ wbs_code: "2", start_date: "2026-09-01", end_date: "2026-09-03", duration_days: 3, predecessors: "1" }),
+    task({ wbs_code: "3", start_date: "2026-09-01", end_date: "2026-09-01", duration_days: 0, predecessors: "2", is_milestone: true }),
+    task({ wbs_code: "4", start_date: null, end_date: null, duration_days: 6, predecessors: "2" }),
+  ];
+  const cpm = computeCpm(tasks, { dataDate: "2026-09-01" });
+  const health = assessSchedule(tasks, cpm, { dataDate: "2026-09-01" });
+  const dur = health.checks.find((c) => c.id === "duration_vs_dates")!;
+  eq("only the drifted task is reported", dur.affected.length, 1);
+  eq("and it is the right one", dur.affected[0]?.wbs, "1");
+  check("a milestone is not reported as drifted", !dur.affected.some((a) => a.wbs === "3"));
+  check("a task with no dates is not reported", !dur.affected.some((a) => a.wbs === "4"));
+
+  // What the drift actually costs is worth being exact about. The projection
+  // honours the planned finish while nothing is pushing the task, so a drifted
+  // row looks right on the Gantt today...
+  eq("the projection holds the planned finish", cpm.byWbs.get("1")?.projectedEnd, "2026-09-14");
+
+  // ...but float comes off the duration, so successor 2 is measured against a
+  // 1-day predecessor rather than the fortnight its own bar shows. The moment
+  // anything pushes task 1, it snaps from a fortnight to a day.
+  const pushed = computeCpm(
+    [
+      task({ wbs_code: "0", start_date: "2026-09-01", end_date: "2026-09-04", duration_days: 4 }),
+      ...tasks.map((t) => (t.wbs_code === "1" ? { ...t, predecessors: "0" } : t)),
+    ],
+    { dataDate: "2026-09-01" },
+  );
+  // Task 0 finishes Fri 4 Sep, Mon 7 is Labor Day, so the one day of work is
+  // Tue 8 - not the 14th its own dates still claim.
+  eq(
+    "pushed, it runs its duration and not its date span",
+    pushed.byWbs.get("1")?.projectedEnd,
+    "2026-09-08",
+  );
 }
 
 {
@@ -860,6 +912,150 @@ section("Editing - import diff");
   const { rows } = buildImportRows(grid, mapping);
   const diff = diffImport([], rows, mapping);
   check("duplicate WBS blocks the import", diff.blocking.length > 0, diff.blocking.join(" "));
+}
+
+section("Editing - start, finish and duration are one fact");
+
+{
+  // Tue 1 Sep 2026 is a working day. A 5-day task runs Tue-Mon, skipping the
+  // weekend, and Mon 7 Sep is Labor Day, so it lands on Tue 8.
+  const r = reconcileDates(
+    { start_date: "2026-09-01", end_date: "2026-09-03", duration_days: 5 },
+    "duration_days",
+    5,
+  );
+  eq("duration keeps the start", r.start_date, "2026-09-01");
+  eq("duration moves the finish over weekend and holiday", r.end_date, "2026-09-08");
+  eq("duration is kept as typed", r.duration_days, 5);
+}
+
+{
+  // Moving the start holds the length: a 3-day task stays 3 days long.
+  const r = reconcileDates(
+    { start_date: "2026-09-09", end_date: "2026-09-03", duration_days: 3 },
+    "start_date",
+    5,
+  );
+  eq("start keeps the duration", r.duration_days, 3);
+  eq("start moves the finish to match", r.end_date, "2026-09-11");
+}
+
+{
+  // A start typed onto a Saturday snaps to the next working day rather than
+  // scheduling work nobody will do.
+  const r = reconcileDates(
+    { start_date: "2026-09-05", end_date: "2026-09-10", duration_days: null },
+    "start_date",
+    5,
+  );
+  eq("a weekend start snaps forward", r.start_date, "2026-09-08");
+}
+
+{
+  // Typing a finish restates how long the task is, which is the whole point of
+  // typing one.
+  const r = reconcileDates(
+    { start_date: "2026-09-01", end_date: "2026-09-10", duration_days: 3 },
+    "end_date",
+    5,
+  );
+  eq("finish keeps the start", r.start_date, "2026-09-01");
+  // Tue 1, Wed 2, Thu 3, Fri 4, (Mon 7 Labor Day), Tue 8, Wed 9, Thu 10 = 7.
+  eq("finish recomputes the duration", r.duration_days, 7);
+}
+
+{
+  // Dragging a finish back past its own start is a resize to one day, not a
+  // task of negative length.
+  const r = reconcileDates(
+    { start_date: "2026-09-10", end_date: "2026-09-01", duration_days: 5 },
+    "end_date",
+    5,
+  );
+  eq("a finish before the start clamps to one day", r.end_date, "2026-09-10");
+  eq("and the duration follows", r.duration_days, 1);
+}
+
+{
+  // A milestone marks an instant. Duration 0 is also how isMilestoneTask
+  // recognises one, so it must survive every edit.
+  const r = reconcileDates(
+    { start_date: "2026-09-01", end_date: "2026-09-01", duration_days: 0 },
+    "end_date",
+    5,
+    { isMilestone: true },
+  );
+  eq("a milestone keeps duration 0", r.duration_days, 0);
+  eq("a milestone start and finish are the same day", r.start_date, r.end_date);
+}
+
+{
+  // Growing backwards off a finish, for a task that has one and no start.
+  const r = reconcileDates(
+    { start_date: null, end_date: "2026-09-10", duration_days: 3 },
+    "duration_days",
+    5,
+  );
+  eq("duration with no start grows off the finish", r.start_date, "2026-09-08");
+  eq("and keeps that finish", r.end_date, "2026-09-10");
+}
+
+{
+  // Clearing the duration leaves the dates alone. The engine falls back to
+  // their span, so there is nothing to guess.
+  const r = reconcileDates(
+    { start_date: "2026-09-01", end_date: "2026-09-03", duration_days: null },
+    "duration_days",
+    5,
+  );
+  eq("clearing the duration keeps the start", r.start_date, "2026-09-01");
+  eq("clearing the duration keeps the finish", r.end_date, "2026-09-03");
+  eq("and leaves it null", r.duration_days, null);
+}
+
+{
+  // The six-day week counts Saturday, so the same span is one day longer.
+  const r = reconcileDates(
+    { start_date: "2026-09-01", end_date: null, duration_days: 5 },
+    "duration_days",
+    6,
+  );
+  eq("a 6-day week works the Saturday", r.end_date, "2026-09-05");
+}
+
+{
+  // Reconciling is idempotent: settling an already-settled triple changes
+  // nothing. Every write path runs this, so a save must not creep a date.
+  const once = reconcileDates(
+    { start_date: "2026-09-01", end_date: "2026-09-03", duration_days: 9 },
+    "duration_days",
+    5,
+  );
+  const twice = reconcileDates(once, "duration_days", 5);
+  eq("reconcile is idempotent on start", twice.start_date, once.start_date);
+  eq("reconcile is idempotent on finish", twice.end_date, once.end_date);
+  eq("reconcile is idempotent on duration", twice.duration_days, once.duration_days);
+}
+
+{
+  // Tue 1 to Tue 8 Sep is five working days, not six: the weekend and Labor
+  // Day come out. The same five the duration test above lands on, which is the
+  // agreement that matters - the two directions have to be mirrors.
+  eq(
+    "durationFromDates counts inclusive working days",
+    durationFromDates({ start_date: "2026-09-01", end_date: "2026-09-08" }, 5),
+    5,
+  );
+  eq(
+    "durationFromDates returns 0 for a milestone",
+    durationFromDates({ start_date: "2026-09-01", end_date: "2026-09-01", is_milestone: true }, 5),
+    0,
+  );
+  eq(
+    "durationFromDates cannot know without both dates",
+    durationFromDates({ start_date: "2026-09-01", end_date: null }, 5),
+    null,
+  );
 }
 
 section("Editing - bulk date shift");

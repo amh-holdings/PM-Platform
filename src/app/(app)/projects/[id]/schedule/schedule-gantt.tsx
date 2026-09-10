@@ -44,6 +44,10 @@ type Props = {
   calendar?: CalendarLike;
   onCommit?: (edits: GanttEdit[]) => Promise<void> | void;
   saving?: boolean;
+  // The as-of line the whole page calculates against. The chart opens here
+  // rather than at the project start, which on a 13-month job is six months of
+  // finished work before you reach this week.
+  dataDate?: string;
 };
 
 const ZOOMS = [
@@ -87,11 +91,13 @@ export function ScheduleGantt({
   calendar = 5,
   onCommit,
   saving = false,
+  dataDate,
 }: Props) {
   const [zoom, setZoom] = useState(1);
   const [hover, setHover] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const today = todayIso();
+  const asOf = dataDate ?? today;
 
   // Dropped-but-unsaved moves. Held here rather than written on mouse-up so a
   // drag can be looked at, corrected, or thrown away before it becomes the plan.
@@ -155,6 +161,28 @@ export function ScheduleGantt({
 
   const rowH = 30;
   const todayX = xOf(today);
+  const asOfX = xOf(asOf);
+
+  // Open on the as-of line with a little history to its left, rather than at
+  // the far edge of the span. Sweet Springs runs Jul 2026 to May 2027, so the
+  // old behaviour put this week comfortably off screen on every load and the
+  // first thing anyone did was scroll to find it.
+  //
+  // Re-runs on zoom because the pixel position of a date changes with it, and
+  // the point of the zoom is to look at the same week more closely.
+  const scrollToAsOf = useCallback(
+    (behavior: ScrollBehavior = "auto") => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const x = ((parseIso(asOf) - min) / DAY_MS) * dayPx;
+      el.scrollTo({ left: Math.max(0, x - el.clientWidth * 0.25), behavior });
+    },
+    [asOf, min, dayPx],
+  );
+
+  useEffect(() => {
+    scrollToAsOf("auto");
+  }, [scrollToAsOf]);
 
   // ---- dragging ------------------------------------------------------------
   // The pointer moves in calendar days because that is what the pixels mean;
@@ -255,6 +283,18 @@ export function ScheduleGantt({
             </button>
           ))}
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => scrollToAsOf("smooth")}
+          title={
+            dataDate && dataDate !== today
+              ? `Scroll to the data date, ${shortDate(asOf)}`
+              : "Scroll back to today"
+          }
+        >
+          {dataDate && dataDate !== today ? "Data date" : "Today"}
+        </Button>
         <Legend />
         {editable && (
           <span className="text-[11px] text-muted-foreground">
@@ -371,6 +411,18 @@ export function ScheduleGantt({
                     title={`Today ${today}`}
                   >
                     <div className="absolute -top-0 -left-[3px] h-1.5 w-1.5 rounded-full bg-blue-500" />
+                  </div>
+                )}
+                {/* The data date, when it is not today. Every float and
+                    projection on the page is calculated from this line, so on
+                    a back-dated update it matters more than today does. */}
+                {dataDate && dataDate !== today && asOfX >= 0 && asOfX <= width && (
+                  <div
+                    className="absolute top-0 bottom-0 z-20 w-px bg-violet-600"
+                    style={{ left: asOfX }}
+                    title={`Data date ${asOf} - every calculation is as of here`}
+                  >
+                    <div className="absolute -left-[3px] top-0 h-1.5 w-1.5 rotate-45 bg-violet-600" />
                   </div>
                 )}
 
@@ -561,6 +613,10 @@ function Legend() {
       <span className="flex items-center gap-1.5">
         <span className="inline-block h-3 w-px bg-blue-500" />
         Today
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="inline-block h-3 w-px bg-violet-600" />
+        Data date
       </span>
     </div>
   );

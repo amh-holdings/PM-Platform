@@ -16,8 +16,10 @@ import {
   planMove,
   planOutdent,
   parentCodeOf,
+  reconcileDates,
   scheduleOrder,
   shiftDates,
+  type DateField,
   type DropPlan,
   type EditTask,
   type StructurePlan,
@@ -50,6 +52,10 @@ const FIELDS = [
 ] as const;
 
 type Field = (typeof FIELDS)[number];
+
+// The three cells that are really one fact. Editing any of them settles the
+// other two.
+const DATE_FIELDS: readonly Field[] = ["start_date", "end_date", "duration_days"];
 
 type Draft = Record<string, Partial<Record<Field, string>>>;
 
@@ -121,9 +127,17 @@ export function ScheduleEditGrid({
     [ordered, byId],
   );
 
-  const dirtyIds = Object.keys(draft).filter((id) =>
-    Object.keys(draft[id] ?? {}).length > 0,
-  );
+  // A row counts as changed only when a cell actually differs from the
+  // database. Reconciling a date triple writes all three cells into the draft,
+  // two of which usually come back identical, and counting those would report
+  // rows as unsaved that have nothing to save.
+  const dirtyIds = Object.keys(draft).filter((id) => {
+    const t = byId.get(id);
+    if (!t) return false;
+    return Object.entries(draft[id] ?? {}).some(
+      ([f, v]) => v !== undefined && v !== raw(t, f as Field),
+    );
+  });
   const dirtyCount = dirtyIds.length;
 
   const valueOf = useCallback(
@@ -134,8 +148,53 @@ export function ScheduleEditGrid({
   const isDirty = (t: ScheduleTaskRow, f: Field) =>
     draft[t.id]?.[f] !== undefined && draft[t.id]?.[f] !== raw(t, f);
 
+  // Start, finish and duration are one fact in three cells. Typing into any of
+  // them settles the other two in the same draft, so what you read back is
+  // what will be saved - and the duration can no longer be left behind by a
+  // date edit, which is how the CPM engine ended up forecasting 8 Sweet
+  // Springs tasks off a stale number.
   function setCell(id: string, f: Field, v: string) {
-    setDraft((prev) => ({ ...prev, [id]: { ...(prev[id] ?? {}), [f]: v } }));
+    setDraft((prev) => {
+      const row = { ...(prev[id] ?? {}), [f]: v };
+      if (!DATE_FIELDS.includes(f)) return { ...prev, [id]: row };
+
+      const t = byId.get(id);
+      if (!t) return { ...prev, [id]: row };
+
+      // An empty or half-typed date is a keystroke on the way to a real one.
+      // Reconciling it would rewrite the other cells from a value the user has
+      // not finished entering, so hold off until the field is complete.
+      if ((f === "start_date" || f === "end_date") && v !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+        return { ...prev, [id]: row };
+      }
+      if (f === "duration_days" && v.trim() !== "") {
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < 0) return { ...prev, [id]: row };
+      }
+
+      const cur = (field: Field): string => row[field] ?? raw(t, field);
+      const durRaw = cur("duration_days").trim();
+      const settled = reconcileDates(
+        {
+          start_date: cur("start_date") || null,
+          end_date: cur("end_date") || null,
+          duration_days: durRaw === "" ? null : Math.round(Number(durRaw)),
+        },
+        f as DateField,
+        calendar,
+        { isMilestone: !!t.is_milestone },
+      );
+
+      return {
+        ...prev,
+        [id]: {
+          ...row,
+          start_date: settled.start_date ?? "",
+          end_date: settled.end_date ?? "",
+          duration_days: settled.duration_days == null ? "" : String(settled.duration_days),
+        },
+      };
+    });
   }
 
   function discard() {

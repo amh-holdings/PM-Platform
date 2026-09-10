@@ -49,6 +49,7 @@ export type HealthCheckId =
   | "negative_float"
   | "high_duration"
   | "invalid_dates"
+  | "duration_vs_dates"
   | "resources"
   | "missed_tasks"
   | "critical_path_test"
@@ -481,6 +482,59 @@ export function assessSchedule(
         : `Every task sits on the correct side of the data date (${dataDate}).`,
       fix: "Either record the progress that has happened, or move the dates to when the work will actually run. Leaving a start date in the past on a task nobody has begun quietly makes the whole forecast optimistic.",
       weight: 3,
+      affected,
+    });
+  }
+
+  // ---- 9b. Duration against the dates ------------------------------------
+  // Not a DCMA check. It is here because the two numbers can disagree and only
+  // one of them drives the forecast.
+  //
+  // A task carries a duration and a pair of dates. Float, the critical path
+  // and every late date come off the duration; the Gantt, the look-ahead and
+  // any printed update show the dates. While they agree the distinction never
+  // comes up.
+  //
+  // When they drift the damage is delayed, which is what makes it worth a
+  // check of its own. The projection holds the planned finish while nothing is
+  // pushing the task, so a drifted row looks perfectly normal on the chart.
+  // Its float is already wrong. And the moment a predecessor slips onto it,
+  // the task snaps from the window its bar shows to the duration nobody
+  // looked at - a fortnight becoming a day, without warning.
+  //
+  // Every editing surface now settles the three together, so new drift cannot
+  // appear. This finds what was written before that and, more importantly,
+  // refuses to guess which number was meant: a 1-day culvert whose window runs
+  // three weeks is either a task that took three weeks or a date nobody
+  // tightened after it finished, and only a human on the job knows which.
+  {
+    const affected: AffectedTask[] = [];
+    for (const t of tasks) {
+      if (t.is_milestone || t.duration_days === 0) continue;
+      if (t.duration_days == null || !t.start_date || !t.end_date) continue;
+      if (parseIso(t.end_date) < parseIso(t.start_date)) continue;
+      const span = workingDaysBetween(t.start_date, t.end_date, cal) + 1;
+      if (span === t.duration_days) continue;
+      affected.push({
+        wbs: t.wbs_code,
+        name: nameOf(t),
+        note: `${t.duration_days}d planned, ${span}d between ${t.start_date} and ${t.end_date} - the forecast uses ${t.duration_days}`,
+      });
+    }
+    const value = round1(pct(affected.length, tasks.length));
+    add({
+      id: "duration_vs_dates",
+      name: "Duration against dates",
+      question: "Does each task's duration agree with its own start and finish?",
+      status: affected.length === 0 ? "pass" : value <= 10 ? "warn" : "fail",
+      value,
+      display: `${affected.length} of ${tasks.length} disagree (${value}%)`,
+      threshold: "0",
+      detail: affected.length
+        ? "Float and the critical path are calculated from the duration; the bar on the Gantt is drawn from the dates. Where they disagree the float is already wrong, and the first time a predecessor slips onto one of these tasks it will collapse from the window its bar shows to the duration underneath it."
+        : "Every task's duration matches the working days between its own start and finish.",
+      fix: "Open the task and set whichever of the two is right - typing a finish restates the duration, typing a duration moves the finish. Where the dates are a long window around a short job, the duration is usually the true one and the dates want tightening.",
+      weight: 2,
       affected,
     });
   }

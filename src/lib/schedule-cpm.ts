@@ -201,6 +201,20 @@ function durationOf(t: CpmInput, cal: Calendar): number {
   // and finish are the same day and it cannot itself be the reason anything
   // is late - only the logic through it can.
   if (isMilestoneTask(t)) return 0;
+  // duration_days first, then the span between the dates.
+  //
+  // This order was worth questioning, because nothing used to keep the two in
+  // agreement - a dragged Gantt bar wrote start and finish and left the
+  // duration behind, so the engine forecast from a number the bar on screen
+  // contradicted. reconcileDates now closes that on every write path, so the
+  // two can only disagree on rows written before it existed.
+  //
+  // The order stays as it was on purpose. Where they do disagree on Sweet
+  // Springs the gap is not a rounding error, it is effort against elapsed
+  // time: a one-day culvert whose window runs three weeks because it waited on
+  // an inspection. Reading the span as the duration would silently restate 24
+  // tasks as several times the work they are. assessSchedule reports the
+  // disagreement instead, and a human decides which number was meant.
   if (t.duration_days != null && t.duration_days > 0) return t.duration_days;
   if (t.start_date && t.end_date)
     return durationInWorkingDays(t.start_date, t.end_date, cal);

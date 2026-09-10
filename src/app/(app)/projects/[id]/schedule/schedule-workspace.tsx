@@ -18,6 +18,7 @@ import {
   summarizeConstraints,
   type ScheduleConstraint,
 } from "@/lib/schedule-constraints";
+import { durationFromDates } from "@/lib/schedule-edit";
 import { SCOPE_ORDER, scopeOf, type TaskScope } from "@/lib/schedule-scope";
 import {
   applyProjectedDates,
@@ -195,14 +196,28 @@ export function ScheduleWorkspace({
 
   // Bars dropped on the Gantt. Same write path as the grid and the import, so
   // a date moved by dragging is indistinguishable from one that was typed.
+  //
+  // The duration goes with them. It used to be left behind - a resized bar
+  // wrote two dates and the engine went on forecasting from the old number -
+  // which is the drift that put 8 Sweet Springs tasks on a duration their own
+  // bars contradicted.
   async function commitGanttEdits(edits: GanttEdit[]) {
     setMsg(null);
+    const byId = new Map(tasks.map((t) => [t.id, t]));
     const res = await bulkUpdateScheduleTasks(
       projectId,
       edits.map((e) => ({
         id: e.id,
         start_date: e.start_date,
         end_date: e.end_date,
+        duration_days: durationFromDates(
+          {
+            start_date: e.start_date,
+            end_date: e.end_date,
+            is_milestone: byId.get(e.id)?.is_milestone ?? false,
+          },
+          calendar,
+        ),
       })),
     );
     setMsg(
@@ -566,6 +581,7 @@ export function ScheduleWorkspace({
           editable
           calendar={calendar}
           saving={pending}
+          dataDate={effectiveDataDate}
           onCommit={commitGanttEdits}
         />
       )}

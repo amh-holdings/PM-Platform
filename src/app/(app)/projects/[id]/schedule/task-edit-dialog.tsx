@@ -7,6 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import type { CalendarLike } from "@/lib/schedule-calendar";
+import {
+  reconcileDates,
+  type DateField,
+  type DateTriple,
+} from "@/lib/schedule-edit";
 import {
   DATE_CONSTRAINT_LABELS,
   DATE_CONSTRAINT_TYPES,
@@ -82,6 +88,9 @@ type Props = {
   // than typed, and so cycles can be caught before the form is submitted.
   allTasks: LinkTask[];
   phase1Available: boolean;
+  // Needed to turn a duration into a finish date. Optional so the older call
+  // sites keep working; without it the three boxes behave as they always did.
+  calendar?: CalendarLike;
   onDone?: () => void;
 };
 
@@ -95,6 +104,7 @@ export function TaskEditDialog({
   trigger,
   allTasks,
   phase1Available,
+  calendar = 5,
   onDone,
 }: Props) {
   const creating = mode === "create";
@@ -113,6 +123,38 @@ export function TaskEditDialog({
   // exclude it from its own options and check for cycles. When creating, that
   // identity is whatever is currently typed in the WBS box.
   const [wbs, setWbs] = useState(values.wbs_code);
+  // Start, finish and duration are one fact in three boxes, so they are
+  // controlled together rather than left uncontrolled like the rest of the
+  // form. Type a duration and the finish moves; type a finish and the duration
+  // restates itself. Without this the dialog can save a 5-day task whose dates
+  // span three weeks, which is exactly the disagreement the schedule already
+  // carries on 24 rows.
+  const [triple, setTriple] = useState<DateTriple>({
+    start_date: values.start_date,
+    end_date: values.end_date,
+    duration_days: values.duration_days,
+  });
+
+  function editTriple(field: DateField, raw: string) {
+    setTriple((prev) => {
+      const next: DateTriple = {
+        ...prev,
+        [field]:
+          field === "duration_days"
+            ? raw.trim() === "" ? null : Math.round(Number(raw))
+            : raw || null,
+      };
+      // A half-typed date is a keystroke on the way to a real one. Reconciling
+      // it would rewrite the other boxes from a value that is not finished.
+      if (field !== "duration_days" && raw !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        return next;
+      }
+      if (field === "duration_days" && raw.trim() !== "" && !Number.isFinite(Number(raw))) {
+        return next;
+      }
+      return reconcileDates(next, field, calendar, { isMilestone });
+    });
+  }
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [impact, setImpact] = useState<DeleteImpact | null>(null);
 
@@ -273,7 +315,8 @@ export function TaskEditDialog({
                     name="duration_days"
                     type="number"
                     min={0}
-                    defaultValue={values.duration_days ?? ""}
+                    value={triple.duration_days ?? ""}
+                    onChange={(e) => editTriple("duration_days", e.target.value)}
                     disabled={isMilestone}
                   />
                   {isMilestone && (
@@ -285,12 +328,24 @@ export function TaskEditDialog({
 
                 <div className="space-y-2">
                   <Label htmlFor="start_date">Start date</Label>
-                  <Input id="start_date" name="start_date" type="date" defaultValue={values.start_date ?? ""} />
+                  <Input
+                    id="start_date"
+                    name="start_date"
+                    type="date"
+                    value={triple.start_date ?? ""}
+                    onChange={(e) => editTriple("start_date", e.target.value)}
+                  />
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="end_date">End date</Label>
-                  <Input id="end_date" name="end_date" type="date" defaultValue={values.end_date ?? ""} />
+                  <Input
+                    id="end_date"
+                    name="end_date"
+                    type="date"
+                    value={triple.end_date ?? ""}
+                    onChange={(e) => editTriple("end_date", e.target.value)}
+                  />
                 </div>
 
                 <PredecessorEditor
@@ -355,7 +410,18 @@ export function TaskEditDialog({
                         type="checkbox"
                         name="is_milestone"
                         checked={isMilestone}
-                        onChange={(e) => setIsMilestone(e.target.checked)}
+                        onChange={(e) => {
+                          const on = e.target.checked;
+                          setIsMilestone(on);
+                          // Becoming a milestone collapses the task to an
+                          // instant; the finish follows the start rather than
+                          // being left behind on its old date.
+                          setTriple((prev) =>
+                            reconcileDates(prev, "start_date", calendar, {
+                              isMilestone: on,
+                            }),
+                          );
+                        }}
                       />
                       <span title="Marks an instant. Consumes no working days, so its start and finish are the same.">
                         Milestone
