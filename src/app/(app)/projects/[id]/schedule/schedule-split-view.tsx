@@ -178,6 +178,16 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
   "code", "task", "status", "dur", "start", "finish", "float",
 ];
 
+// Below this a header label is unreadable and a date input collapses to its
+// picker icon. Resizing is for making a column fit its content, not for hiding
+// it - the Columns menu is how you hide one.
+const MIN_COL_W = 44;
+const MAX_COL_W = 620;
+
+function widthStorageKey(projectId: string): string {
+  return `schedule-col-widths:${projectId}`;
+}
+
 const STATUS_TONE: Record<string, string> = {
   Complete: "bg-emerald-100 text-emerald-900",
   "In Progress": "bg-blue-100 text-blue-900",
@@ -290,6 +300,56 @@ export function ScheduleSplitView({
   const [focus, setFocus] = useState<string | null>(null);
   const [showColumnMenu, setShowColumnMenu] = useState(false);
 
+  // Column widths, overriding the defaults in ALL_COLUMNS. Kept per project
+  // and per browser: how wide "Task" needs to be depends on how long the task
+  // names on THIS job are, and Sweet Springs civil names run far longer than
+  // the mechanical ones.
+  const [colW, setColW] = useState<Partial<Record<ColumnKey, number>>>({});
+  const [resizing, setResizing] = useState<ColumnKey | null>(null);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(widthStorageKey(projectId));
+      if (saved) setColW(JSON.parse(saved));
+    } catch {
+      // A corrupt or unavailable store is not worth failing the page over.
+      // The defaults are perfectly usable.
+    }
+  }, [projectId]);
+
+  const persistWidths = useCallback(
+    (next: Partial<Record<ColumnKey, number>>) => {
+      try {
+        window.localStorage.setItem(widthStorageKey(projectId), JSON.stringify(next));
+      } catch {
+        // Private browsing, quota, whatever. The widths still apply this session.
+      }
+    },
+    [projectId],
+  );
+
+  const widthOf = useCallback(
+    (c: Column) => colW[c.key] ?? c.width,
+    [colW],
+  );
+
+  const anyBaseline = useMemo(() => tasks.some((t) => t.baseline_end), [tasks]);
+
+  const shownColumns = useMemo(
+    () =>
+      ALL_COLUMNS.filter(
+        (c) => columns.includes(c.key) && (c.key !== "variance" || anyBaseline),
+      ),
+    [columns, anyBaseline],
+  );
+  // The columns as drawn: the definitions with any user width folded in, so
+  // the header, the rows and the width arithmetic cannot disagree.
+  const resolvedColumns = useMemo(
+    () => shownColumns.map((c) => ({ ...c, width: widthOf(c) })),
+    [shownColumns, widthOf],
+  );
+  const gridInnerWidth = resolvedColumns.reduce((n, c) => n + c.width, 0) + 60;
+
   // Filters, carried over from the old Table view.
   const [phaseFilter, setPhaseFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -328,7 +388,6 @@ export function ScheduleSplitView({
 
   const summaries = useMemo(() => new Set(summaryCodes(allRows)), [allRows]);
   const progress = useMemo(() => buildProgress(tasks), [tasks]);
-  const anyBaseline = useMemo(() => tasks.some((t) => t.baseline_end), [tasks]);
 
   const valueOf = useCallback(
     (t: ScheduleTaskRow, f: Field) => draft[t.id]?.[f] ?? raw(t, f),
@@ -972,6 +1031,96 @@ export function ScheduleSplitView({
     setBarDrag({ id: t.id, mode, startX: e.clientX, origStart: d.start, origEnd: d.end });
   }
 
+  // ---- column resizing ----------------------------------------------------
+  const colDrag = useRef<{ key: ColumnKey; startX: number; startW: number } | null>(null);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const d = colDrag.current;
+      if (!d) return;
+      const w = Math.max(MIN_COL_W, Math.min(MAX_COL_W, d.startW + (e.clientX - d.startX)));
+      setColW((prev) => ({ ...prev, [d.key]: w }));
+    };
+    const onUp = () => {
+      if (!colDrag.current) return;
+      colDrag.current = null;
+      setResizing(null);
+      // Persist on release rather than per mousemove, so a drag is one write
+      // instead of two hundred.
+      setColW((prev) => { persistWidths(prev); return prev; });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [persistWidths]);
+
+  /**
+   * Widen a column to fit its longest value, on a double-click of the handle.
+   *
+   * Measured with a canvas rather than by rendering and reading back, because
+   * the cells are inputs - an input does not grow to its content, so there is
+   * nothing to measure in the DOM. Only the rows currently visible are
+   * considered: fitting to a task name hidden inside a collapsed branch would
+   * widen the column for something you cannot see.
+   */
+  const autoFit = useCallback(
+    (col: Column) => {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.font = getComputedStyle(document.body).font || "14px system-ui";
+
+      let widest = ctx.measureText(col.label).width;
+      for (const t of rows) {
+        let text = "";
+        switch (col.key) {
+          case "code": text = t.wbs_code; break;
+          case "task": text = valueOf(t, "task_name"); break;
+          case "assigned": text = valueOf(t, "assigned_to"); break;
+          case "phase": text = valueOf(t, "phase"); break;
+          case "status": text = valueOf(t, "status"); break;
+          case "dur": text = valueOf(t, "duration_days"); break;
+          case "predecessors": text = valueOf(t, "predecessors"); break;
+          // Dates render in a native input of a fixed size, and the derived
+          // columns hold short numbers. Their defaults already fit.
+          default: continue;
+        }
+        const w = ctx.measureText(text).width;
+        if (w > widest) widest = w;
+      }
+
+      // Padding, the indent of the deepest visible row, and the chevron and
+      // badges that share the task cell.
+      const chrome =
+        col.key === "task"
+          ? 30 + Math.max(0, ...rows.map((t) => ((t.level_code ?? 1) - 1) * 10)) + 70
+          : 24;
+      const next = Math.max(MIN_COL_W, Math.min(MAX_COL_W, Math.ceil(widest + chrome)));
+
+      setColW((prev) => {
+        const merged = { ...prev, [col.key]: next };
+        persistWidths(merged);
+        return merged;
+      });
+
+      // A double-click means "let me read this", so give the pane the room to
+      // honour it rather than leaving the column wide but scrolled out of view.
+      //
+      // Never past two thirds of the split, though. Fitting a long task name
+      // should not cost the bars the room to show a bar - the two halves being
+      // on screen together is the point of the view, and a grid that has eaten
+      // the chart is the old Table tab with extra steps.
+      const total =
+        shownColumns.reduce((n, c) => n + (c.key === col.key ? next : (colW[c.key] ?? c.width)), 0) + 60;
+      const available = scrollerRef.current?.clientWidth ?? 1200;
+      setGridWidth((w) => (total > w ? Math.min(total, Math.round(available * 0.66)) : w));
+    },
+    [rows, valueOf, persistWidths, shownColumns, colW],
+  );
+
   // ---- splitter -----------------------------------------------------------
   const splitDrag = useRef<{ startX: number; startW: number } | null>(null);
   useEffect(() => {
@@ -1002,14 +1151,6 @@ export function ScheduleSplitView({
     return { before, after, days };
   }, [dirtyCount, barMoves.size, cpm, previewCpm, calendar]);
 
-  const shownColumns = useMemo(
-    () =>
-      ALL_COLUMNS.filter(
-        (c) => columns.includes(c.key) && (c.key !== "variance" || anyBaseline),
-      ),
-    [columns, anyBaseline],
-  );
-  const gridInnerWidth = shownColumns.reduce((n, c) => n + c.width, 0) + 60;
 
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const suggestedWbs = useMemo(() => {
@@ -1128,6 +1269,20 @@ export function ScheduleSplitView({
           </Button>
           {showColumnMenu && (
             <div className="absolute left-0 top-9 z-40 w-52 rounded-md border bg-popover p-2 shadow-md">
+              <div className="mb-1 flex items-center justify-between border-b px-1 pb-1">
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Columns
+                </span>
+                {Object.keys(colW).length > 0 && (
+                  <button
+                    onClick={() => { setColW({}); persistWidths({}); }}
+                    className="text-[10px] text-primary hover:underline"
+                    title="Put every column back to its default width"
+                  >
+                    Reset widths
+                  </button>
+                )}
+              </div>
               {ALL_COLUMNS.map((c) => (
                 <label key={c.key} className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted">
                   <input
@@ -1452,14 +1607,34 @@ export function ScheduleSplitView({
                     title="Select all visible rows"
                   />
                 </div>
-                {shownColumns.map((c) => (
+                {resolvedColumns.map((c) => (
                   <div
                     key={c.key}
-                    className={cn("shrink-0 px-1.5", c.derived && "text-muted-foreground/70")}
+                    className={cn(
+                      "relative shrink-0 px-1.5",
+                      c.derived && "text-muted-foreground/70",
+                    )}
                     style={{ width: c.width }}
                     title={c.title}
                   >
-                    {c.label}
+                    <span className="block truncate">{c.label}</span>
+                    {/* Drag to resize, double-click to fit the longest value.
+                        The handle is wider than the line it draws, because a
+                        1px target is a 1px target. */}
+                    <span
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        colDrag.current = { key: c.key, startX: e.clientX, startW: c.width };
+                        setResizing(c.key);
+                      }}
+                      onDoubleClick={(e) => { e.preventDefault(); autoFit(c); }}
+                      className={cn(
+                        "absolute -right-1 top-0 z-10 flex h-full w-2 cursor-col-resize items-center justify-center",
+                        "before:h-3/5 before:w-px before:bg-border hover:before:bg-primary hover:before:w-0.5",
+                        resizing === c.key && "before:bg-primary before:w-0.5",
+                      )}
+                      title={`Drag to resize ${c.label}. Double-click to fit the longest value.`}
+                    />
                   </div>
                 ))}
               </div>
@@ -1476,7 +1651,7 @@ export function ScheduleSplitView({
                     key={t.id}
                     t={t}
                     r={r}
-                    columns={shownColumns}
+                    columns={resolvedColumns}
                     cpm={previewCpm.byWbs.get(t.wbs_code)}
                     progress={progress.get(t.wbs_code) ?? { kind: "none" }}
                     isSummary={summaries.has(t.wbs_code)}
@@ -1711,7 +1886,9 @@ export function ScheduleSplitView({
       </datalist>
 
       <p className="text-xs text-muted-foreground">
-        The grid and the bars are the same rows: edit a date on the left and the
+        Drag the edge of any column header to resize it, or double-click that
+        edge to fit the longest value on screen. Widths are remembered per
+        project. The grid and the bars are the same rows: edit a date on the left and the
         bar moves, drag a bar and the cells follow. Nothing is written until you
         save, and the forecast above the grid is recalculated over the pending
         edit, so what it says is what saving would do. Progress is not editable
