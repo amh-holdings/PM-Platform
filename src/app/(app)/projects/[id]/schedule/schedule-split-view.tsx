@@ -472,7 +472,11 @@ export function ScheduleSplitView({
     },
     [dataDate, geo.min, geo.dayPx],
   );
-  useEffect(() => { scrollToAsOf("auto"); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [zoom]);
+  // Deliberately keyed to the zoom alone. Re-running whenever the geometry
+  // changed would snap the timeline back to the data date while you were
+  // scrolled somewhere else reading it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { scrollToAsOf("auto"); }, [zoom]);
 
   // ---- dependency arrows --------------------------------------------------
   // The schedule has always carried its logic as text in a cell. The August

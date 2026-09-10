@@ -63,7 +63,7 @@ async function main() {
   const rows = data as { id: string; wbs_code: string; task_name: string; predecessors: string | null }[];
   const by = new Map(rows.map((r) => [r.wbs_code, r]));
 
-  const plan: { id: string; wbs: string; name: string; from: string; to: string }[] = [];
+  const plan: { id: string; wbs: string; name: string; from: string; to: string | null }[] = [];
   for (const e of edits) {
     const t = by.get(e.task);
     if (!t) { console.log(`  SKIP ${e.task} - not on this project`); continue; }
@@ -76,15 +76,22 @@ async function main() {
     const next: Link[] = links.map((l) =>
       l.pred === e.pred ? { ...l, type: e.type, lag: e.lag ?? l.lag } : l,
     );
+    // serializeLinks answers null for an empty list. That cannot happen here -
+    // this only ever retypes an existing link, never removes one - but the
+    // column is nullable and writing "" instead of NULL would leave a task
+    // that reads as having a predecessor it does not have.
     const to = serializeLinks(next);
-    if (to === (t.predecessors ?? "")) { console.log(`  SKIP ${e.task} - already ${e.type}`); continue; }
+    if ((to ?? null) === (t.predecessors ?? null)) {
+      console.log(`  SKIP ${e.task} - already ${e.type}`);
+      continue;
+    }
     plan.push({ id: t.id, wbs: t.wbs_code, name: t.task_name, from: t.predecessors ?? "", to });
   }
 
   if (!plan.length) { console.log("\nNothing to change."); return; }
 
   for (const p of plan) {
-    console.log(`  ${p.wbs.padEnd(11)} ${p.name.slice(0, 32).padEnd(32)} ${p.from}  ->  ${p.to}`);
+    console.log(`  ${p.wbs.padEnd(11)} ${p.name.slice(0, 32).padEnd(32)} ${p.from}  ->  ${p.to ?? "(none)"}`);
   }
   console.log("");
 
