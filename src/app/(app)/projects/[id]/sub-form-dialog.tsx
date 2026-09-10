@@ -28,7 +28,6 @@ export type SubFormValues = {
   retainage_pct: number | null;
   coi_status: string | null;
   w9_status: string | null;
-  payment_terms: string | null;
   payment_terms_days: number | null;
 };
 
@@ -48,7 +47,6 @@ const EMPTY_VALUES: SubFormValues = {
   retainage_pct: 10,
   coi_status: "pending",
   w9_status: "pending",
-  payment_terms: "Net 30",
   payment_terms_days: 30,
 };
 
@@ -252,16 +250,6 @@ export function SubFormDialog({ projectId, initial, trigger }: Props) {
                   <p className="text-[10px] text-muted-foreground">
                     Drives the cash-out timing (sub invoice + N days = AHC pays)
                   </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="payment_terms">Payment terms (free text)</Label>
-                  <Input
-                    id="payment_terms"
-                    name="payment_terms"
-                    defaultValue={values.payment_terms ?? "Net 30"}
-                    placeholder="Net 30"
-                  />
                 </div>
               </div>
 

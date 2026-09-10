@@ -205,7 +205,6 @@ function subFormFromRow(s: SubRow): SubFormValues {
     retainage_pct: s.retainage_pct,
     coi_status: s.coi_status,
     w9_status: s.w9_status,
-    payment_terms: s.payment_terms,
     payment_terms_days: s.payment_terms_days,
   };
 }

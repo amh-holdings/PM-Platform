@@ -48,6 +48,19 @@ function getStr(value: FormDataEntryValue | null): string | null {
   return value.trim();
 }
 
+// The form captures terms only as a day count. The legacy free-text column is
+// derived from it so downstream views (sub billing) keep a label to render and
+// the two can no longer disagree.
+function paymentTermsFields(formData: FormData): {
+  payment_terms: string | null;
+  payment_terms_days: number | null;
+} {
+  const raw = formData.get("payment_terms_days");
+  const num = typeof raw === "string" && raw.trim() ? Number(raw) : NaN;
+  const days = Number.isFinite(num) ? num : null;
+  return { payment_terms: days == null ? null : `Net ${days}`, payment_terms_days: days };
+}
+
 export async function createSubcontractor(
   projectId: string,
   formData: FormData,
@@ -79,13 +92,7 @@ export async function createSubcontractor(
     retainage_pct: retainagePct ?? undefined,
     coi_status: getStr(formData.get("coi_status")) ?? "pending",
     w9_status: getStr(formData.get("w9_status")) ?? "pending",
-    payment_terms: getStr(formData.get("payment_terms")) ?? "Net 30",
-    payment_terms_days: (() => {
-      const v = formData.get("payment_terms_days");
-      if (typeof v !== "string" || !v.trim()) return null;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    })(),
+    ...paymentTermsFields(formData),
     active: true,
   };
 
@@ -131,13 +138,7 @@ export async function updateSubcontractor(
     retainage_pct: retainagePct,
     coi_status: getStr(formData.get("coi_status")),
     w9_status: getStr(formData.get("w9_status")),
-    payment_terms: getStr(formData.get("payment_terms")),
-    payment_terms_days: (() => {
-      const v = formData.get("payment_terms_days");
-      if (typeof v !== "string" || !v.trim()) return null;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    })(),
+    ...paymentTermsFields(formData),
   };
 
   const { error } = await auth.supabase

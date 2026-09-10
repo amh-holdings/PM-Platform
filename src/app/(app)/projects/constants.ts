@@ -3,6 +3,7 @@
 // from an actions file silently resolve to undefined on the client.
 export const PROJECT_STATUS_OPTIONS = [
   "Planning",
+  "Engineering",
   "Permitting",
   "Construction",
   "Commissioning",

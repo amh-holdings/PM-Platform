@@ -11,6 +11,7 @@ export const TRADE_OPTIONS = [
   "Commissioning / Testing",
   "Surveying",
   "Trenching / Boring",
+  "Engineer",
   "Engineering / Design",
   "Permitting",
   "Landscaping / Erosion",
