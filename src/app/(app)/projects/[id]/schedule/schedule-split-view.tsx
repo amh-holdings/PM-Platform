@@ -53,13 +53,17 @@ import {
   nextTopLevelCode,
   parentCodeOf,
   planDrop,
+  buildRowIndex,
   nearbyPredecessors,
   planChainLink,
   planIndent,
   planMove,
   planOutdent,
   planUnlink,
+  toRowRefs,
+  toWbsRefs,
   type LinkPlan,
+  type RowIndex,
   reconcileDates,
   scheduleOrder,
   shiftDates,
@@ -124,6 +128,7 @@ type Field = (typeof FIELDS)[number];
 const DATE_FIELDS: readonly Field[] = ["start_date", "end_date", "duration_days"];
 
 type ColumnKey =
+  | "row"
   | "code"
   | "task"
   | "assigned"
@@ -160,6 +165,13 @@ type Column = {
 // row height when a name wraps - which it must not, or the two halves drift
 // apart by a pixel per row and by row 60 they are a whole row out.
 const ALL_COLUMNS: Column[] = [
+  {
+    key: "row",
+    label: "#",
+    width: 44,
+    derived: true,
+    title: "Row number, the way Smartsheet numbers a sheet. Type one of these into a Predecessors cell instead of a WBS code. Numbers come from the whole schedule, so filtering leaves gaps rather than renumbering.",
+  },
   { key: "code", label: "Code", width: 70 },
   { key: "task", label: "Task", width: 232 },
   { key: "status", label: "Status", width: 106 },
@@ -188,7 +200,7 @@ const ALL_COLUMNS: Column[] = [
 ];
 
 const DEFAULT_COLUMNS: ColumnKey[] = [
-  "code", "task", "status", "dur", "start", "finish", "float",
+  "row", "code", "task", "status", "dur", "start", "finish", "float",
 ];
 
 // Below this a header label is unreadable and a date input collapses to its
@@ -410,6 +422,10 @@ export function ScheduleSplitView({
     ReturnType<typeof describeTaskDeletion>
   >>(null);
   const [shiftBy, setShiftBy] = useState("5");
+  // Row numbers or WBS codes in the Predecessors cell. Only ever a way of
+  // writing and reading - see toRowRefs/toWbsRefs. Default on, because typing
+  // "12" is the whole point.
+  const [predAsRows, setPredAsRows] = useState(true);
   const [linkType, setLinkType] = useState<RelType>("FS");
   const [linkLag, setLinkLag] = useState("0");
   const [dragging, setDragging] = useState<string[] | null>(null);
@@ -432,6 +448,17 @@ export function ScheduleSplitView({
   const allRows = useMemo(
     () => ordered.map((o) => byId.get(o.id)!).filter(Boolean),
     [ordered, byId],
+  );
+
+  // Numbered off the full schedule, never off the filtered view, so hiding
+  // completed work does not renumber every predecessor on screen.
+  const rowIndex = useMemo(() => buildRowIndex(allRows), [allRows]);
+
+  // The trace panel and the grid have to agree. Reading "waits on 5.1.1.2" next
+  // to a Predecessors column showing "12" is how you end up trusting neither.
+  const refOf = useCallback(
+    (wbs: string) => (predAsRows ? String(rowIndex.byWbs.get(wbs) ?? wbs) : wbs),
+    [predAsRows, rowIndex],
   );
 
   const summaries = useMemo(() => new Set(summaryCodes(allRows)), [allRows]);
@@ -1490,6 +1517,18 @@ export function ScheduleSplitView({
         <Check label="Field-reported" checked={reportedOnly} onChange={setReportedOnly} />
         <Check label="Hide complete" checked={hideComplete} onChange={setHideComplete} />
         <Check label="Hide internal" checked={hideInternal} onChange={setHideInternal} />
+        <span className="mx-1 h-6 w-px bg-border" />
+        <label className="flex items-center gap-1.5 text-xs" title="How the Predecessors column reads and accepts references. Either way the schedule stores WBS codes - a row number is a position, and positions move when rows are added or dragged.">
+          <span className="text-muted-foreground">Predecessors as</span>
+          <select
+            value={predAsRows ? "rows" : "wbs"}
+            onChange={(e) => setPredAsRows(e.target.value === "rows")}
+            className="h-7 rounded-md border border-input bg-background px-1 text-xs"
+          >
+            <option value="rows">Row #</option>
+            <option value="wbs">WBS code</option>
+          </select>
+        </label>
         {anyFilter && (
           <Button
             variant="ghost"
@@ -1868,6 +1907,8 @@ export function ScheduleSplitView({
                     onDragEnd={() => { setDragging(null); setDropAt(null); }}
                     onDragOver={(e) => onDragOverRow(e, t)}
                     onDrop={onDropRow}
+                    rowIndex={rowIndex}
+                    predAsRows={predAsRows}
                     projectId={projectId}
                     phaseOptions={phaseOptions}
                     allTasks={allTasks}
@@ -2003,8 +2044,9 @@ export function ScheduleSplitView({
                       <button
                         onClick={() => { setFocus(l.pred); jumpTo(l.pred); }}
                         className="font-mono text-[11px] text-primary hover:underline"
+                        title={l.pred}
                       >
-                        {l.pred}
+                        {refOf(l.pred)}
                       </button>
                       <span className="truncate">{l.name}</span>
                       <span className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium">
@@ -2046,8 +2088,9 @@ export function ScheduleSplitView({
                       <button
                         onClick={() => { setFocus(sx.wbs); jumpTo(sx.wbs); }}
                         className="font-mono text-[11px] text-primary hover:underline"
+                        title={sx.wbs}
                       >
-                        {sx.wbs}
+                        {refOf(sx.wbs)}
                       </button>
                       <span className="truncate">{sx.name}</span>
                       <span className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium">
@@ -2129,6 +2172,8 @@ type GridRowProps = {
   phaseOptions: string[];
   allTasks: ScheduleTaskRow[];
   phase1Available: boolean;
+  rowIndex: RowIndex;
+  predAsRows: boolean;
 };
 
 function GridRow({
@@ -2136,7 +2181,7 @@ function GridRow({
   focused, onFocusRow, selected, onSelect, valueOf, isDirty, setCell, onCellKeyDown, setCellRef,
   statusOptions, calendar, constraint, dragging, dropAt,
   onDragStart, onDragEnd, onDragOver, onDrop,
-  projectId, phaseOptions, allTasks, phase1Available,
+  projectId, phaseOptions, allTasks, phase1Available, rowIndex, predAsRows,
 }: GridRowProps) {
   const indent = Math.max(0, (t.level_code ?? 1) - 1) * 10;
   const rowDirty = columns.some((col) => {
@@ -2207,6 +2252,16 @@ function GridRow({
 
         function renderCell(k: ColumnKey) {
           switch (k) {
+            case "row":
+              return (
+                <span
+                  className="block w-full truncate text-right text-[11px] tabular-nums text-muted-foreground"
+                  title={`Row ${rowIndex.byWbs.get(t.wbs_code) ?? "-"} - ${t.wbs_code}`}
+                >
+                  {rowIndex.byWbs.get(t.wbs_code) ?? "-"}
+                </span>
+              );
+
             case "code":
               return (
                 <button
@@ -2382,6 +2437,8 @@ function GridRow({
                   dirty={isDirty(t, "predecessors")}
                   allTasks={allTasks}
                   currentWbs={t.wbs_code}
+                  rowIndex={rowIndex}
+                  asRows={predAsRows}
                   onChange={(v) => setCell(t.id, "predecessors", v)}
                   onKeyDown={(e) => onCellKeyDown(e, r, ci, t, "predecessors")}
                   inputRef={(el) => setCellRef(`${r}:${ci}`, el)}
@@ -2400,6 +2457,7 @@ function GridRow({
           allTasks={allTasks}
           phase1Available={phase1Available}
           calendar={calendar}
+          rowIndex={rowIndex}
           trigger={<Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]">Open</Button>}
         />
       </div>
@@ -2533,6 +2591,8 @@ function PredecessorCell({
   dirty,
   allTasks,
   currentWbs,
+  rowIndex,
+  asRows,
   onChange,
   onKeyDown,
   inputRef,
@@ -2541,12 +2601,22 @@ function PredecessorCell({
   dirty: boolean;
   allTasks: ScheduleTaskRow[];
   currentWbs: string;
+  rowIndex: RowIndex;
+  asRows: boolean;
   onChange: (v: string) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
   inputRef: (el: HTMLElement | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [caretToken, setCaretToken] = useState(0);
+
+  // What the cell shows and what it stores are two different strings in row
+  // mode. Every keystroke goes text -> codes -> text, which is only safe
+  // because that round trip is exact - see the round-trip tests.
+  const shown = asRows ? toRowRefs(value, rowIndex) : value;
+  const store = (text: string) => onChange(asRows ? toWbsRefs(text, rowIndex) : text);
+  const refOf = (wbs: string) =>
+    asRows ? String(rowIndex.byWbs.get(wbs) ?? wbs) : wbs;
 
   const codes = useMemo(() => new Set(allTasks.map((t) => t.wbs_code)), [allTasks]);
   const links = useMemo(() => parsePredecessors(value), [value]);
@@ -2562,19 +2632,28 @@ function PredecessorCell({
         .map((l) => {
           const t = allTasks.find((x) => x.wbs_code === l.pred);
           const rel = `${l.type}${l.lag ? (l.lag > 0 ? `+${l.lag}` : l.lag) : ""}`;
-          return t ? `${l.pred} ${t.task_name} (${rel})` : `${l.pred} - NOT FOUND (${rel})`;
+          return t
+            ? `${refOf(l.pred)} ${t.task_name} (${rel})`
+            : `${l.pred} - NOT FOUND (${rel})`;
         })
         .join("\n"),
-    [links, allTasks],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [links, allTasks, asRows, rowIndex],
   );
 
   // The token the caret is sitting in, so a suggestion replaces the code being
   // typed rather than the whole cell.
-  const tokens = value.split(",");
+  const tokens = shown.split(",");
   const active = (tokens[caretToken] ?? "").trim();
   // Only the code part is matched. Someone mid-way through "5.1.1SS" is still
   // looking for 5.1.1.
   const typedCode = active.replace(/(FS|SS|FF|SF)[+-]?\d*$/i, "").trim();
+  // In row mode what has been typed is a row number, so the menu has to match
+  // it against row numbers as well as codes and names.
+  const typedWbs =
+    asRows && /^\d+$/.test(typedCode)
+      ? rowIndex.byRow.get(Number(typedCode)) ?? null
+      : null;
 
   const already = useMemo(() => new Set(links.map((l) => l.pred)), [links]);
 
@@ -2592,19 +2671,24 @@ function PredecessorCell({
       .filter((t) => t.wbs_code !== currentWbs)
       .filter(
         (t) =>
+          t.wbs_code === typedWbs ||
+          (asRows && String(rowIndex.byWbs.get(t.wbs_code) ?? "").startsWith(typedCode)) ||
           t.wbs_code.startsWith(typedCode) ||
           t.task_name.toLowerCase().includes(q),
       )
       // An exact hit needs no menu; anything already linked is noise.
-      .filter((t) => !(already.has(t.wbs_code) && t.wbs_code !== typedCode))
+      .filter(
+        (t) =>
+          !(already.has(t.wbs_code) && t.wbs_code !== typedCode && t.wbs_code !== typedWbs),
+      )
       .slice(0, 7);
-  }, [open, typedCode, allTasks, currentWbs, already]);
+  }, [open, typedCode, typedWbs, asRows, rowIndex, allTasks, currentWbs, already]);
 
   function choose(code: string) {
     const next = [...tokens];
     const suffix = active.slice(typedCode.length);
-    next[caretToken] = code + suffix;
-    onChange(next.join(",").replace(/\s*,\s*/g, ", "));
+    next[caretToken] = refOf(code) + suffix;
+    store(next.join(",").replace(/\s*,\s*/g, ", "));
     setOpen(false);
   }
 
@@ -2621,19 +2705,21 @@ function PredecessorCell({
           "font-mono text-[11px]",
           unknown.length > 0 && "border-destructive text-destructive",
         )}
-        value={value}
-        placeholder="5.1.1.2SS+3"
+        value={shown}
+        placeholder={asRows ? "12SS+3" : "5.1.1.2SS+3"}
         title={
           unknown.length
             ? `Not on this project: ${unknown.join(", ")}. The engine skips a link it cannot resolve, which frees this task to start on day one.`
             : links.length
               ? resolved
-              : "No predecessors. Type a WBS code or a task name. FS, SS, FF or SF and a lag: 5.1.1.2SS+3"
+              : asRows
+                ? "No predecessors. Type a row number from the # column, or a task name. FS, SS, FF or SF and a lag: 12SS+3"
+                : "No predecessors. Type a WBS code or a task name. FS, SS, FF or SF and a lag: 5.1.1.2SS+3"
         }
         onChange={(e) => {
           setCaretToken(tokenAt(e.currentTarget));
           setOpen(true);
-          onChange(e.target.value);
+          store(e.target.value);
         }}
         onFocus={(e) => { setCaretToken(tokenAt(e.currentTarget)); setOpen(true); }}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
@@ -2648,7 +2734,8 @@ function PredecessorCell({
         <ul className="absolute left-0 top-7 z-50 max-h-56 w-72 overflow-y-auto rounded-md border bg-popover p-1 shadow-lg">
           {!typedCode && (
             <li className="px-1.5 pb-1 pt-0.5 text-[10px] text-muted-foreground">
-              Work just above - or type a code or a task name
+              Work just above - or type {asRows ? "a row number" : "a code"} or a
+              task name
             </li>
           )}
           {suggestions.map((t) => (
@@ -2658,7 +2745,9 @@ function PredecessorCell({
                 onMouseDown={(e) => { e.preventDefault(); choose(t.wbs_code); }}
                 className="flex w-full items-baseline gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-muted"
               >
-                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{t.wbs_code}</span>
+                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                  {refOf(t.wbs_code)}
+                </span>
                 <span className="truncate">{t.task_name}</span>
               </button>
             </li>

@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import type { RowIndex } from "@/lib/schedule-edit";
 import {
   findCycleWith,
   parsePredecessors,
@@ -26,6 +27,12 @@ type Props = {
   currentWbs: string;
   allTasks: LinkTask[];
   defaultValue: string | null;
+  /**
+   * Row numbers as the grid shows them. The dialog names a task the same way
+   * the Predecessors column does, so the two surfaces cannot disagree about
+   * what "12" means. Absent, it falls back to WBS codes.
+   */
+  rowIndex?: RowIndex;
 };
 
 const REL_LABEL: Record<RelType, string> = {
@@ -57,8 +64,16 @@ export function PredecessorEditor({
   currentWbs,
   allTasks,
   defaultValue,
+  rowIndex,
 }: Props) {
   const [links, setLinks] = useState<Link[]>(() => parsePredecessors(defaultValue));
+
+  // "12 - Pile driving" rather than "5.1.1.2 - Pile driving". The code is still
+  // what gets stored and still what the hint line at the bottom shows.
+  const label = (wbs: string) => {
+    const n = rowIndex?.byWbs.get(wbs);
+    return n === undefined ? wbs : String(n);
+  };
 
   const nameByWbs = useMemo(
     () => new Map(allTasks.map((t) => [t.wbs_code, t.task_name])),
@@ -152,7 +167,7 @@ export function PredecessorEditor({
                   .filter((o) => o.wbs_code === l.pred || !chosen.has(o.wbs_code))
                   .map((o) => (
                     <option key={o.wbs_code} value={o.wbs_code}>
-                      {o.wbs_code} - {o.task_name}
+                      {label(o.wbs_code)} - {o.task_name}
                     </option>
                   ))}
               </select>
@@ -228,8 +243,8 @@ export function PredecessorEditor({
             </p>
             <ul className="mt-1.5 space-y-0.5">
               {successors.map((s) => (
-                <li key={s.wbs_code} className="text-xs">
-                  <span className="font-mono text-muted-foreground">{s.wbs_code}</span>{" "}
+                <li key={s.wbs_code} className="text-xs" title={s.wbs_code}>
+                  <span className="font-mono text-muted-foreground">{label(s.wbs_code)}</span>{" "}
                   {s.task_name}
                 </li>
               ))}

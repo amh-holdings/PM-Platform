@@ -25,6 +25,7 @@ import {
   describeTaskDeletion,
   updateScheduleTask,
 } from "../schedule-actions";
+import type { RowIndex } from "@/lib/schedule-edit";
 import {
   PredecessorEditor,
   hasLinkErrors,
@@ -91,6 +92,10 @@ type Props = {
   // Needed to turn a duration into a finish date. Optional so the older call
   // sites keep working; without it the three boxes behave as they always did.
   calendar?: CalendarLike;
+  // Row numbers as the grid shows them, so this dialog names a predecessor the
+  // same way the Predecessors column does. Optional - without it the picker
+  // falls back to WBS codes, which is what the standalone call sites want.
+  rowIndex?: RowIndex;
   onDone?: () => void;
 };
 
@@ -105,6 +110,7 @@ export function TaskEditDialog({
   allTasks,
   phase1Available,
   calendar = 5,
+  rowIndex,
   onDone,
 }: Props) {
   const creating = mode === "create";
@@ -353,6 +359,7 @@ export function TaskEditDialog({
                   currentWbs={creating ? wbs : values.wbs_code}
                   allTasks={allTasks}
                   defaultValue={values.predecessors}
+                  rowIndex={rowIndex}
                 />
 
                 {phase1Available && (

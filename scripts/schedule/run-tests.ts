@@ -68,11 +68,14 @@ import {
   rewritePredecessors,
   shiftDates,
   splitPredecessorToken,
+  buildRowIndex,
   gridFromMatrix,
   nearbyPredecessors,
   planChainLink,
   planFanLink,
   planUnlink,
+  toRowRefs,
+  toWbsRefs,
   type ColumnKey,
   type EditTask,
 } from "@/lib/schedule-edit";
@@ -940,6 +943,65 @@ section("Editing - import diff");
   const { rows } = buildImportRows(grid, mapping);
   const diff = diffImport([], rows, mapping);
   check("duplicate WBS blocks the import", diff.blocking.length > 0, diff.blocking.join(" "));
+}
+
+section("Editing - row numbers as a way of writing, not storing");
+
+{
+  const sheet = [
+    { wbs_code: "5.1" },
+    { wbs_code: "5.1.1" },
+    { wbs_code: "5.1.2" },
+    { wbs_code: "5.1.10" },
+    { wbs_code: "5.2" },
+  ];
+  const idx = buildRowIndex(sheet);
+
+  eq("rows number from one", idx.byWbs.get("5.1"), 1);
+  eq("in the order given", idx.byWbs.get("5.1.10"), 4);
+  eq("and read back", idx.byRow.get(4), "5.1.10");
+
+  // Display: codes out, numbers in.
+  eq("a plain link shows as a row number", toRowRefs("5.1.1", idx), "2");
+  eq("type and lag survive the swap", toRowRefs("5.1.10SS+3", idx), "4SS+3");
+  eq("a negative lag too", toRowRefs("5.1.2-2", idx), "3-2");
+  eq("several at once", toRowRefs("5.1.1, 5.1.2FF", idx), "2, 3FF");
+  // A code that is not on the project has no row, so it stays visible as
+  // itself rather than disappearing out of the cell.
+  eq("an unknown code is left alone", toRowRefs("9.9.9", idx), "9.9.9");
+  eq("nothing in, nothing out", toRowRefs(null, idx), "");
+
+  // Storage: numbers in, codes out.
+  eq("a row number becomes a code", toWbsRefs("2", idx), "5.1.1");
+  eq("with its relationship", toWbsRefs("4SS+3", idx), "5.1.10SS+3");
+  eq("and a list of them", toWbsRefs("2, 3FF", idx), "5.1.1, 5.1.2FF");
+  // The safety valve: a real code typed while the grid is in row-number mode
+  // is still a real code. Only a bare integer means a row.
+  eq("a typed WBS code is not reinterpreted", toWbsRefs("5.1.2", idx), "5.1.2");
+  // Half-typed. Row 47 does not exist yet, so it is left as-is and the cell
+  // shows it as unresolved rather than silently dropping it.
+  eq("an out-of-range row is left alone", toWbsRefs("47", idx), "47");
+  eq("whitespace is tolerated", toWbsRefs("  2 ,3 ", idx), "5.1.1, 5.1.2");
+
+  // The round trip is what makes the cell safe to type in: every keystroke
+  // converts to codes and back to numbers, and must land where it started.
+  // The trailing-comma cases are the ones that matter - the cell converts on
+  // every keystroke, so a swallowed comma means you can never type a second
+  // predecessor at all.
+  for (const written of ["2", "3FF", "4SS+3", "2, 3-1", "2, ", "2, 3SS-1, "]) {
+    eq(`round trip "${written}"`, toRowRefs(toWbsRefs(written, idx), idx), written);
+  }
+  eq("a trailing comma survives to storage", toWbsRefs("2, ", idx), "5.1.1, ");
+  eq("and parses as one link", parsePredecessors(toWbsRefs("2, ", idx)).length, 1);
+  eq("an interior blank is still dropped", toWbsRefs("2, , 3", idx), "5.1.1, 5.1.2");
+}
+
+{
+  // Row numbers follow the saved order, so a schedule whose sort_order was set
+  // by dragging numbers by that order and not by WBS.
+  const idx = buildRowIndex([{ wbs_code: "5.2" }, { wbs_code: "5.1" }]);
+  eq("order given is order numbered", idx.byWbs.get("5.2"), 1);
+  eq("not WBS order", idx.byWbs.get("5.1"), 2);
 }
 
 section("Editing - linking without typing");

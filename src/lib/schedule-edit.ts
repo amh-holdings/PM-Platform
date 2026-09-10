@@ -874,6 +874,90 @@ export function shiftDates(
 }
 
 // ============================================================================
+// Row numbers
+// ============================================================================
+//
+// Smartsheet lets you write a predecessor as "12" because the sheet numbers its
+// own rows. Nobody has to go and read a WBS code first, and 5.1.1.2 is a lot to
+// type correctly when you are doing it four hundred times.
+//
+// So the grid offers the same thing - but only as a way of writing and reading.
+// Row numbers are NOT stored. A row number is a position, and a position moves
+// the moment anything is inserted, deleted or dragged; a predecessor stored as
+// "12" would silently come to mean a different task. WBS codes stay the storage
+// format because they are also what billing lines, inspections and cost codes
+// point at, none of which have a foreign key to catch a break.
+//
+// The rule is therefore: convert on the way in, convert on the way out, and
+// keep the database in codes. Anything that will not resolve is passed through
+// untouched rather than guessed at, so a half-typed reference stays visible
+// instead of vanishing.
+
+export type RowIndex = {
+  byWbs: Map<string, number>;
+  byRow: Map<number, string>;
+};
+
+// Numbers come from the full schedule in its saved order, not from what is on
+// screen. Filtering to the critical path must not renumber the sheet under
+// you - Smartsheet leaves gaps in a filtered view for exactly this reason.
+export function buildRowIndex(orderedTasks: { wbs_code: string }[]): RowIndex {
+  const byWbs = new Map<string, number>();
+  const byRow = new Map<number, string>();
+  orderedTasks.forEach((t, i) => {
+    byWbs.set(t.wbs_code, i + 1);
+    byRow.set(i + 1, t.wbs_code);
+  });
+  return { byWbs, byRow };
+}
+
+function formatRef(ref: string, type: RelType, lag: number): string {
+  const t = type === "FS" ? "" : type;
+  const l = lag === 0 ? "" : lag > 0 ? `+${lag}` : `${lag}`;
+  return `${ref}${t}${l}`;
+}
+
+function mapRefs(raw: string, swap: (ref: string) => string | null): string {
+  const mapped = raw.split(",").map((token) => {
+    const trimmed = token.trim();
+    if (!trimmed) return "";
+    const parsed = splitPredecessorToken(trimmed);
+    if (!parsed) return trimmed;
+    const next = swap(parsed.ref);
+    return formatRef(next ?? parsed.ref, parsed.type, parsed.lag);
+  });
+
+  // A trailing separator is somebody part-way through typing a second
+  // reference. It has to survive the round trip: the cell converts on every
+  // keystroke, so swallowing the comma just pressed would make a second
+  // predecessor impossible to type. Interior blanks are still dropped.
+  const trailing = mapped.length > 1 && mapped[mapped.length - 1] === "";
+  const kept = mapped.filter(Boolean);
+  return kept.join(", ") + (trailing ? ", " : "");
+}
+
+// Codes to row numbers, for display. A code that is not on the project keeps
+// its own text so the cell can still show it in red.
+export function toRowRefs(raw: string | null | undefined, idx: RowIndex): string {
+  if (!raw) return "";
+  return mapRefs(raw, (ref) => {
+    const n = idx.byWbs.get(ref);
+    return n === undefined ? null : String(n);
+  });
+}
+
+// Row numbers back to codes, for storage. Only a bare integer is treated as a
+// row number: someone who types or pastes a real WBS code while the grid is in
+// row-number mode still gets what they meant.
+export function toWbsRefs(input: string, idx: RowIndex): string {
+  if (!input.trim()) return "";
+  return mapRefs(input, (ref) => {
+    if (!/^\d+$/.test(ref)) return null;
+    return idx.byRow.get(Number(ref)) ?? null;
+  });
+}
+
+// ============================================================================
 // Linking without typing
 // ============================================================================
 //
