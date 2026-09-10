@@ -802,6 +802,62 @@ export function durationFromDates(
 }
 
 // ============================================================================
+// Unsaved edits, applied
+// ============================================================================
+//
+// The grid holds edits in a draft rather than writing per keystroke, which is
+// right - a shift of 40 rows should be one review-and-save gesture. But it
+// meant the forecast on screen described the schedule as it was before you
+// started typing. You changed a duration, the float did not move, and the only
+// way to find out what the edit did was to save it and look.
+//
+// applyDraft produces the task set as it WOULD be, so the CPM engine can run
+// over the pending edit and the page can show the consequence before anything
+// is written. Nothing here writes; the draft is still saved by the same bulk
+// action it always was.
+
+/** Cell edits by task id, as the grid holds them: raw strings from inputs. */
+export type TaskDraft = Record<string, Partial<Record<string, string>>>;
+
+const NUMERIC_DRAFT_FIELDS = new Set(["duration_days", "level_code", "sort_order"]);
+
+/**
+ * The task set with pending cell edits folded in.
+ *
+ * Returns the original array untouched when the draft is empty, so the common
+ * case costs nothing and the memo downstream does not invalidate.
+ */
+export function applyDraft<T extends { id: string }>(
+  tasks: readonly T[],
+  draft: TaskDraft,
+): readonly T[] {
+  const ids = Object.keys(draft);
+  if (!ids.length) return tasks;
+  const dirty = new Set(ids.filter((id) => Object.keys(draft[id] ?? {}).length > 0));
+  if (!dirty.size) return tasks;
+
+  return tasks.map((t) => {
+    if (!dirty.has(t.id)) return t;
+    const patch = draft[t.id]!;
+    const next = { ...t } as Record<string, unknown>;
+    for (const [field, raw] of Object.entries(patch)) {
+      if (raw === undefined) continue;
+      const v = raw.trim();
+      if (NUMERIC_DRAFT_FIELDS.has(field)) {
+        // A half-typed number must not read as 0 - a duration of 0 is how a
+        // milestone is recognised, so "" would silently turn a task into one
+        // for as long as the box is empty.
+        const n = v === "" ? null : Number(v);
+        next[field] = n != null && Number.isFinite(n) ? Math.round(n) : null;
+      } else {
+        next[field] = v === "" ? null : v;
+      }
+    }
+    return next as T;
+  });
+}
+
+// ============================================================================
 // Bulk date shift
 // ============================================================================
 

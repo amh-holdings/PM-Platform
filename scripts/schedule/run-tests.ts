@@ -25,6 +25,19 @@ import {
   type CpmInput,
 } from "@/lib/schedule-cpm";
 import { assessSchedule } from "@/lib/schedule-health";
+import { buildProgress } from "@/lib/schedule-rollup";
+import {
+  collapseToLevel,
+  depthOf,
+  descendantsOf,
+  hasChildren,
+  outlineDepth,
+  parentOf,
+  revealTask,
+  summaryCodes,
+  toggleBranch,
+  visibleRows,
+} from "@/lib/schedule-tree";
 import {
   buildImportRows,
   compareWbs,
@@ -1067,6 +1080,140 @@ section("Editing - bulk date shift");
   const back = shiftDates({ start_date: "2026-09-08", end_date: "2026-09-08" }, -1, 5)!;
   eq("negative shift pulls back over the same days", back.start_date, "2026-09-04");
   eq("a task with no dates is skipped", shiftDates({}, 5, 5), null);
+}
+
+section("Outline - collapse and expand");
+
+{
+  // The real Sweet Springs shape: no "5" row at all, so the shallowest depth
+  // present is 2. Every off-by-one in this file has come from assuming the
+  // outline starts at depth 1.
+  const tree = [
+    { wbs_code: "5.1" },
+    { wbs_code: "5.1.1" },
+    { wbs_code: "5.1.1.1" },
+    { wbs_code: "5.1.1.6" },
+    { wbs_code: "5.1.1.6.1" },
+    { wbs_code: "5.1.1.6.2" },
+    { wbs_code: "5.2" },
+    { wbs_code: "5.2.1" },
+  ];
+
+  eq("parentOf reads the code", parentOf("5.1.1.6.1"), "5.1.1.6");
+  eq("parentOf at the top is null", parentOf("5"), null);
+  eq("depthOf counts segments", depthOf("5.1.1.6"), 4);
+
+  check("a summary has children", hasChildren("5.1.1.6", tree));
+  check("a leaf does not", !hasChildren("5.1.1.6.1", tree));
+  // 5.1.1.1 shares a prefix with nothing; the guard against matching "5.1.1.1"
+  // as a parent of "5.1.1.10" is the trailing dot.
+  check("prefix matching does not confuse 1 with 10", !hasChildren("5.1.1.1", [...tree, { wbs_code: "5.1.1.10" }]));
+
+  eq("summaries are found", summaryCodes(tree).sort().join(","), "5.1,5.1.1,5.1.1.6,5.2");
+  eq("outline depth counts levels actually present", outlineDepth(tree), 4);
+
+  eq("nothing collapsed shows everything", visibleRows(tree, new Set()).length, 8);
+
+  {
+    const vis = visibleRows(tree, new Set(["5.1.1.6"]));
+    eq("collapsing a branch hides its children", vis.length, 6);
+    check("but keeps the summary itself", vis.some((t) => t.wbs_code === "5.1.1.6"));
+    check("and hides the grandchildren", !vis.some((t) => t.wbs_code === "5.1.1.6.1"));
+  }
+
+  {
+    // A collapsed ancestor hides a branch even when the branch itself is open.
+    const vis = visibleRows(tree, new Set(["5.1"]));
+    // 5.2's branch is untouched, so its child stays visible. Collapsing is
+    // per-branch, not a global outline level.
+    eq("an ancestor collapse hides the whole subtree", vis.length, 3);
+    eq("only 5.1's subtree goes", vis.map((t) => t.wbs_code).join(","), "5.1,5.2,5.2.1");
+  }
+
+  eq("descendants of a branch", descendantsOf("5.1.1.6", tree).join(","), "5.1.1.6.1,5.1.1.6.2");
+
+  {
+    // Level 1 on a schedule with no depth-1 row means 5.1 and 5.2, not nothing.
+    const lvl1 = collapseToLevel(tree, 1);
+    const vis = visibleRows(tree, lvl1);
+    eq("level 1 shows the top branches present", vis.map((t) => t.wbs_code).join(","), "5.1,5.2");
+  }
+
+  {
+    const vis = visibleRows(tree, collapseToLevel(tree, 2));
+    eq("level 2 opens one more", vis.map((t) => t.wbs_code).join(","), "5.1,5.1.1,5.2,5.2.1");
+  }
+
+  {
+    // Expanding carries the descendants with it, so opening a summary does not
+    // reveal a half-open branch underneath.
+    const collapsed = new Set(["5.1", "5.1.1", "5.1.1.6"]);
+    const opened = toggleBranch(collapsed, "5.1", tree);
+    check("expanding clears the inner collapses too", opened.size === 0);
+    const closed = toggleBranch(opened, "5.1", tree);
+    check("collapsing again marks just the branch", closed.has("5.1") && closed.size === 1);
+  }
+
+  {
+    const collapsed = new Set(["5.1", "5.1.1", "5.1.1.6"]);
+    const revealed = revealTask(collapsed, "5.1.1.6.1");
+    eq("revealing opens every ancestor", revealed.size, 0);
+    check(
+      "and the row is then visible",
+      visibleRows(tree, revealed).some((t) => t.wbs_code === "5.1.1.6.1"),
+    );
+  }
+}
+
+section("Progress roll-up");
+
+{
+  const rows = [
+    { wbs_code: "5.1" },
+    { wbs_code: "5.1.1", duration_days: 10, pct_complete: 50 },
+    { wbs_code: "5.1.2", duration_days: 2, pct_complete: 100 },
+    { wbs_code: "5.1.3", duration_days: 2, pct_complete: null },
+    { wbs_code: "5.2", duration_days: 4, pct_complete: 25, status_source: "dpr" },
+  ];
+  const p = buildProgress(rows);
+
+  // 5.1.1 carries 10 of the 14 duration-days under 5.1, so its half-done
+  // dominates: (50*10 + 100*2 + 0*2) / 14 = 50.
+  const rolled = p.get("5.1");
+  check("a summary rolls up", rolled?.kind === "rolled");
+  if (rolled?.kind === "rolled") {
+    eq("weighted by duration, not a plain mean", Math.round(rolled.pct), 50);
+    eq("and says how many leaves reported", rolled.reported, 2);
+    eq("out of how many there are", rolled.leaves, 3);
+  }
+
+  // An unweighted mean of 50/100/0 would be 50 too, so make the weighting
+  // visible with a case where the two answers differ.
+  const skewed = buildProgress([
+    { wbs_code: "1" },
+    { wbs_code: "1.1", duration_days: 20, pct_complete: 0 },
+    { wbs_code: "1.2", duration_days: 1, pct_complete: 100 },
+  ]).get("1");
+  if (skewed?.kind === "rolled") {
+    eq("a long unstarted task outweighs a short finished one", Math.round(skewed.pct), 5);
+  }
+
+  eq("a leaf with no report says so", p.get("5.1.3")?.kind, "none");
+  const leaf = p.get("5.2");
+  check("a reported leaf keeps its source", leaf?.kind === "reported" && leaf.source === "dpr");
+
+  // Deep nesting: 5.1.1 would be a summary if it had children, and the roll-up
+  // has to reach past one level to the real leaves.
+  const deep = buildProgress([
+    { wbs_code: "5" },
+    { wbs_code: "5.1" },
+    { wbs_code: "5.1.1", duration_days: 1, pct_complete: 100 },
+    { wbs_code: "5.1.2", duration_days: 1, pct_complete: 0 },
+  ]).get("5");
+  if (deep?.kind === "rolled") {
+    eq("roll-up reaches the leaves, not the summaries", deep.leaves, 2);
+    eq("and averages them", Math.round(deep.pct), 50);
+  }
 }
 
 // ============================================================================

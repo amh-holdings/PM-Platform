@@ -18,18 +18,16 @@ import {
   summarizeConstraints,
   type ScheduleConstraint,
 } from "@/lib/schedule-constraints";
-import { durationFromDates } from "@/lib/schedule-edit";
+import { applyDraft, type TaskDraft } from "@/lib/schedule-edit";
 import { SCOPE_ORDER, scopeOf, type TaskScope } from "@/lib/schedule-scope";
 import {
   applyProjectedDates,
-  bulkUpdateScheduleTasks,
   setScheduleBaseline,
   setScheduleDataDate,
   takeScheduleUpdate,
 } from "../schedule-actions";
-import { ScheduleTable, type ScheduleTaskRow } from "./schedule-table";
-import { ScheduleGantt, type GanttEdit } from "./schedule-gantt";
-import { ScheduleEditGrid } from "./schedule-edit-grid";
+import { ScheduleSplitView } from "./schedule-split-view";
+import type { ScheduleTaskRow } from "./schedule-types";
 import { ScheduleImportDialog } from "./schedule-import-dialog";
 import { ScheduleLookaheadView } from "./schedule-lookahead-view";
 import { ScheduleHealthView, type ScheduleUpdateRow } from "./schedule-health-view";
@@ -52,7 +50,7 @@ type Props = {
   updatesAvailable: boolean;
 };
 
-type View = "table" | "edit" | "gantt" | "lookahead" | "health" | "constraints";
+type View = "schedule" | "lookahead" | "health" | "constraints";
 
 function fmt(iso: string | null): string {
   if (!iso) return "-";
@@ -80,7 +78,7 @@ export function ScheduleWorkspace({
   updates,
   updatesAvailable,
 }: Props) {
-  const [view, setView] = useState<View>("table");
+  const [view, setView] = useState<View>("schedule");
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -147,6 +145,26 @@ export function ScheduleWorkspace({
     [tasks, calendar, effectiveDataDate],
   );
 
+  // Unsaved cell edits, held here rather than inside the grid so the forecast
+  // above it can be recalculated over them. The draft used to live in the grid
+  // and never reached the engine, so every number on this page described the
+  // schedule as it was before you started typing - and the only way to find
+  // out what an edit did was to save it and look.
+  const [draft, setDraft] = useState<TaskDraft>({});
+
+  const previewTasks = useMemo(() => applyDraft(tasks, draft), [tasks, draft]);
+  const previewCpm = useMemo(
+    () =>
+      previewTasks === tasks
+        ? cpm
+        : computeCpm(previewTasks as ScheduleTaskRow[], {
+            calendar,
+            dataDate: effectiveDataDate,
+          }),
+    [previewTasks, tasks, cpm, calendar, effectiveDataDate],
+  );
+  const draftDirty = previewTasks !== tasks;
+
   const scoped = useMemo(
     () => (scopeFilter ? tasks.filter((t) => scopeOf(t) === scopeFilter) : tasks),
     [tasks, scopeFilter],
@@ -194,40 +212,6 @@ export function ScheduleWorkspace({
     });
   }
 
-  // Bars dropped on the Gantt. Same write path as the grid and the import, so
-  // a date moved by dragging is indistinguishable from one that was typed.
-  //
-  // The duration goes with them. It used to be left behind - a resized bar
-  // wrote two dates and the engine went on forecasting from the old number -
-  // which is the drift that put 8 Sweet Springs tasks on a duration their own
-  // bars contradicted.
-  async function commitGanttEdits(edits: GanttEdit[]) {
-    setMsg(null);
-    const byId = new Map(tasks.map((t) => [t.id, t]));
-    const res = await bulkUpdateScheduleTasks(
-      projectId,
-      edits.map((e) => ({
-        id: e.id,
-        start_date: e.start_date,
-        end_date: e.end_date,
-        duration_days: durationFromDates(
-          {
-            start_date: e.start_date,
-            end_date: e.end_date,
-            is_milestone: byId.get(e.id)?.is_milestone ?? false,
-          },
-          calendar,
-        ),
-      })),
-    );
-    setMsg(
-      res.ok
-        ? `${res.count} task${res.count === 1 ? "" : "s"} moved. The baseline is untouched, so the variance is still visible.`
-        : `Failed: ${res.error}`,
-    );
-    if (res.ok) router.refresh();
-  }
-
   function takeBaseline(onlyUnbaselined: boolean) {
     setMsg(null);
     startTransition(async () => {
@@ -266,23 +250,42 @@ export function ScheduleWorkspace({
       {/* Forecast banner - the numbers that matter, side by side. */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Card label="Planned finish" value={fmt(cpm.plannedFinish)} />
+        {/* While an edit is pending these read the draft, so the headline
+            numbers answer "what would this do" rather than "what did the
+            schedule say before you started". The card says which it is. */}
         <Card
           label="Projected finish"
-          value={fmt(cpm.projectedFinish)}
-          tone={slip > 0 ? "bad" : slip < 0 ? "good" : undefined}
+          value={fmt(previewCpm.projectedFinish)}
+          tone={
+            draftDirty
+              ? "warn"
+              : slip > 0 ? "bad" : slip < 0 ? "good" : undefined
+          }
           note={
-            slip === 0
-              ? "on plan"
-              : slip > 0
-                ? `${slip} working days late`
-                : `${-slip} working days early`
+            draftDirty
+              ? `unsaved${
+                  cpm.projectedFinish && previewCpm.projectedFinish
+                    ? `, was ${fmt(cpm.projectedFinish)}`
+                    : ""
+                }`
+              : slip === 0
+                ? "on plan"
+                : slip > 0
+                  ? `${slip} working days late`
+                  : `${-slip} working days early`
           }
         />
         <Card
           label="Critical path"
-          value={`${cpm.criticalPath.length} task${cpm.criticalPath.length === 1 ? "" : "s"}`}
-          note={cpm.criticalPath.length ? "zero float" : "no logic driving finish"}
-          tone={cpm.criticalPath.length ? "bad" : undefined}
+          value={`${previewCpm.criticalPath.length} task${previewCpm.criticalPath.length === 1 ? "" : "s"}`}
+          note={
+            draftDirty
+              ? "unsaved"
+              : previewCpm.criticalPath.length
+                ? "zero float"
+                : "no logic driving finish"
+          }
+          tone={draftDirty ? "warn" : previewCpm.criticalPath.length ? "bad" : undefined}
         />
         <button
           onClick={() => setView("health")}
@@ -450,9 +453,7 @@ export function ScheduleWorkspace({
         <div className="flex items-center gap-1 rounded-md border p-1">
           {(
             [
-              ["table", "Table"],
-              ["edit", "Edit"],
-              ["gantt", "Gantt"],
+              ["schedule", "Schedule"],
               ["lookahead", "Look-ahead"],
               ["health", "Health"],
               ["constraints", "Constraints"],
@@ -552,37 +553,22 @@ export function ScheduleWorkspace({
         </Banner>
       )}
 
-      {view === "table" && (
-        <ScheduleTable
+      {view === "schedule" && (
+        <ScheduleSplitView
           projectId={projectId}
           tasks={scoped}
+          allTasks={tasks}
           cpm={cpm}
-          allTasks={tasks}
+          previewCpm={previewCpm}
           calendar={calendar}
-          constraintState={constraintState}
-          phase1Available={phase1Available}
-        />
-      )}
-      {view === "edit" && (
-        <ScheduleEditGrid
-          projectId={projectId}
-          tasks={scoped}
-          allTasks={tasks}
-          calendar={calendar}
+          dataDate={effectiveDataDate}
+          today={todayIso()}
           phaseOptions={phaseOptions}
           statusOptions={statusOptions}
           phase1Available={phase1Available}
-        />
-      )}
-      {view === "gantt" && (
-        <ScheduleGantt
-          tasks={scoped}
-          cpm={cpm}
-          editable
-          calendar={calendar}
-          saving={pending}
-          dataDate={effectiveDataDate}
-          onCommit={commitGanttEdits}
+          constraintState={constraintState}
+          draft={draft}
+          setDraft={setDraft}
         />
       )}
       {view === "lookahead" && (
