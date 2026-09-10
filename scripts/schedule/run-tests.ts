@@ -26,6 +26,7 @@ import {
 } from "@/lib/schedule-cpm";
 import { assessSchedule } from "@/lib/schedule-health";
 import { buildProgress } from "@/lib/schedule-rollup";
+import { endpointsFor, headDirection, linkPoints, toPath } from "@/lib/schedule-links";
 import {
   collapseToLevel,
   depthOf,
@@ -1214,6 +1215,95 @@ section("Progress roll-up");
     eq("roll-up reaches the leaves, not the summaries", deep.leaves, 2);
     eq("and averages them", Math.round(deep.pct), 50);
   }
+}
+
+section("Dependency arrows");
+
+{
+  // The four relationship types connect different ends of the bars, and having
+  // these backwards would draw a picture that contradicts the arithmetic the
+  // engine already does.
+  eq("FS leaves the finish", endpointsFor("FS").from, "finish");
+  eq("FS arrives at the start", endpointsFor("FS").to, "start");
+  eq("SS leaves the start", endpointsFor("SS").from, "start");
+  eq("SS arrives at the start", endpointsFor("SS").to, "start");
+  eq("FF leaves the finish", endpointsFor("FF").from, "finish");
+  eq("FF arrives at the finish", endpointsFor("FF").to, "finish");
+  eq("SF leaves the start", endpointsFor("SF").from, "start");
+  eq("SF arrives at the finish", endpointsFor("SF").to, "finish");
+}
+
+{
+  // The ordinary case: successor starts well after the predecessor finishes.
+  const pred = { x1: 0, x2: 100, y: 10 };
+  const succ = { x1: 200, x2: 300, y: 40 };
+  const pts = linkPoints(pred, succ, "FS");
+  eq("a forward FS turns once", pts.length, 4);
+  eq("it starts at the predecessor finish", pts[0].x, 100);
+  eq("on the predecessor row", pts[0].y, 10);
+  eq("and ends at the successor start", pts[pts.length - 1].x, 200);
+  eq("on the successor row", pts[pts.length - 1].y, 40);
+  check("every segment is horizontal or vertical", pts.every((p, i) =>
+    i === 0 || p.x === pts[i - 1].x || p.y === pts[i - 1].y));
+  eq("the head points forward", headDirection(pts), 1);
+}
+
+{
+  // The overlap case, which is what the August review was full of: the
+  // successor starts BEFORE the predecessor finishes. A direct line would run
+  // straight through both bars, so the arrow has to detour.
+  const pred = { x1: 0, x2: 300, y: 10 };
+  const succ = { x1: 50, x2: 200, y: 40 };
+  const pts = linkPoints(pred, succ, "FS");
+  eq("a backwards FS detours", pts.length, 6);
+  check("every segment is horizontal or vertical", pts.every((p, i) =>
+    i === 0 || p.x === pts[i - 1].x || p.y === pts[i - 1].y));
+  // The detour must leave the predecessor's row before turning back, or the
+  // line runs along the bar it is leaving.
+  check("it clears the predecessor finish before turning", pts[1].x > 300);
+  check("it approaches the successor start from the left", pts[4].x < 50);
+  eq("and still arrives at the successor start", pts[5].x, 50);
+  eq("with the head pointing forward", headDirection(pts), 1);
+}
+
+{
+  // Same row and already in front: a plain horizontal line, no corners.
+  const pts = linkPoints({ x1: 0, x2: 50, y: 20 }, { x1: 90, x2: 140, y: 20 }, "FS");
+  eq("a same-row link is a straight line", pts.length, 2);
+  eq("from the finish", pts[0].x, 50);
+  eq("to the start", pts[1].x, 90);
+}
+
+{
+  // SS joins two left edges, so it must leave leftwards and come back, never
+  // cut across the predecessor bar.
+  const pts = linkPoints({ x1: 100, x2: 300, y: 10 }, { x1: 140, x2: 260, y: 40 }, "SS");
+  eq("SS starts at the predecessor start", pts[0].x, 100);
+  eq("and ends at the successor start", pts[pts.length - 1].x, 140);
+  check("every segment is horizontal or vertical", pts.every((p, i) =>
+    i === 0 || p.x === pts[i - 1].x || p.y === pts[i - 1].y));
+}
+
+{
+  // FF joins two right edges.
+  const pts = linkPoints({ x1: 0, x2: 100, y: 10 }, { x1: 40, x2: 180, y: 40 }, "FF");
+  eq("FF starts at the predecessor finish", pts[0].x, 100);
+  eq("and ends at the successor finish", pts[pts.length - 1].x, 180);
+  eq("arriving from the right, so the head points back", headDirection(pts), -1);
+}
+
+{
+  // Upward links - a successor drawn above its predecessor, which happens
+  // whenever sort order and logic disagree - route through the channel above.
+  const pts = linkPoints({ x1: 0, x2: 300, y: 100 }, { x1: 50, x2: 200, y: 10 }, "FS");
+  check("an upward detour goes up", pts[2].y < 100);
+  eq("and still lands on the successor row", pts[pts.length - 1].y, 10);
+}
+
+{
+  eq("a path renders as SVG", toPath([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 20 }]), "M0 0 L10 0 L10 20");
+  eq("a degenerate path renders as nothing", toPath([{ x: 1, y: 1 }]), "");
+  eq("and its head defaults forward", headDirection([{ x: 1, y: 1 }]), 1);
 }
 
 // ============================================================================

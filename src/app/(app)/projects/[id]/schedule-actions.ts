@@ -659,13 +659,57 @@ export async function deleteScheduleTasks(
   return { ok: true, count: taskIds.length };
 }
 
+/**
+ * Apply a set of cell patches, and hand back the patches that would put them
+ * all back.
+ *
+ * The inverse is read from the database immediately before the write and
+ * covers exactly the fields being changed and no others, so replaying it
+ * restores what was there without touching anything a later edit may have
+ * changed elsewhere on the row. That is what makes one-step undo safe here
+ * without a migration or an audit table: the browser holds a patch set that is
+ * only ever the mirror of the one it just sent.
+ *
+ * It is deliberately one step. An undo stack that survives a refresh would be
+ * a different feature with a table behind it; an undo button that works for
+ * the edit you just made is most of the value and none of the schema.
+ */
 export async function bulkUpdateScheduleTasks(
   projectId: string,
   patches: TaskPatch[],
-): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; count: number; inverse: TaskPatch[] }
+  | { ok: false; error: string }
+> {
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
-  if (!patches.length) return { ok: true, count: 0 };
+  if (!patches.length) return { ok: true, count: 0, inverse: [] };
+
+  const ids = patches.map((p) => p.id);
+  const { data: before, error: readError } = await auth.supabase
+    .from("schedule_tasks")
+    .select("*")
+    .eq("project_id", projectId)
+    .in("id", ids);
+  if (readError) return { ok: false, error: readError.message };
+
+  const beforeById = new Map(
+    (before ?? []).map((r) => [(r as { id: string }).id, r as Record<string, unknown>]),
+  );
+
+  const inverse: TaskPatch[] = [];
+  for (const p of patches) {
+    const prior = beforeById.get(p.id);
+    if (!prior) continue;
+    const back: TaskPatch = { id: p.id };
+    let any = false;
+    for (const key of BULK_EDITABLE) {
+      if (!(key in p)) continue;
+      (back as Record<string, unknown>)[key] = prior[key] ?? null;
+      any = true;
+    }
+    if (any) inverse.push(back);
+  }
 
   let count = 0;
   for (const p of patches) {
@@ -687,7 +731,7 @@ export async function bulkUpdateScheduleTasks(
 
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
-  return { ok: true, count };
+  return { ok: true, count, inverse };
 }
 
 // Apply an indent, outdent or row move. Renames run in a dependency-safe order

@@ -45,7 +45,8 @@ import {
   workingDaysBetween,
   type CalendarLike,
 } from "@/lib/schedule-calendar";
-import { parsePredecessors, type CpmOutput } from "@/lib/schedule-cpm";
+import { parsePredecessors, type CpmOutput, type RelType } from "@/lib/schedule-cpm";
+import { headDirection, linkPoints, toPath } from "@/lib/schedule-links";
 import {
   durationFromDates,
   nextChildCode,
@@ -273,12 +274,20 @@ export function ScheduleSplitView({
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [msg, setMsg] = useState<{ tone: "good" | "bad" | "warn"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // The mirror of the last saved edit. One step, held in memory: an undo stack
+  // that survives a refresh is a different feature with a table behind it.
+  const [undoPatch, setUndoPatch] = useState<{ patches: TaskPatch[]; what: string } | null>(null);
   const [zoom, setZoom] = useState(2);
   // Wide enough that the default columns all fit without horizontal scrolling.
   // A finish date you have to scroll to is the problem this view exists to fix.
   const [gridWidth, setGridWidth] = useState(810);
   const [query, setQuery] = useState("");
   const [columns, setColumns] = useState<ColumnKey[]>(DEFAULT_COLUMNS);
+  // Arrows default to the focused task's own logic rather than all of it.
+  // Every relationship at once on a 200-task schedule is a ball of wool; the
+  // question people actually have is "what drives THIS task".
+  const [linkMode, setLinkMode] = useState<"off" | "focus" | "all">("focus");
+  const [focus, setFocus] = useState<string | null>(null);
   const [showColumnMenu, setShowColumnMenu] = useState(false);
 
   // Filters, carried over from the old Table view.
@@ -401,6 +410,12 @@ export function ScheduleSplitView({
 
   const maxLevel = useMemo(() => outlineDepth(allRows), [allRows]);
 
+  const rowIndexOf = useMemo(() => {
+    const m = new Map<string, number>();
+    rows.forEach((t, i) => m.set(t.wbs_code, i));
+    return m;
+  }, [rows]);
+
   // ---- geometry -----------------------------------------------------------
   const barDatesOf = useCallback(
     (t: ScheduleTaskRow): { start: string | null; end: string | null } => {
@@ -458,6 +473,104 @@ export function ScheduleSplitView({
     [dataDate, geo.min, geo.dayPx],
   );
   useEffect(() => { scrollToAsOf("auto"); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [zoom]);
+
+  // ---- dependency arrows --------------------------------------------------
+  // The schedule has always carried its logic as text in a cell. The August
+  // civil review found thirteen tasks starting before their own predecessor
+  // allowed, one backwards link and one missing permit gate, all by reading
+  // those strings by hand. None of it needed judgement to detect. It needed
+  // the links to be visible.
+  //
+  // A link whose other end is collapsed, filtered out or in another scope is
+  // dropped rather than drawn to nowhere - but it is counted and reported,
+  // because "three predecessors, one of them on screen" is a different
+  // statement from "one predecessor".
+  const arrows = useMemo(() => {
+    if (linkMode === "off") return { paths: [], hidden: 0 };
+    const out: {
+      key: string;
+      d: string;
+      head: { x: number; y: number; dir: 1 | -1 };
+      type: RelType;
+      driving: boolean;
+    }[] = [];
+    let hidden = 0;
+
+    const boxOf = (t: ScheduleTaskRow) => {
+      const d = barDatesOf(t);
+      if (!d.start || !d.end) return null;
+      const i = rowIndexOf.get(t.wbs_code);
+      if (i === undefined) return null;
+      const x1 = geo.xOf(d.start);
+      return { x1, x2: x1 + geo.wOf(d.start, d.end), y: i * ROW_H + 13.5 };
+    };
+    const byCode = new Map(rows.map((r) => [r.wbs_code, r]));
+
+    for (const t of rows) {
+      const links = parsePredecessors(t.predecessors);
+      if (!links.length) continue;
+
+      // In focus mode only the focused task's own logic is drawn, in both
+      // directions: what drives it, and what waits on it.
+      const relevant =
+        linkMode === "all" ||
+        (focus !== null && (t.wbs_code === focus || links.some((l) => l.pred === focus)));
+      if (!relevant) continue;
+
+      const succBox = boxOf(t);
+      if (!succBox) continue;
+      const c = previewCpm.byWbs.get(t.wbs_code);
+
+      for (const l of links) {
+        if (linkMode === "focus" && focus !== null && t.wbs_code !== focus && l.pred !== focus) continue;
+        const pred = byCode.get(l.pred);
+        if (!pred) { hidden++; continue; }
+        const predBox = boxOf(pred);
+        if (!predBox) { hidden++; continue; }
+        const pts = linkPoints(predBox, succBox, l.type);
+        const last = pts[pts.length - 1];
+        out.push({
+          key: `${l.pred}->${t.wbs_code}`,
+          d: toPath(pts),
+          head: { x: last.x, y: last.y, dir: headDirection(pts) },
+          type: l.type,
+          // The driving predecessor is the one holding the task where it is.
+          // Everything else is slack, and drawing them at the same weight is
+          // why a full network view tells you nothing.
+          driving: c?.drivenBy === l.pred,
+        });
+      }
+    }
+    return { paths: out, hidden };
+  }, [linkMode, focus, rows, rowIndexOf, geo, barDatesOf, previewCpm]);
+
+  // What holds the focused task where it is, and what waits on it. The
+  // schedule could say a task had two days of float; it could not say why its
+  // dates were what they were.
+  const trace = useMemo(() => {
+    if (!focus) return null;
+    const t = allRows.find((r) => r.wbs_code === focus);
+    if (!t) return null;
+    const c = previewCpm.byWbs.get(focus);
+    const nameOf = (code: string) =>
+      allTasks.find((x) => x.wbs_code === code)?.task_name ?? code;
+    return {
+      task: t,
+      cpm: c,
+      predecessors: parsePredecessors(t.predecessors).map((l) => ({
+        ...l,
+        name: nameOf(l.pred),
+        driving: c?.drivenBy === l.pred,
+        onScreen: rowIndexOf.has(l.pred),
+      })),
+      successors: allTasks
+        .filter((x) => parsePredecessors(x.predecessors).some((l) => l.pred === focus))
+        .map((x) => {
+          const l = parsePredecessors(x.predecessors).find((y) => y.pred === focus)!;
+          return { wbs: x.wbs_code, name: x.task_name, type: l.type, lag: l.lag };
+        }),
+    };
+  }, [focus, allRows, allTasks, previewCpm, rowIndexOf]);
 
   // ---- editing ------------------------------------------------------------
   function setCell(id: string, f: Field, v: string) {
@@ -630,10 +743,27 @@ export function ScheduleSplitView({
     if (!res.ok) { setMsg({ tone: "bad", text: res.error }); return; }
     setDraft({});
     setBarMoves(new Map());
+    setUndoPatch({
+      patches: res.inverse,
+      what: `${res.count} task${res.count === 1 ? "" : "s"}`,
+    });
     setMsg({
       tone: "good",
       text: `${res.count} task${res.count === 1 ? "" : "s"} saved. Float and the projection have been recalculated. The baseline is untouched, so the variance is still visible.`,
     });
+    startTransition(() => router.refresh());
+  }
+
+  async function undoLast() {
+    if (!undoPatch) return;
+    setBusy(true);
+    const res = await bulkUpdateScheduleTasks(projectId, undoPatch.patches);
+    setBusy(false);
+    if (!res.ok) { setMsg({ tone: "bad", text: res.error }); return; }
+    // The undo is itself undoable, so a mis-click is recoverable in both
+    // directions rather than one.
+    setUndoPatch({ patches: res.inverse, what: undoPatch.what });
+    setMsg({ tone: "good", text: `Put ${undoPatch.what} back. Redo is on the same button.` });
     startTransition(() => router.refresh());
   }
 
@@ -968,6 +1098,21 @@ export function ScheduleSplitView({
           {dataDate !== today ? "Data date" : "Today"}
         </Button>
 
+        <div className="flex items-center gap-0.5 rounded-md border p-0.5" title="Dependency arrows">
+          {([["off", "No links"], ["focus", "Selected"], ["all", "All links"]] as const).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => setLinkMode(m)}
+              className={cn(
+                "rounded px-2 py-0.5 text-xs font-medium",
+                linkMode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="relative">
           <Button
             variant="outline"
@@ -1173,12 +1318,31 @@ export function ScheduleSplitView({
 
       {msg && (
         <div className={cn(
-          "rounded-md border p-3 text-sm",
+          "flex flex-wrap items-center gap-3 rounded-md border p-3 text-sm",
           msg.tone === "bad" && "border-destructive/40 bg-destructive/10 text-destructive",
           msg.tone === "warn" && "border-amber-300 bg-amber-50 text-amber-900",
           msg.tone === "good" && "border-emerald-300 bg-emerald-50 text-emerald-900",
         )}>
-          {msg.text}
+          <span>{msg.text}</span>
+          {undoPatch && undoPatch.patches.length > 0 && msg.tone === "good" && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto h-7 text-xs"
+              disabled={busy}
+              onClick={undoLast}
+            >
+              {busy ? "Working..." : "Undo"}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            className={cn("h-7 text-xs", !(undoPatch && msg.tone === "good") && "ml-auto")}
+            onClick={() => setMsg(null)}
+          >
+            Dismiss
+          </Button>
         </div>
       )}
 
@@ -1263,6 +1427,7 @@ export function ScheduleSplitView({
       <div className="overflow-hidden rounded-lg border bg-card shadow-sm">
         <div
           ref={scrollerRef}
+          data-schedule-split
           className="flex max-h-[calc(100vh-11rem)] min-h-[28rem] overflow-y-auto"
         >
           {/* Grid pane */}
@@ -1315,6 +1480,8 @@ export function ScheduleSplitView({
                     onToggleCollapse={() =>
                       setCollapsed((prev) => toggleBranch(prev, t.wbs_code, allRows))
                     }
+                    focused={focus === t.wbs_code}
+                    onFocusRow={() => setFocus((f) => (f === t.wbs_code ? null : t.wbs_code))}
                     selected={selected.has(t.id)}
                     onSelect={(on) =>
                       setSelected((prev) => {
@@ -1363,6 +1530,34 @@ export function ScheduleSplitView({
               <TimelineHeader geo={geo} />
               <div className={cn("relative", barDrag && "select-none")}>
                 <TimelineGrid geo={geo} today={today} dataDate={dataDate} />
+
+                {/* Arrows sit under the bars: a relationship line that hides a
+                    bar has obscured the thing it was drawn to explain. */}
+                {arrows.paths.length > 0 && (
+                  <svg
+                    className="pointer-events-none absolute inset-0 z-0 overflow-visible"
+                    width={geo.width}
+                    height={rows.length * ROW_H}
+                  >
+                    {arrows.paths.map((a) => (
+                      <g key={a.key}>
+                        <path
+                          d={a.d}
+                          fill="none"
+                          className={
+                            a.driving ? "stroke-destructive/80" : "stroke-foreground/30"
+                          }
+                          strokeWidth={a.driving ? 1.6 : 1}
+                          strokeDasharray={a.type === "FS" ? undefined : "3 2"}
+                        />
+                        <polygon
+                          points={`${a.head.x},${a.head.y} ${a.head.x - a.head.dir * 5},${a.head.y - 3} ${a.head.x - a.head.dir * 5},${a.head.y + 3}`}
+                          className={a.driving ? "fill-destructive/80" : "fill-foreground/30"}
+                        />
+                      </g>
+                    ))}
+                  </svg>
+                )}
                 {rows.map((t) => {
                   const d = barDatesOf(t);
                   const c = previewCpm.byWbs.get(t.wbs_code);
@@ -1397,6 +1592,115 @@ export function ScheduleSplitView({
           </div>
         </div>
       </div>
+
+      {/* ---- why is this task here ---------------------------------------- */}
+      {trace && (
+        <div className="rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
+          <div className="flex flex-wrap items-baseline gap-2">
+            <span className="font-mono text-xs text-muted-foreground">{trace.task.wbs_code}</span>
+            <span className="font-medium">{trace.task.task_name}</span>
+            {trace.cpm && (
+              <span className="text-xs text-muted-foreground">
+                {trace.cpm.isolated
+                  ? "no logic on either side, so its float is measured against nothing"
+                  : trace.cpm.critical
+                    ? "on the critical path - zero float"
+                    : `${trace.cpm.totalFloat} working days of float, ${trace.cpm.freeFloat} before it moves a successor`}
+              </span>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto h-6 text-xs"
+              onClick={() => setFocus(null)}
+            >
+              Close
+            </Button>
+          </div>
+
+          <div className="mt-2 grid gap-3 md:grid-cols-2">
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                Waits on
+              </div>
+              {trace.predecessors.length === 0 ? (
+                <p className="mt-1 text-xs text-amber-800">
+                  Nothing. It starts on its own date, so no delay upstream can move
+                  it and it cannot be the reason anything else is late.
+                </p>
+              ) : (
+                <ul className="mt-1 space-y-0.5 text-xs">
+                  {trace.predecessors.map((l) => (
+                    <li key={l.pred} className="flex items-baseline gap-1.5">
+                      <button
+                        onClick={() => { setFocus(l.pred); jumpTo(l.pred); }}
+                        className="font-mono text-[11px] text-primary hover:underline"
+                      >
+                        {l.pred}
+                      </button>
+                      <span className="truncate">{l.name}</span>
+                      <span className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium">
+                        {l.type}{l.lag ? (l.lag > 0 ? `+${l.lag}` : l.lag) : ""}
+                      </span>
+                      {l.driving && (
+                        <span
+                          className="shrink-0 rounded bg-destructive/10 px-1 text-[10px] font-medium text-destructive"
+                          title="This is the link holding the task where it is. The others have slack."
+                        >
+                          DRIVING
+                        </span>
+                      )}
+                      {!l.onScreen && (
+                        <span className="shrink-0 text-[10px] text-muted-foreground" title="Collapsed, filtered out, or in another scope">
+                          off screen
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                Holds up
+              </div>
+              {trace.successors.length === 0 ? (
+                <p className="mt-1 text-xs text-amber-800">
+                  Nothing waits on this. If it slips, the schedule will not show
+                  it - which is usually a missing link rather than a task that
+                  genuinely matters to nobody.
+                </p>
+              ) : (
+                <ul className="mt-1 space-y-0.5 text-xs">
+                  {trace.successors.map((sx) => (
+                    <li key={sx.wbs} className="flex items-baseline gap-1.5">
+                      <button
+                        onClick={() => { setFocus(sx.wbs); jumpTo(sx.wbs); }}
+                        className="font-mono text-[11px] text-primary hover:underline"
+                      >
+                        {sx.wbs}
+                      </button>
+                      <span className="truncate">{sx.name}</span>
+                      <span className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium">
+                        {sx.type}{sx.lag ? (sx.lag > 0 ? `+${sx.lag}` : sx.lag) : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          {arrows.hidden > 0 && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              {arrows.hidden} link{arrows.hidden === 1 ? "" : "s"} could not be drawn
+              because the task at the other end is collapsed, filtered out or in
+              another scope.
+            </p>
+          )}
+        </div>
+      )}
 
       <datalist id="phase-options">
         {phaseOptions.map((p) => <option key={p} value={p} />)}
@@ -1433,6 +1737,8 @@ type GridRowProps = {
   isSummary: boolean;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  focused: boolean;
+  onFocusRow: () => void;
   selected: boolean;
   onSelect: (on: boolean) => void;
   valueOf: (t: ScheduleTaskRow, f: Field) => string;
@@ -1457,7 +1763,7 @@ type GridRowProps = {
 
 function GridRow({
   t, r, columns, cpm: c, progress: p, isSummary, collapsed, onToggleCollapse,
-  selected, onSelect, valueOf, isDirty, setCell, onCellKeyDown, setCellRef,
+  focused, onFocusRow, selected, onSelect, valueOf, isDirty, setCell, onCellKeyDown, setCellRef,
   statusOptions, calendar, constraint, dragging, dropAt,
   onDragStart, onDragEnd, onDragOver, onDrop,
   projectId, phaseOptions, allTasks, phase1Available,
@@ -1483,6 +1789,7 @@ function GridRow({
       onDrop={onDrop}
       className={cn(
         "flex items-center border-b text-sm",
+        focused && "ring-1 ring-inset ring-primary/60",
         selected && "bg-blue-50/60",
         rowDirty && "bg-amber-50/60",
         !selected && !rowDirty && c?.critical && "bg-destructive/5",
@@ -1524,9 +1831,16 @@ function GridRow({
           switch (k) {
             case "code":
               return (
-                <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                <button
+                  onClick={onFocusRow}
+                  className={cn(
+                    "block w-full truncate text-left font-mono text-[11px]",
+                    focused ? "font-semibold text-primary" : "text-muted-foreground hover:text-foreground",
+                  )}
+                  title="Show what drives this task"
+                >
                   {t.wbs_code}
-                </span>
+                </button>
               );
 
             case "task":
@@ -1683,20 +1997,18 @@ function GridRow({
                 </span>
               );
 
-            case "predecessors": {
-              const linkCount = parsePredecessors(valueOf(t, "predecessors")).length;
+            case "predecessors":
               return (
-                <input
-                  className={cn(cellCls(isDirty(t, "predecessors")), "font-mono text-[11px]")}
+                <PredecessorCell
                   value={valueOf(t, "predecessors")}
-                  placeholder="5.1.1.2SS+3"
-                  title={`${linkCount} link${linkCount === 1 ? "" : "s"}. WBS codes separated by commas, with FS, SS, FF or SF and a lag: 5.1.1.2SS+3`}
-                  onChange={(e) => setCell(t.id, "predecessors", e.target.value)}
+                  dirty={isDirty(t, "predecessors")}
+                  allTasks={allTasks}
+                  currentWbs={t.wbs_code}
+                  onChange={(v) => setCell(t.id, "predecessors", v)}
                   onKeyDown={(e) => onCellKeyDown(e, r, ci, t, "predecessors")}
-                  ref={(el) => setCellRef(`${r}:${ci}`, el)}
+                  inputRef={(el) => setCellRef(`${r}:${ci}`, el)}
                 />
               );
-            }
           }
         }
       })}
@@ -1821,6 +2133,147 @@ function ProgressCell({ progress }: { progress: Progress }) {
         />
       </div>
       <span className="w-8 shrink-0 text-right text-[11px] tabular-nums">{Math.round(pct)}%</span>
+    </div>
+  );
+}
+
+/**
+ * The predecessor cell.
+ *
+ * It was a bare text box holding `5.1.1.2SS+3`, which is fast if you already
+ * know every WBS code on the job and unusable otherwise - and it never showed
+ * what the codes referred to, so the only way to check a link was to scroll to
+ * the row it pointed at. Typing now suggests tasks by code or by name, and the
+ * cell says what it currently resolves to.
+ *
+ * A code that matches nothing is called out in the cell rather than waiting for
+ * the save to reject it. The engine skips a link it cannot resolve, which reads
+ * as a task with no predecessor at all and quietly frees it to start on day one.
+ */
+function PredecessorCell({
+  value,
+  dirty,
+  allTasks,
+  currentWbs,
+  onChange,
+  onKeyDown,
+  inputRef,
+}: {
+  value: string;
+  dirty: boolean;
+  allTasks: ScheduleTaskRow[];
+  currentWbs: string;
+  onChange: (v: string) => void;
+  onKeyDown: (e: React.KeyboardEvent) => void;
+  inputRef: (el: HTMLElement | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [caretToken, setCaretToken] = useState(0);
+
+  const codes = useMemo(() => new Set(allTasks.map((t) => t.wbs_code)), [allTasks]);
+  const links = useMemo(() => parsePredecessors(value), [value]);
+
+  const unknown = useMemo(
+    () => links.filter((l) => !codes.has(l.pred)).map((l) => l.pred),
+    [links, codes],
+  );
+
+  const resolved = useMemo(
+    () =>
+      links
+        .map((l) => {
+          const t = allTasks.find((x) => x.wbs_code === l.pred);
+          const rel = `${l.type}${l.lag ? (l.lag > 0 ? `+${l.lag}` : l.lag) : ""}`;
+          return t ? `${l.pred} ${t.task_name} (${rel})` : `${l.pred} - NOT FOUND (${rel})`;
+        })
+        .join("\n"),
+    [links, allTasks],
+  );
+
+  // The token the caret is sitting in, so a suggestion replaces the code being
+  // typed rather than the whole cell.
+  const tokens = value.split(",");
+  const active = (tokens[caretToken] ?? "").trim();
+  // Only the code part is matched. Someone mid-way through "5.1.1SS" is still
+  // looking for 5.1.1.
+  const typedCode = active.replace(/(FS|SS|FF|SF)[+-]?\d*$/i, "").trim();
+
+  const suggestions = useMemo(() => {
+    if (!open || !typedCode) return [];
+    const q = typedCode.toLowerCase();
+    const already = new Set(links.map((l) => l.pred));
+    return allTasks
+      .filter((t) => t.wbs_code !== currentWbs)
+      .filter(
+        (t) =>
+          t.wbs_code.startsWith(typedCode) ||
+          t.task_name.toLowerCase().includes(q),
+      )
+      // An exact hit needs no menu; anything already linked is noise.
+      .filter((t) => !(already.has(t.wbs_code) && t.wbs_code !== typedCode))
+      .slice(0, 7);
+  }, [open, typedCode, allTasks, currentWbs, links]);
+
+  function choose(code: string) {
+    const next = [...tokens];
+    const suffix = active.slice(typedCode.length);
+    next[caretToken] = code + suffix;
+    onChange(next.join(",").replace(/\s*,\s*/g, ", "));
+    setOpen(false);
+  }
+
+  function tokenAt(el: HTMLInputElement): number {
+    const upto = el.value.slice(0, el.selectionStart ?? el.value.length);
+    return upto.split(",").length - 1;
+  }
+
+  return (
+    <div className="relative">
+      <input
+        className={cn(
+          cellCls(dirty),
+          "font-mono text-[11px]",
+          unknown.length > 0 && "border-destructive text-destructive",
+        )}
+        value={value}
+        placeholder="5.1.1.2SS+3"
+        title={
+          unknown.length
+            ? `Not on this project: ${unknown.join(", ")}. The engine skips a link it cannot resolve, which frees this task to start on day one.`
+            : links.length
+              ? resolved
+              : "No predecessors. Type a WBS code or a task name. FS, SS, FF or SF and a lag: 5.1.1.2SS+3"
+        }
+        onChange={(e) => {
+          setCaretToken(tokenAt(e.currentTarget));
+          setOpen(true);
+          onChange(e.target.value);
+        }}
+        onFocus={(e) => setCaretToken(tokenAt(e.currentTarget))}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && open) { setOpen(false); e.stopPropagation(); return; }
+          onKeyDown(e);
+        }}
+        onClick={(e) => setCaretToken(tokenAt(e.currentTarget))}
+        ref={inputRef}
+      />
+      {open && suggestions.length > 0 && (
+        <ul className="absolute left-0 top-7 z-50 max-h-56 w-72 overflow-y-auto rounded-md border bg-popover p-1 shadow-lg">
+          {suggestions.map((t) => (
+            <li key={t.wbs_code}>
+              <button
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); choose(t.wbs_code); }}
+                className="flex w-full items-baseline gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-muted"
+              >
+                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{t.wbs_code}</span>
+                <span className="truncate">{t.task_name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

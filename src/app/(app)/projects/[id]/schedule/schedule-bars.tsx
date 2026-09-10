@@ -412,6 +412,17 @@ export function Legend() {
         <span className="inline-block h-3 w-px bg-violet-600" />
         Data date
       </span>
+      <span
+        className="flex items-center gap-1.5"
+        title="The one predecessor actually holding a task where it is. The others have slack."
+      >
+        <span className="inline-block h-px w-4 bg-destructive/80" />
+        Driving link
+      </span>
+      <span className="flex items-center gap-1.5" title="A predecessor with slack in it">
+        <span className="inline-block h-px w-4 bg-foreground/30" />
+        Other link
+      </span>
     </div>
   );
 }
