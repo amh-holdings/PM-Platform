@@ -182,3 +182,46 @@ export async function toggleSubcontractorActive(
   revalidatePath(`/projects/${projectId}`);
   return { ok: true };
 }
+
+// The subcontract itself. The blob and its project_documents row are created
+// client-side (same path as every other upload); this only moves the pointer,
+// scoped by project_id so a sub id from another job can't be retargeted.
+export async function linkSubcontractDocument(
+  subId: string,
+  projectId: string,
+  documentId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { error } = await auth.supabase
+    .from("subcontractors")
+    .update({ document_id: documentId })
+    .eq("id", subId)
+    .eq("project_id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/subs`);
+  return { ok: true };
+}
+
+// Unlinks only. The file stays in the Documents library on purpose - an
+// executed contract that was attached to the wrong sub is a filing mistake,
+// not a reason to destroy the record.
+export async function unlinkSubcontractDocument(
+  subId: string,
+  projectId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { error } = await auth.supabase
+    .from("subcontractors")
+    .update({ document_id: null })
+    .eq("id", subId)
+    .eq("project_id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/subs`);
+  return { ok: true };
+}

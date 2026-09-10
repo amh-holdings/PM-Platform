@@ -50,6 +50,7 @@ const PROBES = [
   ["0046_change_order_buildup", "change_order_buildup_lines", null],
   ["0047_project_equipment", "project_equipment", null],
   ["0047_project_equipment (dpr link)", "dpr_equipment", "equipment_id"],
+  ["0048_subcontractor_document", "subcontractors", "document_id"],
 ];
 
 // 0029 (RLS policies) and 0044 (a data update plus a dropped index) leave no

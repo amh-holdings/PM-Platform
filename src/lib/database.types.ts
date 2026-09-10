@@ -2549,6 +2549,7 @@ export type Database = {
           contact_phone: string | null
           contract_value: number | null
           created_at: string | null
+          document_id: string | null
           id: string
           payment_terms: string | null
           payment_terms_days: number | null
@@ -2566,6 +2567,7 @@ export type Database = {
           contact_phone?: string | null
           contract_value?: number | null
           created_at?: string | null
+          document_id?: string | null
           id?: string
           payment_terms?: string | null
           payment_terms_days?: number | null
@@ -2583,6 +2585,7 @@ export type Database = {
           contact_phone?: string | null
           contract_value?: number | null
           created_at?: string | null
+          document_id?: string | null
           id?: string
           payment_terms?: string | null
           payment_terms_days?: number | null
@@ -2592,6 +2595,13 @@ export type Database = {
           w9_status?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "subcontractors_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "project_documents"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "subcontractors_project_id_fkey"
             columns: ["project_id"]

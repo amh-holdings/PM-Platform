@@ -12,6 +12,7 @@ import {
 } from "./subs-actions";
 import { STATUS_TONE, statusLabel } from "./subs-constants";
 import { SubFormDialog, type SubFormValues } from "./sub-form-dialog";
+import { SubContractDialog, type SubContractDoc } from "./sub-contract-dialog";
 
 type SubRow = {
   id: string;
@@ -27,14 +28,18 @@ type SubRow = {
   payment_terms: string | null;
   payment_terms_days: number | null;
   active: boolean | null;
+  contract_doc: SubContractDoc | null;
 };
 
 type Props = {
   projectId: string;
   subs: SubRow[];
+  // False until migration 0048 lands. The column is hidden rather than shown
+  // broken, so the roster looks exactly as it did before the feature existed.
+  contractsEnabled: boolean;
 };
 
-export function SubList({ projectId, subs }: Props) {
+export function SubList({ projectId, subs, contractsEnabled }: Props) {
   const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -94,6 +99,9 @@ export function SubList({ projectId, subs }: Props) {
               <th className="px-4 py-3 font-medium">COI</th>
               <th className="px-4 py-3 font-medium">W9</th>
               <th className="px-4 py-3 text-right font-medium">Contract</th>
+              {contractsEnabled && (
+                <th className="px-4 py-3 font-medium">Subcontract</th>
+              )}
               <th className="px-4 py-3 text-right font-medium">Actions</th>
             </tr>
           </thead>
@@ -142,6 +150,35 @@ export function SubList({ projectId, subs }: Props) {
                 <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
                   {formatCurrency(s.contract_value)}
                 </td>
+                {contractsEnabled && (
+                  <td className="px-4 py-3">
+                    <SubContractDialog
+                      projectId={projectId}
+                      subId={s.id}
+                      companyName={s.company_name}
+                      doc={s.contract_doc}
+                      trigger={
+                        s.contract_doc ? (
+                          <button
+                            type="button"
+                            className="max-w-[14rem] truncate text-left text-xs underline underline-offset-2 hover:text-foreground"
+                            title={s.contract_doc.file_name}
+                          >
+                            {s.contract_doc.file_name}
+                          </button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs text-muted-foreground"
+                          >
+                            Upload
+                          </Button>
+                        )
+                      }
+                    />
+                  </td>
+                )}
                 <td className="px-4 py-3 text-right">
                   <div className="flex justify-end gap-1">
                     <SubFormDialog
@@ -183,6 +220,7 @@ export function SubList({ projectId, subs }: Props) {
                 <td className="px-4 py-2 text-right text-sm font-medium tabular-nums">
                   {formatCurrency(totalContractValue)}
                 </td>
+                {contractsEnabled && <td />}
                 <td />
               </tr>
             </tfoot>
