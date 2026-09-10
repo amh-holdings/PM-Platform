@@ -141,6 +141,15 @@ type Column = {
   /** Read-only columns are derived; editing them would be editing an output. */
   derived?: boolean;
   title?: string;
+  /**
+   * Absorb the leftover width instead of taking a fixed one.
+   *
+   * Set on Task when the chart is hidden. Without it, hiding the chart left the
+   * task name truncated at its old width with several hundred pixels of empty
+   * grid beside it - which is the opposite of what someone hiding the chart
+   * asked for.
+   */
+  flex?: boolean;
 };
 
 // Widths are fixed rather than fluid so the grid and the bars keep the same
@@ -186,6 +195,10 @@ const MAX_COL_W = 620;
 
 function widthStorageKey(projectId: string): string {
   return `schedule-col-widths:${projectId}`;
+}
+
+function chartStorageKey(projectId: string): string {
+  return `schedule-show-chart:${projectId}`;
 }
 
 const STATUS_TONE: Record<string, string> = {
@@ -307,15 +320,36 @@ export function ScheduleSplitView({
   const [colW, setColW] = useState<Partial<Record<ColumnKey, number>>>({});
   const [resizing, setResizing] = useState<ColumnKey | null>(null);
 
+  // Hiding the bars turns this back into a plain grid, which is what you want
+  // when the job is typing dates or reading assignments down a column rather
+  // than looking at when anything runs. The grid takes the whole width, so the
+  // columns that were a horizontal scroll away are simply there.
+  const [showChart, setShowChart] = useState(true);
+
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(widthStorageKey(projectId));
       if (saved) setColW(JSON.parse(saved));
+      // Only an explicit "false" hides it. A missing key means a first visit,
+      // and the chart is the reason this view exists.
+      setShowChart(window.localStorage.getItem(chartStorageKey(projectId)) !== "false");
     } catch {
       // A corrupt or unavailable store is not worth failing the page over.
       // The defaults are perfectly usable.
     }
   }, [projectId]);
+
+  function toggleChart() {
+    setShowChart((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(chartStorageKey(projectId), String(next));
+      } catch {
+        // Preference is not worth failing over; it just will not stick.
+      }
+      return next;
+    });
+  }
 
   const persistWidths = useCallback(
     (next: Partial<Record<ColumnKey, number>>) => {
@@ -345,8 +379,16 @@ export function ScheduleSplitView({
   // The columns as drawn: the definitions with any user width folded in, so
   // the header, the rows and the width arithmetic cannot disagree.
   const resolvedColumns = useMemo(
-    () => shownColumns.map((c) => ({ ...c, width: widthOf(c) })),
-    [shownColumns, widthOf],
+    () =>
+      shownColumns.map((c) => ({
+        ...c,
+        width: widthOf(c),
+        // Only Task flexes, and only with the chart hidden. Sharing the
+        // leftover between every column would push the dates apart for no
+        // reason; the name is the thing that runs long.
+        flex: !showChart && c.key === "task",
+      })),
+    [shownColumns, widthOf, showChart],
   );
   const gridInnerWidth = resolvedColumns.reduce((n, c) => n + c.width, 0) + 60;
 
@@ -549,7 +591,7 @@ export function ScheduleSplitView({
   // because "three predecessors, one of them on screen" is a different
   // statement from "one predecessor".
   const arrows = useMemo(() => {
-    if (linkMode === "off") return { paths: [], hidden: 0 };
+    if (linkMode === "off" || !showChart) return { paths: [], hidden: 0 };
     const out: {
       key: string;
       d: string;
@@ -605,7 +647,7 @@ export function ScheduleSplitView({
       }
     }
     return { paths: out, hidden };
-  }, [linkMode, focus, rows, rowIndexOf, geo, barDatesOf, previewCpm]);
+  }, [linkMode, showChart, focus, rows, rowIndexOf, geo, barDatesOf, previewCpm]);
 
   // What holds the focused task where it is, and what waits on it. The
   // schedule could say a task had two days of float; it could not say why its
@@ -1225,38 +1267,56 @@ export function ScheduleSplitView({
 
         <span className="mx-1 h-6 w-px bg-border" />
 
-        <div className="flex items-center gap-0.5 rounded-md border p-0.5">
-          {ZOOMS.map((z, i) => (
-            <button
-              key={z.label}
-              onClick={() => setZoom(i)}
-              className={cn(
-                "rounded px-2 py-0.5 text-xs font-medium",
-                zoom === i ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-              )}
-            >
-              {z.label}
-            </button>
-          ))}
-        </div>
-        <Button variant="outline" size="sm" className="h-8" onClick={() => scrollToAsOf("smooth")}>
-          {dataDate !== today ? "Data date" : "Today"}
+        <Button
+          variant={showChart ? "outline" : "default"}
+          size="sm"
+          className="h-8"
+          onClick={toggleChart}
+          title={
+            showChart
+              ? "Hide the bars and give the whole width to the grid"
+              : "Show the bars beside the grid again"
+          }
+        >
+          {showChart ? "Hide chart" : "Show chart"}
         </Button>
 
-        <div className="flex items-center gap-0.5 rounded-md border p-0.5" title="Dependency arrows">
-          {([["off", "No links"], ["focus", "Selected"], ["all", "All links"]] as const).map(([m, label]) => (
-            <button
-              key={m}
-              onClick={() => setLinkMode(m)}
-              className={cn(
-                "rounded px-2 py-0.5 text-xs font-medium",
-                linkMode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {showChart && (
+          <>
+            <div className="flex items-center gap-0.5 rounded-md border p-0.5">
+              {ZOOMS.map((z, i) => (
+                <button
+                  key={z.label}
+                  onClick={() => setZoom(i)}
+                  className={cn(
+                    "rounded px-2 py-0.5 text-xs font-medium",
+                    zoom === i ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  {z.label}
+                </button>
+              ))}
+            </div>
+            <Button variant="outline" size="sm" className="h-8" onClick={() => scrollToAsOf("smooth")}>
+              {dataDate !== today ? "Data date" : "Today"}
+            </Button>
+
+            <div className="flex items-center gap-0.5 rounded-md border p-0.5" title="Dependency arrows">
+              {([["off", "No links"], ["focus", "Selected"], ["all", "All links"]] as const).map(([m, label]) => (
+                <button
+                  key={m}
+                  onClick={() => setLinkMode(m)}
+                  className={cn(
+                    "rounded px-2 py-0.5 text-xs font-medium",
+                    linkMode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         <div className="relative">
           <Button
@@ -1366,7 +1426,7 @@ export function ScheduleSplitView({
             Clear filters
           </Button>
         )}
-        <Legend />
+        {showChart && <Legend />}
       </div>
 
       {/* ---- edit actions -------------------------------------------------- */}
@@ -1590,8 +1650,11 @@ export function ScheduleSplitView({
           className="flex max-h-[calc(100vh-11rem)] min-h-[28rem] overflow-y-auto"
         >
           {/* Grid pane */}
-          <div className="shrink-0 overflow-x-auto" style={{ width: gridWidth }}>
-            <div style={{ width: Math.max(gridInnerWidth, gridWidth) }}>
+          <div
+            className={cn("overflow-x-auto", showChart ? "shrink-0" : "flex-1")}
+            style={showChart ? { width: gridWidth } : undefined}
+          >
+            <div style={{ minWidth: showChart ? Math.max(gridInnerWidth, gridWidth) : gridInnerWidth }}>
               <div
                 className="sticky top-0 z-30 flex items-center border-b bg-muted/60 text-[11px] font-medium uppercase tracking-wide text-muted-foreground backdrop-blur"
                 style={{ height: HEADER_H }}
@@ -1614,7 +1677,11 @@ export function ScheduleSplitView({
                       "relative shrink-0 px-1.5",
                       c.derived && "text-muted-foreground/70",
                     )}
-                    style={{ width: c.width }}
+                    style={
+                      c.flex
+                        ? { flexGrow: 1, flexShrink: 1, flexBasis: c.width, minWidth: c.width }
+                        : { width: c.width }
+                    }
                     title={c.title}
                   >
                     <span className="block truncate">{c.label}</span>
@@ -1694,16 +1761,19 @@ export function ScheduleSplitView({
           </div>
 
           {/* Splitter */}
-          <div
-            onMouseDown={(e) => {
-              splitDrag.current = { startX: e.clientX, startW: gridWidth };
-              e.preventDefault();
-            }}
-            className="w-1.5 shrink-0 cursor-col-resize border-x bg-muted/40 hover:bg-primary/40"
-            title="Drag to resize the grid"
-          />
+          {showChart && (
+            <div
+              onMouseDown={(e) => {
+                splitDrag.current = { startX: e.clientX, startW: gridWidth };
+                e.preventDefault();
+              }}
+              className="w-1.5 shrink-0 cursor-col-resize border-x bg-muted/40 hover:bg-primary/40"
+              title="Drag to resize the grid"
+            />
+          )}
 
           {/* Timeline pane */}
+          {showChart && (
           <div ref={timelineRef} className="flex-1 overflow-x-auto">
             <div className="relative" style={{ width: geo.width }}>
               <TimelineHeader geo={geo} />
@@ -1769,6 +1839,7 @@ export function ScheduleSplitView({
               </div>
             </div>
           </div>
+          )}
         </div>
       </div>
 
@@ -1888,7 +1959,7 @@ export function ScheduleSplitView({
       <p className="text-xs text-muted-foreground">
         Drag the edge of any column header to resize it, or double-click that
         edge to fit the longest value on screen. Widths are remembered per
-        project. The grid and the bars are the same rows: edit a date on the left and the
+        project, as is whether the chart is showing. The grid and the bars are the same rows: edit a date on the left and the
         bar moves, drag a bar and the cells follow. Nothing is written until you
         save, and the forecast above the grid is recalculated over the pending
         edit, so what it says is what saving would do. Progress is not editable
@@ -2003,7 +2074,15 @@ function GridRow({
         if (f) editableIndex++;
         const ci = editableIndex;
         return (
-          <div key={col.key} className="shrink-0 px-1" style={{ width: col.width }}>
+          <div
+            key={col.key}
+            className={cn("px-1", !col.flex && "shrink-0")}
+            style={
+              col.flex
+                ? { flexGrow: 1, flexShrink: 1, flexBasis: col.width, minWidth: col.width }
+                : { width: col.width }
+            }
+          >
             {renderCell(col.key)}
           </div>
         );
