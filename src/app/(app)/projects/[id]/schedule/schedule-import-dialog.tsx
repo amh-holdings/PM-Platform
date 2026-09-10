@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import {
   type ParsedGrid,
   guessColumns,
 } from "@/lib/schedule-edit";
+import type { SheetSummary } from "@/lib/schedule-workbook";
 import { applyScheduleImport, type ImportPlan } from "../schedule-actions";
 
 type Props = {
@@ -30,6 +31,15 @@ type Props = {
 };
 
 type Step = "paste" | "map" | "review";
+
+// A workbook is read in the browser, so nothing leaves the machine until the
+// diff is applied. Guard the size anyway - a 40 MB programme schedule read on a
+// tablet in a site trailer will lock the tab, and saying so beats a white
+// screen.
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+const SPREADSHEET_RE = /\.(xlsx|xlsm|xls)$/i;
+const TEXT_RE = /\.(csv|tsv|txt)$/i;
 
 const SAMPLE = `WBS\tTask Name\tDuration\tStart\tFinish\tPredecessors
 5.2.1\tMobilize racking crew\t5d\t9/8/26\t9/14/26\t
@@ -47,6 +57,12 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>("paste");
   const [text, setText] = useState("");
+  const [sheets, setSheets] = useState<SheetSummary[] | null>(null);
+  const [sheetIndex, setSheetIndex] = useState(0);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const fileInput = useRef<HTMLInputElement | null>(null);
   const [wbsRoot, setWbsRoot] = useState("");
   const [deleteRoot, setDeleteRoot] = useState("");
   const [allowDeletes, setAllowDeletes] = useState(false);
@@ -74,9 +90,17 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
     });
   }, [built, tasks, mapping, allowDeletes, deleteRoot]);
 
+  function clearFile() {
+    setSheets(null);
+    setSheetIndex(0);
+    setFileName(null);
+    if (fileInput.current) fileInput.current.value = "";
+  }
+
   function reset() {
     setStep("paste");
     setText("");
+    clearFile();
     setGrid(null);
     setMapping([]);
     setError(null);
@@ -86,11 +110,85 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
     setWbsRoot("");
   }
 
-  function doParse() {
+  // Reading the file is the only asynchronous step, and it is the only place
+  // xlsx is pulled in - a dynamic import keeps ~900 KB of spreadsheet parser
+  // out of the schedule page for everyone who never opens this dialog.
+  async function loadFile(file: File) {
     setError(null);
-    const g = parseGrid(text);
+    setResult(null);
+
+    if (file.size > MAX_FILE_BYTES) {
+      setError(
+        `${file.name} is ${(file.size / 1024 / 1024).toFixed(1)} MB. Export just the schedule rows, or paste them instead.`,
+      );
+      return;
+    }
+
+    // A .csv or .tsv is text. Put it in the box rather than hiding it behind a
+    // file name, so what is about to be imported is on screen and editable.
+    if (TEXT_RE.test(file.name)) {
+      try {
+        const body = await file.text();
+        clearFile();
+        setText(body);
+        setFileName(file.name);
+      } catch {
+        setError(`Could not read ${file.name}.`);
+      }
+      return;
+    }
+
+    if (!SPREADSHEET_RE.test(file.name)) {
+      setError(
+        `${file.name} is not a spreadsheet. Use .xlsx, .xls, .csv or paste the rows.`,
+      );
+      return;
+    }
+
+    setReading(true);
+    try {
+      const [buf, mod] = await Promise.all([
+        file.arrayBuffer(),
+        import("@/lib/schedule-workbook"),
+      ]);
+      const parsed = mod.readWorkbook(buf);
+      const usable = parsed.filter((sh) => sh.filledRows > 0);
+      if (!usable.length) {
+        setError(`${file.name} has no rows in any sheet.`);
+        return;
+      }
+      setText("");
+      setSheets(usable);
+      setSheetIndex(mod.defaultSheetIndex(usable));
+      setFileName(file.name);
+    } catch (e) {
+      setError(
+        `Could not read ${file.name}. ${
+          e instanceof Error ? e.message : "The file may be password protected or not a real workbook."
+        }`,
+      );
+    } finally {
+      setReading(false);
+    }
+  }
+
+  async function doParse() {
+    setError(null);
+
+    let g: ParsedGrid;
+    if (sheets) {
+      const mod = await import("@/lib/schedule-workbook");
+      g = mod.gridFromSheet(sheets[sheetIndex]);
+    } else {
+      g = parseGrid(text);
+    }
+
     if (!g.rows.length) {
-      setError("Nothing to read. Paste rows copied from Smartsheet or Excel.");
+      setError(
+        sheets
+          ? `Sheet "${sheets[sheetIndex].name}" has no rows below its header.`
+          : "Nothing to read. Paste rows copied from Smartsheet or Excel, or choose a file.",
+      );
       return;
     }
     setGrid(g);
@@ -163,7 +261,8 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
               <div>
                 <h3 className="text-lg font-semibold">Import schedule rows</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Paste straight out of Smartsheet, Excel or any grid. Nothing is
+                  Drop in an Excel file, or paste straight out of Smartsheet or
+                  any grid. The file is read here in the browser and nothing is
                   written until you have seen the diff.
                 </p>
               </div>
@@ -197,24 +296,112 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
             {/* ---------------------------------------------------- paste -- */}
             {step === "paste" && (
               <div className="mt-4 space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="paste">Pasted rows</Label>
-                  <textarea
-                    id="paste"
-                    value={text}
-                    onChange={(e) => setText(e.target.value)}
-                    rows={12}
-                    spellCheck={false}
-                    placeholder={SAMPLE}
-                    className="w-full rounded-md border border-input bg-background p-3 font-mono text-xs"
-                  />
-                  <p className="text-[11px] text-muted-foreground">
-                    Include the header row if you have one. Predecessors written
-                    as Smartsheet row numbers are translated to WBS codes
-                    automatically; relationship types and lag (
-                    <code className="font-mono">12SS+5d</code>) are kept.
-                  </p>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept=".xlsx,.xlsm,.xls,.csv,.tsv,.txt"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void loadFile(f);
+                  }}
+                />
+
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragging(false);
+                    const f = e.dataTransfer.files?.[0];
+                    if (f) void loadFile(f);
+                  }}
+                  className={cn(
+                    "rounded-lg border border-dashed p-4 text-center transition-colors",
+                    dragging ? "border-primary bg-primary/5" : "border-input",
+                  )}
+                >
+                  {reading ? (
+                    <p className="text-sm text-muted-foreground">
+                      Reading {fileName ?? "file"}...
+                    </p>
+                  ) : sheets ? (
+                    <div className="space-y-3 text-left">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm">
+                          <span className="font-medium">{fileName}</span>
+                          <span className="text-muted-foreground">
+                            {" "}- {sheets.length} sheet{sheets.length === 1 ? "" : "s"}
+                          </span>
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => { clearFile(); setError(null); }}
+                          className="text-xs text-muted-foreground underline hover:text-foreground"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      {sheets.length > 1 && (
+                        <div className="space-y-1">
+                          <Label htmlFor="sheet">Sheet to import</Label>
+                          <select
+                            id="sheet"
+                            value={sheetIndex}
+                            onChange={(e) => setSheetIndex(Number(e.target.value))}
+                            className="h-9 w-full max-w-sm rounded-md border border-input bg-background px-2 text-sm"
+                          >
+                            {sheets.map((sh, i) => (
+                              <option key={sh.name} value={i}>
+                                {sh.name} ({sh.filledRows} row
+                                {sh.filledRows === 1 ? "" : "s"})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      <SheetPeek sheet={sheets[sheetIndex]} />
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => fileInput.current?.click()}
+                      >
+                        Choose an Excel file
+                      </Button>
+                      <p className="text-[11px] text-muted-foreground">
+                        or drag one here - .xlsx, .xlsm, .xls, .csv. Merged title
+                        rows, blank columns and formula results are handled;
+                        dates keep the day they have in the sheet.
+                      </p>
+                    </div>
+                  )}
                 </div>
+
+                {!sheets && (
+                  <div className="space-y-2">
+                    <Label htmlFor="paste">
+                      {fileName ? `Rows from ${fileName}` : "Pasted rows"}
+                    </Label>
+                    <textarea
+                      id="paste"
+                      value={text}
+                      onChange={(e) => { setText(e.target.value); setFileName(null); }}
+                      rows={12}
+                      spellCheck={false}
+                      placeholder={SAMPLE}
+                      className="w-full rounded-md border border-input bg-background p-3 font-mono text-xs"
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Include the header row if you have one. Predecessors written
+                      as Smartsheet row numbers are translated to WBS codes
+                      automatically; relationship types and lag (
+                      <code className="font-mono">12SS+5d</code>) are kept.
+                    </p>
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <Label htmlFor="wbsroot">Nest under WBS code (optional)</Label>
@@ -226,9 +413,10 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
                     className="max-w-xs font-mono"
                   />
                   <p className="text-[11px] text-muted-foreground">
-                    Only used when the paste has no WBS column. Codes are then
-                    generated from the indentation of the task names, beneath
-                    this branch.
+                    Only used when the rows have no WBS column. Codes are then
+                    generated from the indentation of the task names - spaces in
+                    a paste, indent formatting in a spreadsheet - beneath this
+                    branch.
                   </p>
                 </div>
 
@@ -236,7 +424,12 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
 
                 <div className="flex justify-end gap-2 border-t pt-4">
                   <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-                  <Button onClick={doParse} disabled={!text.trim()}>Read rows</Button>
+                  <Button
+                    onClick={() => void doParse()}
+                    disabled={reading || (!sheets && !text.trim())}
+                  >
+                    Read rows
+                  </Button>
                 </div>
               </div>
             )}
@@ -247,7 +440,9 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
                 <p className="text-sm text-muted-foreground">
                   {grid.rows.length} row{grid.rows.length === 1 ? "" : "s"},{" "}
                   {mapping.length} column{mapping.length === 1 ? "" : "s"},{" "}
-                  {grid.delimiter === "tab" ? "tab" : "comma"} separated
+                  {grid.delimiter === "cells"
+                    ? `from ${fileName ?? "the workbook"}${sheets && sheets.length > 1 ? ` / ${sheets[sheetIndex].name}` : ""}`
+                    : `${grid.delimiter} separated`}
                   {grid.headers ? ", header row detected" : ", no header row detected"}.
                   Set anything you do not want to import to Ignore.
                 </p>
@@ -511,6 +706,37 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
         </div>
       )}
     </>
+  );
+}
+
+// The first few cells of the chosen sheet. A workbook has tabs that all look
+// plausible from their names, and seeing the actual rows is the fastest way to
+// know you picked the right one before spending a mapping pass on it.
+function SheetPeek({ sheet }: { sheet: SheetSummary }) {
+  const preview = sheet.rows.filter((r) => r.some((c) => c.trim())).slice(0, 4);
+  if (!preview.length) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        This sheet is empty. Pick another one.
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto rounded border bg-muted/20">
+      <table className="text-[11px]">
+        <tbody className="divide-y">
+          {preview.map((r, ri) => (
+            <tr key={ri}>
+              {r.slice(0, 8).map((c, ci) => (
+                <td key={ci} className="max-w-[12rem] truncate px-2 py-1 font-mono">
+                  {c.trim() || <span className="text-muted-foreground/40">-</span>}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

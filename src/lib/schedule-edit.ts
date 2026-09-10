@@ -876,7 +876,7 @@ export function shiftDates(
 // Pasted-grid import
 // ============================================================================
 
-export type Delimiter = "tab" | "comma";
+export type Delimiter = "tab" | "comma" | "cells";
 
 export type ParsedGrid = {
   headers: string[] | null;
@@ -914,6 +914,75 @@ const HEADER_HINTS = [
   "predecessor", "phase", "assigned", "status", "activity", "code",
 ];
 
+// How much a row reads like a header rather than data. Zero disqualifies it
+// outright, and three things disqualify a row: a single filled cell, which is a
+// title banner; a cell holding a date; and a cell that is a bare number or a
+// dotted code. That last one is what stops a first row of
+// "5.1.1 | Start earthworks | 10" from being eaten as a header on the strength
+// of the word "Start" - no real column is called "5.1.1" or "10".
+function headerHits(cells: string[]): number {
+  const norm = cells.map((c) => c.trim().toLowerCase());
+  if (norm.filter(Boolean).length < 2) return 0;
+  if (norm.some((c) => c && parseLooseDate(c) !== null)) return 0;
+  if (norm.some((c) => /^\d+(\.\d+)*$/.test(c))) return 0;
+  return norm.filter((c) => c && HEADER_HINTS.some((h) => c.includes(h))).length;
+}
+
+function filledCount(cells: string[]): number {
+  return cells.filter((c) => c.trim().length > 0).length;
+}
+
+// Turn a rectangular block of cells into a grid: square it off, drop the empty
+// rows and columns, then decide where the header is.
+//
+// Both entry points land here - a paste that has been split on its delimiter,
+// and a worksheet read out of a workbook - so the two routes cannot drift apart
+// in how they read a header or how they count rows.
+export function gridFromMatrix(matrix: string[][], delimiter: Delimiter): ParsedGrid {
+  if (!matrix.length) return { headers: null, rows: [], delimiter };
+
+  const width = Math.max(...matrix.map((r) => r.length));
+  let rows = matrix.map((r) => {
+    const out = r.slice(0, width).map((c) => c ?? "");
+    while (out.length < width) out.push("");
+    return out;
+  });
+
+  // A spacer column between two blocks of a spreadsheet is common and carries
+  // nothing. Dropping it here keeps the column mapper from showing empty
+  // selects the user has to set to Ignore one at a time.
+  const keep: number[] = [];
+  for (let c = 0; c < width; c++) {
+    if (rows.some((r) => r[c].trim().length > 0)) keep.push(c);
+  }
+  if (keep.length !== width) rows = rows.map((r) => keep.map((c) => r[c]));
+
+  rows = rows.filter((r) => filledCount(r) > 0);
+  if (!rows.length) return { headers: null, rows: [], delimiter };
+
+  // The header is usually the first row. When it is not, what sits above it is
+  // a title block: rows with fewer filled cells than the header itself. Only a
+  // row that clears that bar and names at least two fields can displace row 0,
+  // so a task called "Start earthworks" is never mistaken for a header.
+  let headerAt = -1;
+  const limit = Math.min(rows.length, 20);
+  for (let i = 0; i < limit; i++) {
+    const hits = headerHits(rows[i]);
+    if (!hits) continue;
+    if (i === 0) { headerAt = 0; break; }
+    if (hits < 2) continue;
+    const filled = filledCount(rows[i]);
+    if (rows.slice(0, i).every((r) => filledCount(r) < filled)) { headerAt = i; break; }
+  }
+
+  if (headerAt === -1) return { headers: null, rows, delimiter };
+  return {
+    headers: rows[headerAt].map((c) => c.trim()),
+    rows: rows.slice(headerAt + 1),
+    delimiter,
+  };
+}
+
 export function parseGrid(text: string): ParsedGrid {
   const lines = text
     .replace(/\r\n?/g, "\n")
@@ -926,20 +995,7 @@ export function parseGrid(text: string): ParsedGrid {
   const delimiter: Delimiter = lines.some((l) => l.includes("\t")) ? "tab" : "comma";
   const d = delimiter === "tab" ? "\t" : ",";
 
-  const rows = lines.map((l) => splitLine(l, d));
-  const width = Math.max(...rows.map((r) => r.length));
-  for (const r of rows) while (r.length < width) r.push("");
-
-  // A first row is a header when its cells read like column names and none of
-  // them parses as a date - "Start" is a header, "8/19/26" is data.
-  const first = rows[0].map((c) => c.trim().toLowerCase());
-  const looksLikeHeader =
-    first.some((c) => HEADER_HINTS.some((h) => c.includes(h))) &&
-    !first.some((c) => c && parseLooseDate(c) !== null);
-
-  return looksLikeHeader
-    ? { headers: rows[0].map((c) => c.trim()), rows: rows.slice(1), delimiter }
-    : { headers: null, rows, delimiter };
+  return gridFromMatrix(lines.map((l) => splitLine(l, d)), delimiter);
 }
 
 export type ColumnKey =

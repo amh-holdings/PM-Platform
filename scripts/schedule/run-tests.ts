@@ -9,6 +9,8 @@
 //
 // Run: npx tsx scripts/schedule/run-tests.ts
 
+import * as XLSX from "xlsx";
+
 import {
   addWorkingDays,
   advance,
@@ -25,6 +27,13 @@ import {
   type CpmInput,
 } from "@/lib/schedule-cpm";
 import { assessSchedule } from "@/lib/schedule-health";
+import {
+  defaultSheetIndex,
+  gridFromSheet,
+  isWorkbookFile,
+  readWorkbook,
+  sheetMatrix,
+} from "@/lib/schedule-workbook";
 import { buildProgress } from "@/lib/schedule-rollup";
 import { endpointsFor, headDirection, linkPoints, toPath } from "@/lib/schedule-links";
 import {
@@ -59,6 +68,7 @@ import {
   rewritePredecessors,
   shiftDates,
   splitPredecessorToken,
+  gridFromMatrix,
   type ColumnKey,
   type EditTask,
 } from "@/lib/schedule-edit";
@@ -926,6 +936,144 @@ section("Editing - import diff");
   const { rows } = buildImportRows(grid, mapping);
   const diff = diffImport([], rows, mapping);
   check("duplicate WBS blocks the import", diff.blocking.length > 0, diff.blocking.join(" "));
+}
+
+section("Editing - Excel import");
+
+// Round-trip through a real workbook. Writing one and reading it back is the
+// only honest way to test this: the bugs worth catching (a date landing a day
+// early, a title row eaten as a header, a spacer column shifting the mapping)
+// all live in the gap between what Excel stores and what the parser sees.
+function xlsxBuffer(sheets: { name: string; aoa: unknown[][] }[]): ArrayBuffer {
+  const wb = XLSX.utils.book_new();
+  for (const s of sheets) {
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.aoa_to_sheet(s.aoa, { cellDates: true }),
+      s.name,
+    );
+  }
+  const out = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as
+    | ArrayBuffer
+    | Uint8Array;
+  return out instanceof Uint8Array
+    ? (out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer)
+    : out;
+}
+
+// Local midnight, which is how a spreadsheet means a date and how SheetJS
+// rebuilds one. Constructing it in UTC here would test the test, not the code.
+const day = (y: number, m: number, d: number) => new Date(y, m - 1, d);
+
+{
+  const buf = xlsxBuffer([
+    { name: "Cover", aoa: [["Sweet Springs Solar"]] },
+    {
+      name: "Schedule",
+      aoa: [
+        ["Sweet Springs Solar - Construction Schedule"],
+        ["Rev 4"],
+        [],
+        ["WBS", "", "Task Name", "Duration", "Start", "Finish", "Predecessors"],
+        ["5.1.1", "", "Clear and grub", "10d", day(2026, 9, 1), day(2026, 9, 14), ""],
+        ["5.1.2", "", "Install culvert", 5, day(2026, 9, 15), day(2026, 9, 21), "1"],
+        ["5.1.3", "", "Build entrance", 8, day(2026, 9, 16), day(2026, 9, 25), "2SS+1d"],
+      ],
+    },
+  ]);
+
+  const sheets = readWorkbook(buf);
+  eq("both sheets read", sheets.length, 2);
+  eq("the schedule tab is the one we land on", defaultSheetIndex(sheets), 1);
+
+  const grid = gridFromSheet(sheets[1]);
+  eq("the grid knows it came from cells", grid.delimiter, "cells");
+  // The title block and the blank line above the header are dropped, and so is
+  // the empty spacer column between WBS and Task Name.
+  eq("title rows skipped", grid.headers?.[0], "WBS");
+  eq("spacer column dropped", grid.headers?.[1], "Task Name");
+  eq("header width", grid.headers?.length, 6);
+  eq("data rows", grid.rows.length, 3);
+
+  const mapping = guessColumns(grid.headers, grid.rows);
+  eq("wbs column mapped", mapping[0], "wbs_code");
+  eq("name column mapped", mapping[1], "task_name");
+  eq("duration column mapped", mapping[2], "duration_days");
+  eq("start column mapped", mapping[3], "start_date");
+  eq("finish column mapped", mapping[4], "end_date");
+  eq("predecessor column mapped", mapping[5], "predecessors");
+
+  const { rows } = buildImportRows(grid, mapping);
+  // The off-by-one this whole path exists to avoid.
+  eq("a date cell keeps its day", rows[0].values.start_date, "2026-09-01");
+  eq("and so does the finish", rows[0].values.end_date, "2026-09-14");
+  eq("a text duration is read", rows[0].values.duration_days, 10);
+  eq("a numeric duration is read", rows[1].values.duration_days, 5);
+  eq("row-number predecessor translated", rows[1].values.predecessors, "5.1.1");
+  eq("type and lag survive", rows[2].values.predecessors, "5.1.2SS+1");
+  eq("no unreadable values", rows.filter((r) => r.issues.length).length, 0);
+}
+
+{
+  // A workbook whose only content is a legend must not be treated as data.
+  const sheets = readWorkbook(xlsxBuffer([{ name: "Legend", aoa: [["Key"], [], []] }]));
+  eq("empty trailing rows are not counted", sheets[0].filledRows, 1);
+  eq("a one-row sheet still yields no data rows", gridFromSheet(sheets[0]).rows.length, 1);
+}
+
+{
+  // Cells the reader has to interpret rather than copy: a serial that stayed
+  // numeric, a formula that failed, a boolean, and formatted indentation.
+  const ws: Record<string, unknown> = {
+    "!ref": "A1:D3",
+    A1: { t: "s", v: "Task Name" },
+    B1: { t: "s", v: "Start" },
+    C1: { t: "s", v: "Milestone" },
+    D1: { t: "s", v: "Duration" },
+    A2: { t: "s", v: "Sitework" },
+    B2: { t: "n", v: 46266, z: "m/d/yy" },
+    C2: { t: "b", v: false },
+    D2: { t: "n", v: 1250, z: '#,##0" d"' },
+    A3: { t: "s", v: "Rough grade", s: { alignment: { indent: 1 } } },
+    B3: { t: "e", v: 0x17, w: "#REF!" },
+    C3: { t: "b", v: true },
+    D3: { t: "n", v: 12 },
+  };
+  const m = sheetMatrix(ws as never);
+  eq("a date-formatted serial decodes", m[1][1], "2026-09-01");
+  eq("a quoted literal is not a date format", m[1][3], "1250");
+  eq("a broken formula reads as empty", m[2][1], "");
+  eq("false renders as false", m[1][2], "false");
+  eq("true renders as true", m[2][2], "true");
+  eq("formatted indentation becomes spaces", m[2][0], "  Rough grade");
+
+  // And that indentation is load-bearing: with no WBS column it is the only
+  // thing carrying the hierarchy.
+  const grid = gridFromMatrix(m, "cells");
+  const mapping = guessColumns(grid.headers, grid.rows);
+  const { rows } = buildImportRows(grid, mapping, { wbsRoot: "5.2" });
+  eq("parent code", rows[0].wbs_code, "5.2.1");
+  eq("indent becomes depth", rows[1].wbs_code, "5.2.1.1");
+}
+
+{
+  eq("xlsx is offered", isWorkbookFile("Sweet Springs Rev4.XLSX"), true);
+  eq("csv is offered", isWorkbookFile("schedule.csv"), true);
+  eq("a pdf is not", isWorkbookFile("schedule.pdf"), false);
+}
+
+{
+  // A header that is not row 0 only wins when what sits above it is thinner.
+  // Otherwise a task called "Start earthworks" would be read as a header.
+  const g = gridFromMatrix(
+    [
+      ["5.1.1", "Start earthworks", "10"],
+      ["5.1.2", "Finish earthworks", "5"],
+    ],
+    "cells",
+  );
+  eq("data is not mistaken for a header", g.headers, null);
+  eq("and no rows are lost to it", g.rows.length, 2);
 }
 
 section("Editing - start, finish and duration are one fact");
