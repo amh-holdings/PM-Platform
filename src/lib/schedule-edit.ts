@@ -24,6 +24,7 @@ import {
   type CalendarLike,
 } from "@/lib/schedule-calendar";
 import {
+  findCycleWith,
   parsePredecessors,
   serializeLinks,
   type Link,
@@ -873,6 +874,238 @@ export function shiftDates(
 }
 
 // ============================================================================
+// Linking without typing
+// ============================================================================
+//
+// Building logic one cell at a time is the slowest thing on the schedule page:
+// to tie forty tasks together you type forty WBS codes you have to go and look
+// up first. Every scheduling tool worth using solves this the same way - select
+// the rows, press one key, and the selection is chained in order. This is that,
+// as a pure plan the grid can preview through CPM before anything is saved.
+//
+// Three rules the chain follows, and the reasons they are not options:
+//
+//   Order is schedule order, not the order the boxes were ticked. Ticking three
+//   rows bottom-up and getting a backwards chain would be a trap.
+//
+//   Summary rows are skipped. A summary has no dates of its own; its bar is its
+//   children. Linking to one does nothing the engine can act on, so it is
+//   dropped from the chain rather than silently made a no-op.
+//
+//   An existing link between the same pair is updated, never duplicated. Run
+//   Link twice and the second run changes nothing.
+
+export type LinkPlanTask = {
+  wbs_code: string;
+  task_name: string;
+  predecessors: string | null;
+};
+
+export type LinkPlan = {
+  // wbs_code -> the new predecessor string, or null to clear it
+  updates: Map<string, string | null>;
+  // Ordered codes actually chained, for the message the grid shows
+  chain: string[];
+  skipped: string[];
+  warnings: string[];
+};
+
+const emptyPlan = (): LinkPlan => ({
+  updates: new Map(),
+  chain: [],
+  skipped: [],
+  warnings: [],
+});
+
+function isSummary(tasks: { wbs_code: string }[], code: string): boolean {
+  return !isLeafWbs(tasks, code);
+}
+
+// Chain the given tasks in schedule order: each becomes a predecessor of the
+// next. The relationship type and lag apply to every link in the chain, which
+// is what "these four crews follow each other with a two-day gap" means.
+export function planChainLink(
+  tasks: LinkPlanTask[],
+  codes: string[],
+  type: RelType = "FS",
+  lag = 0,
+): LinkPlan {
+  const plan = emptyPlan();
+  const wanted = new Set(codes);
+  const known = new Map(tasks.map((t) => [t.wbs_code, t]));
+
+  const ordered = tasks
+    .filter((t) => wanted.has(t.wbs_code))
+    .map((t) => t.wbs_code)
+    .sort(compareWbs);
+
+  for (const code of codes) {
+    if (!known.has(code)) plan.warnings.push(`${code} is not on this project.`);
+  }
+
+  const chain = ordered.filter((c) => {
+    if (isSummary(tasks, c)) { plan.skipped.push(c); return false; }
+    return true;
+  });
+
+  if (plan.skipped.length) {
+    plan.warnings.push(
+      `${plan.skipped.join(", ")} ${plan.skipped.length === 1 ? "is a summary row and was" : "are summary rows and were"} left out - a summary has no dates of its own, so linking it does nothing.`,
+    );
+  }
+
+  if (chain.length < 2) {
+    plan.warnings.push("Select at least two tasks to link.");
+    return plan;
+  }
+
+  plan.chain = chain;
+
+  // Build the whole chain against a working copy, so a cycle check sees the
+  // links added earlier in this same run rather than only the saved state.
+  const working = tasks.map((t) => ({
+    wbs_code: t.wbs_code,
+    predecessors: t.predecessors,
+  }));
+  const predsOf = new Map(working.map((t) => [t.wbs_code, t.predecessors]));
+
+  for (let i = 1; i < chain.length; i++) {
+    const pred = chain[i - 1];
+    const succ = chain[i];
+    const links = parsePredecessors(predsOf.get(succ) ?? null);
+    const at = links.findIndex((l) => l.pred === pred);
+    if (at === -1) links.push({ pred, type, lag });
+    else links[at] = { pred, type, lag };
+
+    const cycle = findCycleWith(working, succ, links);
+    if (cycle) {
+      plan.warnings.push(
+        `Linking ${pred} to ${succ} would close a loop through ${cycle.join(", ")}, so it was left out.`,
+      );
+      continue;
+    }
+
+    const next = serializeLinks(links);
+    predsOf.set(succ, next);
+    const w = working.find((t) => t.wbs_code === succ);
+    if (w) w.predecessors = next;
+    plan.updates.set(succ, next);
+  }
+
+  return plan;
+}
+
+// Link every selected task to one chosen predecessor - the "these all wait on
+// the transformer" shape, which a chain cannot express.
+export function planFanLink(
+  tasks: LinkPlanTask[],
+  pred: string,
+  codes: string[],
+  type: RelType = "FS",
+  lag = 0,
+): LinkPlan {
+  const plan = emptyPlan();
+  const known = new Map(tasks.map((t) => [t.wbs_code, t]));
+  if (!known.has(pred)) {
+    plan.warnings.push(`${pred} is not on this project.`);
+    return plan;
+  }
+
+  const working = tasks.map((t) => ({
+    wbs_code: t.wbs_code,
+    predecessors: t.predecessors,
+  }));
+
+  const targets = tasks
+    .filter((t) => codes.includes(t.wbs_code) && t.wbs_code !== pred)
+    .map((t) => t.wbs_code)
+    .sort(compareWbs);
+
+  for (const succ of targets) {
+    if (isSummary(tasks, succ)) { plan.skipped.push(succ); continue; }
+    const links = parsePredecessors(
+      working.find((t) => t.wbs_code === succ)?.predecessors ?? null,
+    );
+    const at = links.findIndex((l) => l.pred === pred);
+    if (at === -1) links.push({ pred, type, lag });
+    else links[at] = { pred, type, lag };
+
+    const cycle = findCycleWith(working, succ, links);
+    if (cycle) {
+      plan.warnings.push(
+        `Linking ${pred} to ${succ} would close a loop through ${cycle.join(", ")}, so it was left out.`,
+      );
+      continue;
+    }
+    const next = serializeLinks(links);
+    const w = working.find((t) => t.wbs_code === succ);
+    if (w) w.predecessors = next;
+    plan.updates.set(succ, next);
+    plan.chain.push(succ);
+  }
+
+  if (plan.skipped.length) {
+    plan.warnings.push(
+      `${plan.skipped.join(", ")} skipped - a summary row has no dates of its own.`,
+    );
+  }
+  if (!plan.updates.size && !plan.warnings.length) {
+    plan.warnings.push("Nothing to link.");
+  }
+  return plan;
+}
+
+// Cut the links *between* the selected tasks, leaving their links to everything
+// outside the selection alone. Unlinking a chain should not orphan its first
+// task from the work that feeds it.
+export function planUnlink(tasks: LinkPlanTask[], codes: string[]): LinkPlan {
+  const plan = emptyPlan();
+  const inSelection = new Set(codes);
+  let cut = 0;
+
+  for (const t of tasks) {
+    if (!inSelection.has(t.wbs_code)) continue;
+    const links = parsePredecessors(t.predecessors);
+    const kept = links.filter((l) => !inSelection.has(l.pred));
+    if (kept.length === links.length) continue;
+    cut += links.length - kept.length;
+    plan.updates.set(t.wbs_code, serializeLinks(kept));
+    plan.chain.push(t.wbs_code);
+  }
+
+  if (!cut) {
+    plan.warnings.push(
+      "None of the selected tasks are linked to each other, so there was nothing to cut.",
+    );
+  }
+  return plan;
+}
+
+// The tasks most likely to be the answer when a predecessor cell is empty and
+// nothing has been typed yet. In practice that is the work immediately above:
+// a schedule is written top to bottom and most logic is local. Nearest first,
+// summaries and anything already linked left out.
+export function nearbyPredecessors<T extends { wbs_code: string }>(
+  tasks: T[],
+  currentWbs: string,
+  exclude: Set<string>,
+  limit = 7,
+): T[] {
+  const ordered = [...tasks].sort((a, b) => compareWbs(a.wbs_code, b.wbs_code));
+  const at = ordered.findIndex((t) => t.wbs_code === currentWbs);
+  const above = at === -1 ? ordered : ordered.slice(0, at);
+  const out: T[] = [];
+  for (let i = above.length - 1; i >= 0 && out.length < limit; i--) {
+    const t = above[i];
+    if (t.wbs_code === currentWbs) continue;
+    if (exclude.has(t.wbs_code)) continue;
+    if (isSummary(tasks, t.wbs_code)) continue;
+    out.push(t);
+  }
+  return out;
+}
+
+// ============================================================================
 // Pasted-grid import
 // ============================================================================
 
@@ -920,12 +1153,27 @@ const HEADER_HINTS = [
 // dotted code. That last one is what stops a first row of
 // "5.1.1 | Start earthworks | 10" from being eaten as a header on the strength
 // of the word "Start" - no real column is called "5.1.1" or "10".
-function headerHits(cells: string[]): number {
+// How a header row is recognised. The schedule's defaults are the historical
+// behaviour; the SOV importer overrides them.
+export type HeaderRule = {
+  // Column words that make a row read like a header.
+  hints?: string[];
+  // Whether a cell holding a date disqualifies the row. True for a schedule,
+  // where a date means "this is a task row". False for a schedule of values,
+  // whose header legitimately carries month columns ("Jan-26", "Feb-26") -
+  // the numeric guard below is what keeps its data rows out.
+  allowDates?: boolean;
+};
+
+function headerHits(cells: string[], rule: HeaderRule = {}): number {
+  const hints = rule.hints ?? HEADER_HINTS;
   const norm = cells.map((c) => c.trim().toLowerCase());
   if (norm.filter(Boolean).length < 2) return 0;
-  if (norm.some((c) => c && parseLooseDate(c) !== null)) return 0;
+  if (!rule.allowDates && norm.some((c) => c && parseLooseDate(c) !== null)) {
+    return 0;
+  }
   if (norm.some((c) => /^\d+(\.\d+)*$/.test(c))) return 0;
-  return norm.filter((c) => c && HEADER_HINTS.some((h) => c.includes(h))).length;
+  return norm.filter((c) => c && hints.some((h) => c.includes(h))).length;
 }
 
 function filledCount(cells: string[]): number {
@@ -938,7 +1186,15 @@ function filledCount(cells: string[]): number {
 // Both entry points land here - a paste that has been split on its delimiter,
 // and a worksheet read out of a workbook - so the two routes cannot drift apart
 // in how they read a header or how they count rows.
-export function gridFromMatrix(matrix: string[][], delimiter: Delimiter): ParsedGrid {
+// `rule` controls header recognition. It defaults to the schedule's own column
+// vocabulary; the SOV importer passes its own so an
+// "Item Number / Type / Schedule of Value / Jan-26..." header is not read as
+// data.
+export function gridFromMatrix(
+  matrix: string[][],
+  delimiter: Delimiter,
+  rule: HeaderRule = {},
+): ParsedGrid {
   if (!matrix.length) return { headers: null, rows: [], delimiter };
 
   const width = Math.max(...matrix.map((r) => r.length));
@@ -967,7 +1223,7 @@ export function gridFromMatrix(matrix: string[][], delimiter: Delimiter): Parsed
   let headerAt = -1;
   const limit = Math.min(rows.length, 20);
   for (let i = 0; i < limit; i++) {
-    const hits = headerHits(rows[i]);
+    const hits = headerHits(rows[i], rule);
     if (!hits) continue;
     if (i === 0) { headerAt = 0; break; }
     if (hits < 2) continue;
@@ -983,7 +1239,7 @@ export function gridFromMatrix(matrix: string[][], delimiter: Delimiter): Parsed
   };
 }
 
-export function parseGrid(text: string): ParsedGrid {
+export function parseGrid(text: string, rule: HeaderRule = {}): ParsedGrid {
   const lines = text
     .replace(/\r\n?/g, "\n")
     .split("\n")
@@ -995,7 +1251,7 @@ export function parseGrid(text: string): ParsedGrid {
   const delimiter: Delimiter = lines.some((l) => l.includes("\t")) ? "tab" : "comma";
   const d = delimiter === "tab" ? "\t" : ",";
 
-  return gridFromMatrix(lines.map((l) => splitLine(l, d)), delimiter);
+  return gridFromMatrix(lines.map((l) => splitLine(l, d)), delimiter, rule);
 }
 
 export type ColumnKey =

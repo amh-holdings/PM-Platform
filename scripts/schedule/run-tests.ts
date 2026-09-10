@@ -69,6 +69,10 @@ import {
   shiftDates,
   splitPredecessorToken,
   gridFromMatrix,
+  nearbyPredecessors,
+  planChainLink,
+  planFanLink,
+  planUnlink,
   type ColumnKey,
   type EditTask,
 } from "@/lib/schedule-edit";
@@ -936,6 +940,130 @@ section("Editing - import diff");
   const { rows } = buildImportRows(grid, mapping);
   const diff = diffImport([], rows, mapping);
   check("duplicate WBS blocks the import", diff.blocking.length > 0, diff.blocking.join(" "));
+}
+
+section("Editing - linking without typing");
+
+// A four-task run with one summary sitting in the middle of it, which is what a
+// real selection looks like when somebody drags down the grid.
+const linkTasks = [
+  { wbs_code: "5.1", task_name: "Sitework", predecessors: null },
+  { wbs_code: "5.1.1", task_name: "Clear and grub", predecessors: null },
+  { wbs_code: "5.1.2", task_name: "Rough grade", predecessors: null },
+  { wbs_code: "5.1.3", task_name: "Install culvert", predecessors: null },
+  { wbs_code: "5.1.10", task_name: "Fine grade", predecessors: null },
+];
+
+{
+  const plan = planChainLink(linkTasks, ["5.1.1", "5.1.2", "5.1.3"]);
+  eq("three tasks chain into two links", plan.updates.size, 2);
+  eq("the first stays free", plan.updates.get("5.1.1"), undefined);
+  eq("the second follows the first", plan.updates.get("5.1.2"), "5.1.1");
+  eq("the third follows the second", plan.updates.get("5.1.3"), "5.1.2");
+}
+
+{
+  // Ticked bottom-up. The chain still runs down the schedule - a backwards
+  // chain because of the order the boxes were clicked would be a trap.
+  const plan = planChainLink(linkTasks, ["5.1.3", "5.1.1", "5.1.2"]);
+  eq("order comes from the schedule, not the clicks", plan.updates.get("5.1.2"), "5.1.1");
+  eq("and runs downward", plan.updates.get("5.1.3"), "5.1.2");
+}
+
+{
+  // 5.1.10 sorts after 5.1.3, not between 5.1.1 and 5.1.2.
+  const plan = planChainLink(linkTasks, ["5.1.1", "5.1.10", "5.1.2"]);
+  eq("segments sort numerically", plan.updates.get("5.1.10"), "5.1.2");
+}
+
+{
+  const plan = planChainLink(linkTasks, ["5.1", "5.1.1", "5.1.2"], "SS", 3);
+  eq("the summary is dropped", plan.skipped[0], "5.1");
+  eq("and the chain is just the leaves", plan.updates.size, 1);
+  eq("type and lag apply to the link", plan.updates.get("5.1.2"), "5.1.1SS+3");
+  check("and the drop is explained", plan.warnings.some((w) => w.includes("summary")), plan.warnings.join(" "));
+}
+
+{
+  // FS is the implicit default, so it is not written out. What matters is that
+  // the negative lag survives a round trip - "5.1.1-2" has to come back as
+  // 5.1.1 with a lag of -2, not as a task code with a stray minus on it.
+  const plan = planChainLink(linkTasks, ["5.1.1", "5.1.2"], "FS", -2);
+  eq("a negative lag is written bare", plan.updates.get("5.1.2"), "5.1.1-2");
+  const back = parsePredecessors(plan.updates.get("5.1.2") ?? null);
+  eq("and reads back as the right task", back[0].pred, "5.1.1");
+  eq("with the overlap intact", back[0].lag, -2);
+  eq("and the default relationship", back[0].type, "FS");
+}
+
+{
+  // Running Link twice must not double the link, and must not fight a
+  // relationship somebody set deliberately on a different predecessor.
+  const withLogic = [
+    { wbs_code: "5.1.1", task_name: "A", predecessors: null },
+    { wbs_code: "5.1.2", task_name: "B", predecessors: "5.1.1, 4.9SS+2" },
+  ];
+  const plan = planChainLink(withLogic, ["5.1.1", "5.1.2"], "SS", 1);
+  eq("the existing link is updated in place", plan.updates.get("5.1.2"), "5.1.1SS+1, 4.9SS+2");
+}
+
+{
+  // The loop guard. B already feeds A, so chaining A into B closes it.
+  const looped = [
+    { wbs_code: "5.1.1", task_name: "A", predecessors: "5.1.2" },
+    { wbs_code: "5.1.2", task_name: "B", predecessors: null },
+  ];
+  const plan = planChainLink(looped, ["5.1.1", "5.1.2"]);
+  eq("a circular link is not written", plan.updates.size, 0);
+  check("and it says so", plan.warnings.some((w) => w.includes("loop")), plan.warnings.join(" "));
+}
+
+{
+  const plan = planChainLink(linkTasks, ["5.1.1"]);
+  eq("one task is not a chain", plan.updates.size, 0);
+  check("and it asks for another", plan.warnings.some((w) => w.includes("two")), plan.warnings.join(" "));
+}
+
+{
+  // Fan-out: everything waits on the same task.
+  const plan = planFanLink(linkTasks, "5.1.1", ["5.1.2", "5.1.3", "5.1.10"], "FS", 0);
+  eq("all three get the same predecessor", plan.updates.size, 3);
+  eq("second", plan.updates.get("5.1.2"), "5.1.1");
+  eq("third", plan.updates.get("5.1.3"), "5.1.1");
+  eq("and they are not chained to each other", plan.updates.get("5.1.10"), "5.1.1");
+}
+
+{
+  // Unlink cuts inside the selection only. 5.1.2 keeps its link to 4.9, which
+  // is not on screen and was never part of what was being cut.
+  const chained = [
+    { wbs_code: "5.1.1", task_name: "A", predecessors: "4.9" },
+    { wbs_code: "5.1.2", task_name: "B", predecessors: "5.1.1, 4.9SS+2" },
+    { wbs_code: "5.1.3", task_name: "C", predecessors: "5.1.2" },
+  ];
+  const plan = planUnlink(chained, ["5.1.1", "5.1.2", "5.1.3"]);
+  eq("two rows change", plan.updates.size, 2);
+  eq("the outside link survives", plan.updates.get("5.1.2"), "4.9SS+2");
+  eq("a row left with nothing goes null", plan.updates.get("5.1.3"), null);
+  eq("the head of the chain is untouched", plan.updates.get("5.1.1"), undefined);
+}
+
+{
+  const plan = planUnlink(linkTasks, ["5.1.1", "5.1.2"]);
+  eq("nothing to cut writes nothing", plan.updates.size, 0);
+  check("and says so", plan.warnings.length > 0, plan.warnings.join(" "));
+}
+
+{
+  // The empty-cell menu: the work immediately above, nearest first, no
+  // summaries, nothing already linked.
+  const near = nearbyPredecessors(linkTasks, "5.1.10", new Set(["5.1.3"]));
+  eq("nearest first", near[0].wbs_code, "5.1.2");
+  eq("then the next one up", near[1].wbs_code, "5.1.1");
+  eq("summaries and existing links are left out", near.length, 2);
+
+  const top = nearbyPredecessors(linkTasks, "5.1.1", new Set());
+  eq("the first task has nothing above it", top.length, 0);
 }
 
 section("Editing - Excel import");

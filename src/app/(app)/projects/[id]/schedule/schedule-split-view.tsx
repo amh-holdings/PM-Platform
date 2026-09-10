@@ -53,9 +53,13 @@ import {
   nextTopLevelCode,
   parentCodeOf,
   planDrop,
+  nearbyPredecessors,
+  planChainLink,
   planIndent,
   planMove,
   planOutdent,
+  planUnlink,
+  type LinkPlan,
   reconcileDates,
   scheduleOrder,
   shiftDates,
@@ -406,6 +410,8 @@ export function ScheduleSplitView({
     ReturnType<typeof describeTaskDeletion>
   >>(null);
   const [shiftBy, setShiftBy] = useState("5");
+  const [linkType, setLinkType] = useState<RelType>("FS");
+  const [linkLag, setLinkLag] = useState("0");
   const [dragging, setDragging] = useState<string[] | null>(null);
   const [dropAt, setDropAt] = useState<{ wbs: string; position: "before" | "after" } | null>(null);
   const [pendingDrop, setPendingDrop] = useState<{ plan: DropPlan; parent: string | null } | null>(null);
@@ -871,6 +877,78 @@ export function ScheduleSplitView({
     setMsg({ tone: "good", text: `Put ${undoPatch.what} back. Redo is on the same button.` });
     startTransition(() => router.refresh());
   }
+
+  // ---- linking ------------------------------------------------------------
+  //
+  // Both actions write into the same draft as a typed cell, so the chain is
+  // recalculated through CPM and shown - float, critical path, projected finish
+  // - before anything is saved. Linking is the edit most likely to be wrong in
+  // a way you only notice three weeks later, so it gets previewed like the rest.
+  function applyLinkPlan(plan: LinkPlan, verb: string) {
+    if (plan.updates.size) {
+      setDraft((prev) => {
+        const next = { ...prev };
+        for (const [wbs, value] of Array.from(plan.updates.entries())) {
+          const t = allTasks.find((x) => x.wbs_code === wbs);
+          if (!t) continue;
+          next[t.id] = { ...(next[t.id] ?? {}), predecessors: value ?? "" };
+        }
+        return next;
+      });
+    }
+
+    const parts: string[] = [];
+    if (plan.updates.size) {
+      parts.push(
+        `${verb} ${plan.updates.size} task${plan.updates.size === 1 ? "" : "s"}, not yet saved.`,
+      );
+    }
+    parts.push(...plan.warnings);
+    setMsg({
+      tone: plan.updates.size ? "warn" : "bad",
+      text: parts.join(" ") || "Nothing changed.",
+    });
+  }
+
+  function selectedCodes(): string[] {
+    return Array.from(selected)
+      .map((id) => byId.get(id)?.wbs_code)
+      .filter(Boolean) as string[];
+  }
+
+  function linkSelected() {
+    const codes = selectedCodes();
+    if (codes.length < 2) {
+      setMsg({ tone: "warn", text: "Tick at least two rows, then Link." });
+      return;
+    }
+    const lag = Number(linkLag) || 0;
+    applyLinkPlan(planChainLink(allTasks.map(asEdit), codes, linkType, lag), "Linked");
+  }
+
+  function unlinkSelected() {
+    const codes = selectedCodes();
+    if (!codes.length) {
+      setMsg({ tone: "warn", text: "Tick the rows whose links you want cut." });
+      return;
+    }
+    applyLinkPlan(planUnlink(allTasks.map(asEdit), codes), "Unlinked");
+  }
+
+  // Ctrl+L to link, Ctrl+Shift+L to unlink - the shortcut every scheduler
+  // already has in their fingers from Project and P6. It fires while a cell has
+  // focus too, because linking the rows you just typed is the next thing you do.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "l") return;
+      if (!selected.size) return;
+      e.preventDefault();
+      if (e.shiftKey) unlinkSelected();
+      else linkSelected();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   // ---- bulk edits ---------------------------------------------------------
   function bulkSet(f: Field, v: string) {
@@ -1452,6 +1530,46 @@ export function ScheduleSplitView({
         <Button variant="outline" size="sm" className="h-8" disabled={!selected.size || busy} onClick={() => structure("down")}>↓</Button>
         <Button variant="outline" size="sm" className="h-8" disabled={!selected.size || busy} onClick={() => structure("indent")}>→ Indent</Button>
         <Button variant="outline" size="sm" className="h-8" disabled={!selected.size || busy} onClick={() => structure("outdent")}>← Outdent</Button>
+        <span className="mx-1 h-6 w-px bg-border" />
+        <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8"
+            disabled={selected.size < 2 || busy}
+            onClick={linkSelected}
+            title="Chain the ticked rows in schedule order, each one a predecessor of the next. Ctrl+L"
+          >
+            🔗 Link
+          </Button>
+          <select
+            value={linkType}
+            onChange={(e) => setLinkType(e.target.value as RelType)}
+            className="h-8 rounded-md border border-input bg-background px-1 text-xs"
+            title="The relationship every link in the chain gets"
+          >
+            <option value="FS">FS</option>
+            <option value="SS">SS</option>
+            <option value="FF">FF</option>
+            <option value="SF">SF</option>
+          </select>
+          <Input
+            value={linkLag}
+            onChange={(e) => setLinkLag(e.target.value)}
+            className="h-8 w-12"
+            title="Lag in working days on every link. Negative overlaps the tasks."
+          />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8"
+            disabled={!selected.size || busy}
+            onClick={unlinkSelected}
+            title="Cut the links between the ticked rows, leaving their links to everything else alone. Ctrl+Shift+L"
+          >
+            Unlink
+          </Button>
+        </div>
         <span className="mx-1 h-6 w-px bg-border" />
         <div className="flex items-center gap-1">
           <Input
@@ -2458,10 +2576,18 @@ function PredecessorCell({
   // looking for 5.1.1.
   const typedCode = active.replace(/(FS|SS|FF|SF)[+-]?\d*$/i, "").trim();
 
+  const already = useMemo(() => new Set(links.map((l) => l.pred)), [links]);
+
+  // With nothing typed, offer the work immediately above rather than an empty
+  // menu. A schedule is written top to bottom and most logic is local, so the
+  // answer is usually two or three rows up - and it is the answer you are least
+  // able to type, because you would have to go and read its WBS code first.
   const suggestions = useMemo(() => {
-    if (!open || !typedCode) return [];
+    if (!open) return [];
+    if (!typedCode) {
+      return nearbyPredecessors(allTasks, currentWbs, already);
+    }
     const q = typedCode.toLowerCase();
-    const already = new Set(links.map((l) => l.pred));
     return allTasks
       .filter((t) => t.wbs_code !== currentWbs)
       .filter(
@@ -2472,7 +2598,7 @@ function PredecessorCell({
       // An exact hit needs no menu; anything already linked is noise.
       .filter((t) => !(already.has(t.wbs_code) && t.wbs_code !== typedCode))
       .slice(0, 7);
-  }, [open, typedCode, allTasks, currentWbs, links]);
+  }, [open, typedCode, allTasks, currentWbs, already]);
 
   function choose(code: string) {
     const next = [...tokens];
@@ -2509,17 +2635,22 @@ function PredecessorCell({
           setOpen(true);
           onChange(e.target.value);
         }}
-        onFocus={(e) => setCaretToken(tokenAt(e.currentTarget))}
+        onFocus={(e) => { setCaretToken(tokenAt(e.currentTarget)); setOpen(true); }}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
         onKeyDown={(e) => {
           if (e.key === "Escape" && open) { setOpen(false); e.stopPropagation(); return; }
           onKeyDown(e);
         }}
-        onClick={(e) => setCaretToken(tokenAt(e.currentTarget))}
+        onClick={(e) => { setCaretToken(tokenAt(e.currentTarget)); setOpen(true); }}
         ref={inputRef}
       />
       {open && suggestions.length > 0 && (
         <ul className="absolute left-0 top-7 z-50 max-h-56 w-72 overflow-y-auto rounded-md border bg-popover p-1 shadow-lg">
+          {!typedCode && (
+            <li className="px-1.5 pb-1 pt-0.5 text-[10px] text-muted-foreground">
+              Work just above - or type a code or a task name
+            </li>
+          )}
           {suggestions.map((t) => (
             <li key={t.wbs_code}>
               <button
