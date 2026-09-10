@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 
 import { METHOD_LABEL, STATUS_LABEL, STATUS_TONE } from "../constants";
 import { MappingRow } from "./mapping-row";
+import { SovEditor } from "./sov-editor";
 
 type Params = { id: string; subId: string };
 
@@ -18,6 +19,9 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
   await guardCapability("verifySubBilling");
   const { effective } = await getEffectiveRole();
   const showDollars = can(effective, "viewSubBillingDollars");
+  // The SOV carries scheduled values, so editing it sits with the same
+  // capability as entering a bill rather than with percent-only verification.
+  const canEditSov = can(effective, "enterSubBill");
   const db = subBillingClient();
 
   const { data: sub } = await db
@@ -97,6 +101,11 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
 
   const sovTotal = sovLines.reduce((s, l) => s + Number(l.scheduled_value ?? 0), 0);
   const unmapped = sovLines.filter((l) => l.verification_method === "unmapped").length;
+  // The SOV is what every percentage is priced against, so a total that does
+  // not match the executed contract value is worth saying out loud rather than
+  // leaving for someone to notice at approval time.
+  const contractValue = Number(sub.contract_value ?? 0);
+  const sovVariance = sovTotal - contractValue;
 
   return (
     <div className="space-y-6">
@@ -126,6 +135,9 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
       </div>
 
       {/* ---------------------------- Next bill ---------------------------- */}
+      {/* Nothing to project against until an SOV exists, and "no earned work"
+          would read as a field-record finding rather than a missing SOV. */}
+      {sovLines.length > 0 && (
       <section className="space-y-2 rounded-md border bg-card p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-sm font-semibold">What we expect on the next bill</h3>
@@ -211,6 +223,7 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
           </>
         )}
       </section>
+      )}
 
       {/* ------------------------- Bill history --------------------------- */}
       <section className="space-y-2">
@@ -275,56 +288,101 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
       </section>
 
       {/* -------------------- SOV and evidence mapping --------------------- */}
-      <section className="space-y-2">
+      <section className="space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-sm font-semibold">Executed schedule of values</h3>
           <span className="text-xs text-muted-foreground">
             {sovLines.length} lines
-            {showDollars ? ` · ${formatCurrency(sovTotal)}` : ""}
-            {unmapped > 0 ? ` · ${unmapped} unmapped` : " · all mapped"}
+            {showDollars ? ` \u00b7 ${formatCurrency(sovTotal)}` : ""}
+            {sovLines.length > 0 && (unmapped > 0 ? ` \u00b7 ${unmapped} unmapped` : " \u00b7 all mapped")}
           </span>
         </div>
-        <div className="overflow-x-auto rounded-md border">
-          <table className="w-full min-w-[900px] text-sm">
-            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2">Item</th>
-                <th className="px-3 py-2">Description</th>
-                {showDollars && <th className="px-3 py-2 text-right">Scheduled value</th>}
-                {showDollars && <th className="px-3 py-2 text-right">Billed to date</th>}
-                <th className="px-3 py-2">Verified by</th>
-                <th className="px-3 py-2">Evidence</th>
-                <th className="px-3 py-2" />
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {sovLines.map((l) => (
-                <MappingRow
-                  key={l.id}
-                  projectId={params.id}
-                  line={{
-                    id: l.id,
-                    item_number: l.item_number,
-                    description: l.description,
-                    scheduled_value: Number(l.scheduled_value ?? 0),
-                    verification_method: l.verification_method,
-                    linked_task_wbs_codes: l.linked_task_wbs_codes ?? [],
-                    linked_commodity_ids: l.linked_commodity_ids ?? [],
-                    milestone_task_wbs_code: l.milestone_task_wbs_code,
-                    mapping_notes: l.mapping_notes,
-                    mapping_confirmed_at: l.mapping_confirmed_at,
-                  }}
-                  billedToDate={billedByItem.get(l.item_number) ?? 0}
-                  showDollars={showDollars}
-                  methodLabel={METHOD_LABEL[l.verification_method] ?? l.verification_method}
-                  tasks={tasks.map((t) => ({ wbs_code: t.wbs_code, task_name: t.task_name ?? "" }))}
-                  commodities={commodities.map((c) => ({ id: c.id, label: c.label ?? "" }))}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+
+        {showDollars && sovLines.length > 0 && contractValue > 0 && Math.abs(sovVariance) >= 0.01 && (
+          <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            The SOV totals {formatCurrency(sovTotal)} against a contract value of{" "}
+            {formatCurrency(contractValue)}, a difference of {formatCurrency(Math.abs(sovVariance))}
+            {sovVariance > 0 ? " over" : " under"}. Every percentage on this page is priced off
+            the SOV, so the two should tie out before a bill is approved.
+          </p>
+        )}
+
+        {canEditSov && (
+          <SovEditor
+            projectId={params.id}
+            subcontractorId={params.subId}
+            hasLines={sovLines.length > 0}
+          />
+        )}
+
+        {sovLines.length === 0 ? (
+          <p className="rounded-md border bg-card p-4 text-sm text-muted-foreground">
+            No schedule of values has been loaded for {sub.company_name}.
+            {canEditSov
+              ? " Paste the executed SOV above, then map each line to the schedule tasks or commodities that prove it. Bills cannot be recorded until the SOV is in."
+              : " Bills cannot be recorded against this subcontractor until one is loaded."}
+          </p>
+        ) : (
+          <div className="overflow-x-auto rounded-md border">
+            <table className="w-full min-w-[900px] text-sm">
+              <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">Item</th>
+                  <th className="px-3 py-2">Description</th>
+                  {showDollars && <th className="px-3 py-2 text-right">Scheduled value</th>}
+                  {showDollars && <th className="px-3 py-2 text-right">Billed to date</th>}
+                  <th className="px-3 py-2">Verified by</th>
+                  <th className="px-3 py-2">Evidence</th>
+                  <th className="px-3 py-2" />
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {sovLines.map((l) => (
+                  <MappingRow
+                    key={l.id}
+                    projectId={params.id}
+                    line={{
+                      id: l.id,
+                      item_number: l.item_number,
+                      description: l.description,
+                      scheduled_value: Number(l.scheduled_value ?? 0),
+                      section_name: l.section_name,
+                      quantity: l.quantity == null ? null : Number(l.quantity),
+                      unit: l.unit,
+                      is_change_order: l.is_change_order,
+                      change_order_ref: l.change_order_ref,
+                      verification_method: l.verification_method,
+                      linked_task_wbs_codes: l.linked_task_wbs_codes ?? [],
+                      linked_commodity_ids: l.linked_commodity_ids ?? [],
+                      milestone_task_wbs_code: l.milestone_task_wbs_code,
+                      mapping_notes: l.mapping_notes,
+                      mapping_confirmed_at: l.mapping_confirmed_at,
+                    }}
+                    billedToDate={billedByItem.get(l.item_number) ?? 0}
+                    showDollars={showDollars}
+                    canEditLine={canEditSov}
+                    methodLabel={METHOD_LABEL[l.verification_method] ?? l.verification_method}
+                    tasks={tasks.map((t) => ({ wbs_code: t.wbs_code, task_name: t.task_name ?? "" }))}
+                    commodities={commodities.map((c) => ({ id: c.id, label: c.label ?? "" }))}
+                  />
+                ))}
+              </tbody>
+              {showDollars && (
+                <tfoot className="border-t-2 bg-muted/30 font-medium">
+                  <tr>
+                    <td className="px-3 py-2" colSpan={2}>
+                      SOV total
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(sovTotal)}</td>
+                    <td colSpan={4} />
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        )}
       </section>
+
     </div>
   );
 }

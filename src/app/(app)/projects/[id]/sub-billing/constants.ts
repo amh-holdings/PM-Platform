@@ -24,6 +24,7 @@ export const METHOD_LABEL: Record<string, string> = {
   schedule: "Schedule tasks",
   commodity: "Commodity quantities",
   milestone: "Milestone",
+  on_site: "On site",
   time: "Time-based",
   manual: "CM sign-off",
   unmapped: "Not mapped",

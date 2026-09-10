@@ -25,6 +25,7 @@
     "commodity:apply": "tsx scripts/commodity/apply-backfill.ts",
     "verify:schedule-edit": "tsx scripts/schedule/verify-edit-plans.ts",
     "test:nav": "tsx scripts/nav/check-nav.ts",
+    "test:sub-sov-import": "tsx scripts/sub-billing/run-sov-import-tests.ts",
     "commodity:propose-reports": "tsx scripts/commodity/propose-from-reports.ts"
   },
   "dependencies": {

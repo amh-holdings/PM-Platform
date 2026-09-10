@@ -7,7 +7,8 @@ import { createClient } from "@/lib/supabase/server";
 import { can, toEffectiveRole, type Capability } from "@/lib/roles";
 import { runVerificationCore } from "@/lib/sub-billing-run";
 import { approvedToDateByItem, type BillHeader, type BillLine, type SovLine } from "@/lib/sub-billing";
-import type { SubPayAppStatus } from "@/lib/sub-billing.types";
+import { parsePastedSovLines } from "@/lib/sub-sov-import";
+import type { SubBillingClient, SubPayAppStatus } from "@/lib/sub-billing.types";
 
 export type ActionResult =
   | { ok: true; id?: string }
@@ -479,4 +480,318 @@ export async function markBillPaid(
   if (error) return { ok: false, error: error.message };
   revalidatePath(`/projects/${projectId}/sub-billing/${app?.subcontractor_id}/${appId}`);
   return { ok: true, id: appId };
+}
+
+// ---------------------------------------------------------------------------
+// SOV maintenance.
+//
+// The executed schedule of values is the spine of everything else on this
+// screen: the bill entry form is built from it, the verification engine reads
+// the mapping off it, and the projection prices its percentages against it.
+// Until now those rows could only be loaded by a one-off import script, which
+// meant a sub whose SOV was not scripted in could never be billed through the
+// platform at all.
+//
+// These four actions are Phil-only (`enterSubBill`). Scheduled values are
+// dollars, and the whole point of the CM's percent-only view is that he judges
+// the work without seeing the money - letting him edit the SOV would hand back
+// exactly what that split withholds.
+// ---------------------------------------------------------------------------
+
+type SovLineFields = {
+  item_number: string;
+  description: string;
+  section_code: string | null;
+  section_name: string | null;
+  scheduled_value: number;
+  quantity: number | null;
+  unit: string | null;
+  unit_cost: number | null;
+  is_change_order: boolean;
+  change_order_ref: string | null;
+  sort_order: number | null;
+};
+
+function readSovFields(formData: FormData): SovLineFields | { error: string } {
+  const itemNumber = str(formData.get("item_number"));
+  const description = str(formData.get("description"));
+  if (!itemNumber) return { error: "Item number is required" };
+  if (!description) return { error: "Description is required" };
+
+  const scheduledValue = optNum(formData.get("scheduled_value"));
+  if (scheduledValue == null) return { error: "Scheduled value is required" };
+
+  const quantity = optNum(formData.get("quantity"));
+  const unitCost = optNum(formData.get("unit_cost"));
+
+  return {
+    item_number: itemNumber,
+    description,
+    section_code: str(formData.get("section_code")),
+    section_name: str(formData.get("section_name")),
+    scheduled_value: round2(scheduledValue),
+    quantity,
+    unit: str(formData.get("unit")),
+    // A unit-price line pasted with a quantity and an extended value but no
+    // rate can still carry one, and the verification engine reads it.
+    unit_cost: unitCost ?? (quantity && quantity !== 0 ? scheduledValue / quantity : null),
+    is_change_order: formData.get("is_change_order") === "on",
+    change_order_ref: str(formData.get("change_order_ref")),
+    sort_order: optNum(formData.get("sort_order")),
+  };
+}
+
+/** The end of the current sort order, so a new line lands at the bottom. */
+async function nextSortOrder(db: SubBillingClient, subcontractorId: string): Promise<number> {
+  // Postgres sorts nulls first on a descending order, so an unordered row
+  // would otherwise answer this query and restart numbering at 10.
+  const { data } = await db
+    .from("sub_sov_lines")
+    .select("sort_order")
+    .eq("subcontractor_id", subcontractorId)
+    .not("sort_order", "is", null)
+    .order("sort_order", { ascending: false })
+    .limit(1);
+  return Number(data?.[0]?.sort_order ?? 0) + 10;
+}
+
+export async function createSovLine(
+  projectId: string,
+  subcontractorId: string,
+  formData: FormData,
+): Promise<ActionResult> {
+  const auth = await requireCapability("enterSubBill");
+  if (!auth.ok) return auth;
+  const db = subBillingClient();
+
+  const fields = readSovFields(formData);
+  if ("error" in fields) return { ok: false, error: fields.error };
+
+  const { data, error } = await db
+    .from("sub_sov_lines")
+    .insert({
+      project_id: projectId,
+      subcontractor_id: subcontractorId,
+      ...fields,
+      sort_order: fields.sort_order ?? (await nextSortOrder(db, subcontractorId)),
+      verification_method: (str(formData.get("verification_method")) ?? "unmapped") as never,
+      active: true,
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    if (error.code === "23505") {
+      return { ok: false, error: `Item ${fields.item_number} already exists on this SOV` };
+    }
+    return { ok: false, error: error.message };
+  }
+
+  revalidatePath(`/projects/${projectId}/sub-billing/${subcontractorId}`);
+  revalidatePath(`/projects/${projectId}/sub-billing`);
+  return { ok: true, id: data.id };
+}
+
+export async function updateSovLine(
+  projectId: string,
+  sovLineId: string,
+  formData: FormData,
+): Promise<ActionResult> {
+  const auth = await requireCapability("enterSubBill");
+  if (!auth.ok) return auth;
+  const db = subBillingClient();
+
+  const fields = readSovFields(formData);
+  if ("error" in fields) return { ok: false, error: fields.error };
+
+  const { data: existing } = await db
+    .from("sub_sov_lines")
+    .select("id, subcontractor_id, item_number")
+    .eq("id", sovLineId)
+    .single();
+  if (!existing) return { ok: false, error: "SOV line not found" };
+
+  // item_number is the key every recorded bill line carries and the key the
+  // previously-billed baseline is looked up by. Renumbering a line that has
+  // already been billed would orphan that history and reset the line's
+  // previous column to zero, handing the sub the same money twice.
+  if (fields.item_number !== existing.item_number) {
+    const { count } = await db
+      .from("sub_pay_app_lines")
+      .select("id", { count: "exact", head: true })
+      .eq("sub_sov_line_id", sovLineId);
+    if ((count ?? 0) > 0) {
+      return {
+        ok: false,
+        error: `Item ${existing.item_number} has already been billed, so its item number cannot be changed. Everything else on the line can still be edited.`,
+      };
+    }
+  }
+
+  // The edit form carries no sort_order input, so writing the parsed value
+  // back would null out the ordering of every line that gets edited.
+  const { sort_order, ...editable } = fields;
+  const patch = sort_order == null ? editable : fields;
+
+  const { error } = await db.from("sub_sov_lines").update(patch).eq("id", sovLineId);
+  if (error) {
+    if (error.code === "23505") {
+      return { ok: false, error: `Item ${fields.item_number} already exists on this SOV` };
+    }
+    return { ok: false, error: error.message };
+  }
+
+  revalidatePath(`/projects/${projectId}/sub-billing/${existing.subcontractor_id}`);
+  revalidatePath(`/projects/${projectId}/sub-billing`);
+  return { ok: true, id: sovLineId };
+}
+
+/**
+ * Removes a line. A line that has never been billed is deleted outright; one
+ * that appears on a recorded bill is retired instead, because the bill lines
+ * point at it and an approved application has to stay reconstructible.
+ */
+export async function removeSovLine(
+  projectId: string,
+  sovLineId: string,
+): Promise<ActionResult> {
+  const auth = await requireCapability("enterSubBill");
+  if (!auth.ok) return auth;
+  const db = subBillingClient();
+
+  const { data: existing } = await db
+    .from("sub_sov_lines")
+    .select("id, subcontractor_id")
+    .eq("id", sovLineId)
+    .single();
+  if (!existing) return { ok: false, error: "SOV line not found" };
+
+  const { count } = await db
+    .from("sub_pay_app_lines")
+    .select("id", { count: "exact", head: true })
+    .eq("sub_sov_line_id", sovLineId);
+
+  const { error } =
+    (count ?? 0) > 0
+      ? await db.from("sub_sov_lines").update({ active: false }).eq("id", sovLineId)
+      : await db.from("sub_sov_lines").delete().eq("id", sovLineId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/sub-billing/${existing.subcontractor_id}`);
+  revalidatePath(`/projects/${projectId}/sub-billing`);
+  return { ok: true, id: sovLineId };
+}
+
+/**
+ * Loads a whole SOV from a pasted spreadsheet range.
+ *
+ * Existing item numbers are updated in place rather than duplicated, so a
+ * re-paste after a change order keeps every confirmed mapping instead of
+ * throwing the evidence links away and starting over as unmapped.
+ */
+export async function importSovLines(
+  projectId: string,
+  subcontractorId: string,
+  formData: FormData,
+): Promise<ActionResult & { imported?: number; updated?: number; skipped?: string[] }> {
+  const auth = await requireCapability("enterSubBill");
+  if (!auth.ok) return auth;
+  const db = subBillingClient();
+
+  const text = typeof formData.get("paste") === "string" ? String(formData.get("paste")) : "";
+  if (!text.trim()) return { ok: false, error: "Nothing pasted" };
+
+  const parsed = parsePastedSovLines(text);
+  if (parsed.lines.length === 0) {
+    return {
+      ok: false,
+      error:
+        parsed.skipped.length > 0
+          ? `No lines could be read. First problem: row ${parsed.skipped[0].row} - ${parsed.skipped[0].reason}`
+          : "No lines could be read from that paste",
+    };
+  }
+
+  const { data: existingRows } = await db
+    .from("sub_sov_lines")
+    .select("id, item_number, sort_order")
+    .eq("subcontractor_id", subcontractorId);
+  const existing = new Map((existingRows ?? []).map((r) => [r.item_number.toLowerCase(), r]));
+
+  // Auto-numbering for a paste with no item column, continuing past whatever
+  // is already on the SOV rather than colliding with it.
+  let autoSeed = 0;
+  for (const r of existingRows ?? []) {
+    const n = Number(r.item_number.replace(/[^0-9.]/g, ""));
+    if (Number.isFinite(n)) autoSeed = Math.max(autoSeed, Math.floor(n));
+  }
+  // Item numbers spoken for either by the existing SOV or by an earlier row of
+  // this same paste. Without this, five unnumbered rows pasted alongside an
+  // explicit item 5 both land on "5" and the whole insert fails on the unique
+  // key with a raw Postgres error.
+  const claimed = new Set(existing.keys());
+  const nextAuto = () => {
+    do autoSeed += 1;
+    while (claimed.has(String(autoSeed).toLowerCase()));
+    return String(autoSeed);
+  };
+
+  let sortOrder = await nextSortOrder(db, subcontractorId);
+  const isChangeOrder = formData.get("is_change_order") === "on";
+  const changeOrderRef = str(formData.get("change_order_ref"));
+
+  const inserts: Record<string, unknown>[] = [];
+  let updated = 0;
+
+  for (const line of parsed.lines) {
+    const itemNumber = line.itemNumber ?? nextAuto();
+    claimed.add(itemNumber.toLowerCase());
+    const prior = existing.get(itemNumber.toLowerCase());
+    const shared = {
+      description: line.description,
+      scheduled_value: line.scheduledValue,
+      quantity: line.quantity,
+      unit: line.unit,
+      unit_cost:
+        line.unitCost ??
+        (line.quantity && line.quantity !== 0 ? line.scheduledValue / line.quantity : null),
+      section_name: line.sectionName,
+    };
+
+    if (prior) {
+      // Deliberately does NOT touch verification_method, the evidence links or
+      // the mapping confirmation. Those are the expensive part to rebuild.
+      const { error } = await db.from("sub_sov_lines").update(shared).eq("id", prior.id);
+      if (error) return { ok: false, error: error.message };
+      updated += 1;
+      continue;
+    }
+
+    inserts.push({
+      project_id: projectId,
+      subcontractor_id: subcontractorId,
+      item_number: itemNumber,
+      ...shared,
+      is_change_order: isChangeOrder,
+      change_order_ref: changeOrderRef,
+      verification_method: "unmapped",
+      sort_order: sortOrder,
+      active: true,
+    });
+    sortOrder += 10;
+  }
+
+  if (inserts.length > 0) {
+    const { error } = await db.from("sub_sov_lines").insert(inserts as never);
+    if (error) return { ok: false, error: error.message };
+  }
+
+  revalidatePath(`/projects/${projectId}/sub-billing/${subcontractorId}`);
+  revalidatePath(`/projects/${projectId}/sub-billing`);
+  return {
+    ok: true,
+    imported: inserts.length,
+    updated,
+    skipped: parsed.skipped.map((s) => `Row ${s.row}: ${s.reason}`),
+  };
 }

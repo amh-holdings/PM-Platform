@@ -126,20 +126,26 @@ export default async function SubBillingPage({ params }: { params: Params }) {
                 const unmapped = Number(s.unmapped_lines ?? 0);
                 return (
                   <tr key={s.subcontractor_id} className="hover:bg-muted/30">
+                    {/* Linked whether or not an SOV is loaded. A sub with no
+                        SOV is exactly the one that needs the detail page,
+                        because loading the SOV is what happens there. */}
                     <td className="px-3 py-2">
-                      {lineCount > 0 ? (
-                        <Link
-                          className="font-medium underline-offset-2 hover:underline"
-                          href={`/projects/${params.id}/sub-billing/${s.subcontractor_id}`}
-                        >
-                          {s.company_name}
-                        </Link>
-                      ) : (
-                        <span className="text-muted-foreground">{s.company_name}</span>
-                      )}
+                      <Link
+                        className="font-medium underline-offset-2 hover:underline"
+                        href={`/projects/${params.id}/sub-billing/${s.subcontractor_id}`}
+                      >
+                        {s.company_name}
+                      </Link>
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">
-                      {lineCount || <span className="text-muted-foreground">No SOV</span>}
+                      {lineCount || (
+                        <Link
+                          className="text-muted-foreground underline underline-offset-2 hover:no-underline"
+                          href={`/projects/${params.id}/sub-billing/${s.subcontractor_id}`}
+                        >
+                          Add SOV
+                        </Link>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">
                       {lineCount === 0 ? (

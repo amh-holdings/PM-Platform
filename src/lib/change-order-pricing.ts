@@ -10,6 +10,8 @@
  * sub quote sit next to 10% on self-perform work in the same CO.
  */
 
+import { parseMoney, splitRow } from "@/lib/paste-table";
+
 export const COST_CATEGORIES = [
   "labor",
   "material",
@@ -389,41 +391,6 @@ const CATEGORY_ALIASES: Record<string, CostCategory> = {
   delivery: "freight",
   other: "other",
 };
-
-/** Strips $ , % and whitespace, and reads (123.45) as negative. */
-function parseMoney(raw: string): number | null {
-  const t = raw.trim();
-  if (!t) return null;
-  const negative = /^\(.*\)$/.test(t);
-  const cleaned = t.replace(/[()$,%\s]/g, "");
-  if (!cleaned) return null;
-  const n = Number(cleaned);
-  if (!Number.isFinite(n)) return null;
-  return negative ? -n : n;
-}
-
-function splitRow(row: string): string[] {
-  // Excel and Sheets both put tabs between cells on copy, so tabs win when
-  // present. Falling back to commas would split "Racking, delivered" in two.
-  if (row.includes("\t")) return row.split("\t").map((c) => c.trim());
-  const out: string[] = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < row.length; i++) {
-    const ch = row[i];
-    if (ch === '"') {
-      if (inQuotes && row[i + 1] === '"') {
-        cur += '"';
-        i++;
-      } else inQuotes = !inQuotes;
-    } else if (ch === "," && !inQuotes) {
-      out.push(cur.trim());
-      cur = "";
-    } else cur += ch;
-  }
-  out.push(cur.trim());
-  return out;
-}
 
 function matchHeader(cells: string[]): Record<string, number> | null {
   const map: Record<string, number> = {};
