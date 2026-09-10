@@ -32,7 +32,7 @@
 
 import * as XLSX from "xlsx";
 
-import { gridFromMatrix, type ParsedGrid } from "@/lib/schedule-edit";
+import { gridFromMatrix, type HeaderRule, type ParsedGrid } from "@/lib/schedule-edit";
 
 export type SheetSummary = {
   name: string;
@@ -166,16 +166,26 @@ export function readWorkbook(data: ArrayBuffer): SheetSummary[] {
   });
 }
 
-export function gridFromSheet(sheet: SheetSummary): ParsedGrid {
-  return gridFromMatrix(sheet.rows, "cells");
+// `rule` is passed through to the header detector. Callers importing something
+// other than a schedule supply their own column vocabulary.
+export function gridFromSheet(
+  sheet: SheetSummary,
+  rule?: HeaderRule,
+): ParsedGrid {
+  return gridFromMatrix(sheet.rows, "cells", rule);
 }
 
-// The sheet to land on: the first one with real content. A workbook whose first
-// tab is a cover page or a legend should not open on an empty mapper.
-export function defaultSheetIndex(sheets: SheetSummary[]): number {
-  const named = sheets.findIndex(
-    (s) => s.filledRows > 1 && /schedule|task|activit|wbs|plan/i.test(s.name),
-  );
+const SCHEDULE_SHEET_RE = /schedule|task|activit|wbs|plan/i;
+
+// The sheet to land on: the first one with real content whose name looks like
+// the thing being imported. A workbook whose first tab is a cover page or a
+// legend should not open on an empty mapper, and Phil's cash-flow workbook has
+// seven tabs of which only one is the SOV.
+export function defaultSheetIndex(
+  sheets: SheetSummary[],
+  nameRe: RegExp = SCHEDULE_SHEET_RE,
+): number {
+  const named = sheets.findIndex((s) => s.filledRows > 1 && nameRe.test(s.name));
   if (named !== -1) return named;
   const first = sheets.findIndex((s) => s.filledRows > 1);
   return first === -1 ? 0 : first;

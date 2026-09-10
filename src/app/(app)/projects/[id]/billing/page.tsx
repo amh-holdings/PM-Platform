@@ -12,8 +12,13 @@ import {
   summarizeLineBilling,
 } from "@/lib/billing-progress";
 
+import { Button } from "@/components/ui/button";
+
 import { BillingLinkForm } from "../billing-link-form";
 import { BillingPoLinkForm } from "../billing-po-link-form";
+import { BillingLineDialog } from "./billing-line-dialog";
+import { BillingLineRowActions } from "./billing-line-row-actions";
+import { SovImportDialog } from "./sov-import-dialog";
 import { BillThisPeriodPanel } from "./bill-this-period-panel";
 import { BillingPeriodSelector } from "./billing-period-selector";
 import { LinkCatalogProvider, type TaskOption } from "./link-catalog";
@@ -53,11 +58,12 @@ export default async function ProjectBillingPage({
     { data: pos },
     { data: entries },
     { data: tasks },
+    { data: changeOrders },
   ] = await Promise.all([
     supabase
       .from("billing_lines")
       .select(
-        "id, item_number, type, description, scheduled_value, linked_task_wbs_codes, linked_procurement_order_ids, sort_order, change_order_id",
+        "id, item_number, type, description, scheduled_value, linked_task_wbs_codes, linked_procurement_order_ids, sort_order, change_order_id, notes",
       )
       .eq("project_id", params.id)
       .order("sort_order", { ascending: true, nullsFirst: false })
@@ -86,6 +92,12 @@ export default async function ProjectBillingPage({
       .eq("project_id", params.id)
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("wbs_code", { ascending: true }),
+    // Only so an edit or a delete can say which CO owns a line by name rather
+    // than by uuid.
+    supabase
+      .from("change_orders")
+      .select("id, co_number")
+      .eq("project_id", params.id),
   ]);
 
   const availablePos = (pos ?? []).map((p) => ({
@@ -132,6 +144,27 @@ export default async function ProjectBillingPage({
   const periodByLine = summarizeLineBilling(entries ?? [], period, periodEnd);
 
   const rows = lines ?? [];
+
+  // Inputs for the line editor. Types already in use become the autocomplete
+  // on the Type field, so a hand-added line does not invent "Sitework" beside
+  // the existing "Site Work".
+  const coNumberById = new Map(
+    (changeOrders ?? []).map((c) => [c.id, c.co_number]),
+  );
+  const knownTypes = Array.from(
+    new Set(rows.map((r) => (r.type ?? "").trim()).filter(Boolean)),
+  ).sort();
+  const existingForImport = rows.map((r) => ({
+    id: r.id,
+    item_number: r.item_number,
+    type: r.type,
+    description: r.description,
+    scheduled_value: r.scheduled_value === null ? null : Number(r.scheduled_value),
+    sort_order: r.sort_order,
+    notes: r.notes,
+    change_order_id: r.change_order_id,
+  }));
+
   const footer = rows.reduce(
     (acc, r) => {
       const p = periodByLine.get(r.id) ?? emptyLineBillingSummary();
@@ -151,11 +184,24 @@ export default async function ProjectBillingPage({
   return (
     <LinkCatalogProvider tasks={taskOptions} pos={availablePos}>
       <div className="space-y-6">
-        <div>
-          <p className="text-xs text-muted-foreground">
-            Owner billing lines from the cash flow spreadsheet. Link schedule
-            tasks per line so the dashboard can auto-suggest next-month billing.
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <p className="max-w-2xl text-xs text-muted-foreground">
+            Owner billing lines - the schedule of values the G703 bills against.
+            Add them by hand or import the spreadsheet, then link schedule tasks
+            per line so the dashboard can auto-suggest next-month billing.
           </p>
+          <div className="flex shrink-0 gap-2">
+            <SovImportDialog
+              projectId={params.id}
+              existing={existingForImport}
+              trigger={<Button variant="outline">Import spreadsheet</Button>}
+            />
+            <BillingLineDialog
+              projectId={params.id}
+              knownTypes={knownTypes}
+              trigger={<Button>Add SOV line</Button>}
+            />
+          </div>
         </div>
 
         <BillingPeriodSelector projectId={params.id} selected={period} />
@@ -195,6 +241,9 @@ export default async function ProjectBillingPage({
                   </span>
                 </th>
                 <th className="px-3 py-2 text-right font-medium">Planned</th>
+                <th className="px-3 py-2 text-right font-medium">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -318,16 +367,52 @@ export default async function ProjectBillingPage({
                     <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground">
                       {formatCurrency(t.planned)}
                     </td>
+                    <td className="px-3 py-2 text-right">
+                      <BillingLineRowActions
+                        projectId={params.id}
+                        knownTypes={knownTypes}
+                        line={{
+                          id: r.id,
+                          item_number: r.item_number,
+                          type: r.type,
+                          description: r.description,
+                          scheduled_value: scheduled,
+                          sort_order: r.sort_order,
+                          notes: r.notes,
+                          coNumber: r.change_order_id
+                            ? (coNumberById.get(r.change_order_id) ?? null)
+                            : null,
+                        }}
+                      />
+                    </td>
                   </tr>
                 );
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td
-                    colSpan={9}
-                    className="px-3 py-6 text-center text-xs text-muted-foreground"
-                  >
-                    No billing lines. Run the cash flow importer to populate.
+                  <td colSpan={10} className="px-3 py-10 text-center">
+                    <p className="text-sm font-medium">
+                      No schedule of values yet
+                    </p>
+                    <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
+                      Import the SOV out of the cash-flow workbook, or add the
+                      lines one at a time. Either way you can edit them here
+                      afterwards.
+                    </p>
+                    <div className="mt-4 flex justify-center gap-2">
+                      <SovImportDialog
+                        projectId={params.id}
+                        existing={existingForImport}
+                        trigger={
+                          <Button variant="outline">Import spreadsheet</Button>
+                        }
+                      />
+                      <BillingLineDialog
+                        projectId={params.id}
+                        knownTypes={knownTypes}
+                        trigger={<Button>Add SOV line</Button>}
+                      />
+                    </div>
                   </td>
                 </tr>
               )}
@@ -353,6 +438,7 @@ export default async function ProjectBillingPage({
                   <td className="px-3 py-2 text-right font-mono">
                     {formatCurrency(footer.remaining)}
                   </td>
+                  <td className="px-3 py-2" />
                   <td className="px-3 py-2" />
                 </tr>
               </tfoot>
