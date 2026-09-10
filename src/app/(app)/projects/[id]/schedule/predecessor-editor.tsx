@@ -109,6 +109,11 @@ export function PredecessorEditor({
     [links, nameByWbs],
   );
 
+  const selfRef = useMemo(
+    () => links.some((l) => l.pred === currentWbs),
+    [links, currentWbs],
+  );
+
   const cycle = useMemo(() => {
     const valid = links.filter((l) => l.pred && nameByWbs.has(l.pred));
     if (!valid.length) return null;
@@ -215,7 +220,14 @@ export function PredecessorEditor({
         </p>
       )}
 
-      {cycle && (
+      {selfRef && (
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+          {currentWbs} is listed as its own predecessor. A task cannot wait on
+          itself.
+        </p>
+      )}
+
+      {cycle && !selfRef && (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
           This creates a circular dependency through {cycle.join(", ")}. Nothing
           on the schedule can be scheduled until the loop is broken.
@@ -263,6 +275,12 @@ export function hasLinkErrors(
 ): string | null {
   const links = parsePredecessors(raw);
   const known = new Set(allTasks.map((t) => t.wbs_code));
+  // Called out before the loop check, which would otherwise report a task
+  // depending on itself as a "circular dependency through 2.1" - technically a
+  // loop, and useless for working out what to do about it.
+  if (links.some((l) => l.pred === currentWbs)) {
+    return `${currentWbs} is listed as its own predecessor. A task cannot wait on itself.`;
+  }
   const missing = links.filter((l) => !known.has(l.pred)).map((l) => l.pred);
   if (missing.length) return `Unknown task: ${missing.join(", ")}`;
   const cycle = findCycleWith(allTasks, currentWbs, links);

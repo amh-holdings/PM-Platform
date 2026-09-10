@@ -55,6 +55,7 @@ import {
   planDrop,
   buildRowIndex,
   nearbyPredecessors,
+  rowRefsAreSafe,
   planChainLink,
   planIndent,
   planMove,
@@ -423,9 +424,13 @@ export function ScheduleSplitView({
   >>(null);
   const [shiftBy, setShiftBy] = useState("5");
   // Row numbers or WBS codes in the Predecessors cell. Only ever a way of
-  // writing and reading - see toRowRefs/toWbsRefs. Default on, because typing
-  // "12" is the whole point.
-  const [predAsRows, setPredAsRows] = useState(true);
+  // writing and reading - see toRowRefs/toWbsRefs.
+  //
+  // On by default, because typing "12" is the whole point - but OFF on a
+  // schedule whose WBS codes are bare integers, where "2" could mean row 2 or
+  // code 2 and nothing can tell them apart. Guessing there silently repoints
+  // predecessors at the wrong task.
+  const [predAsRows, setPredAsRows] = useState(() => rowRefsAreSafe(tasks));
   const [linkType, setLinkType] = useState<RelType>("FS");
   const [linkLag, setLinkLag] = useState("0");
   const [dragging, setDragging] = useState<string[] | null>(null);
@@ -1528,6 +1533,14 @@ export function ScheduleSplitView({
             <option value="rows">Row #</option>
             <option value="wbs">WBS code</option>
           </select>
+          {predAsRows && rowIndex.ambiguous && (
+            <span
+              className="rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-900"
+              title="This schedule has WBS codes that are bare numbers, so a typed number could mean either a row or a code. Codes win. Use WBS mode here if that is confusing."
+            >
+              codes win
+            </span>
+          )}
         </label>
         {anyFilter && (
           <Button
@@ -2614,7 +2627,8 @@ function PredecessorCell({
   // mode. Every keystroke goes text -> codes -> text, which is only safe
   // because that round trip is exact - see the round-trip tests.
   const shown = asRows ? toRowRefs(value, rowIndex) : value;
-  const store = (text: string) => onChange(asRows ? toWbsRefs(text, rowIndex) : text);
+  const store = (text: string) =>
+    onChange(asRows ? toWbsRefs(text, rowIndex, currentWbs) : text);
   const refOf = (wbs: string) =>
     asRows ? String(rowIndex.byWbs.get(wbs) ?? wbs) : wbs;
 

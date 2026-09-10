@@ -896,6 +896,17 @@ export function shiftDates(
 export type RowIndex = {
   byWbs: Map<string, number>;
   byRow: Map<number, string>;
+  /**
+   * True when this schedule has bare-integer WBS codes, which makes "2"
+   * genuinely ambiguous - it could be row 2 or code 2, and there is no way to
+   * tell them apart. Row-number mode is off by default on such a project.
+   *
+   * This is not hypothetical. Sussexx CSG 1 has codes 2, 4, 5, 6, 7 alongside
+   * 2.1 and 2.1.1; typing "2" for code 2 resolved to row 2, which is 2.1, and
+   * on row 2 that is the task depending on itself. It surfaced as "circular
+   * dependency" on an edit that had no loop in it.
+   */
+  ambiguous: boolean;
 };
 
 // Numbers come from the full schedule in its saved order, not from what is on
@@ -908,7 +919,15 @@ export function buildRowIndex(orderedTasks: { wbs_code: string }[]): RowIndex {
     byWbs.set(t.wbs_code, i + 1);
     byRow.set(i + 1, t.wbs_code);
   });
-  return { byWbs, byRow };
+  return {
+    byWbs,
+    byRow,
+    ambiguous: orderedTasks.some((t) => /^\d+$/.test(t.wbs_code)),
+  };
+}
+
+export function rowRefsAreSafe(tasks: { wbs_code: string }[]): boolean {
+  return !tasks.some((t) => /^\d+$/.test(t.wbs_code));
 }
 
 function formatRef(ref: string, type: RelType, lag: number): string {
@@ -946,14 +965,26 @@ export function toRowRefs(raw: string | null | undefined, idx: RowIndex): string
   });
 }
 
-// Row numbers back to codes, for storage. Only a bare integer is treated as a
-// row number: someone who types or pastes a real WBS code while the grid is in
-// row-number mode still gets what they meant.
-export function toWbsRefs(input: string, idx: RowIndex): string {
+// Row numbers back to codes, for storage.
+//
+// Two rules, both of which exist because getting this wrong repoints a
+// predecessor at the wrong task in silence:
+//
+//   A bare integer that is ALSO a real WBS code is left as the code. This is
+//   the same rule the paste importer uses, and it means a schedule with
+//   integer codes is never rewritten out from under the person typing.
+//
+//   A reference is never allowed to resolve to the task being edited. A task
+//   cannot depend on itself, so a row number that lands on `self` is left as
+//   typed and shows up as unresolved rather than as a loop.
+export function toWbsRefs(input: string, idx: RowIndex, self?: string): string {
   if (!input.trim()) return "";
   return mapRefs(input, (ref) => {
     if (!/^\d+$/.test(ref)) return null;
-    return idx.byRow.get(Number(ref)) ?? null;
+    if (idx.byWbs.has(ref)) return null; // it is already a code
+    const code = idx.byRow.get(Number(ref));
+    if (code === undefined || code === self) return null;
+    return code;
   });
 }
 

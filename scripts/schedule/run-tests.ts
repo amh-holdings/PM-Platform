@@ -27,6 +27,7 @@ import {
   type CpmInput,
 } from "@/lib/schedule-cpm";
 import { assessSchedule } from "@/lib/schedule-health";
+import { hasLinkErrors } from "@/app/(app)/projects/[id]/schedule/predecessor-editor";
 import {
   defaultSheetIndex,
   gridFromSheet,
@@ -74,6 +75,7 @@ import {
   planChainLink,
   planFanLink,
   planUnlink,
+  rowRefsAreSafe,
   toRowRefs,
   toWbsRefs,
   type ColumnKey,
@@ -1002,6 +1004,52 @@ section("Editing - row numbers as a way of writing, not storing");
   const idx = buildRowIndex([{ wbs_code: "5.2" }, { wbs_code: "5.1" }]);
   eq("order given is order numbered", idx.byWbs.get("5.2"), 1);
   eq("not WBS order", idx.byWbs.get("5.1"), 2);
+}
+
+// The Sussexx CSG 1 shape, and the regression that made every edit on it report
+// a circular dependency. Its codes are bare integers - 2, 4, 5, 6, 7 - sitting
+// alongside 2.1 and 2.1.1, so a typed "2" could be row 2 or code 2. Reading it
+// as a row landed on 2.1, and on row 2 that is the task depending on itself.
+{
+  const sussexx = [
+    { wbs_code: "2" },      // row 1
+    { wbs_code: "2.1" },    // row 2
+    { wbs_code: "2.1.1" },  // row 3
+    { wbs_code: "4" },      // row 4
+    { wbs_code: "5" },      // row 5
+  ];
+  const idx = buildRowIndex(sussexx);
+
+  check("integer codes are flagged ambiguous", idx.ambiguous);
+  eq("and row mode is not offered by default", rowRefsAreSafe(sussexx), false);
+  check("a dotted schedule is safe", rowRefsAreSafe([{ wbs_code: "5.1.1" }]));
+  check("and not flagged", !buildRowIndex([{ wbs_code: "5.1.1" }]).ambiguous);
+
+  // The fix: a bare integer that is also a real code stays that code. Same rule
+  // the paste importer has always used.
+  eq("a typed code wins over a row number", toWbsRefs("2", idx), "2");
+  eq("even when the row exists", toWbsRefs("4", idx), "4");
+  // 3 is not a code here, so it is still read as a row.
+  eq("a number that is not a code is still a row", toWbsRefs("3", idx), "2.1.1");
+
+  // The self-reference guard, which is what surfaced as the false loop.
+  eq("a row number landing on the edited task is refused", toWbsRefs("3", idx, "2.1.1"), "3");
+  eq("and it does not silently self-link", parsePredecessors(toWbsRefs("3", idx, "2.1.1"))[0].pred, "3");
+  eq("an unrelated reference is unaffected", toWbsRefs("3", idx, "5"), "2.1.1");
+}
+
+{
+  // hasLinkErrors has to name a self-reference as one. Reporting it as a
+  // "circular dependency through 2.1" is true and useless.
+  const tasks = [
+    { wbs_code: "2.1", task_name: "Design Package", predecessors: null },
+    { wbs_code: "2.1.1", task_name: "Civil", predecessors: null },
+  ];
+  const err = hasLinkErrors(tasks, "2.1", "2.1");
+  check("a self-reference is caught", !!err, String(err));
+  check("and named as one", (err ?? "").includes("its own predecessor"), String(err));
+  check("not as a loop", !(err ?? "").toLowerCase().includes("circular"), String(err));
+  eq("a real link is still fine", hasLinkErrors(tasks, "2.1.1", "2.1"), null);
 }
 
 section("Editing - linking without typing");
