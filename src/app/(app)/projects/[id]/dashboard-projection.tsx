@@ -5,6 +5,16 @@ import { buildProjection } from "@/lib/projection";
 
 type Props = {
   projectId: string;
+  /**
+   * Rendered inside the Cash flow panel rather than as a panel of its own.
+   *
+   * The chart above it answers "when does money move and am I ever short".
+   * This table is what the chart cannot be: the accrual side - revenue, cost
+   * and margin by work month - and figures exact enough to put in an AFP. It
+   * is the detail behind the picture, so it sits under a disclosure rather
+   * than taking a screen of its own.
+   */
+  embedded?: boolean;
 };
 
 const CONFIDENCE_STYLES: Record<string, { dot: string; label: string }> = {
@@ -14,7 +24,7 @@ const CONFIDENCE_STYLES: Record<string, { dot: string; label: string }> = {
   none: { dot: "bg-muted-foreground", label: "No data" },
 };
 
-export async function DashboardProjection({ projectId }: Props) {
+export async function DashboardProjection({ projectId, embedded = false }: Props) {
   const supabase = createClient();
   const result = await buildProjection(supabase, projectId);
   const { rows, warnings, totals } = result;
@@ -23,32 +33,29 @@ export async function DashboardProjection({ projectId }: Props) {
     return null;
   }
 
-  // Trim view to a useful window: start at the earliest month with any activity,
-  // end at the last month with activity (capped at 12 months from today).
-  const firstActiveIdx = rows.findIndex(
-    (r) =>
-      r.revenueRecognized > 0 ||
-      r.totalCost > 0 ||
-      r.cashIn > 0 ||
-      r.totalCashOut > 0,
-  );
-  const lastActiveIdx = (() => {
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const r = rows[i];
-      if (r.revenueRecognized > 0 || r.totalCost > 0 || r.cashIn > 0 || r.totalCashOut > 0) {
-        return i;
-      }
-    }
-    return rows.length - 1;
-  })();
-  const startIdx = firstActiveIdx === -1 ? 0 : Math.max(0, firstActiveIdx);
-  const endIdx = lastActiveIdx === -1 ? rows.length - 1 : lastActiveIdx;
-  const visible = rows.slice(startIdx, endIdx + 1);
+  // Months with activity, not a contiguous window between the first and last.
+  // The old slice kept every quiet month in the middle, so Sussexx drew Feb,
+  // Mar and Apr 27 as three rows of dashes between work. The chart above drops
+  // them; a table that disagrees with the chart beside it is the thing this
+  // whole section was cleaned up to stop doing.
+  const isActive = (r: (typeof rows)[number]) =>
+    r.revenueRecognized !== 0 ||
+    r.totalCost !== 0 ||
+    r.cashIn !== 0 ||
+    r.totalCashOut !== 0;
+  const visible = rows.filter((r) => isActive(r) || r.isCurrent);
+
+  const Wrapper = embedded ? "div" : "section";
 
   return (
-    <section className="space-y-3 rounded-lg border bg-card p-4 shadow-sm">
+    <Wrapper
+      className={cn(
+        "space-y-3",
+        !embedded && "rounded-lg border bg-card p-4 shadow-sm",
+      )}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+        <div className={cn(embedded && "hidden")}>
           <h2 className="text-sm font-semibold">Cash flow projection</h2>
           <p className="text-xs text-muted-foreground">
             Month-by-month revenue + cash IN against cost + cash OUT,
@@ -204,6 +211,6 @@ export async function DashboardProjection({ projectId }: Props) {
           (after Net X + retainage).
         </span>
       </div>
-    </section>
+    </Wrapper>
   );
 }

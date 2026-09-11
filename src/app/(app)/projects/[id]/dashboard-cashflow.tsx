@@ -7,8 +7,9 @@ import { firstOfThisMonthIso } from "@/lib/cashflow";
 import { buildProjection } from "@/lib/projection";
 
 import { DashboardCashflowChart, type CashflowDatum } from "./dashboard-cashflow-chart";
+import { DashboardProjection } from "./dashboard-projection";
 
-type Props = { projectId: string };
+type Props = { projectId: string; showCosts?: boolean };
 
 // Replaces Project margin, Billing timeline and Cash Out timeline.
 //
@@ -18,7 +19,7 @@ type Props = { projectId: string };
 // point; the month-by-month detail lives in the projection table underneath,
 // and the per-line detail lives on the Billing page.
 
-export async function DashboardCashflow({ projectId }: Props) {
+export async function DashboardCashflow({ projectId, showCosts = false }: Props) {
   const supabase = createClient();
 
   let projection;
@@ -141,6 +142,20 @@ export async function DashboardCashflow({ projectId }: Props) {
           note="Revenue less cost, whole horizon"
         />
       </div>
+
+      {showCosts && (
+        <details className="rounded-md border bg-muted/20 px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium">
+            Monthly detail
+            <span className="ml-1.5 font-normal text-muted-foreground">
+              revenue, cost and margin by work month, with exact figures
+            </span>
+          </summary>
+          <div className="mt-2">
+            <DashboardProjection projectId={projectId} embedded />
+          </div>
+        </details>
+      )}
 
       {projection.warnings.length > 0 && (
         <details className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-xs">
