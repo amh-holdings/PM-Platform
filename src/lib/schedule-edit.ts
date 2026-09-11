@@ -1370,6 +1370,7 @@ export function parseGrid(text: string, rule: HeaderRule = {}): ParsedGrid {
 }
 
 export type ColumnKey =
+  | "source_row"
   | "wbs_code"
   | "task_name"
   | "duration_days"
@@ -1383,6 +1384,7 @@ export type ColumnKey =
   | "is_milestone";
 
 export const COLUMN_LABELS: Record<ColumnKey, string> = {
+  source_row: "Row number (source)",
   wbs_code: "WBS code",
   task_name: "Task name",
   duration_days: "Duration (days)",
@@ -1398,7 +1400,20 @@ export const COLUMN_LABELS: Record<ColumnKey, string> = {
 
 export const COLUMN_KEYS = Object.keys(COLUMN_LABELS) as ColumnKey[];
 
+// Columns that describe the ROW rather than the task. They steer the import -
+// they decide what a predecessor points at and what a task is called - but
+// neither is ever written to a task record, so both are excluded everywhere a
+// mapped column becomes a field.
+export const REFERENCE_KEYS: readonly ColumnKey[] = ["source_row", "wbs_code"];
+
+export const FIELD_COLUMN_KEYS = COLUMN_KEYS.filter(
+  (k) => !REFERENCE_KEYS.includes(k),
+);
+
 const COLUMN_ALIASES: Record<ColumnKey, string[]> = {
+  // Smartsheet's row-number gutter. It usually exports with no header at all,
+  // which is handled separately below - these are the cases where it has one.
+  source_row: ["row", "row #", "row number", "row no", "#", "no", "no.", "sheet row"],
   wbs_code: ["wbs", "wbs code", "wbs #", "code", "task id", "id", "activity id", "line"],
   task_name: ["task name", "task", "name", "activity", "activity name", "description of work", "work"],
   duration_days: ["duration", "dur", "days", "duration (days)", "orig dur", "original duration"],
@@ -1444,13 +1459,21 @@ export function guessColumns(
         }
       }
     }
+    claimBareGutter(out, headers, rows, taken);
     return out;
   }
+
+  // Before the value heuristics, not after: 1, 2, 3 all parse as durations, so
+  // a row-number gutter in a headerless paste would be claimed as one.
+  claimBareGutter(out, headers, rows, taken);
 
   const sample = rows.slice(0, 12);
   const colVals = (i: number) => sample.map((r) => (r[i] ?? "").trim()).filter(Boolean);
 
   for (let i = 0; i < width; i++) {
+    // A column already claimed stays claimed. Without this the loop overwrote
+    // the gutter it had just been handed, since 1, 2, 3 read as durations.
+    if (out[i]) continue;
     const vals = colVals(i);
     if (!vals.length) continue;
     const dates = vals.filter((v) => parseLooseDate(v) !== null).length;
@@ -1470,6 +1493,39 @@ export function guessColumns(
     }
   }
   return out;
+}
+
+// Smartsheet exports its row numbers in a leading column with no header. It is
+// the most useful column in the file - it is what the Predecessors column is
+// written against - and because it has no header it was being mapped to
+// nothing and thrown away.
+//
+// Claim it only on strong evidence: an unmapped column, no header text of its
+// own, holding positive integers that strictly increase. Nothing else in a
+// schedule looks like that, and a duration or a WBS column would fail the
+// increasing test immediately.
+function claimBareGutter(
+  out: (ColumnKey | null)[],
+  headers: string[] | null,
+  rows: string[][],
+  taken: Set<ColumnKey>,
+): void {
+  if (taken.has("source_row")) return;
+  for (let i = 0; i < out.length; i++) {
+    if (out[i]) continue;
+    if ((headers?.[i] ?? "").trim()) continue;
+    const vals = rows.map((r) => (r[i] ?? "").trim()).filter(Boolean);
+    if (vals.length < Math.max(2, Math.floor(rows.length * 0.8))) continue;
+    if (!vals.every((v) => /^\d+$/.test(v))) continue;
+    let rising = true;
+    for (let k = 1; k < vals.length; k++) {
+      if (Number(vals[k]) <= Number(vals[k - 1])) { rising = false; break; }
+    }
+    if (!rising) continue;
+    out[i] = "source_row";
+    taken.add("source_row");
+    return;
+  }
 }
 
 // ---- loose value parsing --------------------------------------------------
@@ -1601,7 +1657,91 @@ export function buildImportRows(
   let codes: string[];
   if (has("wbs_code")) {
     const c = colOf("wbs_code");
-    codes = rawRows.map((r) => (r.cells[c] ?? "").trim());
+    const given = rawRows.map((r) => (r.cells[c] ?? "").trim());
+
+    // A Smartsheet export puts a WBS code on the summary rows and leaves it
+    // blank on the leaves beneath them - "1.2.1.1 30% Design" followed by three
+    // unnumbered rows for Design, Internal Review and Page Turn. Those blanks
+    // used to produce codeless rows, which the diff then dropped in silence:
+    // half the leaf tasks in the file would simply not arrive.
+    //
+    // So a blank is filled from the indentation of the task name, beneath the
+    // nearest coded row shallower than it. That is the same hierarchy the sheet
+    // is already drawing on screen, just written down.
+    const nameCol = has("task_name") ? colOf("task_name") : -1;
+    const indents = rawRows.map((r) =>
+      nameCol === -1 ? 0 : indentOf(r.cells[nameCol] ?? ""),
+    );
+
+    // Highest child segment seen under each parent, so a filled code never
+    // collides with one the file stated outright.
+    const usedChildren = new Map<string, number>();
+    for (const code of given) {
+      if (!code) continue;
+      const last = wbsParts(code).pop();
+      if (!Number.isFinite(last)) continue;
+      // "" is the top of the tree, so a generated top-level code cannot land on
+      // a number the file already used.
+      const key = parentCodeOf(code) ?? "";
+      usedChildren.set(key, Math.max(usedChildren.get(key) ?? 0, last as number));
+    }
+
+    // Coded rows seen so far, innermost last, used to find a blank row's parent.
+    const openCodes: { indent: number; code: string }[] = [];
+    let filled = 0;
+    let orphaned = 0;
+
+    codes = given.map((code, i) => {
+      if (code) {
+        while (openCodes.length && openCodes[openCodes.length - 1].indent >= indents[i]) {
+          openCodes.pop();
+        }
+        openCodes.push({ indent: indents[i], code });
+        return code;
+      }
+
+      // Where this row sits. Indented past the nearest coded row makes it a
+      // child of it; level with that row makes it a SIBLING, which is the case
+      // that matters for a top-level section. Sussex exports "Construction"
+      // with a blank code at the same level as "Permitting" and "Procurement" -
+      // reading it as a child of Procurement buried a whole construction phase
+      // at 3.1 instead of standing it up as 4.
+      let parent: string | null = null;
+      let sibling = false;
+      for (let k = openCodes.length - 1; k >= 0; k--) {
+        if (openCodes[k].indent < indents[i]) { parent = openCodes[k].code; break; }
+        if (openCodes[k].indent === indents[i]) {
+          parent = parentCodeOf(openCodes[k].code);
+          sibling = true;
+          break;
+        }
+      }
+      // Nothing to compare against: no indentation in the file at all. The most
+      // recent coded row is then the only honest guess.
+      if (parent === null && !sibling && openCodes.length) {
+        parent = openCodes[openCodes.length - 1].code;
+      }
+      if (parent === null && !sibling) { orphaned++; return ""; }
+
+      // A null parent after a sibling match means top of the tree, which is a
+      // real place to be - not a failure.
+      const key = parent ?? "";
+      const next = (usedChildren.get(key) ?? 0) + 1;
+      usedChildren.set(key, next);
+      filled++;
+      return parent === null ? String(next) : `${parent}.${next}`;
+    });
+
+    if (filled) {
+      notes.push(
+        `${filled} row${filled === 1 ? "" : "s"} had no WBS code and ${filled === 1 ? "was" : "were"} given one from ${filled === 1 ? "its" : "their"} indentation beneath the nearest numbered row. Check the codes in the preview before applying.`,
+      );
+    }
+    if (orphaned) {
+      notes.push(
+        `${orphaned} row${orphaned === 1 ? " has" : "s have"} no WBS code and nothing above ${orphaned === 1 ? "it" : "them"} to sit under.`,
+      );
+    }
   } else if (has("task_name")) {
     // Derive from indentation. A stack of counters per level, rooted at
     // wbsRoot when the paste is being added under an existing branch.
@@ -1623,20 +1763,38 @@ export function buildImportRows(
     codes = rawRows.map((r) => String(r.rowNumber));
   }
 
+  // What a bare-integer predecessor points at.
+  //
+  // Smartsheet writes predecessors against the sheet's own row numbers, which
+  // are NOT the same as position in the file: a collapsed section exports as a
+  // jump (78 -> 113 -> 160), and after the first jump every positional guess is
+  // wrong. So when the file carries its row-number column, that column is the
+  // authority and position is not consulted at all.
   const rowToWbs = new Map<string, string>();
-  rawRows.forEach((r, i) => rowToWbs.set(String(r.rowNumber), codes[i]));
+  const hasSourceRows = has("source_row");
+  if (hasSourceRows) {
+    const c = colOf("source_row");
+    rawRows.forEach((r, i) => {
+      const n = (r.cells[c] ?? "").trim();
+      if (n && codes[i]) rowToWbs.set(n, codes[i]);
+    });
+  } else {
+    rawRows.forEach((r, i) => rowToWbs.set(String(r.rowNumber), codes[i]));
+  }
 
   const knownWbs = new Set([...(opts.knownWbs ?? []), ...codes]);
 
   // --- rows ----------------------------------------------------------------
   let translated = 0;
+  let collided = 0;
+  let unresolved = 0;
   const rows: ImportRow[] = rawRows.map((r, i) => {
     const issues: string[] = [];
     const values: ImportRow["values"] = {};
 
     for (let c = 0; c < mapping.length; c++) {
       const key = mapping[c];
-      if (!key || key === "wbs_code" || key === "predecessors") continue;
+      if (!key || REFERENCE_KEYS.includes(key) || key === "predecessors") continue;
       const raw = (r.cells[c] ?? "").trim();
 
       switch (key) {
@@ -1678,13 +1836,30 @@ export function buildImportRows(
           const parsed = splitPredecessorToken(token);
           if (!parsed) continue;
           let ref = parsed.ref;
-          if (!knownWbs.has(ref)) {
-            // Smartsheet writes predecessors as row numbers. Translate only
-            // when the token is not already a real WBS code, so a schedule
-            // whose codes happen to be bare integers is not rewritten.
-            const byRow = /^\d+$/.test(ref) ? rowToWbs.get(ref) : undefined;
+          const isBareNumber = /^\d+$/.test(ref);
+          const byRow = isBareNumber ? rowToWbs.get(ref) : undefined;
+
+          if (hasSourceRows && byRow) {
+            // The file states its own row numbers, so a bare integer is a row
+            // reference even when a task happens to be coded with that number.
+            // Sussex has a task coded "2" AND a row 2; reading "2" as the code
+            // pointed half the contract logic at Permitting.
+            if (knownWbs.has(ref) && ref !== byRow) collided++;
+            ref = byRow;
+            translated++;
+          } else if (!knownWbs.has(ref)) {
+            // No row-number column, so translate by position - and only when
+            // the token is not already a real code, so a schedule whose codes
+            // are bare integers is not rewritten out from under itself.
             if (byRow) { ref = byRow; translated++; }
-            else issues.push(`Predecessor "${parsed.ref}" does not match a task`);
+            else {
+              issues.push(
+                isBareNumber
+                  ? `Predecessor "${parsed.ref}" is not a row in this file - a collapsed section, or work that was not exported`
+                  : `Predecessor "${parsed.ref}" does not match a task`,
+              );
+              unresolved++;
+            }
           }
           links.push({ pred: ref, type: parsed.type, lag: parsed.lag });
         }
@@ -1701,7 +1876,17 @@ export function buildImportRows(
 
   if (translated) {
     notes.push(
-      `${translated} predecessor reference${translated === 1 ? " was" : "s were"} written as row numbers and have been translated to WBS codes.`,
+      `${translated} predecessor reference${translated === 1 ? " was" : "s were"} written as row numbers and ${translated === 1 ? "has" : "have"} been translated to WBS codes${hasSourceRows ? ", using the row numbers in the file" : " by position in the paste"}.`,
+    );
+  }
+  if (collided) {
+    notes.push(
+      `${collided} of those number${collided === 1 ? "" : "s"} also exists as a WBS code on this schedule. The row number won, because that is what the source sheet meant.`,
+    );
+  }
+  if (unresolved) {
+    notes.push(
+      `${unresolved} predecessor reference${unresolved === 1 ? "" : "s"} could not be resolved. Those tasks import with no constraint at all - expand every collapsed section before exporting so the rows they point at are in the file.`,
     );
   }
 
@@ -1748,9 +1933,7 @@ export function diffImport(
   opts: { deleteMissingUnder?: string | null } = {},
 ): ImportDiff {
   const byWbs = new Map(existing.map((t) => [t.wbs_code, t]));
-  const fields = COLUMN_KEYS.filter(
-    (k) => k !== "wbs_code" && mapping.includes(k),
-  );
+  const fields = FIELD_COLUMN_KEYS.filter((k) => mapping.includes(k));
 
   const adds: ImportRow[] = [];
   const changes: ImportDiff["changes"] = [];
@@ -1796,6 +1979,15 @@ export function diffImport(
   const dupes = rows.filter((r) => r.issues.some((i) => i.includes("is also on row")));
   if (dupes.length) {
     blocking.push(`Duplicate WBS codes on rows ${dupes.map((r) => r.rowNumber).join(", ")}.`);
+  }
+  // A row with no code is skipped by the loop above. Skipping it quietly is how
+  // a 166-row schedule imports as 90 tasks and looks like it worked, so it
+  // stops the import instead.
+  const codeless = rows.filter((r) => !r.wbs_code);
+  if (codeless.length) {
+    blocking.push(
+      `${codeless.length} row${codeless.length === 1 ? "" : "s"} could not be given a WBS code (row ${codeless.slice(0, 12).map((r) => r.rowNumber).join(", ")}${codeless.length > 12 ? ", ..." : ""}). Map a WBS column, or indent the task names so each one sits under a numbered row.`,
+    );
   }
 
   return { adds, changes, unchangedCount, deletes, blocking };

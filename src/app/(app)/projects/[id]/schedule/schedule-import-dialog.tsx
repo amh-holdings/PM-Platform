@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import {
   COLUMN_KEYS,
   COLUMN_LABELS,
+  FIELD_COLUMN_KEYS,
   buildImportRows,
   diffImport,
   parseGrid,
@@ -203,8 +204,7 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
 
     const patchOf = (row: ImportRow) => {
       const patch: Record<string, unknown> = {};
-      for (const k of COLUMN_KEYS) {
-        if (k === "wbs_code") continue;
+      for (const k of FIELD_COLUMN_KEYS) {
         if (!mapping.includes(k)) continue;
         if (!(k in row.values)) continue;
         patch[k] = row.values[k] ?? null;
@@ -372,9 +372,10 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
                         Choose an Excel file
                       </Button>
                       <p className="text-[11px] text-muted-foreground">
-                        or drag one here - .xlsx, .xlsm, .xls, .csv. Merged title
-                        rows, blank columns and formula results are handled;
-                        dates keep the day they have in the sheet.
+                        or drag one here - .xlsx, .xlsm, .xls, .csv. Export
+                        straight out of Smartsheet with every section expanded:
+                        a collapsed section is missing from the file, and any
+                        predecessor pointing into it cannot be resolved.
                       </p>
                     </div>
                   )}
@@ -395,9 +396,10 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
                       className="w-full rounded-md border border-input bg-background p-3 font-mono text-xs"
                     />
                     <p className="text-[11px] text-muted-foreground">
-                      Include the header row if you have one. Predecessors written
-                      as Smartsheet row numbers are translated to WBS codes
-                      automatically; relationship types and lag (
+                      Include the header row if you have one, and keep
+                      Smartsheet&rsquo;s row-number column - predecessors are
+                      written against it, and without it they have to be matched
+                      by position. Relationship types and lag (
                       <code className="font-mono">12SS+5d</code>) are kept.
                     </p>
                   </div>
@@ -445,6 +447,14 @@ export function ScheduleImportDialog({ projectId, tasks, trigger }: Props) {
                     : `${grid.delimiter} separated`}
                   {grid.headers ? ", header row detected" : ", no header row detected"}.
                   Set anything you do not want to import to Ignore.
+                  {mapping.includes("source_row") && (
+                    <>
+                      {" "}
+                      The unheadered number column has been read as the
+                      source sheet&rsquo;s row numbers, which is what
+                      predecessors are written against.
+                    </>
+                  )}
                 </p>
 
                 <div className="overflow-x-auto rounded-lg border">

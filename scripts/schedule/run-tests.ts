@@ -891,6 +891,142 @@ section("Editing - pasted grid import");
   eq("quoted comma kept", grid.rows[0][1], "Clear, grub and haul");
 }
 
+section("Editing - a Smartsheet export, as Phil actually exports one");
+
+// Rows lifted verbatim from Sussex CSG Schedule - Eng/Perm/Proc. Four things
+// about this file broke the importer, and all four are normal Smartsheet:
+//
+//   Column A is the sheet's row-number gutter and has no header.
+//   The WBS column is filled on summary rows and blank on the leaves.
+//   Predecessors are written against those row numbers, not against WBS.
+//   Collapsed sections are missing entirely, so the numbering jumps 78 -> 113.
+{
+  const H = ["", "WBS", "Task Name", "Assigned To", "Status", "Duration", "Start Date", "End Date", "Predecessors"];
+  const DATA = [
+    ["1", "0", "Contracts & Agreements", "AHC / Dimension", "", "94d", "05/13/26", "09/21/26", ""],
+    ["2", "", "  Award", "", "", "1d", "05/13/26", "05/13/26", ""],
+    ["3", "0.1", "  Owner Contracts", "AHC / Dimension", "", "93d", "05/14/26", "09/21/26", ""],
+    ["4", "0.1.1", "    LNTP - Engineering", "AHC / Dimension", "", "29d", "05/14/26", "06/23/26", ""],
+    ["5", "0.1.1.1", "      AHC Internal Review", "AHC", "Complete", "18d", "05/14/26", "06/08/26", "2"],
+    ["6", "0.1.1.3", "      Dimension Countersignature", "Dimension", "Complete", "10d", "06/09/26", "06/22/26", "5"],
+    ["37", "1.2.1.1", "      30% Design", "AHC", "", "22d", "08/21/26", "09/21/26", ""],
+    ["38", "", "        Design", "AHC / Exactus Energy", "In Progress", "17d", "08/21/26", "09/14/26", "6"],
+    ["39", "", "        30% Design - Internal Review", "AHC", "Not Started", "5d", "09/15/26", "09/21/26", "38"],
+    ["40", "", "        DE Page Turn", "AHC", "Not Started", "1d", "09/15/26", "09/15/26", "38"],
+    ["78", "2", "Permitting", "", "", "1585d", "08/16/21", "09/10/27", ""],
+    ["113", "3", "Procurement", "", "", "", "", "", ""],
+    ["160", "", "Construction", "", "", "193d", "02/03/27", "10/29/27", ""],
+    ["161", "4.0", "  Bat Restriction Period", "AHC", "Not Started", "152d", "04/01/27", "10/29/27", ""],
+    ["162", "4.1", "  Mobilization", "AHC", "Not Started", "15d", "02/03/27", "02/23/27", "106"],
+    ["163", "4.2", "  Civil / Grading", "AHC / Civil Sub", "Not Started", "50d", "02/24/27", "05/04/27", "162"],
+  ];
+
+  const grid = gridFromMatrix([["Sussex CSG Schedule - Eng/Perm/Proc"], [], H, ...DATA], "cells");
+  eq("the title row is skipped", grid.headers?.[1], "WBS");
+  eq("every data row survives", grid.rows.length, DATA.length);
+
+  const mapping = guessColumns(grid.headers, grid.rows);
+  // The gutter has no header at all. Claiming it is the whole fix for
+  // predecessors, because it is what they are written against.
+  eq("the unheadered gutter is claimed", mapping[0], "source_row");
+  eq("wbs still maps", mapping[1], "wbs_code");
+  eq("and so does the name", mapping[2], "task_name");
+
+  const { rows, notes } = buildImportRows(grid, mapping);
+  const byRow = new Map(rows.map((r) => [r.rowNumber, r]));
+  const at = (n: number) => byRow.get(n)!;
+
+  // --- blank WBS cells ------------------------------------------------------
+  eq("no row is left without a code", rows.filter((r) => !r.wbs_code).length, 0);
+  eq("a leaf is numbered under its summary", at(8).wbs_code, "1.2.1.1.1");
+  eq("and its siblings follow", at(9).wbs_code, "1.2.1.1.2");
+  eq("in order", at(10).wbs_code, "1.2.1.1.3");
+  // Award is a child of 0, and 0.1 is already spoken for by Owner Contracts.
+  eq("a filled code never collides with a stated one", at(2).wbs_code, "0.2");
+  // The one that buried a whole phase: Construction is level with Permitting
+  // and Procurement, so it is their sibling, not Procurement's child.
+  eq("a blank top-level row stays top level", at(13).wbs_code, "4");
+  check("the fills are reported", notes.some((n) => n.includes("had no WBS code")), notes.join(" "));
+
+  // --- predecessors ---------------------------------------------------------
+  // Row 5 says "2", meaning sheet row 2 - Award. There is ALSO a task coded
+  // "2" (Permitting). Before the source-row column was read, the code won and
+  // half the contract logic pointed at Permitting.
+  eq("a row reference beats a same-numbered code", at(5).values.predecessors, "0.2");
+  check("and the collision is reported", notes.some((n) => n.includes("also exists as a WBS code")), notes.join(" "));
+  // Row 163 says "162", which is only row 162 because the file says so - by
+  // position it is the fifteenth row, not the hundred and sixty-second.
+  eq("numbering survives the collapsed-section jump", at(16).values.predecessors, "4.1");
+  eq("a generated code can be referenced", at(9).values.predecessors, "1.2.1.1.1");
+  eq("and referenced from a stated one", at(8).values.predecessors, "0.1.1.3");
+
+  // --- what is genuinely missing -------------------------------------------
+  // 106 is inside the collapsed Procurement block and was never exported.
+  // Guessing at it would be worse than saying so.
+  check(
+    "a reference into a collapsed section is named, not guessed",
+    at(15).issues.some((i) => i.includes("not a row in this file")),
+    at(15).issues.join("; "),
+  );
+  check("and summarised", notes.some((n) => n.includes("could not be resolved")), notes.join(" "));
+
+  // --- the diff -------------------------------------------------------------
+  const diff = diffImport([], rows, mapping);
+  eq("every row becomes a task", diff.adds.length, DATA.length);
+  eq("nothing blocks", diff.blocking.length, 0);
+  eq("source_row is never written to a task", "source_row" in diff.adds[0].values, false);
+}
+
+{
+  // The silent drop this replaced: a codeless row used to vanish from the diff
+  // with no error, so a 166-row schedule imported as 90 tasks and looked fine.
+  const grid = gridFromMatrix(
+    [["WBS", "Task Name"], ["", "Orphan with nothing above it"], ["5.1", "Real"]],
+    "cells",
+  );
+  const mapping = guessColumns(grid.headers, grid.rows);
+  const { rows } = buildImportRows(grid, mapping);
+  const diff = diffImport([], rows, mapping);
+  check(
+    "a row with no derivable code stops the import",
+    diff.blocking.some((b) => b.includes("could not be given a WBS code")),
+    diff.blocking.join(" "),
+  );
+}
+
+{
+  // The gutter is claimed on strong evidence only. A leading column of numbers
+  // that does not climb is data, not a row counter.
+  const notRising = gridFromMatrix(
+    [["", "Task Name", "Duration"], ["7", "A", "3"], ["3", "B", "4"], ["9", "C", "5"]],
+    "cells",
+  );
+  eq(
+    "a jumbled leading column is not a gutter",
+    guessColumns(notRising.headers, notRising.rows)[0],
+    null,
+  );
+
+  // Headerless paste, gutter still found. It has to be claimed before the
+  // value heuristics run - 1, 2, 3 all parse as durations.
+  const headerless = gridFromMatrix(
+    [["1", "Clear and grub", "10"], ["2", "Rough grade", "12"], ["3", "Install culvert", "5"]],
+    "cells",
+  );
+  eq("no header row here", headerless.headers, null);
+  const hm = guessColumns(headerless.headers, headerless.rows);
+  eq("the gutter is still claimed", hm[0], "source_row");
+  eq("and the duration is not stolen by it", hm[2], "duration_days");
+  const headed = gridFromMatrix(
+    [["Dur", "Task Name"], ["1", "A"], ["2", "B"], ["3", "C"]],
+    "cells",
+  );
+  check(
+    "a column with its own header is not a gutter",
+    guessColumns(headed.headers, headed.rows)[0] !== "source_row",
+  );
+}
+
 section("Editing - import diff");
 
 {
