@@ -46,6 +46,20 @@ export type ProjectionRow = {
   subCashOut: number;
   vendorCashOut: number;
   totalCashOut: number;
+  /**
+   * The same money split by how solid it is, because a timeline that draws a
+   * forecast and an invoice identically is lying about one of them.
+   *
+   * Actual is money with a record behind it - a paid entry, a settled vendor
+   * milestone. Forecast is everything else, including the schedule-driven
+   * estimate. actual + forecast equals the total beside it.
+   */
+  revenueActual: number;
+  revenueForecast: number;
+  retainageActual: number;
+  retainageForecast: number;
+  cashOutActual: number;
+  cashOutForecast: number;
   netCash: number;
   cumulativeCash: number;
   // Metadata
@@ -202,6 +216,12 @@ export async function buildProjection(
 
   // ---- BUCKETS ----
   type Bucket = {
+    revenueActual: number;
+    revenueForecast: number;
+    retainageActual: number;
+    retainageForecast: number;
+    cashOutActual: number;
+    cashOutForecast: number;
     revenueRecognized: number;
     subCostIncurred: number;
     vendorCostIncurred: number;
@@ -213,6 +233,12 @@ export async function buildProjection(
     confidenceSignals: Confidence[];
   };
   const empty = (): Bucket => ({
+    revenueActual: 0,
+    revenueForecast: 0,
+    retainageActual: 0,
+    retainageForecast: 0,
+    cashOutActual: 0,
+    cashOutForecast: 0,
     revenueRecognized: 0,
     subCostIncurred: 0,
     vendorCostIncurred: 0,
@@ -241,10 +267,15 @@ export async function buildProjection(
 
     const accrualBucket = get(accrualMonth);
     accrualBucket.revenueRecognized += gross;
-    if (Number(e.actual_amount ?? 0) > 0 || e.status === "paid") {
+    const isReal = Number(e.actual_amount ?? 0) > 0 || e.status === "paid";
+    if (isReal) {
+      accrualBucket.revenueActual += gross;
+      accrualBucket.retainageActual += retainage;
       accrualBucket.hasActualBilling = true;
       accrualBucket.confidenceSignals.push("high");
     } else {
+      accrualBucket.revenueForecast += gross;
+      accrualBucket.retainageForecast += retainage;
       accrualBucket.confidenceSignals.push("medium"); // forecast
     }
 
@@ -325,9 +356,11 @@ export async function buildProjection(
 
     const accrual = get(at.month);
     accrual.revenueRecognized += remaining;
+    accrual.revenueForecast += remaining;
     accrual.confidenceSignals.push("low"); // estimated from the schedule
 
     const retainage = remaining * ownerRetPct;
+    accrual.retainageForecast += retainage;
     forecastRetainage += retainage;
     const cashMonth =
       ownerTermsDays > 0 ? shiftByDaysToMonth(at.month, ownerTermsDays) : at.month;
@@ -376,7 +409,10 @@ export async function buildProjection(
     accrual.confidenceSignals.push("low");
 
     const cashMonth = subDays > 0 ? shiftByDaysToMonth(at.month, subDays) : at.month;
-    get(cashMonth).subCashOut += remaining * (1 - retPct);
+    const netOut = remaining * (1 - retPct);
+    const outBucket = get(cashMonth);
+    outBucket.subCashOut += netOut;
+    outBucket.cashOutForecast += netOut;
     forecastSubRetainage += remaining * retPct;
   }
 
@@ -406,6 +442,8 @@ export async function buildProjection(
 
     const cashBucket = get(cashMonth);
     cashBucket.subCashOut += netCash;
+    if (Number(f.actual_amount ?? 0) > 0) cashBucket.cashOutActual += netCash;
+    else cashBucket.cashOutForecast += netCash;
   }
 
   // ---- VENDOR PAYMENTS -> Cost (accrual, at milestone) + Cash Out ----
@@ -420,9 +458,11 @@ export async function buildProjection(
     bucket.vendorCostIncurred += amount;
     bucket.vendorCashOut += amount;
     if (p.paid_at) {
+      bucket.cashOutActual += amount;
       bucket.hasActualCost = true;
       bucket.confidenceSignals.push("high");
     } else {
+      bucket.cashOutForecast += amount;
       bucket.confidenceSignals.push("medium");
     }
   }
@@ -451,6 +491,10 @@ export async function buildProjection(
       const bucket = get(release);
       bucket.cashIn += totalOwnerRetainage;
       bucket.subCashOut += totalSubRetainage;
+      // The release is money moving, so it belongs in the actual/forecast split
+      // as well. Leaving it out made the Cash Out timeline read $86,490 against
+      // a $96,100 total - short by exactly the sub retainage.
+      bucket.cashOutForecast += totalSubRetainage;
     }
   }
 
@@ -491,6 +535,12 @@ export async function buildProjection(
       totalCashOut,
       netCash,
       cumulativeCash: cumCash,
+      revenueActual: b.revenueActual,
+      revenueForecast: b.revenueForecast,
+      retainageActual: b.retainageActual,
+      retainageForecast: b.retainageForecast,
+      cashOutActual: b.cashOutActual,
+      cashOutForecast: b.cashOutForecast,
       confidence,
       hasActualBilling: b.hasActualBilling,
       hasActualCost: b.hasActualCost,

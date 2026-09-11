@@ -1,12 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
+import { buildProjection } from "@/lib/projection";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import {
-  addMonthsIso,
-  effectiveAmount,
   firstOfThisMonthIso,
-  monthIsoFromDate,
-  shiftByDaysToMonth,
   shortMonthLabel,
 } from "@/lib/cashflow";
 
@@ -19,178 +16,50 @@ type Props = {
 export async function DashboardNetCash({ projectId }: Props) {
   const supabase = createClient();
 
-  const [projectRes, billingRes, costRes, payRes] = await Promise.all([
-    supabase
-      .from("projects")
-      .select("owner_payment_terms_days, retainage_pct_default")
-      .eq("id", projectId)
-      .maybeSingle(),
-    supabase
-      .from("billing_entries")
-      .select(
-        "period_month, cash_in_month, planned_amount, actual_amount, retainage_amount, billing_lines!inner(project_id)",
-      )
-      .eq("billing_lines.project_id", projectId),
-    supabase
-      .from("cost_forecasts")
-      .select(
-        "period_month, planned_amount, actual_amount, cost_codes!inner(project_id, subcontractor_id, procurement_order_id, subcontractors(payment_terms_days, retainage_pct))",
-      )
-      .eq("cost_codes.project_id", projectId),
-    supabase
-      .from("procurement_payments")
-      .select(
-        "expected_date, paid_at, amount, paid_amount, procurement_orders!inner(project_id)",
-      )
-      .eq("procurement_orders.project_id", projectId),
-  ]);
+  // Same rows as the projection table, the billing timeline and the cash-out
+  // timeline - see the note in dashboard-billing.tsx. This panel built its own
+  // maps from billing_entries and cost_forecasts, so on a project that had
+  // never billed it drew "No cash flow yet" directly beneath a table showing
+  // $290,388 of revenue and a $194,288 margin.
+  const projectRes = await supabase
+    .from("projects")
+    .select("owner_payment_terms_days, retainage_pct_default")
+    .eq("id", projectId)
+    .maybeSingle();
 
-  const err =
-    billingRes.error?.message ??
-    costRes.error?.message ??
-    payRes.error?.message ??
-    projectRes.error?.message;
-  if (err) {
+  let projection;
+  try {
+    projection = await buildProjection(supabase, projectId, { monthsAhead: 18 });
+  } catch (e) {
     return (
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h2 className="text-sm font-semibold">Net cash position</h2>
-        <p className="mt-2 text-xs text-destructive">Failed to load: {err}</p>
+        <p className="mt-2 text-xs text-destructive">
+          Failed to load: {e instanceof Error ? e.message : "unknown error"}
+        </p>
       </section>
     );
   }
 
   const thisMonthIso = firstOfThisMonthIso();
-  const ownerTermsDays = Number(
-    projectRes.data?.owner_payment_terms_days ?? 0,
-  );
-  const ownerRetainagePct = Number(
-    projectRes.data?.retainage_pct_default ?? 0,
-  ) / 100;
+  const ownerTermsDays = Number(projectRes.data?.owner_payment_terms_days ?? 0);
+  const ownerRetainagePct =
+    Number(projectRes.data?.retainage_pct_default ?? 0) / 100;
 
-  // We compute TWO views of the project:
-  //  1. ACCRUAL (revenue by work month, cost by work month) -> drives the
-  //     chart bars + cumulative line. Answers "am I making money on this job?"
-  //  2. CASH (cash in by cash_in_month, cash out by Net-X shifted month) ->
-  //     drives the funding gap detector. Answers "will I run out of cash?"
-
-  // === ACCRUAL: revenue by period_month, GROSS billed amount ===
+  // Months with nothing in them are left out so the chart does not draw a flat
+  // run of empty bars either side of the work.
   const revenueByMonth = new Map<string, number>();
-  for (const e of billingRes.data ?? []) {
-    const gross = effectiveAmount(e.actual_amount, e.planned_amount);
-    revenueByMonth.set(
-      e.period_month,
-      (revenueByMonth.get(e.period_month) ?? 0) + gross,
-    );
-  }
-
-  // === ACCRUAL: sub cost by work month (period_month), gross. Skip vendor-linked. ===
   const costByMonth = new Map<string, number>();
-  for (const f of costRes.data ?? []) {
-    const code = f.cost_codes as unknown as {
-      subcontractor_id: string | null;
-      procurement_order_id: string | null;
-      subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
-    } | null;
-    if (code?.procurement_order_id) continue;
-    const gross = effectiveAmount(f.actual_amount, f.planned_amount);
-    costByMonth.set(
-      f.period_month,
-      (costByMonth.get(f.period_month) ?? 0) + gross,
-    );
-  }
-
-  // === ACCRUAL: vendor cost at milestone date (paid or expected). ===
-  // Treat each milestone payment as the cost incurred that month - a
-  // simplification (deposit is technically a prepaid asset, not COGS, until
-  // delivery), but matches the granularity of the rest of the model.
-  for (const p of payRes.data ?? []) {
-    const date = p.paid_at ?? p.expected_date;
-    if (!date) continue;
-    const month = monthIsoFromDate(date);
-    const amount = Number(p.paid_amount ?? p.amount ?? 0);
-    if (!amount) continue;
-    costByMonth.set(month, (costByMonth.get(month) ?? 0) + amount);
-  }
-
-  // === CASH BASIS (for funding gap detector) ===
   const cashInByMonth = new Map<string, number>();
-  for (const e of billingRes.data ?? []) {
-    const cashMonth =
-      e.cash_in_month ??
-      (ownerTermsDays > 0
-        ? shiftByDaysToMonth(e.period_month, ownerTermsDays)
-        : e.period_month);
-    const gross = effectiveAmount(e.actual_amount, e.planned_amount);
-    const net = gross - Number(e.retainage_amount ?? 0);
-    cashInByMonth.set(cashMonth, (cashInByMonth.get(cashMonth) ?? 0) + net);
-  }
   const cashOutByMonth = new Map<string, number>();
-  for (const f of costRes.data ?? []) {
-    const code = f.cost_codes as unknown as {
-      subcontractor_id: string | null;
-      procurement_order_id: string | null;
-      subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
-    } | null;
-    if (code?.procurement_order_id) continue;
-    const subDays = Number(code?.subcontractors?.payment_terms_days ?? 0);
-    const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
-    const cashMonth =
-      subDays > 0 ? shiftByDaysToMonth(f.period_month, subDays) : f.period_month;
-    const gross = effectiveAmount(f.actual_amount, f.planned_amount);
-    const net = gross * (1 - retPct);
-    cashOutByMonth.set(cashMonth, (cashOutByMonth.get(cashMonth) ?? 0) + net);
-  }
-  for (const p of payRes.data ?? []) {
-    const date = p.paid_at ?? p.expected_date;
-    if (!date) continue;
-    const cashMonth = monthIsoFromDate(date);
-    const amount = Number(p.paid_amount ?? p.amount ?? 0);
-    if (!amount) continue;
-    cashOutByMonth.set(cashMonth, (cashOutByMonth.get(cashMonth) ?? 0) + amount);
+  for (const r of projection.rows) {
+    if (r.revenueRecognized !== 0) revenueByMonth.set(r.month, r.revenueRecognized);
+    if (r.totalCost !== 0) costByMonth.set(r.month, r.totalCost);
+    if (r.cashIn !== 0) cashInByMonth.set(r.month, r.cashIn);
+    if (r.totalCashOut !== 0) cashOutByMonth.set(r.month, r.totalCashOut);
   }
 
-  // === Retainage release (CASH BASIS only - accrual already accounts for it) ===
-  // Both sides release at substantial completion. Land 1 month after the last
-  // regular cash event so cycle payments have cleared first.
-  let totalOwnerRetainage = 0;
-  for (const e of billingRes.data ?? []) {
-    totalOwnerRetainage += Number(e.retainage_amount ?? 0);
-  }
-  let totalSubRetainage = 0;
-  for (const f of costRes.data ?? []) {
-    const code = f.cost_codes as unknown as {
-      subcontractor_id: string | null;
-      procurement_order_id: string | null;
-      subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
-    } | null;
-    if (code?.procurement_order_id) continue;
-    const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
-    const gross = effectiveAmount(f.actual_amount, f.planned_amount);
-    totalSubRetainage += gross * retPct;
-  }
-  if (totalOwnerRetainage > 0 || totalSubRetainage > 0) {
-    const allCashMonthsForRelease = new Set<string>();
-    cashInByMonth.forEach((_, k) => allCashMonthsForRelease.add(k));
-    cashOutByMonth.forEach((_, k) => allCashMonthsForRelease.add(k));
-    const lastCashMonth = Array.from(allCashMonthsForRelease).sort().pop();
-    if (lastCashMonth) {
-      const releaseMonth = addMonthsIso(lastCashMonth, 1);
-      if (totalOwnerRetainage > 0) {
-        cashInByMonth.set(
-          releaseMonth,
-          (cashInByMonth.get(releaseMonth) ?? 0) + totalOwnerRetainage,
-        );
-      }
-      if (totalSubRetainage > 0) {
-        cashOutByMonth.set(
-          releaseMonth,
-          (cashOutByMonth.get(releaseMonth) ?? 0) + totalSubRetainage,
-        );
-      }
-    }
-  }
 
-  // === Build chart data on ACCRUAL ===
   const allMonths = new Set<string>();
   revenueByMonth.forEach((_, k) => allMonths.add(k));
   costByMonth.forEach((_, k) => allMonths.add(k));

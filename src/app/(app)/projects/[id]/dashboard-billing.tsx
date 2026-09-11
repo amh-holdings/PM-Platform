@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { buildProjection } from "@/lib/projection";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import {
@@ -20,20 +21,23 @@ const shortLabel = shortMonthLabel;
 export async function DashboardBilling({ projectId }: Props) {
   const supabase = createClient();
 
-  const { data: entries, error } = await supabase
-    .from("billing_entries")
-    .select(
-      "period_month, planned_amount, actual_amount, retainage_amount, afp_number, status, billing_lines!inner(project_id, description, item_number)",
-    )
-    .eq("billing_lines.project_id", projectId)
-    .order("period_month");
-
-  if (error) {
+  // One source for every money panel on this page.
+  //
+  // This used to read billing_entries directly, which is only the money
+  // somebody has already written down. Once the projection learned to forecast
+  // off the schedule, this panel kept saying "No billing data yet" directly
+  // underneath a table showing $290,388 of it. Two panels disagreeing about the
+  // same project is worse than either being wrong on its own, so they now read
+  // the same rows and cannot drift apart.
+  let projection;
+  try {
+    projection = await buildProjection(supabase, projectId, { monthsAhead: 18 });
+  } catch (e) {
     return (
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h2 className="text-sm font-semibold">Billing timeline</h2>
         <p className="mt-2 text-xs text-destructive">
-          Failed to load: {error.message}
+          Failed to load: {e instanceof Error ? e.message : "unknown error"}
         </p>
       </section>
     );
@@ -47,32 +51,24 @@ export async function DashboardBilling({ projectId }: Props) {
     plannedRetainage: number;
   };
   const byMonth = new Map<string, Bucket>();
-  // Prefer actual when present so a paid entry with a leftover planned
-  // forecast doesn't get counted twice. Split each entry into cash + retainage
-  // so the chart can stack "held back" on top of "going to the bank."
-  for (const e of entries ?? []) {
-    if (!byMonth.has(e.period_month))
-      byMonth.set(e.period_month, {
-        actualCash: 0,
-        actualRetainage: 0,
-        plannedCash: 0,
-        plannedRetainage: 0,
-      });
-    const m = byMonth.get(e.period_month)!;
-    const actual = Number(e.actual_amount ?? 0);
-    const planned = Number(e.planned_amount ?? 0);
-    const retainage = Number(e.retainage_amount ?? 0);
-    if (actual > 0) {
-      m.actualRetainage += retainage;
-      m.actualCash += Math.max(0, actual - retainage);
-    } else if (planned > 0) {
-      m.plannedRetainage += retainage;
-      m.plannedCash += Math.max(0, planned - retainage);
+  for (const r of projection.rows) {
+    if (
+      r.revenueActual === 0 &&
+      r.revenueForecast === 0 &&
+      r.retainageActual === 0 &&
+      r.retainageForecast === 0
+    ) {
+      continue;
     }
+    byMonth.set(r.month, {
+      // The bar shows what reaches the bank; retainage stacks on top of it.
+      actualCash: Math.max(0, r.revenueActual - r.retainageActual),
+      actualRetainage: r.retainageActual,
+      plannedCash: Math.max(0, r.revenueForecast - r.retainageForecast),
+      plannedRetainage: r.retainageForecast,
+    });
   }
 
-  // Fill in every month between earliest and latest so empty months still
-  // appear as gaps in the timeline instead of being compressed out.
   const sortedMonths = Array.from(byMonth.keys()).sort();
   const dataMonths =
     sortedMonths.length > 0

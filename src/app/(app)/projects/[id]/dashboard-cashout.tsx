@@ -1,12 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
+import { buildProjection } from "@/lib/projection";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import {
   addMonthsIso,
   firstOfThisMonthIso,
-  monthIsoFromDate,
   monthsBetween,
-  shiftByDaysToMonth,
   shortMonthLabel,
 } from "@/lib/cashflow";
 
@@ -21,70 +20,31 @@ type BucketRow = { actual: number; planned: number };
 export async function DashboardCashOut({ projectId }: Props) {
   const supabase = createClient();
 
-  const [forecastRes, payRes] = await Promise.all([
-    supabase
-      .from("cost_forecasts")
-      .select(
-        "period_month, planned_amount, actual_amount, cost_codes!inner(project_id, subcontractor_id, procurement_order_id, subcontractors(payment_terms_days, retainage_pct))",
-      )
-      .eq("cost_codes.project_id", projectId),
-    supabase
-      .from("procurement_payments")
-      .select(
-        "expected_date, paid_at, amount, paid_amount, procurement_orders!inner(project_id)",
-      )
-      .eq("procurement_orders.project_id", projectId),
-  ]);
-
-  const err = forecastRes.error?.message ?? payRes.error?.message;
-  if (err) {
+  // Same source as the projection table and the billing timeline - see the note
+  // in dashboard-billing.tsx. This panel read cost_forecasts and
+  // procurement_payments directly, so it reported "No cash-out data yet" while
+  // the table above it showed $18,216 leaving in Nov and $42,264 in Jul 27.
+  let projection;
+  try {
+    projection = await buildProjection(supabase, projectId, { monthsAhead: 18 });
+  } catch (e) {
     return (
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h2 className="text-sm font-semibold">Cash Out timeline</h2>
-        <p className="mt-2 text-xs text-destructive">Failed to load: {err}</p>
+        <p className="mt-2 text-xs text-destructive">
+          Failed to load: {e instanceof Error ? e.message : "unknown error"}
+        </p>
       </section>
     );
   }
 
   const thisMonthIso = firstOfThisMonthIso();
   const byMonth = new Map<string, BucketRow>();
-  const bump = (iso: string, side: "actual" | "planned", v: number) => {
-    if (!byMonth.has(iso)) byMonth.set(iso, { actual: 0, planned: 0 });
-    byMonth.get(iso)![side] += v;
-  };
-
-  // Sub side: shift by Net X, apply retainage, skip vendor-linked codes.
-  for (const f of forecastRes.data ?? []) {
-    const code = f.cost_codes as unknown as {
-      subcontractor_id: string | null;
-      procurement_order_id: string | null;
-      subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
-    } | null;
-    if (code?.procurement_order_id) continue;
-    const subDays = Number(code?.subcontractors?.payment_terms_days ?? 0);
-    const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
-    const cashMonth =
-      subDays > 0 ? shiftByDaysToMonth(f.period_month, subDays) : f.period_month;
-    const actual = Number(f.actual_amount ?? 0) * (1 - retPct);
-    const planned = Number(f.planned_amount ?? 0) * (1 - retPct);
-    // Use effective rule: if both set, actual wins (so headers don't double).
-    if (actual > 0) bump(cashMonth, "actual", actual);
-    else if (planned > 0) bump(cashMonth, "planned", planned);
+  for (const r of projection.rows) {
+    if (r.cashOutActual === 0 && r.cashOutForecast === 0) continue;
+    byMonth.set(r.month, { actual: r.cashOutActual, planned: r.cashOutForecast });
   }
 
-  // Vendor side: payments scheduled by milestone expected_date.
-  for (const p of payRes.data ?? []) {
-    const isPaid = p.paid_at != null;
-    const date = isPaid ? p.paid_at : p.expected_date;
-    if (!date) continue;
-    const cashMonth = monthIsoFromDate(date);
-    const amount = Number(p.paid_amount ?? p.amount ?? 0);
-    if (!amount) continue;
-    bump(cashMonth, isPaid ? "actual" : "planned", amount);
-  }
-
-  // Fill in every month between earliest and latest so idle months still
-  // appear as gaps in the timeline instead of compressing out.
   const sortedMonths = Array.from(byMonth.keys()).sort();
   const dataMonths =
     sortedMonths.length > 0
