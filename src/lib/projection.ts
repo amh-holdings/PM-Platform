@@ -23,7 +23,13 @@ import {
   shiftByDaysToMonth,
   shortMonthLabel,
 } from "@/lib/cashflow";
-import { aggregateConfidence, estimateTaskProgress, type Confidence } from "@/lib/progress";
+import {
+  aggregateConfidence,
+  estimateTaskProgress,
+  isSummaryOf,
+  resolveMilestoneTask,
+  type Confidence,
+} from "@/lib/progress";
 
 export type ProjectionRow = {
   month: string;
@@ -84,7 +90,10 @@ export async function buildProjection(
   const horizonEnd = addMonthsIso(todayIso, months);
   const startCap = addMonthsIso(todayIso, -6); // include up to 6 prior months for context
 
-  const [projectRes, entriesRes, forecastsRes, paymentsRes, posRes, linesRes, tasksRes] =
+  const [
+    projectRes, entriesRes, forecastsRes, paymentsRes, posRes, linesRes, tasksRes,
+    subSovRes, subBilledRes,
+  ] =
     await Promise.all([
       supabase
         .from("projects")
@@ -94,7 +103,7 @@ export async function buildProjection(
       supabase
         .from("billing_entries")
         .select(
-          "period_month, cash_in_month, planned_amount, actual_amount, retainage_amount, status, billing_lines!inner(project_id)",
+          "billing_line_id, period_month, cash_in_month, planned_amount, actual_amount, retainage_amount, status, billing_lines!inner(project_id)",
         )
         .eq("billing_lines.project_id", projectId),
       supabase
@@ -115,12 +124,22 @@ export async function buildProjection(
         .eq("project_id", projectId),
       supabase
         .from("billing_lines")
-        .select("id, item_number, description, linked_task_wbs_codes")
+        .select("id, item_number, description, type, scheduled_value, linked_task_wbs_codes")
         .eq("project_id", projectId),
       supabase
         .from("schedule_tasks")
-        .select("wbs_code, status, start_date, end_date, pct_complete")
+        .select("wbs_code, task_name, status, start_date, end_date, pct_complete")
         .eq("project_id", projectId),
+      supabase
+        .from("sub_sov_lines")
+        .select(
+          "id, item_number, description, scheduled_value, linked_task_wbs_codes, milestone_task_wbs_code, active, subcontractors!inner(company_name, payment_terms_days, retainage_pct)",
+        )
+        .eq("project_id", projectId),
+      supabase
+        .from("sub_pay_app_lines")
+        .select("sub_sov_line_id, total_completed, sub_pay_apps!inner(project_id)")
+        .eq("sub_pay_apps.project_id", projectId),
     ]);
 
   const warnings: ProjectionWarning[] = [];
@@ -233,6 +252,134 @@ export async function buildProjection(
     cashBucket.cashIn += Math.max(0, gross - retainage);
   }
 
+  // ---- SCHEDULE-DRIVEN FORECAST ----
+  //
+  // Everything above this point is money somebody already wrote down: a billing
+  // entry, a cost forecast, a vendor milestone. That is why a project which has
+  // never billed projected a flat zero - the curve could only show what had
+  // already been recorded, which is the opposite of a forecast.
+  //
+  // This fills in the rest from the schedule. An SOV line earns when the work it
+  // points at is planned to finish, so the milestone task's END DATE is the
+  // month the money lands in. Not progress, not today's percent - the planned
+  // date. That is what makes the curve move when the schedule moves.
+  //
+  // Only the unbilled remainder is forecast, so a line half billed in real
+  // entries contributes its other half here and nothing is counted twice.
+  const schedTasks = (tasksRes.data ?? []) as {
+    wbs_code: string; task_name: string; end_date: string | null;
+  }[];
+
+  /** The month an SOV line's milestone is planned to finish. */
+  const milestoneMonthOf = (
+    links: string[] | null,
+    explicit?: string | null,
+  ): { month: string; via: string } | null => {
+    const codes = explicit ? [explicit, ...(links ?? [])] : links ?? [];
+    for (const code of codes) {
+      // A leaf is its own milestone; a package resolves to the deliverable
+      // inside it, the same way the billing suggestion engine reads it.
+      const hasChildren = schedTasks.some((t) => isSummaryOf(code, t.wbs_code));
+      const task = hasChildren
+        ? resolveMilestoneTask(schedTasks, code)
+        : schedTasks.find((t) => t.wbs_code === code);
+      if (task?.end_date) {
+        return { month: monthIsoFromDate(task.end_date), via: task.wbs_code };
+      }
+    }
+    return null;
+  };
+
+  const ownerRetPct = Number(projectRes.data?.retainage_pct_default ?? 0) / 100;
+  const billedByLine = new Map<string, number>();
+  for (const e of entriesRes.data ?? []) {
+    const id = (e as { billing_line_id?: string | null }).billing_line_id;
+    if (!id) continue;
+    billedByLine.set(
+      id,
+      (billedByLine.get(id) ?? 0) + effectiveAmount(e.actual_amount, e.planned_amount),
+    );
+  }
+
+  let forecastRetainage = 0;
+  let forecastSubRetainage = 0;
+
+  for (const line of linesRes.data ?? []) {
+    const scheduled = Number((line as { scheduled_value?: number | null }).scheduled_value ?? 0);
+    const remaining = scheduled - (billedByLine.get(line.id) ?? 0);
+    if (remaining <= 0.005) continue;
+
+    const at = milestoneMonthOf(line.linked_task_wbs_codes);
+    if (!at) {
+      // Warned rather than dropped: a line missing from the curve is money the
+      // forecast is silently short by.
+      if ((line.linked_task_wbs_codes ?? []).length > 0) {
+        warnings.push({
+          kind: "task_no_dates",
+          ref: line.item_number,
+          message: `${line.item_number} "${line.description ?? ""}" links to work with no planned finish date - $${Math.round(remaining).toLocaleString()} is missing from the forecast`,
+        });
+      }
+      continue;
+    }
+
+    const accrual = get(at.month);
+    accrual.revenueRecognized += remaining;
+    accrual.confidenceSignals.push("low"); // estimated from the schedule
+
+    const retainage = remaining * ownerRetPct;
+    forecastRetainage += retainage;
+    const cashMonth =
+      ownerTermsDays > 0 ? shiftByDaysToMonth(at.month, ownerTermsDays) : at.month;
+    get(cashMonth).cashIn += remaining - retainage;
+  }
+
+  // The same treatment on the way out, off the subcontractor SOV.
+  const subBilledByLine = new Map<string, number>();
+  for (const l of subBilledRes.data ?? []) {
+    const id = (l as { sub_sov_line_id?: string | null }).sub_sov_line_id;
+    if (!id) continue;
+    subBilledByLine.set(
+      id,
+      (subBilledByLine.get(id) ?? 0) +
+        Number((l as { total_completed?: number | null }).total_completed ?? 0),
+    );
+  }
+
+  for (const line of (subSovRes.data ?? []) as unknown as {
+    id: string; item_number: string; scheduled_value: number | null;
+    linked_task_wbs_codes: string[] | null; milestone_task_wbs_code: string | null;
+    active: boolean | null;
+    subcontractors: {
+      company_name: string; payment_terms_days: number | null; retainage_pct: number | null;
+    } | null;
+  }[]) {
+    if (line.active === false) continue;
+    const remaining = Number(line.scheduled_value ?? 0) - (subBilledByLine.get(line.id) ?? 0);
+    if (remaining <= 0.005) continue;
+
+    const at = milestoneMonthOf(line.linked_task_wbs_codes, line.milestone_task_wbs_code);
+    if (!at) {
+      warnings.push({
+        kind: "task_no_dates",
+        ref: `${line.subcontractors?.company_name ?? "sub"} ${line.item_number}`,
+        message: `${line.subcontractors?.company_name ?? "A subcontractor"} line ${line.item_number} has no dated task - $${Math.round(remaining).toLocaleString()} of cost is missing from the forecast`,
+      });
+      continue;
+    }
+
+    const subDays = Number(line.subcontractors?.payment_terms_days ?? 0);
+    const retPct = Number(line.subcontractors?.retainage_pct ?? 0) / 100;
+
+    const accrual = get(at.month);
+    accrual.subCostIncurred += remaining;
+    accrual.confidenceSignals.push("low");
+
+    const cashMonth = subDays > 0 ? shiftByDaysToMonth(at.month, subDays) : at.month;
+    get(cashMonth).subCashOut += remaining * (1 - retPct);
+    forecastSubRetainage += remaining * retPct;
+  }
+
   // ---- SUB COSTS -> Cost (accrual) + Cash Out (cash basis) ----
   for (const f of forecastsRes.data ?? []) {
     const code = f.cost_codes as unknown as {
@@ -281,11 +428,11 @@ export async function buildProjection(
   }
 
   // ---- RETAINAGE RELEASE on cash basis at the last cash month + 1 ----
-  let totalOwnerRetainage = 0;
+  let totalOwnerRetainage = forecastRetainage;
   for (const e of entriesRes.data ?? []) {
     totalOwnerRetainage += Number(e.retainage_amount ?? 0);
   }
-  let totalSubRetainage = 0;
+  let totalSubRetainage = forecastSubRetainage;
   for (const f of forecastsRes.data ?? []) {
     const code = f.cost_codes as unknown as {
       procurement_order_id: string | null;
