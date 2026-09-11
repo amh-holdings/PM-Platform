@@ -58,6 +58,24 @@ export function BillThisPeriodClient({
       ]),
     ),
   );
+  // A row proposing nothing is not a projection for this period. It is a note
+  // about why a line cannot bill yet, and it belongs behind a disclosure -
+  // nine SOV lines with one real number and eight zeroes reads as "everything
+  // is here" when the honest answer is "one thing is billable".
+  //
+  // Kept rather than dropped, because a $0 with a reason is how you find out a
+  // line is linked to a summary row. Dropping it silently is how it stays
+  // broken until somebody reconciles the AFP.
+  const isProposing = (r: BillableRow) =>
+    r.kind === "suggestion"
+      ? r.amount > 0
+      : !r.blockedReason && (r.recommendedAmount ?? r.amount) > 0;
+
+  const proposing = rows.filter(isProposing);
+  const unsupported = rows.filter((r) => !isProposing(r));
+  const [showUnsupported, setShowUnsupported] = useState(false);
+  const visibleRows = showUnsupported ? [...proposing, ...unsupported] : proposing;
+
   const [openEvidence, setOpenEvidence] = useState<Set<string>>(new Set());
   function toggleEvidence(key: string) {
     setOpenEvidence((prev) => {
@@ -168,7 +186,7 @@ export function BillThisPeriodClient({
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
+              {visibleRows.map((r) => {
                 const isChecked = selected.has(r.key);
                 // Label what the AMOUNT is, not where the row came from - the
                 // row may be a forecast entry while the figure is the
@@ -313,11 +331,27 @@ export function BillThisPeriodClient({
                   </tr>
                 );
               })}
-              {rows.length === 0 && (
+              {visibleRows.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-4 text-center text-muted-foreground">
-                    Nothing to bill: no forecast entries queued up, no schedule
-                    progress detected.
+                    {unsupported.length > 0
+                      ? `Nothing billable for ${periodLabel(periodMonth)}. ${unsupported.length} line${unsupported.length === 1 ? "" : "s"} could not be supported - see below.`
+                      : "Nothing to bill: no forecast entries queued up, no schedule progress detected."}
+                  </td>
+                </tr>
+              )}
+              {unsupported.length > 0 && (
+                <tr>
+                  <td colSpan={5} className="py-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowUnsupported((v) => !v)}
+                      className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    >
+                      {showUnsupported ? "Hide" : "Show"} {unsupported.length} line
+                      {unsupported.length === 1 ? "" : "s"} not billable this
+                      period
+                    </button>
                   </td>
                 </tr>
               )}
