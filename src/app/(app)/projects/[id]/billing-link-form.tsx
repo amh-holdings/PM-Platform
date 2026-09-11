@@ -18,7 +18,13 @@ type Props = {
 
 /** Chips shown before the "+N more" toggle takes over. */
 const COLLAPSED_CHIPS = 3;
-const MAX_SUGGESTIONS = 8;
+
+// A render guard, not a browse limit. The list used to stop at eight with no
+// scroll and no sign that more existed, so on an 86-task schedule opening the
+// box showed the first eight rows in schedule order - all contract admin - and
+// there was no way to reach Engineering except by guessing at a search term.
+// The list scrolls; let it.
+const MAX_SUGGESTIONS = 200;
 
 function rank(task: TaskOption, query: string): number {
   const q = query.toLowerCase();
@@ -53,6 +59,7 @@ export function BillingLinkForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, startSaving] = useTransition();
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
 
   const taskByCode = useMemo(() => {
     const m = new Map<string, TaskOption>();
@@ -62,17 +69,26 @@ export function BillingLinkForm({
 
   const linked = useMemo(() => new Set(codes), [codes]);
 
-  const suggestions = useMemo(() => {
+  // Matches before truncation, so the list can say what it is not showing
+  // instead of silently ending.
+  const matches = useMemo(() => {
     const q = query.trim();
     const pool = tasks.filter((t) => !linked.has(t.wbsCode));
-    if (!q) return pool.slice(0, MAX_SUGGESTIONS);
+    // Nothing typed is a browse, not a search: the whole schedule, in schedule
+    // order, exactly as the Schedule page lists it.
+    if (!q) return pool;
     return pool
       .map((t) => ({ t, r: rank(t, q) }))
       .filter((x) => x.r >= 0)
       .sort((a, b) => a.r - b.r || a.t.wbsCode.localeCompare(b.t.wbsCode))
-      .slice(0, MAX_SUGGESTIONS)
       .map((x) => x.t);
   }, [query, tasks, linked]);
+
+  const suggestions = useMemo(
+    () => matches.slice(0, MAX_SUGGESTIONS),
+    [matches],
+  );
+  const hidden = matches.length - suggestions.length;
 
   const save = (next: string[], revertTo: string[]) => {
     setError(null);
@@ -104,13 +120,22 @@ export function BillingLinkForm({
     );
   };
 
+  // Keep the highlighted row in the box. With eight items it was always
+  // visible; with the whole schedule it is not.
+  const moveHighlight = (next: number) => {
+    setHighlight(next);
+    requestAnimationFrame(() => {
+      listRef.current?.children[next]?.scrollIntoView({ block: "nearest" });
+    });
+  };
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setHighlight((h) => Math.min(h + 1, suggestions.length - 1));
+      moveHighlight(Math.min(highlight + 1, suggestions.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setHighlight((h) => Math.max(h - 1, 0));
+      moveHighlight(Math.max(highlight - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
       // Enter on a highlighted suggestion takes it; otherwise the typed text
@@ -246,7 +271,10 @@ export function BillingLinkForm({
             )}
           />
           {suggestions.length > 0 && (
-            <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border bg-card shadow-md">
+            <ul
+              ref={listRef}
+              className="absolute z-20 mt-1 max-h-72 w-full overflow-y-auto rounded-md border bg-card shadow-md"
+            >
               {suggestions.map((t, i) => (
                 <li key={t.wbsCode}>
                   <button
@@ -259,7 +287,10 @@ export function BillingLinkForm({
                       i === highlight ? "bg-muted" : "hover:bg-muted/60",
                     )}
                   >
-                    <span className="font-mono text-muted-foreground">
+                    <span
+                      className="font-mono text-muted-foreground"
+                      style={{ paddingLeft: (t.wbsCode.split(".").length - 1) * 8 }}
+                    >
                       {t.wbsCode}
                     </span>
                     <span className="flex-1 truncate">{t.taskName}</span>
@@ -276,6 +307,12 @@ export function BillingLinkForm({
                   </button>
                 </li>
               ))}
+              {hidden > 0 && (
+                <li className="border-t px-2 py-1 text-[10px] text-muted-foreground">
+                  {hidden} more match{hidden === 1 ? "" : "es"} - keep typing to
+                  narrow it down
+                </li>
+              )}
             </ul>
           )}
           {query.trim() && suggestions.length === 0 && (
