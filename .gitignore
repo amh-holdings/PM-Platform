@@ -44,6 +44,9 @@ db/reference/
 
 # Scratch / one-off scripts (prefixed with _), at any depth under scripts/
 scripts/**/_*.mjs
+# Same rule, same reason - tsx-era scratch scripts are local diagnostics, not
+# shipped code. The .mts extension was slipping past the line above.
+scripts/**/_*.mts
 scripts/**/_*.js
 scripts/**/_*.ts
 

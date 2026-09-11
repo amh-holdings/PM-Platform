@@ -132,8 +132,11 @@ export function BillingLinkForm({
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-1">
         {codes.length === 0 && !adding && (
-          <span className="text-[10px] italic text-muted-foreground">
-            No tasks linked
+          <span
+            className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+            title="Nothing to measure progress against, so this line cannot be auto-suggested for billing."
+          >
+            Not linked
           </span>
         )}
         {shown.map((code) => {
@@ -209,9 +212,14 @@ export function BillingLinkForm({
               setHighlight(0);
               requestAnimationFrame(() => inputRef.current?.focus());
             }}
-            className="text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors",
+              codes.length === 0
+                ? "border-primary/40 bg-primary/5 text-primary hover:bg-primary/10"
+                : "border-input text-muted-foreground hover:border-primary/40 hover:text-foreground",
+            )}
           >
-            + Add linked task
+            {codes.length === 0 ? "Link schedule task" : "+ Add task"}
           </button>
         )}
       </div>

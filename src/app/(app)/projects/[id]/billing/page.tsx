@@ -204,6 +204,8 @@ export default async function ProjectBillingPage({
           </div>
         </div>
 
+        <UnlinkedSovBanner rows={rows} />
+
         <BillingPeriodSelector projectId={params.id} selected={period} />
         <BillThisPeriodPanel
           projectId={params.id}
@@ -447,5 +449,43 @@ export default async function ProjectBillingPage({
         </div>
       </div>
     </LinkCatalogProvider>
+  );
+}
+
+// Unlinked lines are the difference between a schedule of values and a working
+// one: nothing measures their progress, so they never appear in a billing
+// suggestion and never reach the cash forecast. That is invisible if the only
+// sign of it is a grey caption repeated down a column, which is how Sussexx sat
+// with all nine lines unlinked without anyone noticing.
+function UnlinkedSovBanner({
+  rows,
+}: {
+  rows: { item_number: string; linked_task_wbs_codes: string[] | null; description: string | null; type: string | null }[];
+}) {
+  const unlinked = rows.filter(
+    (r) =>
+      !isProcurementLine({ type: r.type, description: r.description }) &&
+      !(r.linked_task_wbs_codes ?? []).length,
+  );
+  if (!unlinked.length) return null;
+
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+      <p className="font-medium">
+        {unlinked.length} of {rows.length} billing line
+        {rows.length === 1 ? "" : "s"} {unlinked.length === 1 ? "is" : "are"} not
+        linked to the schedule.
+      </p>
+      <p className="mt-1 text-xs">
+        A line with no linked task has nothing to measure its progress against,
+        so it never appears in a billing suggestion and never reaches the cash
+        forecast. Use <span className="font-medium">Link schedule task</span> on
+        each row below.
+      </p>
+      <p className="mt-1.5 font-mono text-xs">
+        {unlinked.slice(0, 20).map((r) => r.item_number).join(", ")}
+        {unlinked.length > 20 ? ", ..." : ""}
+      </p>
+    </div>
   );
 }
