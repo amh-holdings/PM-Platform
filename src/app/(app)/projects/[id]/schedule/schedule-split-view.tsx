@@ -96,6 +96,8 @@ import {
   DAY_MS,
   HEADER_H,
   Legend,
+  ACTION_W,
+  GUTTER_W,
   ROW_H,
   TimelineGrid,
   TimelineHeader,
@@ -407,7 +409,8 @@ export function ScheduleSplitView({
       })),
     [shownColumns, widthOf, showChart],
   );
-  const gridInnerWidth = resolvedColumns.reduce((n, c) => n + c.width, 0) + 60;
+  const gridInnerWidth =
+    resolvedColumns.reduce((n, c) => n + c.width, 0) + GUTTER_W + ACTION_W;
 
   // Filters, carried over from the old Table view.
   const [phaseFilter, setPhaseFilter] = useState("");
@@ -1829,7 +1832,10 @@ export function ScheduleSplitView({
                 className="sticky top-0 z-30 flex items-center border-b bg-muted/60 text-[11px] font-medium uppercase tracking-wide text-muted-foreground backdrop-blur"
                 style={{ height: HEADER_H }}
               >
-                <div className="flex w-[60px] shrink-0 items-center gap-1 px-1.5">
+                <div
+                  className="flex shrink-0 items-center gap-1 px-1.5"
+                  style={{ width: GUTTER_W }}
+                >
                   <span className="w-3" />
                   <input
                     type="checkbox"
@@ -1844,7 +1850,8 @@ export function ScheduleSplitView({
                   <div
                     key={c.key}
                     className={cn(
-                      "relative shrink-0 px-1.5",
+                      "relative px-1.5",
+                      !c.flex && "shrink-0",
                       c.derived && "text-muted-foreground/70",
                     )}
                     style={
@@ -1874,6 +1881,12 @@ export function ScheduleSplitView({
                     />
                   </div>
                 ))}
+                {/* Stands in for the Open button on every row. Without it the
+                    header is one cell short, and with the chart hidden the Task
+                    column flexes to a different width above than below - which
+                    slides every heading off its column and puts the resize
+                    handles over the wrong edges. */}
+                <div className="shrink-0" style={{ width: ACTION_W }} />
               </div>
 
               {rows.length === 0 ? (
@@ -2232,7 +2245,10 @@ function GridRow({
             : undefined,
       }}
     >
-      <div className="flex w-[60px] shrink-0 items-center gap-1 px-1.5">
+      <div
+        className="flex shrink-0 items-center gap-1 px-1.5"
+        style={{ width: GUTTER_W }}
+      >
         <span
           draggable
           onDragStart={onDragStart}
@@ -2461,7 +2477,7 @@ function GridRow({
         }
       })}
 
-      <div className="shrink-0 px-1">
+      <div className="shrink-0 px-1" style={{ width: ACTION_W }}>
         <TaskEditDialog
           projectId={projectId}
           task={t}

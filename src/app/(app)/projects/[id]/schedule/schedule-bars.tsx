@@ -28,6 +28,18 @@ export const ROW_H = 30;
 /** Height of the header strip, likewise shared. */
 export const HEADER_H = 36;
 
+/**
+ * Width of the select-and-drag gutter at the left of every grid row, and of the
+ * Open-button cell at the right.
+ *
+ * Both are cells in the same flex row as the columns, so both have to be in the
+ * header too and in the total width, or the header stops lining up with the
+ * rows beneath it. That is not cosmetic: the resize handles live in the header,
+ * so a header that has drifted is a header you cannot drag the right edge of.
+ */
+export const GUTTER_W = 60;
+export const ACTION_W = 56;
+
 export const ZOOMS = [
   { label: "Fit", px: 0 },
   { label: "Month", px: 3 },
