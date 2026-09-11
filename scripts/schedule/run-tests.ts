@@ -27,6 +27,7 @@ import {
   type CpmInput,
 } from "@/lib/schedule-cpm";
 import { assessSchedule } from "@/lib/schedule-health";
+import { resolveMilestoneTask } from "@/lib/progress";
 import { hasLinkErrors } from "@/app/(app)/projects/[id]/schedule/predecessor-editor";
 import {
   defaultSheetIndex,
@@ -889,6 +890,77 @@ section("Editing - pasted grid import");
   const grid = parseGrid('WBS,Task Name\n5.1.1,"Clear, grub and haul"');
   eq("comma delimiter detected", grid.delimiter, "comma");
   eq("quoted comma kept", grid.rows[0][1], "Clear, grub and haul");
+}
+
+section("Billing - which task inside a package earns the line");
+
+// The real Sussexx branches. An SOV line linked to the package has to resolve
+// to the deliverable underneath it, or it bills on a duration rollup and pays
+// early: on 26 Oct the Civil 90% package reads 62% of $30,510.
+{
+  const sussexx = [
+    { wbs_code: "1.2.1.1", task_name: "30% Design", end_date: "2026-09-21" },
+    { wbs_code: "1.2.1.1.1", task_name: "Design", end_date: "2026-09-14" },
+    { wbs_code: "1.2.1.1.2", task_name: "30% Design - Internal Review", end_date: "2026-09-21" },
+    { wbs_code: "1.2.1.1.3", task_name: "DE Page Turn", end_date: "2026-09-15" },
+    { wbs_code: "1.2.1.3", task_name: "90% Design", end_date: "2026-11-03" },
+    { wbs_code: "1.2.1.3.1", task_name: "Design", end_date: "2026-10-26" },
+    { wbs_code: "1.2.1.3.2", task_name: "90% Design - Internal Review", end_date: "2026-11-02" },
+    { wbs_code: "1.2.1.3.3", task_name: "DE Page Turn", end_date: "2026-11-03" },
+    { wbs_code: "1.2.1.4", task_name: "IFP (Issued For Permit)", end_date: "2026-11-18" },
+    { wbs_code: "1.2.1.4.1", task_name: "Design", end_date: "2026-11-10" },
+    { wbs_code: "1.2.1.4.2", task_name: "IFP - Internal Review", end_date: "2026-11-17" },
+    { wbs_code: "1.2.1.4.3", task_name: "IFP Page Turn", end_date: "2026-11-18" },
+  ];
+
+  eq("a package resolves to its page turn", resolveMilestoneTask(sussexx, "1.2.1.3")?.wbs_code, "1.2.1.3.3");
+  eq("and so does the IFP package", resolveMilestoneTask(sussexx, "1.2.1.4")?.wbs_code, "1.2.1.4.3");
+
+  // The case that rules out "just take the latest finish": the 30% package
+  // ends with its internal review on 21 Sep, six days AFTER the page turn it
+  // actually bills on.
+  eq("name beats finish date", resolveMilestoneTask(sussexx, "1.2.1.1")?.wbs_code, "1.2.1.1.3");
+  check(
+    "which is not the latest-finishing leaf",
+    sussexx.find((t) => t.wbs_code === "1.2.1.1.2")!.end_date >
+      sussexx.find((t) => t.wbs_code === "1.2.1.1.3")!.end_date,
+  );
+}
+
+{
+  // No deliverable-shaped name anywhere: fall back to the leaf that finishes
+  // last, since completing it completes the package.
+  const plain = [
+    { wbs_code: "5.1", task_name: "Sitework", end_date: "2026-10-01" },
+    { wbs_code: "5.1.1", task_name: "Clear and grub", end_date: "2026-09-10" },
+    { wbs_code: "5.1.2", task_name: "Rough grade", end_date: "2026-10-01" },
+  ];
+  eq("latest finish is the fallback", resolveMilestoneTask(plain, "5.1")?.wbs_code, "5.1.2");
+}
+
+{
+  // Nested packages: a sub-package is not a deliverable, only its leaves are.
+  const nested = [
+    { wbs_code: "2", task_name: "Permitting", end_date: "2027-01-01" },
+    { wbs_code: "2.1", task_name: "County", end_date: "2026-12-01" },
+    { wbs_code: "2.1.1", task_name: "Application", end_date: "2026-11-01" },
+    { wbs_code: "2.1.2", task_name: "Permit Issued", end_date: "2026-12-01" },
+  ];
+  eq("it reaches through a sub-package", resolveMilestoneTask(nested, "2")?.wbs_code, "2.1.2");
+  eq("a leaf has nothing inside it", resolveMilestoneTask(nested, "2.1.2"), null);
+  eq("and an unknown code resolves to nothing", resolveMilestoneTask(nested, "9.9"), null);
+}
+
+{
+  // Ties break on the later code, so the answer is stable rather than
+  // dependent on the order rows came back from the database.
+  const tied = [
+    { wbs_code: "3", task_name: "Pkg", end_date: "2026-10-01" },
+    { wbs_code: "3.1", task_name: "Page Turn", end_date: "2026-10-01" },
+    { wbs_code: "3.2", task_name: "Page Turn", end_date: "2026-10-01" },
+  ];
+  eq("ties break on the later code", resolveMilestoneTask(tied, "3")?.wbs_code, "3.2");
+  eq("and reversing the input changes nothing", resolveMilestoneTask([...tied].reverse(), "3")?.wbs_code, "3.2");
 }
 
 section("Editing - a Smartsheet export, as Phil actually exports one");

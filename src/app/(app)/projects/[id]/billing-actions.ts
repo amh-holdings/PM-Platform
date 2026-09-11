@@ -13,6 +13,7 @@ import {
   type ProcurementMilestone,
   type Confidence,
   type ProgressEstimate,
+  resolveMilestoneTask,
 } from "@/lib/progress";
 import { progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
@@ -272,6 +273,7 @@ export async function computeBillingSuggestions(
     let estimateWeights: Array<number | null> = [];
     let evidenceCodes: string[] = [];
     let procurementDetail: string[] = [];
+    let resolvedDetail: string[] = [];
     let linkedCount = 0;
 
     // Procurement-scope lines: progress comes from PO state, NOT schedule date math.
@@ -295,8 +297,34 @@ export async function computeBillingSuggestions(
       const links = line.linked_task_wbs_codes ?? [];
       if (links.length === 0) continue;
 
-      const leafLinks = links.filter((c) => !summaryCodes.has(c));
+      const directLeaves = links.filter((c) => !summaryCodes.has(c));
       const summaryLinks = links.filter((c) => summaryCodes.has(c));
+
+      // A summary link is not a mistake, it is how people describe a milestone:
+      // "Civil 90% bills on the 90% package". Resolve it to the deliverable
+      // inside rather than refusing it. Billing on the package itself would run
+      // date interpolation over the whole window and invoice $18,916 of a
+      // $30,510 plan set nobody had issued yet.
+      const resolvedFromSummaries: { code: string; via: string; name: string }[] = [];
+      for (const code of summaryLinks) {
+        const milestone = resolveMilestoneTask(tasks ?? [], code);
+        if (!milestone) continue;
+        resolvedFromSummaries.push({
+          code: milestone.wbs_code,
+          via: code,
+          name: milestone.task_name,
+        });
+      }
+
+      const leafLinks = [
+        ...directLeaves,
+        ...resolvedFromSummaries
+          .map((r) => r.code)
+          .filter((c) => !directLeaves.includes(c)),
+      ];
+      const unresolvedSummaries = summaryLinks.filter(
+        (c) => !resolvedFromSummaries.some((r) => r.via === c),
+      );
 
       if (leafLinks.length === 0) {
         // Every link is a summary row, so there is no defensible percent.
@@ -313,14 +341,14 @@ export async function computeBillingSuggestions(
           targetPct: 0,
           suggestedAmount: 0,
           confidence: "none",
-          reasons: summaryLinks.map(
-            (c) => `${c} is a summary/parent task - its percent is a rollup, not measured work`,
+          reasons: unresolvedSummaries.map(
+            (c) => `${c} is a summary task with nothing billable inside it`,
           ),
           sourcesSummary: "blocked",
           weightedByDuration: false,
           unweightedPct: 0,
           evidence: [],
-          blockedReason: `Linked only to summary task${summaryLinks.length > 1 ? "s" : ""} ${summaryLinks.join(", ")}. Re-link this SOV line to the leaf tasks that represent the actual work.`,
+          blockedReason: `Linked only to summary task${unresolvedSummaries.length > 1 ? "s" : ""} ${unresolvedSummaries.join(", ")}, and ${unresolvedSummaries.length > 1 ? "none of them have" : "it has no"} task underneath to bill against. Link the deliverable directly.`,
         });
         continue;
       }
@@ -333,6 +361,9 @@ export async function computeBillingSuggestions(
       estimateWeights = matched.map((m) => durationByCode.get(m.code) ?? null);
       evidenceCodes = matched.map((m) => m.code);
       linkedCount = matched.length;
+      resolvedDetail = resolvedFromSummaries.map(
+        (r) => `${r.via} is a package - billing on ${r.code} ${r.name}, the milestone inside it`,
+      );
     }
 
     const rollup = durationWeightedPct(
@@ -404,7 +435,9 @@ export async function computeBillingSuggestions(
       targetPct: avgPct,
       suggestedAmount: Math.round(suggested * 100) / 100,
       confidence,
-      reasons: estimateRecords.map((e) => e.reason),
+      // The resolution first: a reader who linked the package needs to see
+      // which task the number actually came from before the percentages.
+      reasons: [...resolvedDetail, ...estimateRecords.map((e) => e.reason)],
       sourcesSummary,
       weightedByDuration: rollup.weightedByDuration,
       unweightedPct: rollup.unweightedPct,

@@ -153,6 +153,73 @@ export function aggregateConfidence(items: Confidence[]): Confidence {
   return "high";
 }
 
+// Resolving a summary link to the milestone it bills on.
+//
+// Linking an SOV line to the package - "Civil 90%" -> 1.2.1.3 - is how people
+// think about it, and the app used to refuse it outright. The refusal was
+// right about the arithmetic and wrong about the intent.
+//
+// The arithmetic: a summary with no status falls through to date interpolation,
+// so on 26 Oct a 13-Oct-to-3-Nov package reads 62% and would have you invoicing
+// $18,916 for a plan set nobody has issued. These lines are milestone payments.
+// The money is earned when the stamped set goes out, not while it is drawn.
+//
+// The intent: the milestone IS under that summary. So rather than refusing the
+// link, resolve it to the deliverable inside - a one-day page turn, which reads
+// 0% until the day it happens and 100% after. That is the shape of the payment.
+//
+// Two rules, in order:
+//
+//   A leaf whose name reads like a deliverable wins. Page turns, issues and
+//   executions are the things owners pay against; reviews and design work are
+//   not.
+//
+//   Otherwise the leaf that finishes last, because completing it is what
+//   completes the package. Deliberately second: Civil's 30% package finishes
+//   with its internal review on 21 Sep, six days AFTER the page turn it bills
+//   on, so "latest finish" alone picks the wrong task.
+
+const MILESTONE_NAME_RE =
+  /page turn|issued for|issue for|\bifp\b|\bifc\b|executed|stamped|submitted|delivered|milestone|complete/i;
+
+export type MilestoneCandidate = {
+  wbs_code: string;
+  task_name: string;
+  end_date?: string | null;
+};
+
+export function isSummaryOf(code: string, candidate: string): boolean {
+  return candidate !== code && candidate.startsWith(code + ".");
+}
+
+/**
+ * The task inside `summaryCode` whose completion earns the line, or null when
+ * the branch holds nothing that could be one.
+ */
+export function resolveMilestoneTask<T extends MilestoneCandidate>(
+  tasks: T[],
+  summaryCode: string,
+): T | null {
+  const descendants = tasks.filter((t) => isSummaryOf(summaryCode, t.wbs_code));
+  if (!descendants.length) return null;
+  // Leaves only - a sub-package is not a deliverable either.
+  const leaves = descendants.filter(
+    (t) => !descendants.some((o) => isSummaryOf(t.wbs_code, o.wbs_code)),
+  );
+  if (!leaves.length) return null;
+
+  const pick = (pool: T[]): T =>
+    [...pool].sort((a, b) => {
+      const ae = a.end_date ?? "";
+      const be = b.end_date ?? "";
+      if (ae !== be) return ae < be ? 1 : -1; // latest finish first
+      return a.wbs_code < b.wbs_code ? 1 : -1; // then the later code
+    })[0];
+
+  const named = leaves.filter((t) => MILESTONE_NAME_RE.test(t.task_name ?? ""));
+  return pick(named.length ? named : leaves);
+}
+
 // Detect whether a billing_line is procurement-scope. Procurement billing is
 // triggered by PO submission, not by schedule date math, so the suggestion
 // engine treats these lines specially.
