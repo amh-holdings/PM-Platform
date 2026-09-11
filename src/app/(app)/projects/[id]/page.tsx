@@ -1,12 +1,10 @@
-import { DashboardBilling } from "./dashboard-billing";
-import { DashboardCashOut } from "./dashboard-cashout";
+import { DashboardCashflow } from "./dashboard-cashflow";
 import { DashboardCompliance } from "./dashboard-compliance";
 import { DashboardCost } from "./dashboard-cost";
 import { DashboardFieldStatus } from "./dashboard-field-status";
 import { DashboardFinancial } from "./dashboard-financial";
 import { DashboardKpis } from "./dashboard-kpis";
 import { DashboardMilestones } from "./dashboard-milestones";
-import { DashboardNetCash } from "./dashboard-netcash";
 import { DashboardPlanActual } from "./dashboard-plan-actual";
 import { DashboardProjection } from "./dashboard-projection";
 import { DashboardSchedule } from "./dashboard-schedule";
@@ -71,10 +69,11 @@ export default async function ProjectDashboardPage({ params }: { params: Params 
             sub="Cash position, billing, spend, cost variance"
           />
           <DashboardKpis projectId={params.id} showCosts={showCosts} />
+          {/* One chart where there were three. Margin, billing and cash-out all
+              drew the same projection rows; see dashboard-cashflow.tsx. The
+              month-by-month numbers behind it are the projection table. */}
+          <DashboardCashflow projectId={params.id} />
           {showCosts && <DashboardProjection projectId={params.id} />}
-          <DashboardNetCash projectId={params.id} />
-          <DashboardBilling projectId={params.id} />
-          <DashboardCashOut projectId={params.id} />
           <div className={showCosts ? "grid gap-4 md:grid-cols-2" : ""}>
             <DashboardFinancial projectId={params.id} />
             {showCosts && <DashboardCost projectId={params.id} />}
