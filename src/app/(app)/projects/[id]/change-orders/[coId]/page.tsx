@@ -8,7 +8,11 @@ import { can } from "@/lib/roles";
 import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
 import { coClient } from "@/lib/database.types.co";
 import { loadChangeOrder } from "@/lib/change-order-load";
-import { CO_STATUS_LABELS, type CoStatus } from "@/lib/change-order-pricing";
+import {
+  CO_STATUS_LABELS,
+  CONTRACT_MARKUP_PCT,
+  type CoStatus,
+} from "@/lib/change-order-pricing";
 
 import { DOCUMENT_BUCKET } from "../../documents-constants";
 import { CoLineEditor } from "./co-line-editor";
@@ -87,6 +91,12 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
 
   const linesTotal = (sovLines ?? []).reduce((s, l) => s + Number(l.scheduled_value ?? 0), 0);
 
+  // A legacy-priced CO reports the numbers it was executed with, never the
+  // buildup's. Its lines are reference detail entered after the fact, and
+  // re-deriving a contract price from them would contradict a signed form.
+  const useBuildupTotals = !co.legacyPricing && buildup.lines.length > 0;
+  const ownerValue = useBuildupTotals ? buildup.billable : co.coValue;
+
   return (
     <div className="space-y-4">
       <div>
@@ -134,6 +144,16 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         linesMissingBackup={linesMissingBackup}
       />
 
+      {co.legacyPricing && showCosts && (
+        <div className="rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
+          Priced before the app, under the old per-line markup. Its value of{" "}
+          {formatCurrency(co.coValue)} is the executed number and is frozen - editing the buildup
+          below records cost detail but will not re-price the change order or its SOV line.
+          Change orders priced in the app carry one {CONTRACT_MARKUP_PCT}% markup on the cost
+          total, per the contract.
+        </div>
+      )}
+
       {totalsOutOfSync && showCosts && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
           <span>
@@ -150,27 +170,33 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
           {showCosts && (
             <PricingCell
               label="Cost (AHC)"
-              value={formatCurrency(buildup.lines.length > 0 ? buildup.totalCost : (co.costAmount ?? 0))}
-              sub={buildup.lines.length > 0 ? `${buildup.lines.length} cost lines` : "Entered as a lump sum"}
+              value={formatCurrency(useBuildupTotals ? buildup.totalCost : (co.costAmount ?? 0))}
+              sub={
+                co.legacyPricing
+                  ? "As executed"
+                  : buildup.lines.length > 0
+                    ? `${buildup.lines.length} cost lines`
+                    : "Entered as a lump sum"
+              }
             />
           )}
           {showCosts && (
             <PricingCell
               label="Profit"
               value={
-                buildup.lines.length > 0
+                useBuildupTotals
                   ? `${formatCurrency(buildup.profit)}${buildup.effectiveMarginPct != null ? ` (${buildup.effectiveMarginPct}%)` : ""}`
                   : co.costAmount != null
                     ? formatCurrency(co.coValue - co.costAmount)
                     : "-"
               }
-              sub="Markup on cost"
+              sub={co.legacyPricing ? "As executed" : "Markup on total cost"}
               tone="emerald"
             />
           )}
           <PricingCell
             label="Billable (owner)"
-            value={formatCurrency(buildup.lines.length > 0 ? buildup.billable : co.coValue)}
+            value={formatCurrency(ownerValue)}
             sub={co.status === "approved" ? "On the SOV, bills next AFP" : "Not yet approved"}
             tone="emerald"
           />
@@ -183,9 +209,10 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
           changeOrderId={params.coId}
           lines={buildup.lines}
           attachments={attachments}
-          defaultMarkupPct={co.profitPct}
+          markupPct={co.profitPct}
           bondPct={co.bondPct}
           taxPct={co.taxPct}
+          legacyPricing={co.legacyPricing}
           locked={locked}
           lockReason={lockReason}
         />
@@ -217,7 +244,7 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
       <CoLineEditor
         projectId={params.id}
         changeOrderId={params.coId}
-        coValue={buildup.lines.length > 0 ? buildup.billable : co.coValue}
+        coValue={ownerValue}
         lines={(sovLines ?? []).map((l) => ({
           id: l.id,
           itemNumber: l.item_number,
@@ -225,7 +252,7 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
           scheduledValue: Number(l.scheduled_value ?? 0),
         }))}
         linesTotal={linesTotal}
-        drift={(buildup.lines.length > 0 ? buildup.billable : co.coValue) - linesTotal}
+        drift={ownerValue - linesTotal}
       />
     </div>
   );

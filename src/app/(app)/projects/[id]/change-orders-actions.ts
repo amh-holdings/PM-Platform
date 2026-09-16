@@ -7,6 +7,7 @@ import type { TablesUpdate } from "@/lib/database.types";
 import { coClient } from "@/lib/database.types.co";
 import {
   CO_STATUS_LABELS,
+  CONTRACT_MARKUP_PCT,
   COST_CATEGORIES,
   canTransition,
   countsTowardContract,
@@ -238,12 +239,24 @@ async function resyncCoTotals(
   const [{ data: coRow }, { data: lineRows }] = await Promise.all([
     db
       .from("change_orders")
-      .select("id, project_id, co_number, description, status, profit_pct, bond_pct, tax_pct, billing_line_id")
+      // select("*") rather than a column list on purpose: legacy_pricing
+      // arrives with migration 0050, and naming a column Postgres does not
+      // have yet fails the whole query. This way the code deploys before the
+      // migration is applied and simply sees no frozen COs until it is.
+      .select("*")
       .eq("id", coId)
       .maybeSingle(),
     db.from("change_order_cost_lines").select("*").eq("change_order_id", coId),
   ]);
   if (!coRow) return null;
+
+  // CO-01..CO-06 were priced, signed and billed before the app existed, under
+  // per-line markup. Their co_value is an executed number and the SOV line
+  // behind it is what the owner has already paid against, so nothing here may
+  // recompute them - not a line edit, not an approval, not the Resync button.
+  // Their cost detail stays editable for the record; only the totals are
+  // frozen. See migration 0050.
+  if (coRow.legacy_pricing === true) return null;
 
   const lines = lineRows ?? [];
   // A CO with no buildup yet is still a valid lump-sum CO from before this
@@ -260,11 +273,10 @@ async function resyncCoTotals(
       quantity: Number(l.quantity ?? 0),
       unit: l.unit,
       unitCost: Number(l.unit_cost ?? 0),
-      markupPct: l.markup_pct == null ? null : Number(l.markup_pct),
       costCodeId: l.cost_code_id,
       notes: l.notes,
     })),
-    defaultMarkupPct: coRow.profit_pct == null ? null : Number(coRow.profit_pct),
+    markupPct: coRow.profit_pct == null ? null : Number(coRow.profit_pct),
     bondPct: coRow.bond_pct == null ? null : Number(coRow.bond_pct),
     taxPct: coRow.tax_pct == null ? null : Number(coRow.tax_pct),
   });
@@ -298,7 +310,6 @@ export type SaveCostLineInput = {
   quantity: number;
   unit: string | null;
   unitCost: number;
-  markupPct: number | null;
   costCodeId: string | null;
   notes: string | null;
 };
@@ -325,7 +336,9 @@ export async function saveCostLine(
     quantity: input.quantity,
     unit: input.unit?.trim() || null,
     unit_cost: input.unitCost,
-    markup_pct: input.markupPct,
+    // markup_pct on the row is legacy. Markup lives on the change order and
+    // applies to the cost total, so a line never carries its own rate.
+    markup_pct: null,
     cost_code_id: input.costCodeId,
     notes: input.notes?.trim() || null,
   };
@@ -667,7 +680,8 @@ export async function updateCoFormFields(
     .eq("id", coId);
   if (error) return { ok: false, error: error.message };
 
-  // Markup lives on the CO, so changing it re-prices every inheriting line.
+  // Markup, bond and tax all price off the cost total, so changing any of
+  // them re-prices the CO. (A no-op on a legacy CO - resyncCoTotals declines.)
   if ("profitPct" in input || "bondPct" in input || "taxPct" in input) {
     await resyncCoTotals(auth.supabase, coId);
   }
@@ -682,6 +696,22 @@ export async function resyncChangeOrderTotals(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
+
+  // Two different reasons resync can decline, and the frozen one deserves to
+  // be named - "no cost lines" on a CO that plainly has them reads as a bug.
+  const { data: co } = await coClient(auth.supabase)
+    .from("change_orders")
+    .select("*")
+    .eq("id", coId)
+    .maybeSingle();
+  if (co?.legacy_pricing === true) {
+    return {
+      ok: false,
+      error:
+        "This change order was priced and executed before the app. Its value is frozen and cannot be recomputed from the buildup.",
+    };
+  }
+
   const result = await resyncCoTotals(auth.supabase, coId);
   if (!result) return { ok: false, error: "This change order has no cost lines to total" };
   revalidateCo(projectId, coId);
@@ -713,7 +743,12 @@ export type AddCostLinesInput = {
 export async function addCostLinesFromPaste(
   input: AddCostLinesInput,
 ): Promise<
-  | { ok: true; added: number; skipped: Array<{ row: number; text: string; reason: string }> }
+  | {
+      ok: true;
+      added: number;
+      skipped: Array<{ row: number; text: string; reason: string }>;
+      ignoredMarkupColumn: boolean;
+    }
   | { ok: false; error: string }
 > {
   const auth = await assertAhcUser();
@@ -750,7 +785,7 @@ export async function addCostLinesFromPaste(
       quantity: l.quantity,
       unit: l.unit,
       unit_cost: l.unitCost,
-      markup_pct: l.markupPct,
+      markup_pct: null,
       sort_order: (sort += 10) - 10,
     })),
   );
@@ -758,7 +793,12 @@ export async function addCostLinesFromPaste(
 
   await resyncCoTotals(auth.supabase, input.changeOrderId);
   revalidateCo(input.projectId, input.changeOrderId);
-  return { ok: true, added: parsed.lines.length, skipped: parsed.skipped };
+  return {
+    ok: true,
+    added: parsed.lines.length,
+    skipped: parsed.skipped,
+    ignoredMarkupColumn: parsed.ignoredMarkupColumn,
+  };
 }
 
 /**
@@ -793,7 +833,18 @@ export async function createDraftChangeOrder(
 
   const { data, error } = await db
     .from("change_orders")
-    .insert({ project_id: projectId, co_number: coNumber, status: "draft", co_value: 0 })
+    .insert({
+      project_id: projectId,
+      co_number: coNumber,
+      status: "draft",
+      co_value: 0,
+      // The contract allows one overall markup on the cost total and nothing
+      // else, so a new CO starts there rather than at a blank field somebody
+      // has to remember to fill in.
+      profit_pct: CONTRACT_MARKUP_PCT,
+      // legacy_pricing is left to its column default (false) so this insert
+      // still works before migration 0050 is applied.
+    })
     .select("id")
     .single();
   if (error || !data) return { ok: false, error: error?.message ?? "Could not create" };

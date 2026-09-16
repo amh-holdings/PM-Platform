@@ -1,5 +1,6 @@
 /**
- * Type overlay for migration 0046 (change order buildup).
+ * Type overlay for migrations 0046 (change order buildup) and 0050
+ * (legacy_pricing).
  *
  * database.types.ts is generated from the LIVE database, and migrations here
  * are applied by hand in the Supabase SQL editor. So between "code written"
@@ -80,6 +81,11 @@ type CoAdds = {
   billing_line_id: string | null;
 };
 
+/** Column migration 0050 adds to change_orders. */
+type CoLegacyPricing = {
+  legacy_pricing: boolean;
+};
+
 /** Columns migration 0046 adds to projects, all for Exhibit H's header. */
 type ProjectAdds = {
   agreement_date: string | null;
@@ -97,9 +103,9 @@ export type DatabaseWithCo = Omit<Database, "public"> & {
   public: Omit<Pub, "Tables"> & {
     Tables: Omit<T, "change_orders" | "projects"> & {
       change_orders: {
-        Row: T["change_orders"]["Row"] & CoAdds;
-        Insert: T["change_orders"]["Insert"] & Optional<CoAdds>;
-        Update: T["change_orders"]["Update"] & Optional<CoAdds>;
+        Row: T["change_orders"]["Row"] & CoAdds & CoLegacyPricing;
+        Insert: T["change_orders"]["Insert"] & Optional<CoAdds> & Optional<CoLegacyPricing>;
+        Update: T["change_orders"]["Update"] & Optional<CoAdds> & Optional<CoLegacyPricing>;
         Relationships: T["change_orders"]["Relationships"];
       };
       projects: {

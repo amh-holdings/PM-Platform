@@ -5,12 +5,20 @@
  * the detail page, the CO list roll-ups, and the AFP.
  *
  * The buildup replaces the old single-lump model (one cost_amount, one blanket
- * profit_pct). Each cost line prices its own scope; markup is per line with the
- * CO's profit_pct as the fallback, which is what lets a 5% pass-through on a
- * sub quote sit next to 10% on self-perform work in the same CO.
+ * profit_pct). Each cost line carries bare cost only. Markup is a single CO
+ * level rate applied once to the direct cost total, which is how AHC prices
+ * OH&P on a change order and how the owner expects to read it: a cost column
+ * that ties to the quotes, then one markup line underneath.
  */
 
 import { parseMoney, splitRow } from "@/lib/paste-table";
+
+/**
+ * The markup the contract allows: one overall rate on the direct cost total.
+ * Not a default that invites tuning - the agreement permits this and nothing
+ * more, so a CO priced above it is out of contract and the editor says so.
+ */
+export const CONTRACT_MARKUP_PCT = 10;
 
 export const COST_CATEGORIES = [
   "labor",
@@ -40,28 +48,19 @@ export type CostLine = {
   quantity: number;
   unit: string | null;
   unitCost: number;
-  /** null means "inherit the CO's default markup". */
-  markupPct: number | null;
   costCodeId: string | null;
   notes: string | null;
 };
 
 export type PricedLine = CostLine & {
-  /** quantity x unitCost */
+  /** quantity x unitCost. A line is cost only - markup is not per line. */
   extendedCost: number;
-  /** markupPct, or the CO default when the line does not override it. */
-  effectiveMarkupPct: number;
-  /** Whether effectiveMarkupPct came from the CO default rather than the line. */
-  markupInherited: boolean;
-  markupDollars: number;
-  /** extendedCost + markupDollars */
-  billable: number;
 };
 
 export type BuildupInput = {
   lines: CostLine[];
-  /** CO-level default markup applied to lines that do not set their own. */
-  defaultMarkupPct: number | null;
+  /** The one markup rate, applied to the direct cost total. */
+  markupPct: number | null;
   /** Percent of (direct cost + markup). Null or 0 means no bond line. */
   bondPct: number | null;
   /** Percent of (direct cost + markup). Null or 0 means no tax line. */
@@ -72,7 +71,9 @@ export type Buildup = {
   lines: PricedLine[];
   /** Sum of every line's extendedCost. */
   directCost: number;
-  /** Sum of every line's markupDollars. This is the CO's profit. */
+  /** The rate that produced `markup`. 0 when the CO sets none. */
+  markupPct: number;
+  /** directCost x markupPct. This is the CO's profit. */
   markup: number;
   /** directCost + markup. Bond and tax are computed off this. */
   subtotal: number;
@@ -89,7 +90,9 @@ export type Buildup = {
   profit: number;
   /** profit / totalCost as a percent, or null when there is no cost. */
   effectiveMarginPct: number | null;
-  byCategory: Array<{ category: CostCategory; cost: number; billable: number }>;
+  /** Cost by category. Markup is not split across categories - it sits once
+   *  on the total - so there is no per-category billable to report. */
+  byCategory: Array<{ category: CostCategory; cost: number }>;
 };
 
 function round2(n: number): number {
@@ -97,25 +100,18 @@ function round2(n: number): number {
 }
 
 export function priceBuildup(input: BuildupInput): Buildup {
-  const fallback = input.defaultMarkupPct ?? 0;
+  const markupPct = input.markupPct ?? 0;
 
-  const lines: PricedLine[] = input.lines.map((l) => {
-    const extendedCost = round2(l.quantity * l.unitCost);
-    const markupInherited = l.markupPct == null;
-    const effectiveMarkupPct = markupInherited ? fallback : (l.markupPct as number);
-    const markupDollars = round2(extendedCost * (effectiveMarkupPct / 100));
-    return {
-      ...l,
-      extendedCost,
-      effectiveMarkupPct,
-      markupInherited,
-      markupDollars,
-      billable: round2(extendedCost + markupDollars),
-    };
-  });
+  const lines: PricedLine[] = input.lines.map((l) => ({
+    ...l,
+    extendedCost: round2(l.quantity * l.unitCost),
+  }));
 
   const directCost = round2(lines.reduce((s, l) => s + l.extendedCost, 0));
-  const markup = round2(lines.reduce((s, l) => s + l.markupDollars, 0));
+  // Once, on the total. Marking up each line and summing the results is the
+  // same number only when every line shares a rate, and it rounds per line,
+  // so the total the owner sees would drift by pennies from cost x rate.
+  const markup = round2(directCost * (markupPct / 100));
   const subtotal = round2(directCost + markup);
   const bond = round2(subtotal * ((input.bondPct ?? 0) / 100));
   const tax = round2(subtotal * ((input.taxPct ?? 0) / 100));
@@ -123,18 +119,17 @@ export function priceBuildup(input: BuildupInput): Buildup {
   const totalCost = round2(directCost + bond + tax);
   const profit = round2(billable - totalCost);
 
-  const byCategory = COST_CATEGORIES.map((category) => {
-    const inCat = lines.filter((l) => l.category === category);
-    return {
-      category,
-      cost: round2(inCat.reduce((s, l) => s + l.extendedCost, 0)),
-      billable: round2(inCat.reduce((s, l) => s + l.billable, 0)),
-    };
-  }).filter((c) => c.cost !== 0 || c.billable !== 0);
+  const byCategory = COST_CATEGORIES.map((category) => ({
+    category,
+    cost: round2(
+      lines.filter((l) => l.category === category).reduce((s, l) => s + l.extendedCost, 0),
+    ),
+  })).filter((c) => c.cost !== 0);
 
   return {
     lines,
     directCost,
+    markupPct,
     markup,
     subtotal,
     bond,
@@ -354,7 +349,6 @@ export type ParsedCostLine = {
   quantity: number;
   unit: string | null;
   unitCost: number;
-  markupPct: number | null;
 };
 
 export type ParseResult = {
@@ -363,6 +357,13 @@ export type ParseResult = {
   skipped: Array<{ row: number; text: string; reason: string }>;
   /** True when a header row was detected and used to map columns. */
   usedHeader: boolean;
+  /**
+   * True when the paste carried a markup column. It is still read, so the
+   * columns after it land in the right fields, but the values are dropped:
+   * markup is one CO-level rate, not a per-line number. Say so rather than
+   * letting a pasted 15% quietly disappear.
+   */
+  ignoredMarkupColumn: boolean;
 };
 
 const HEADER_ALIASES: Record<string, string[]> = {
@@ -418,6 +419,9 @@ function matchHeader(cells: string[]): Record<string, number> | null {
  *
  * Rows that cannot be read are reported rather than dropped - silently losing
  * a line from a buildup is how a CO gets submitted short.
+ *
+ * A markup column is recognized so the columns around it still map correctly,
+ * but its values are discarded and flagged: the CO carries one markup rate.
  */
 export function parsePastedCostLines(
   text: string,
@@ -430,7 +434,9 @@ export function parsePastedCostLines(
 
   const lines: ParsedCostLine[] = [];
   const skipped: ParseResult["skipped"] = [];
-  if (rows.length === 0) return { lines, skipped, usedHeader: false };
+  let ignoredMarkupColumn = false;
+  if (rows.length === 0)
+    return { lines, skipped, usedHeader: false, ignoredMarkupColumn };
 
   const headerMap = matchHeader(splitRow(rows[0]));
   const usedHeader = headerMap != null;
@@ -471,7 +477,7 @@ export function parsePastedCostLines(
     // A blank quantity means one of whatever it is, which is how a lump-sum
     // quote line gets pasted.
     const quantity = parseMoney(at("quantity")) ?? 1;
-    const markupPct = parseMoney(at("markupPct"));
+    if (parseMoney(at("markupPct")) != null) ignoredMarkupColumn = true;
 
     const rawCategory = at("category").toLowerCase().trim();
     const category = CATEGORY_ALIASES[rawCategory] ?? defaultCategory;
@@ -483,11 +489,10 @@ export function parsePastedCostLines(
       quantity,
       unit: at("unit").trim() || null,
       unitCost,
-      markupPct,
     });
   });
 
-  return { lines, skipped, usedHeader };
+  return { lines, skipped, usedHeader, ignoredMarkupColumn };
 }
 
 /* ------------------------------------------------------------------ */

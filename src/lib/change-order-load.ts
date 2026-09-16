@@ -67,6 +67,11 @@ export type ChangeOrderDetail = {
   otherImpacts: string | null;
   notes: string | null;
   billingLineId: string | null;
+  /**
+   * True for a CO priced before the app did it - CO-01..CO-06. Its totals are
+   * executed numbers and nothing recomputes them. See migration 0050.
+   */
+  legacyPricing: boolean;
 };
 
 export type ChangeOrderPageData = {
@@ -79,6 +84,10 @@ export type ChangeOrderPageData = {
    * True when the CO's stored co_value has drifted from the buildup. Happens
    * on COs created before the buildup existed, or if a line is edited outside
    * the app. The page offers a one-click resync.
+   *
+   * Never true for a legacy-priced CO. There the stored value is the executed
+   * one and the buildup is reference detail, so a drift banner would be
+   * inviting a click that must not happen.
    */
   totalsOutOfSync: boolean;
 };
@@ -150,14 +159,13 @@ export async function loadChangeOrder(
     quantity: num(l.quantity, 0),
     unit: l.unit,
     unitCost: num(l.unit_cost, 0),
-    markupPct: numOrNull(l.markup_pct),
     costCodeId: l.cost_code_id,
     notes: l.notes,
   }));
 
   const buildup = priceBuildup({
     lines,
-    defaultMarkupPct: numOrNull(coRow.profit_pct),
+    markupPct: numOrNull(coRow.profit_pct),
     bondPct: numOrNull(coRow.bond_pct),
     taxPct: numOrNull(coRow.tax_pct),
   });
@@ -189,13 +197,19 @@ export async function loadChangeOrder(
     otherImpacts: coRow.other_impacts,
     notes: coRow.notes,
     billingLineId: coRow.billing_line_id,
+    legacyPricing: coRow.legacy_pricing === true,
   };
 
   // Exhibit H line 4 reports what the owner is actually being asked for. Once
   // there is a buildup, that is the buildup total - the stored co_value can
   // lag by one save. With no lines at all, fall back to the stored value so a
   // legacy lump-sum CO still fills the form out.
-  const billableForForm = lines.length > 0 ? buildup.billable : co.coValue;
+  //
+  // A legacy-priced CO always reports its stored value. Its form was signed
+  // against that number; re-deriving it here would print a different contract
+  // price than the one on the executed document.
+  const billableForForm =
+    co.legacyPricing || lines.length === 0 ? co.coValue : buildup.billable;
 
   const exhibitH = deriveExhibitH(
     {
@@ -256,6 +270,8 @@ export async function loadChangeOrder(
     attachments,
     events,
     totalsOutOfSync:
-      lines.length > 0 && Math.abs(buildup.billable - co.coValue) > 0.01,
+      !co.legacyPricing &&
+      lines.length > 0 &&
+      Math.abs(buildup.billable - co.coValue) > 0.01,
   };
 }

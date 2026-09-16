@@ -11,6 +11,7 @@
 // Run: npx tsx scripts/change-orders/run-tests.ts
 
 import {
+  CONTRACT_MARKUP_PCT,
   addDays,
   canTransition,
   countsTowardContract,
@@ -59,7 +60,6 @@ function line(over: Partial<CostLine> = {}): CostLine {
     quantity: 1,
     unit: "ls",
     unitCost: 0,
-    markupPct: null,
     costCodeId: null,
     notes: null,
     ...over,
@@ -67,45 +67,84 @@ function line(over: Partial<CostLine> = {}): CostLine {
 }
 
 // ============================================================================
-section("Buildup - markup inheritance");
+section("Buildup - markup sits on the total, not the lines");
 
 {
   const b = priceBuildup({
-    lines: [
-      line({ id: "a", unitCost: 1000 }),
-      line({ id: "b", unitCost: 1000, markupPct: 5 }),
-    ],
-    defaultMarkupPct: 10,
+    lines: [line({ id: "a", unitCost: 1000 }), line({ id: "b", unitCost: 1000 })],
+    markupPct: 10,
     bondPct: null,
     taxPct: null,
   });
-  eq("a line with no markup inherits the CO default", b.lines[0].effectiveMarkupPct, 10);
-  eq("the inherited flag is set", b.lines[0].markupInherited, true);
-  eq("a line with its own markup overrides the default", b.lines[1].effectiveMarkupPct, 5);
-  eq("the override is not flagged as inherited", b.lines[1].markupInherited, false);
   eq("direct cost sums the lines", b.directCost, 2000);
-  eq("markup mixes both rates", b.markup, 150);
-  eq("billable is cost plus markup", b.billable, 2150);
-  eq("profit equals the markup", b.profit, 150);
+  eq("the rate used is reported", b.markupPct, 10);
+  eq("markup is the rate on the cost total", b.markup, 200);
+  eq("billable is cost plus markup", b.billable, 2200);
+  eq("profit equals the markup", b.profit, 200);
 }
 
 {
-  // A CO with no default markup and no line markup must not invent margin.
+  // The reason markup moved off the lines: marking up each line and summing
+  // rounds per line. Three lines at 10% that each round a half cent up would
+  // bill a cent more than 10% of the total, and the owner checks the total.
   const b = priceBuildup({
-    lines: [line({ unitCost: 500 })],
-    defaultMarkupPct: null,
+    lines: [
+      line({ id: "a", unitCost: 33.33 }),
+      line({ id: "b", unitCost: 33.33 }),
+      line({ id: "c", unitCost: 33.33 }),
+    ],
+    markupPct: 10,
     bondPct: null,
     taxPct: null,
   });
-  eq("no default and no override means zero markup", b.markup, 0);
+  eq("markup is rounded once, off the total", b.markup, 10);
+  eq("billable ties to cost x rate", b.billable, 109.99);
+}
+
+{
+  // A CO with no markup rate must not invent margin.
+  const b = priceBuildup({
+    lines: [line({ unitCost: 500 })],
+    markupPct: null,
+    bondPct: null,
+    taxPct: null,
+  });
+  eq("no rate means zero markup", b.markup, 0);
   eq("billable equals cost", b.billable, 500);
   eq("margin is zero, not null, when there is cost", b.effectiveMarginPct, 0);
 }
 
 {
-  const b = priceBuildup({ lines: [], defaultMarkupPct: 10, bondPct: 2, taxPct: 7 });
+  const b = priceBuildup({ lines: [], markupPct: 10, bondPct: 2, taxPct: 7 });
   eq("an empty buildup bills nothing", b.billable, 0);
   eq("an empty buildup has no margin percentage", b.effectiveMarginPct, null);
+}
+
+section("Buildup - the contract rate");
+
+{
+  // The contract allows one overall markup and nothing else. CO-07 onward is
+  // priced at this rate, so the arithmetic is worth pinning down rather than
+  // trusting a field somebody typed.
+  eq("the contract markup is 10%", CONTRACT_MARKUP_PCT, 10);
+
+  const b = priceBuildup({
+    lines: [
+      line({ id: "a", category: "labor", quantity: 120, unit: "hr", unitCost: 92 }),
+      line({ id: "b", category: "material", unitCost: 18450.75 }),
+      line({ id: "c", category: "subcontractor", unitCost: 64300 }),
+    ],
+    markupPct: CONTRACT_MARKUP_PCT,
+    bondPct: null,
+    taxPct: null,
+  });
+  eq("direct cost sums every category", b.directCost, 93790.75);
+  eq("one 10% markup on the whole cost", b.markup, 9379.08);
+  eq("the owner is billed cost plus that one markup", b.billable, 103169.83);
+  eq("profit is the markup and nothing else", b.profit, 9379.08);
+  // Margin is profit over cost, so a 10% markup reads as 10% here. It stops
+  // reading that way the moment bond or tax lands in cost.
+  eq("margin on a bare 10% markup is 10%", b.effectiveMarginPct, 10);
 }
 
 section("Buildup - quantity, bond and tax");
@@ -113,18 +152,18 @@ section("Buildup - quantity, bond and tax");
 {
   const b = priceBuildup({
     lines: [line({ quantity: 40, unit: "hr", unitCost: 87.5, category: "labor" })],
-    defaultMarkupPct: 10,
+    markupPct: 10,
     bondPct: null,
     taxPct: null,
   });
   eq("quantity times unit cost extends", b.lines[0].extendedCost, 3500);
-  eq("markup applies to the extended cost", b.markup, 350);
+  eq("markup applies to the extended cost total", b.markup, 350);
 }
 
 {
   const b = priceBuildup({
     lines: [line({ unitCost: 10000 })],
-    defaultMarkupPct: 10,
+    markupPct: 10,
     bondPct: 2,
     taxPct: 0,
   });
@@ -140,7 +179,7 @@ section("Buildup - quantity, bond and tax");
 {
   const b = priceBuildup({
     lines: [line({ unitCost: 10000 })],
-    defaultMarkupPct: 10,
+    markupPct: 10,
     bondPct: null,
     taxPct: 7,
   });
@@ -156,9 +195,9 @@ section("Buildup - category roll-up");
     lines: [
       line({ id: "a", category: "labor", unitCost: 1000 }),
       line({ id: "b", category: "labor", unitCost: 500 }),
-      line({ id: "c", category: "subcontractor", unitCost: 2000, markupPct: 5 }),
+      line({ id: "c", category: "subcontractor", unitCost: 2000 }),
     ],
-    defaultMarkupPct: 10,
+    markupPct: 10,
     bondPct: null,
     taxPct: null,
   });
@@ -166,8 +205,9 @@ section("Buildup - category roll-up");
   const labor = b.byCategory.find((c) => c.category === "labor")!;
   const sub = b.byCategory.find((c) => c.category === "subcontractor")!;
   eq("labor cost rolls up", labor.cost, 1500);
-  eq("labor billable carries the default markup", labor.billable, 1650);
-  eq("sub billable carries its own markup", sub.billable, 2100);
+  eq("sub cost rolls up", sub.cost, 2000);
+  eq("categories carry cost only - markup is not split across them",
+     b.directCost, 3500);
 }
 
 section("Exhibit H - contract price lines");
@@ -360,8 +400,7 @@ section("Bulk paste - column mapping");
   eq("currency formatting is stripped", r.lines[0].unitCost, 1250);
   eq("quantity parses", r.lines[0].quantity, 3);
   eq("unit carries through", r.lines[0].unit, "mo");
-  eq("markup parses", r.lines[0].markupPct, 10);
-  eq("a blank markup inherits rather than reading as zero", r.lines[1].markupPct, null);
+  eq("a markup column is flagged as ignored", r.ignoredMarkupColumn, true);
 }
 
 {
@@ -382,7 +421,9 @@ section("Bulk paste - column mapping");
   );
   eq("alias headers map", r.lines[0].description, "Trenching");
   eq("rate maps to unit cost", r.lines[0].unitCost, 42.5);
-  eq("OH&P maps to markup", r.lines[0].markupPct, 5);
+  // OH&P still has to be recognized as the markup column, or the vendor and
+  // category after it would slide one place to the left.
+  eq("OH&P is read as markup and dropped", r.ignoredMarkupColumn, true);
   eq("vendor maps", r.lines[0].vendorName, "ACME Civil");
   eq("category alias resolves", r.lines[0].category, "subcontractor");
 }

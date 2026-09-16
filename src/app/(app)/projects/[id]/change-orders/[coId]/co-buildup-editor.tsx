@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import {
   CATEGORY_LABELS,
+  CONTRACT_MARKUP_PCT,
   COST_CATEGORIES,
   priceBuildup,
   type CostCategory,
@@ -29,7 +30,6 @@ type Draft = {
   quantity: string;
   unit: string;
   unitCost: string;
-  markupPct: string;
   notes: string;
 };
 
@@ -38,9 +38,16 @@ type Props = {
   changeOrderId: string;
   lines: CostLine[];
   attachments: CoAttachment[];
-  defaultMarkupPct: number | null;
+  /** The one markup rate for this CO, applied to the direct cost total. */
+  markupPct: number | null;
   bondPct: number | null;
   taxPct: number | null;
+  /**
+   * True for a CO priced before the app. Its stored total is the executed
+   * number, so nothing here re-prices it - the buildup is cost detail for the
+   * record and the footer says so.
+   */
+  legacyPricing: boolean;
   /** True once the owner has the CO. Editing stays possible behind an unlock. */
   locked: boolean;
   lockReason: string;
@@ -53,7 +60,6 @@ const EMPTY: Draft = {
   quantity: "1",
   unit: "ls",
   unitCost: "",
-  markupPct: "",
   notes: "",
 };
 
@@ -76,7 +82,6 @@ function draftFrom(l: CostLine): Draft {
     quantity: String(l.quantity),
     unit: l.unit ?? "",
     unitCost: String(l.unitCost),
-    markupPct: l.markupPct == null ? "" : String(l.markupPct),
     notes: l.notes ?? "",
   };
 }
@@ -86,9 +91,10 @@ export function CoBuildupEditor({
   changeOrderId,
   lines,
   attachments,
-  defaultMarkupPct,
+  markupPct,
   bondPct,
   taxPct,
+  legacyPricing,
   locked,
   lockReason,
 }: Props) {
@@ -109,14 +115,19 @@ export function CoBuildupEditor({
   const [pasted, setPasted] = useState("");
   const [pasteResult, setPasteResult] = useState<string | null>(null);
   const [rates, setRates] = useState({
-    markup: defaultMarkupPct == null ? "" : String(defaultMarkupPct),
+    markup: markupPct == null ? "" : String(markupPct),
     bond: bondPct == null ? "" : String(bondPct),
     tax: taxPct == null ? "" : String(taxPct),
   });
   const [ratesBusy, setRatesBusy] = useState(false);
 
+  // The contract permits one overall markup and no more. Entering a higher
+  // rate is not stopped - a CO can sit outside the contract and sometimes has
+  // to - but it is called out rather than quietly billed.
+  const overContract = (toNumOrNull(rates.markup) ?? 0) > CONTRACT_MARKUP_PCT;
+
   const ratesDirty =
-    rates.markup !== (defaultMarkupPct == null ? "" : String(defaultMarkupPct)) ||
+    rates.markup !== (markupPct == null ? "" : String(markupPct)) ||
     rates.bond !== (bondPct == null ? "" : String(bondPct)) ||
     rates.tax !== (taxPct == null ? "" : String(taxPct));
 
@@ -134,8 +145,8 @@ export function CoBuildupEditor({
   }
 
   const buildup = useMemo(
-    () => priceBuildup({ lines, defaultMarkupPct, bondPct, taxPct }),
-    [lines, defaultMarkupPct, bondPct, taxPct],
+    () => priceBuildup({ lines, markupPct, bondPct, taxPct }),
+    [lines, markupPct, bondPct, taxPct],
   );
 
   const attachmentsByLine = useMemo(() => {
@@ -169,7 +180,6 @@ export function CoBuildupEditor({
       quantity: toNum(draft.quantity),
       unit: draft.unit || null,
       unitCost: toNum(draft.unitCost),
-      markupPct: toNumOrNull(draft.markupPct),
       costCodeId: null,
       notes: draft.notes || null,
     });
@@ -211,11 +221,14 @@ export function CoBuildupEditor({
       return;
     }
     setPasted("");
+    const markupNote = res.ignoredMarkupColumn
+      ? " Per-line markup was ignored - set the rate once above."
+      : "";
     setPasteResult(
-      res.skipped.length === 0
+      (res.skipped.length === 0
         ? `Added ${res.added} line${res.added === 1 ? "" : "s"}.`
         : `Added ${res.added}. Skipped ${res.skipped.length}: ` +
-          res.skipped.map((k) => `row ${k.row} (${k.reason})`).join(", "),
+          res.skipped.map((k) => `row ${k.row} (${k.reason})`).join(", ")) + markupNote,
     );
     setPasteOpen(res.skipped.length > 0);
     router.refresh();
@@ -250,13 +263,14 @@ export function CoBuildupEditor({
               {missingBackup} line{missingBackup > 1 ? "s" : ""} with no backup attached
             </span>
           )}
-          {!readOnly && (
+          {!readOnly && !legacyPricing && (
             <>
               <Rate
                 label="Markup %"
-                title="Applied to lines that do not set their own"
+                title={`Applied once to the direct cost total. The contract allows ${CONTRACT_MARKUP_PCT}%`}
                 value={rates.markup}
                 onChange={(v) => setRates((r) => ({ ...r, markup: v }))}
+                warn={overContract}
               />
               <Rate
                 label="Bond %"
@@ -270,6 +284,11 @@ export function CoBuildupEditor({
                 value={rates.tax}
                 onChange={(v) => setRates((r) => ({ ...r, tax: v }))}
               />
+              {overContract && (
+                <span className="self-center text-[11px] font-medium text-amber-700">
+                  Over the {CONTRACT_MARKUP_PCT}% the contract allows
+                </span>
+              )}
               {ratesDirty && (
                 <button
                   type="button"
@@ -312,8 +331,6 @@ export function CoBuildupEditor({
               <th className="p-2 text-left font-medium">Unit</th>
               <th className="p-2 text-right font-medium">Unit cost</th>
               <th className="p-2 text-right font-medium">Extended</th>
-              <th className="p-2 text-right font-medium">Markup</th>
-              <th className="p-2 text-right font-medium">Billable</th>
               <th className="p-2 text-left font-medium">Backup</th>
               <th className="p-2" />
             </tr>
@@ -321,7 +338,7 @@ export function CoBuildupEditor({
           <tbody>
             {priced.length === 0 && !adding && (
               <tr>
-                <td colSpan={10} className="p-6 text-center text-sm text-muted-foreground">
+                <td colSpan={8} className="p-6 text-center text-sm text-muted-foreground">
                   No cost lines yet. Add one for each quote, crew, or material package.
                 </td>
               </tr>
@@ -335,11 +352,10 @@ export function CoBuildupEditor({
                 <Fragment key={l.id}>
                   {isEditing ? (
                     <tr className="border-b bg-primary/5">
-                      <td colSpan={10} className="p-2">
+                      <td colSpan={8} className="p-2">
                         <DraftRow
                           draft={draft}
                           setDraft={setDraft}
-                          defaultMarkupPct={defaultMarkupPct}
                           busy={busy}
                           onSave={() => save(l.id)}
                           onCancel={() => {
@@ -368,22 +384,8 @@ export function CoBuildupEditor({
                       <td className="p-2 text-right tabular-nums">{l.quantity}</td>
                       <td className="p-2 text-muted-foreground">{l.unit ?? ""}</td>
                       <td className="p-2 text-right tabular-nums">{formatCurrency(l.unitCost)}</td>
-                      <td className="p-2 text-right tabular-nums">{formatCurrency(l.extendedCost)}</td>
-                      <td
-                        className={cn(
-                          "p-2 text-right tabular-nums",
-                          l.markupInherited && "text-muted-foreground",
-                        )}
-                        title={
-                          l.markupInherited
-                            ? "Inherited from the change order default"
-                            : "Set on this line"
-                        }
-                      >
-                        {l.effectiveMarkupPct}%{l.markupInherited ? "" : " *"}
-                      </td>
                       <td className="p-2 text-right font-medium tabular-nums">
-                        {formatCurrency(l.billable)}
+                        {formatCurrency(l.extendedCost)}
                       </td>
                       <td className="p-2">
                         <button
@@ -429,7 +431,7 @@ export function CoBuildupEditor({
 
                   {isOpen && (
                     <tr className="border-b bg-muted/20">
-                      <td colSpan={10} className="p-3">
+                      <td colSpan={8} className="p-3">
                         <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                           Backup for {l.description}
                         </div>
@@ -450,11 +452,10 @@ export function CoBuildupEditor({
 
             {adding && (
               <tr className="border-b bg-primary/5">
-                <td colSpan={10} className="p-2">
+                <td colSpan={8} className="p-2">
                   <DraftRow
                     draft={draft}
                     setDraft={setDraft}
-                    defaultMarkupPct={defaultMarkupPct}
                     busy={busy}
                     onSave={() => save()}
                     onSaveAndAdd={() => save(undefined, true)}
@@ -471,7 +472,7 @@ export function CoBuildupEditor({
           <tfoot className="border-t-2 text-sm">
             <Total label="Direct cost" value={buildup.directCost} />
             <Total
-              label={`Markup${defaultMarkupPct != null ? ` (default ${defaultMarkupPct}%)` : ""}`}
+              label={`Markup on total cost (${buildup.markupPct}%)`}
               value={buildup.markup}
             />
             <Total label="Subtotal" value={buildup.subtotal} strong />
@@ -525,7 +526,8 @@ export function CoBuildupEditor({
                 <span className="font-mono">
                   description, qty, unit, unit cost, markup %, vendor, category
                 </span>
-                . A blank markup inherits the change order default. Anything unreadable is
+                . A markup column is read so the columns after it line up, but its values are
+                ignored - markup is set once for the whole change order. Anything unreadable is
                 reported, never dropped.
               </p>
               <textarea
@@ -566,10 +568,19 @@ export function CoBuildupEditor({
       )}
 
       <div className="border-t bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground">
-        AHC cost {formatCurrency(buildup.totalCost)} &middot; profit{" "}
-        {formatCurrency(buildup.profit)}
-        {buildup.effectiveMarginPct != null && ` (${buildup.effectiveMarginPct}%)`}. Bond and tax
-        are treated as pass-through cost, not margin.
+        {legacyPricing ? (
+          <>
+            Reference only. This change order was priced and executed before the app, so these
+            totals do not set its value and saving a line will not change it.
+          </>
+        ) : (
+          <>
+            AHC cost {formatCurrency(buildup.totalCost)} &middot; profit{" "}
+            {formatCurrency(buildup.profit)}
+            {buildup.effectiveMarginPct != null && ` (${buildup.effectiveMarginPct}%)`}. Bond and
+            tax are treated as pass-through cost, not margin.
+          </>
+        )}
       </div>
     </section>
   );
@@ -580,11 +591,13 @@ function Rate({
   title,
   value,
   onChange,
+  warn,
 }: {
   label: string;
   title: string;
   value: string;
   onChange: (v: string) => void;
+  warn?: boolean;
 }) {
   return (
     <label className="flex flex-col" title={title}>
@@ -594,7 +607,10 @@ function Rate({
         onChange={(e) => onChange(e.target.value)}
         inputMode="decimal"
         placeholder="-"
-        className="h-7 w-16 rounded border border-input bg-background px-1.5 text-right text-xs"
+        className={cn(
+          "h-7 w-16 rounded border border-input bg-background px-1.5 text-right text-xs",
+          warn && "border-amber-500 text-amber-800",
+        )}
       />
     </label>
   );
@@ -613,7 +629,7 @@ function Total({
 }) {
   return (
     <tr className={cn(strong && "border-t")}>
-      <td colSpan={7} className="p-2 text-right text-xs text-muted-foreground">
+      <td colSpan={5} className="p-2 text-right text-xs text-muted-foreground">
         {label}
       </td>
       <td
@@ -633,7 +649,6 @@ function Total({
 function DraftRow({
   draft,
   setDraft,
-  defaultMarkupPct,
   busy,
   onSave,
   onSaveAndAdd,
@@ -641,7 +656,6 @@ function DraftRow({
 }: {
   draft: Draft;
   setDraft: (d: Draft) => void;
-  defaultMarkupPct: number | null;
   busy: boolean;
   onSave: () => void;
   /** Only offered when adding, not when editing an existing line. */
@@ -650,7 +664,6 @@ function DraftRow({
 }) {
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
   const extended = toNum(draft.quantity) * toNum(draft.unitCost);
-  const markup = toNumOrNull(draft.markupPct) ?? defaultMarkupPct ?? 0;
 
   return (
     <div className="space-y-2">
@@ -702,26 +715,14 @@ function DraftRow({
       </div>
       <div className="grid gap-2 sm:grid-cols-12">
         <input
-          value={draft.markupPct}
-          onChange={(e) => set({ markupPct: e.target.value })}
-          placeholder={
-            defaultMarkupPct != null ? `Markup % (default ${defaultMarkupPct})` : "Markup %"
-          }
-          inputMode="decimal"
-          className="h-8 rounded border border-input bg-background px-2 text-right text-xs sm:col-span-2"
-        />
-        <input
           value={draft.notes}
           onChange={(e) => set({ notes: e.target.value })}
           placeholder="Notes (optional)"
-          className="h-8 rounded border border-input bg-background px-2 text-xs sm:col-span-6"
+          className="h-8 rounded border border-input bg-background px-2 text-xs sm:col-span-8"
         />
         <div className="flex items-center justify-end gap-3 text-xs sm:col-span-4">
           <span className="tabular-nums text-muted-foreground">
-            {formatCurrency(extended)} + {markup}% ={" "}
-            <strong className="text-foreground">
-              {formatCurrency(extended * (1 + markup / 100))}
-            </strong>
+            Extended <strong className="text-foreground">{formatCurrency(extended)}</strong>
           </span>
           <button
             type="button"
