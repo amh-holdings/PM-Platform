@@ -73,7 +73,7 @@ export default async function FieldReportDetailPage({
     supabase
       .from("schedule_tasks")
       .select(
-        "id, wbs_code, task_name, phase, status, pct_complete, start_date, end_date, parent_wbs_code",
+        "id, wbs_code, task_name, phase, status, pct_complete, start_date, end_date, parent_wbs_code, predecessors",
       )
       .eq("project_id", params.id)
       .order("sort_order", { ascending: true, nullsFirst: false })
@@ -131,10 +131,25 @@ export default async function FieldReportDetailPage({
       currentPct: Number(t.pct_complete ?? 0) || null,
       startDate: t.start_date,
       endDate: t.end_date,
+      parentWbsCode: t.parent_wbs_code,
     })),
     summaryCodes,
     dpr.report_date,
   );
+
+  // The sanity checks need every row (summaries included) plus predecessors,
+  // which the leaf-only picker deliberately drops. See src/lib/pin-sanity.ts.
+  const sanityTasks = (tasks ?? []).map((t) => ({
+    id: t.id,
+    wbsCode: t.wbs_code,
+    taskName: t.task_name,
+    status: t.status,
+    pctComplete: t.pct_complete != null ? Number(t.pct_complete) : null,
+    startDate: t.start_date,
+    endDate: t.end_date,
+    predecessors: t.predecessors,
+    parentWbsCode: t.parent_wbs_code,
+  }));
 
   const reviewPins: ReviewPin[] = (pins ?? []).map((p) => ({
     id: p.id,
@@ -296,6 +311,8 @@ export default async function FieldReportDetailPage({
             projectId={params.id}
             pins={reviewPins}
             tasks={taskPicker}
+            sanityTasks={sanityTasks}
+            reportDate={dpr.report_date}
             canReview={canReview(role)}
             canDecide={isInspectionApprover({ role })}
             canResubmit={canResubmit}

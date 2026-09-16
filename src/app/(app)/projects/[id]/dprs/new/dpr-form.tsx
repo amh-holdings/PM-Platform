@@ -28,7 +28,11 @@ import {
 } from "../../inspections/photo-uploader";
 
 import { DprPhotoUploader, type StagedPhoto } from "./dpr-photo-uploader";
-import { PICKER_GROUP_LABEL, type PickerGroup } from "@/lib/schedule-picker";
+import {
+  PICKER_GROUP_LABEL,
+  pickerOptionLabel,
+  type PickerGroup,
+} from "@/lib/schedule-picker";
 import { UNIT_OPTIONS, WORK_STATUS_OPTIONS } from "@/lib/work-pin-options";
 
 // Field crews are on LTE at the edge of a site. A save that has not come
@@ -87,6 +91,10 @@ type Task = {
    * out upstream, so everything here is a real, pinnable piece of work.
    */
   group?: PickerGroup;
+  /** Immediate parent's name, so "Embankment" says which basin it belongs to. */
+  parentName?: string | null;
+  /** Another pinnable leaf shares this task name. */
+  nameIsAmbiguous?: boolean;
 };
 
 type Sub = { id: string; companyName: string; trade: string | null };
@@ -1183,10 +1191,7 @@ export function DprForm({
                                     >
                                       {inGroup.map((t) => (
                                         <option key={t.id} value={t.id}>
-                                          {t.wbsCode} {t.taskName}
-                                          {t.currentPct != null
-                                            ? ` (${t.currentPct}%)`
-                                            : ""}
+                                          {pickerOptionLabel(t)}
                                         </option>
                                       ))}
                                     </optgroup>

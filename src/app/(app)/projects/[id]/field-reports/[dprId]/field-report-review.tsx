@@ -13,7 +13,12 @@ import {
   type BasemapKey,
   type NormalizedPin,
 } from "@/lib/inspection-map";
-import { PICKER_GROUP_LABEL, type PickerGroup } from "@/lib/schedule-picker";
+import {
+  PICKER_GROUP_LABEL,
+  pickerOptionLabel,
+  type PickerGroup,
+} from "@/lib/schedule-picker";
+import { checkPinSanity, type SanityTask } from "@/lib/pin-sanity";
 import { UNIT_OPTIONS, WORK_STATUS_OPTIONS } from "@/lib/work-pin-options";
 import { splitPinNotes } from "@/lib/pin-notes";
 import {
@@ -74,7 +79,13 @@ export type PickerOption = {
   taskName: string;
   currentStatus: string | null;
   currentPct: number | null;
+  startDate?: string | null;
+  endDate?: string | null;
   group?: PickerGroup;
+  /** Immediate parent's name, so "Embankment" says which basin it belongs to. */
+  parentName?: string | null;
+  /** Another pinnable leaf shares this task name. */
+  nameIsAmbiguous?: boolean;
 };
 
 // A pending pin move: the sheet and normalised coordinates the sub tapped,
@@ -86,6 +97,11 @@ type Props = {
   pins: ReviewPin[];
   // The WBS list a rejected pin may be re-pointed at.
   tasks: PickerOption[];
+  // EVERY schedule row, summaries included - the pin sanity checks resolve
+  // predecessors and name collisions across the whole schedule, not just the
+  // pinnable leaves.
+  sanityTasks: SanityTask[];
+  reportDate: string;
   canReview: boolean;
   canDecide: boolean;
   // The owning sub (or an AHC user) may resubmit a returned report one flagged
@@ -106,6 +122,8 @@ export function FieldReportReview({
   projectId,
   pins,
   tasks,
+  sanityTasks,
+  reportDate,
   canReview,
   canDecide,
   canResubmit,
@@ -266,6 +284,8 @@ export function FieldReportReview({
             projectId={projectId}
             pin={active}
             tasks={tasks}
+            sanityTasks={sanityTasks}
+            reportDate={reportDate}
             canReview={canReview}
             canDecide={canDecide}
             canResubmit={canResubmit}
@@ -286,6 +306,8 @@ function PinReview({
   projectId,
   pin,
   tasks,
+  sanityTasks,
+  reportDate,
   canReview,
   canDecide,
   canResubmit,
@@ -297,6 +319,8 @@ function PinReview({
   projectId: string;
   pin: ReviewPin;
   tasks: PickerOption[];
+  sanityTasks: SanityTask[];
+  reportDate: string;
   canReview: boolean;
   canDecide: boolean;
   canResubmit: boolean;
@@ -443,6 +467,19 @@ function PinReview({
     fixNotes.trim().length > 0 && keptSubPhotos.length + fixPhotos.length > 0;
   const selectedTask = tasks.find((t) => t.id === taskId) ?? null;
 
+  // Run against the task the pin is CURRENTLY filed against, not the edit
+  // form's selection - this is what the approver is being asked to bless.
+  const warnings = useMemo(() => {
+    const filed = sanityTasks.find((t) => t.id === pin.scheduleTaskId);
+    if (!filed) return [];
+    return checkPinSanity({
+      claimedPct: pin.taskNewPct,
+      task: filed,
+      reportDate,
+      allTasks: sanityTasks,
+    });
+  }, [pin.scheduleTaskId, pin.taskNewPct, sanityTasks, reportDate]);
+
   return (
     <div className="space-y-3 rounded-lg border bg-card p-3">
       <div className="flex items-center justify-between gap-2">
@@ -540,8 +577,7 @@ function PinReview({
                   <optgroup key={g} label={PICKER_GROUP_LABEL[g]}>
                     {inGroup.map((t) => (
                       <option key={t.id} value={t.id}>
-                        {t.wbsCode} {t.taskName}
-                        {t.currentPct != null ? ` (${t.currentPct}%)` : ""}
+                        {pickerOptionLabel(t)}
                       </option>
                     ))}
                   </optgroup>
@@ -771,6 +807,34 @@ function PinReview({
           >
             {pending ? "Resubmitting…" : "Resubmit item"}
           </Button>
+        </div>
+      )}
+
+      {/* What the schedule says about the activity this pin claims. Shown to
+          the approver before the decide buttons, because the wrong-row failure
+          is invisible in the photos - it is only visible against the schedule. */}
+      {view === "pending" && canReview && warnings.length > 0 && (
+        <div className="space-y-1.5 border-t pt-3">
+          {warnings.map((w) => (
+            <div
+              key={w.code}
+              className={cn(
+                "rounded-md border px-2.5 py-2 text-[11px] leading-snug",
+                w.severity === "high"
+                  ? "border-red-300 bg-red-50 text-red-900"
+                  : "border-amber-200 bg-amber-50 text-amber-900",
+              )}
+            >
+              <span className="font-medium">
+                {w.severity === "high" ? "Check this: " : "Note: "}
+              </span>
+              {w.message}
+            </div>
+          ))}
+          <p className="text-[10px] text-muted-foreground">
+            These are warnings, not blocks. Approve if the field is right and
+            the schedule is stale.
+          </p>
         </div>
       )}
 

@@ -72,6 +72,7 @@ export async function loadFieldReportFormData(projectId: string) {
       currentPct: Number(t.pct_complete ?? 0) || null,
       startDate: t.start_date,
       endDate: t.end_date,
+      parentWbsCode: t.parent_wbs_code,
     })),
     summaryCodes,
     todayIso(),
