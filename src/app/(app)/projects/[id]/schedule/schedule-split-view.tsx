@@ -180,7 +180,7 @@ const ALL_COLUMNS: Column[] = [
   { key: "status", label: "Status", width: 106 },
   { key: "assigned", label: "Assigned", width: 110 },
   { key: "phase", label: "Phase", width: 104 },
-  { key: "progress", label: "Progress", width: 120, derived: true },
+  { key: "progress", label: "Progress", width: 96, derived: true, title: "Percent complete. Green is from an approved field report, amber was set by hand, grey is rolled up from the leaves below. Hover for the report date." },
   { key: "dur", label: "Dur", width: 44 },
   { key: "start", label: "Start", width: 120 },
   { key: "finish", label: "Finish", width: 120 },
@@ -202,8 +202,20 @@ const ALL_COLUMNS: Column[] = [
   { key: "predecessors", label: "Predecessors", width: 170 },
 ];
 
+// The point of sourcing progress from daily reports is a schedule that answers
+// "when does this actually finish" without anyone republishing it. That answer
+// lives in two derived columns, and neither of them used to be on by default:
+// the grid opened on Start and Finish, which are the static plan and do not
+// move when the field reports anything. A CM looking at Sweet Springs saw
+// planned dates from August and concluded the reports were not reaching the
+// schedule, when the projection had been live the whole time and simply was not
+// on screen.
+//
+// Progress and Projected are therefore default columns. Status is not: the
+// progress bar carries the same state with a number attached, and the column
+// picker puts it back in one click for anyone who wants both.
 const DEFAULT_COLUMNS: ColumnKey[] = [
-  "row", "code", "task", "status", "dur", "start", "finish", "float",
+  "row", "code", "task", "progress", "dur", "start", "finish", "projected", "float",
 ];
 
 // Below this a header label is unreadable and a date input collapses to its
@@ -321,8 +333,9 @@ export function ScheduleSplitView({
   const [undoPatch, setUndoPatch] = useState<{ patches: TaskPatch[]; what: string } | null>(null);
   const [zoom, setZoom] = useState(2);
   // Wide enough that the default columns all fit without horizontal scrolling.
-  // A finish date you have to scroll to is the problem this view exists to fix.
-  const [gridWidth, setGridWidth] = useState(810);
+  // A finish date you have to scroll to is the problem this view exists to fix,
+  // and that now includes the PROJECTED finish: 44+70+232+96+44+120+120+104+72.
+  const [gridWidth, setGridWidth] = useState(905);
   const [query, setQuery] = useState("");
   const [columns, setColumns] = useState<ColumnKey[]>(DEFAULT_COLUMNS);
   // Arrows default to the focused task's own logic rather than all of it.
