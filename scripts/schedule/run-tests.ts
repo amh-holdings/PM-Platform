@@ -27,6 +27,7 @@ import {
   type CpmInput,
 } from "@/lib/schedule-cpm";
 import { assessSchedule } from "@/lib/schedule-health";
+import { planScheduleSync } from "@/lib/schedule-sync";
 import { resolveMilestoneTask } from "@/lib/progress";
 import { hasLinkErrors } from "@/app/(app)/projects/[id]/schedule/predecessor-editor";
 import {
@@ -67,6 +68,7 @@ import {
   orderRenames,
   reconcileDates,
   actualStartFromReport,
+  actualFinishFromReport,
   durationFromDates,
   rewritePredecessors,
   shiftDates,
@@ -628,6 +630,81 @@ section("Actual start - an approved report records when work began");
   const ms = { start_date: "2026-09-21", end_date: "2026-09-21", duration_days: 0, pct_complete: null, status: null, is_milestone: true };
   const msMoved = actualStartFromReport(ms, "2026-09-16", cal);
   check("a milestone moves as an instant", msMoved?.start_date === "2026-09-16" && msMoved?.end_date === "2026-09-16" && msMoved?.duration_days === 0, JSON.stringify(msMoved));
+}
+
+// ============================================================================
+section("Live dates - Start and Finish follow the forecast");
+// ============================================================================
+
+{
+  const cal = 5 as const;
+  const tasks: CpmInput[] = [
+    task({ wbs_code: "5.1", start_date: "2026-09-01", end_date: "2026-09-30", duration_days: 20 }),
+    // started, finishing on plan
+    task({ wbs_code: "5.1.1", start_date: "2026-09-01", end_date: "2026-09-02", duration_days: 2, pct_complete: 50, status: "In Progress" }),
+    // still on an old reflow date, should be pulled in behind 5.1.1
+    task({ wbs_code: "5.1.2", start_date: "2026-09-21", end_date: "2026-09-22", duration_days: 2, predecessors: "5.1.1" }),
+    // started and already late: forecast from remaining work
+    task({ wbs_code: "5.1.3", start_date: "2026-08-25", end_date: "2026-08-28", duration_days: 4, pct_complete: 25, status: "In Progress" }),
+    // no logic, dates stand
+    task({ wbs_code: "5.1.4", start_date: "2026-09-21", end_date: "2026-09-22", duration_days: 2 }),
+    // complete, holds its recorded dates
+    task({ wbs_code: "5.1.5", start_date: "2026-08-17", end_date: "2026-08-20", duration_days: 4, pct_complete: 100, status: "Complete" }),
+  ];
+  const opts = { calendar: cal, dataDate: "2026-09-01" };
+  const sync = planScheduleSync(tasks, opts);
+  const by = new Map(sync.map((u) => [u.wbs, u]));
+
+  eq("a pulled-in task gets the forecast start", by.get("5.1.2")?.start, "2026-09-03");
+  eq("and the forecast finish", by.get("5.1.2")?.end, "2026-09-04");
+  eq("a late started task keeps its actual start", by.get("5.1.3")?.start, "2026-08-25");
+  eq("and finishes from remaining work", by.get("5.1.3")?.end, "2026-09-03");
+  check("a started task on plan is not rewritten", !by.has("5.1.1"));
+  check("a task with no logic is not rewritten", !by.has("5.1.4"));
+  check("a complete task is not rewritten", !by.has("5.1.5"));
+  eq("a summary spans its children's new dates", by.get("5.1")?.start, "2026-08-17");
+  eq("to the latest child finish", by.get("5.1")?.end, "2026-09-22");
+
+  // The property that makes this safe to run on every page load.
+  const synced = tasks.map((t) => {
+    const u = by.get(t.wbs_code);
+    return u ? { ...t, start_date: u.start, end_date: u.end } : t;
+  });
+  eq("syncing a synced schedule writes nothing", planScheduleSync(synced, opts).length, 0);
+
+  // ...and stays that way as the days pass and reports arrive.
+  const nextWeek = { calendar: cal, dataDate: "2026-09-09" };
+  const moved = planScheduleSync(synced, nextWeek);
+  const again = synced.map((t) => {
+    const u = moved.find((m) => m.wbs === t.wbs_code);
+    return u ? { ...t, start_date: u.start, end_date: u.end } : t;
+  });
+  eq("a week later it settles again in one pass", planScheduleSync(again, nextWeek).length, 0);
+
+  const looped = [
+    task({ wbs_code: "1", duration_days: 1, predecessors: "2" }),
+    task({ wbs_code: "2", duration_days: 1, predecessors: "1" }),
+  ];
+  eq("a broken network writes nothing", planScheduleSync(looped, opts).length, 0);
+
+  // Started tasks are allowed to have a span that is not their duration.
+  const health = assessSchedule(synced, computeCpm(synced, opts), { dataDate: "2026-09-01" });
+  const dur = health.checks.find((c) => c.id === "duration_vs_dates")!;
+  check("a started task's forecast span is not reported as drift", !dur.affected.some((a) => a.wbs === "5.1.3"));
+}
+
+{
+  const cal = 5 as const;
+  // Reported complete on Fri 18 Sep while the forecast still said 7 Oct.
+  const t = { start_date: "2026-09-10", end_date: "2026-10-07", duration_days: 20, pct_complete: 60, status: "In Progress" };
+  const done = actualFinishFromReport(t, "2026-09-18", cal);
+  eq("the completing report is the actual finish", done?.end_date, "2026-09-18");
+  eq("the start stays", done?.start_date, "2026-09-10");
+  eq("the duration becomes what it took", done?.duration_days, 7);
+  eq("a Saturday completion finishes on Friday", actualFinishFromReport(t, "2026-09-19", cal)?.end_date, "2026-09-18");
+  eq("an already-complete task keeps its finish", actualFinishFromReport({ ...t, pct_complete: 100, status: "Complete" }, "2026-09-18", cal), null);
+  eq("a finish never lands before the start", actualFinishFromReport(t, "2026-09-01", cal)?.end_date, "2026-09-10");
+  eq("no completing report, no change", actualFinishFromReport(t, null, cal), null);
 }
 
 // ============================================================================

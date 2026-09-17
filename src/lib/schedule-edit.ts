@@ -848,6 +848,41 @@ export function actualStartFromReport(
 }
 
 /**
+ * Where an approved field report says a task actually finished.
+ *
+ * The forecast holds a completed task on its recorded dates, and everything
+ * waiting on it starts the day after its Finish. So a task reported 100% on
+ * the 18th that still carries a forecast Finish of 7 Oct holds its successors
+ * until October. The report that completed it is its actual finish.
+ *
+ * Applies only when this approval is what completes the task - a task already
+ * complete keeps the finish it has, so an AHC correction is not overwritten.
+ * The finish never lands before the start. Returns null when nothing changes.
+ */
+export function actualFinishFromReport(
+  task: DateTriple & {
+    pct_complete: number | null;
+    status: string | null;
+    is_milestone?: boolean | null;
+  },
+  completedReportDate: string | null,
+  cal: CalendarLike,
+): DateTriple | null {
+  if (!completedReportDate) return null;
+  const wasComplete = Number(task.pct_complete ?? 0) >= 100 || task.status === "Complete";
+  if (wasComplete) return null;
+  let finish = snapBack(completedReportDate, cal);
+  if (task.start_date && parseIso(finish) < parseIso(task.start_date)) finish = task.start_date;
+  if (finish === task.end_date) return null;
+  return reconcileDates(
+    { start_date: task.start_date, end_date: finish, duration_days: task.duration_days },
+    "end_date",
+    cal,
+    { isMilestone: !!task.is_milestone },
+  );
+}
+
+/**
  * The duration a stored row should carry, or null when it cannot be known.
  * Used by the backfill and by the health check that stops this drifting again.
  */

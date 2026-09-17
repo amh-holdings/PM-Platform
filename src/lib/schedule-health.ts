@@ -512,6 +512,10 @@ export function assessSchedule(
     const affected: AffectedTask[] = [];
     for (const t of tasks) {
       if (t.is_milestone || t.duration_days === 0) continue;
+      // Once work has started, Start is the actual start and Finish is the
+      // forecast from remaining work, so the span is elapsed time and the
+      // duration is effort. They are meant to differ.
+      if (isComplete(t) || Number(t.pct_complete ?? 0) > 0 || t.status === "In Progress") continue;
       if (t.duration_days == null || !t.start_date || !t.end_date) continue;
       if (parseIso(t.end_date) < parseIso(t.start_date)) continue;
       const span = workingDaysBetween(t.start_date, t.end_date, cal) + 1;

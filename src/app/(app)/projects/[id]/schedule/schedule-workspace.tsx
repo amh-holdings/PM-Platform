@@ -225,9 +225,10 @@ export function ScheduleWorkspace({
     });
   }
 
-  // Tasks whose projection has moved off the planned dates. The projection is
-  // always live and read-only; this is the deliberate act of accepting it as
-  // the plan, which is why it is a button and not a background job.
+  // Tasks whose projection has moved off their stored dates. Start and Finish
+  // are synced to the forecast on every load (schedule-sync.ts), so this is
+  // normally empty and the Reflow button hidden. It shows only if a sync could
+  // not write - a role without write access, or a failed update.
   const drifted = useMemo(
     () =>
       scoped

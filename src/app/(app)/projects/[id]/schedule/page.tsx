@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { syncScheduleDates } from "@/lib/schedule-sync-server";
 
 import { ScheduleWorkspace } from "./schedule-workspace";
 
@@ -22,6 +23,10 @@ export default async function ProjectSchedulePage({ params }: { params: Params }
     .select("*")
     .eq("id", params.id)
     .maybeSingle();
+
+  // Start and Finish are the live forecast, so bring them up to date before
+  // they are read. Nothing to write means nothing is written.
+  await syncScheduleDates(supabase, params.id);
 
   const proj = (project ?? {}) as Record<string, unknown>;
   const projectName = (proj.name as string | undefined) ?? "Project";

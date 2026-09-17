@@ -211,11 +211,16 @@ const ALL_COLUMNS: Column[] = [
 // schedule, when the projection had been live the whole time and simply was not
 // on screen.
 //
-// Progress and Projected are therefore default columns. Status is not: the
-// progress bar carries the same state with a number attached, and the column
-// picker puts it back in one click for anyone who wants both.
+// Progress is therefore a default column. Status is not: the progress bar
+// carries the same state with a number attached, and the column picker puts it
+// back in one click for anyone who wants both.
+//
+// Projected is no longer a default either. Since 2026-09-17 Start and Finish
+// ARE the live forecast (schedule-sync.ts), so a Projected column beside them
+// repeated Finish. It stays in the picker: while an edit is unsaved it is the
+// one column that shows what the edit would do.
 const DEFAULT_COLUMNS: ColumnKey[] = [
-  "row", "code", "task", "progress", "dur", "start", "finish", "projected", "float",
+  "row", "code", "task", "progress", "dur", "start", "finish", "float",
 ];
 
 // Below this a header label is unreadable and a date input collapses to its

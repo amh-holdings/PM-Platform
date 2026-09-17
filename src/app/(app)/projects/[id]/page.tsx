@@ -12,6 +12,8 @@ import { redirect } from "next/navigation";
 import { DashboardToday } from "./dashboard-today";
 import { ProjectChat } from "./project-chat";
 import { can } from "@/lib/roles";
+import { syncScheduleDates } from "@/lib/schedule-sync-server";
+import { createClient } from "@/lib/supabase/server";
 import { getEffectiveRole } from "@/lib/roles-server";
 
 type Params = { id: string };
@@ -41,6 +43,10 @@ export default async function ProjectDashboardPage({ params }: { params: Params 
   const showFinancials = can(effective, "viewBilling");
   // Within the Financial section, cost/profit margin is a further Phil-only cut.
   const showCosts = can(effective, "viewCosts");
+
+  // The schedule panels, milestones and cash-flow projection all read Start and
+  // Finish, which are the live forecast - sync before any of them render.
+  await syncScheduleDates(createClient(), params.id);
 
   return (
     <div className="space-y-8">

@@ -8,7 +8,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { TablesUpdate } from "@/lib/database.types";
 import { makeCalendar } from "@/lib/schedule-calendar";
-import { actualStartFromReport } from "@/lib/schedule-edit";
+import { actualFinishFromReport, actualStartFromReport } from "@/lib/schedule-edit";
+import { syncScheduleDates } from "@/lib/schedule-sync-server";
 import { generateInspectionToken, isLinkUsable } from "@/lib/inspection-token";
 import { proposeProductionForReport } from "@/lib/production-proposal-run";
 import { INSPECTION_BUCKET, sanitizeFileName } from "./inspection-constants";
@@ -623,14 +624,33 @@ async function applyPinProgressToSchedule(
         .filter(Boolean)
         .sort()[0] ?? null;
     const calendar = await loadProjectCalendar(auth, task.project_id);
-    const dates = actualStartFromReport(task, firstReportDate, calendar);
-    if (dates) Object.assign(patch, dates);
+    const started = actualStartFromReport(task, firstReportDate, calendar);
+    if (started) Object.assign(patch, started);
+
+    // And WHEN it finished: the report that completed it. Checked against the
+    // task as it stood before this approval, carrying the start just set.
+    const completedReportDate =
+      pins
+        .filter((p) => Number(p.task_new_pct ?? 0) >= 100 || p.task_new_status === "Complete")
+        .map(reportDate)
+        .filter(Boolean)
+        .sort()[0] ?? null;
+    const finished = actualFinishFromReport(
+      { ...task, ...(started ?? {}) },
+      completedReportDate,
+      calendar,
+    );
+    if (finished) Object.assign(patch, finished);
   }
 
   await auth.supabase
     .from("schedule_tasks")
     .update(patch)
     .eq("id", taskId);
+
+  // The report may have moved everything downstream of this task. Start and
+  // Finish are the live forecast, so bring the rest of the schedule with it.
+  if (task) await syncScheduleDates(auth.supabase, task.project_id);
 }
 
 async function loadProjectCalendar(auth: Authed, projectId: string) {

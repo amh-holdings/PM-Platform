@@ -8,7 +8,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { proposeProductionForReport } from "@/lib/production-proposal-run";
 import type { Database, TablesUpdate } from "@/lib/database.types";
 import { makeCalendar } from "@/lib/schedule-calendar";
-import { actualStartFromReport } from "@/lib/schedule-edit";
+import { actualFinishFromReport, actualStartFromReport } from "@/lib/schedule-edit";
+import { syncScheduleDates } from "@/lib/schedule-sync-server";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -443,9 +444,16 @@ export async function approveDpr(
             .eq("project_id", projectId)
             .eq("parent_wbs_code", task.wbs_code)
         : { count: 0 };
-      const dates =
-        task && !children ? actualStartFromReport(task, dpr.report_date, calendar) : null;
-      if (dates) Object.assign(patch, dates);
+      if (task && !children) {
+        const started = actualStartFromReport(task, dpr.report_date, calendar);
+        if (started) Object.assign(patch, started);
+        const completes =
+          Number(u.new_pct_complete ?? 0) >= 100 || u.new_status === "Complete";
+        const finished = completes
+          ? actualFinishFromReport({ ...task, ...(started ?? {}) }, dpr.report_date, calendar)
+          : null;
+        if (finished) Object.assign(patch, finished);
+      }
     }
     if (u.new_status) patch.status = u.new_status;
     if (u.new_pct_complete != null) patch.pct_complete = u.new_pct_complete;
@@ -473,6 +481,9 @@ export async function approveDpr(
     })
     .eq("id", dprId);
   if (stampErr) return { ok: false, error: stampErr.message };
+
+  // Start and Finish are the live forecast; this report may have moved it.
+  if (applied > 0) await syncScheduleDates(auth.supabase, projectId);
 
   // Never throws and never rolls the approval back - a tracker fill is laid on
   // top of a decision that already stands. Same contract as the other path.
