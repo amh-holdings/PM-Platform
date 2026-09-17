@@ -361,6 +361,11 @@ function PinReview({
     pin.quantity != null ? String(pin.quantity) : "",
   );
   const [unit, setUnit] = useState(pin.unitOfMeasure ?? "EA");
+  // The card's title. Normally the WBS activity's own label, so it follows the
+  // activity picker - until somebody types their own, which is the whole point
+  // of the field: a name the schedule does not have.
+  const [title, setTitle] = useState(pin.title);
+  const [titleTouched, setTitleTouched] = useState(false);
   // The correction history is not the sub's to rewrite, so the editor gets the
   // note body only and the trail is shown read-only beneath it.
   const filedNotes = useMemo(() => splitPinNotes(pin.notes), [pin.notes]);
@@ -421,6 +426,7 @@ function PinReview({
   function buildCorrections(): PinCorrection {
     const c: PinCorrection = {};
     if (taskId || pin.scheduleTaskId) c.scheduleTaskId = taskId || null;
+    c.title = title.trim();
     if (status || pin.taskNewStatus) c.taskNewStatus = status || null;
     if (pct.trim() !== "" || pin.taskNewPct != null)
       c.taskNewPct = pct.trim() === "" ? null : Number(pct);
@@ -438,6 +444,8 @@ function PinReview({
 
   function resubmit() {
     setError(null);
+    if (!title.trim())
+      return setError("Give the work item a short title.");
     if (!fixNotes.trim())
       return setError("Describe what you fixed before resubmitting.");
     if (keptSubPhotos.length + fixPhotos.length === 0)
@@ -464,8 +472,15 @@ function PinReview({
   }
 
   const canSubmitFix =
-    fixNotes.trim().length > 0 && keptSubPhotos.length + fixPhotos.length > 0;
+    title.trim().length > 0 &&
+    fixNotes.trim().length > 0 &&
+    keptSubPhotos.length + fixPhotos.length > 0;
   const selectedTask = tasks.find((t) => t.id === taskId) ?? null;
+  // What the title would be if it just followed the activity. Offered as a way
+  // back after a rename, and hidden when the title already matches it.
+  const activityTitle = selectedTask
+    ? `${selectedTask.wbsCode} ${selectedTask.taskName}`
+    : null;
 
   // Run against the task the pin is CURRENTLY filed against, not the edit
   // form's selection - this is what the approver is being asked to bless.
@@ -549,6 +564,50 @@ function PinReview({
             to the CM on its own - the rest of the report is untouched.
           </p>
 
+          {/* The card's name, first, because it is the heading the CM reads.
+              It follows the activity picker until it is typed over - a schedule
+              line and the name the field uses for the same work are not always
+              the same thing, and correcting that used to mean refiling the
+              whole day. */}
+          <div>
+            <Label className="text-[10px]" htmlFor={`pin-title-${pin.id}`}>
+              Work item title *
+            </Label>
+            <Input
+              id={`pin-title-${pin.id}`}
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                setTitleTouched(true);
+              }}
+              placeholder="What this work item is called"
+              className="h-9 text-xs"
+            />
+            <div className="mt-1 flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+              <p className="text-[10px] text-muted-foreground">
+                Renames this card only. If the WBS line itself is wrong, rename
+                it on the Schedule screen.
+              </p>
+              {activityTitle && activityTitle !== title.trim() && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitle(activityTitle);
+                    setTitleTouched(false);
+                  }}
+                  className="shrink-0 text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                >
+                  Use the activity name
+                </button>
+              )}
+            </div>
+            {title.trim() !== pin.title && title.trim().length > 0 && (
+              <p className="mt-1 text-[10px] text-amber-700">
+                Retitled from {pin.title}.
+              </p>
+            )}
+          </div>
+
           <div>
             <Label className="text-[10px]">WBS / schedule activity *</Label>
             <select
@@ -565,6 +624,9 @@ function PinReview({
                   setStatus(
                     t.currentStatus === "Complete" ? "Complete" : "In Progress",
                   );
+                  // Same label the server derives, so picking an activity and
+                  // resubmitting produces the title it always would have.
+                  if (!titleTouched) setTitle(`${t.wbsCode} ${t.taskName}`);
                 }
               }}
               className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
@@ -596,7 +658,9 @@ function PinReview({
               taskId !== pin.scheduleTaskId && (
                 <p className="mt-1 text-[10px] text-amber-700">
                   Activity changed from {pin.wbsLabel ?? "the original item"}.
-                  The card is retitled when you resubmit.
+                  {titleTouched
+                    ? " The title above is kept as you typed it."
+                    : " The title above followed it."}
                 </p>
               )}
           </div>
