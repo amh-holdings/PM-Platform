@@ -66,6 +66,7 @@ import {
   planOutdent,
   orderRenames,
   reconcileDates,
+  actualStartFromReport,
   durationFromDates,
   rewritePredecessors,
   shiftDates,
@@ -562,6 +563,71 @@ section("Progress override - a started task stops waiting on its start logic");
     { dataDate: "2026-09-10" },
   );
   check("finishing before an FF predecessor is", done.outOfSequence.some((o) => o.wbs === "2" && o.type === "FF"));
+}
+
+// ============================================================================
+section("Pull-in - a task that has not started follows its logic, early as well as late");
+// ============================================================================
+
+{
+  // Basin 2 Embankment reported early, and nothing behind it moved: a task
+  // that had not started never forecast earlier than its planned start, so
+  // Lined Inlets, the ditch line and seeding all sat on the 9/9 reflow dates
+  // until somebody reflowed by hand. The field should move them.
+  const tasks = [
+    // 1: started, finishing Wed 2 Sep.
+    task({ wbs_code: "1", start_date: "2026-09-01", end_date: "2026-09-02", duration_days: 2, pct_complete: 50, status: "In Progress" }),
+    // 2: FS on 1, still planned for the 21st from an old reflow.
+    task({ wbs_code: "2", start_date: "2026-09-21", end_date: "2026-09-22", duration_days: 2, predecessors: "1" }),
+    // 3: FS on 2. Follows it in.
+    task({ wbs_code: "3", start_date: "2026-09-23", end_date: "2026-09-23", duration_days: 1, predecessors: "2" }),
+    // 4: no logic at all, planned for the 21st. Nothing to pull it in with.
+    task({ wbs_code: "4", start_date: "2026-09-21", end_date: "2026-09-22", duration_days: 2 }),
+    // 5: FS on 1, but it cannot start before the 15th - a mobilization date.
+    task({ wbs_code: "5", start_date: "2026-09-21", end_date: "2026-09-22", duration_days: 2, predecessors: "1", date_constraint_type: "SNET", date_constraint_date: "2026-09-15" }),
+  ];
+  const out = computeCpm(tasks, { dataDate: "2026-09-01" });
+  eq("a not-started task is pulled in to where its logic lets it start", out.byWbs.get("2")!.projectedStart, "2026-09-03");
+  eq("and runs its own duration from there", out.byWbs.get("2")!.projectedEnd, "2026-09-04");
+  // 2 finishes Fri 4 Sep, Mon 7 is Labor Day.
+  eq("the chain behind it follows", out.byWbs.get("3")!.projectedStart, "2026-09-08");
+  eq("a task with no logic keeps its planned start", out.byWbs.get("4")!.projectedStart, "2026-09-21");
+  eq("a start constraint still holds against the pull", out.byWbs.get("5")!.projectedStart, "2026-09-15");
+
+  // Never earlier than the data date, however early the logic frees it.
+  const late = computeCpm(
+    tasks.map((t) => (t.wbs_code === "1" ? { ...t, pct_complete: 100, status: "Complete" } : t)),
+    { dataDate: "2026-09-10" },
+  );
+  eq("a pulled-in task cannot start before the data date", late.byWbs.get("2")!.projectedStart, "2026-09-10");
+}
+
+// ============================================================================
+section("Actual start - an approved report records when work began");
+// ============================================================================
+
+{
+  const cal = 5 as const;
+  // Basin 2 Embankment, 17 Sep 2026: at 5%, still carrying the 28 Sep start.
+  const emb = { start_date: "2026-09-28", end_date: "2026-09-29", duration_days: 2, pct_complete: 5, status: "In Progress" };
+  const moved = actualStartFromReport(emb, "2026-09-16", cal);
+  eq("a started task's start moves back to its first report", moved?.start_date, "2026-09-16");
+  eq("and the finish follows at the same duration", moved?.end_date, "2026-09-17");
+  eq("the duration is kept", moved?.duration_days, 2);
+
+  const notStarted = { start_date: "2026-09-01", end_date: "2026-09-04", duration_days: 4, pct_complete: null, status: "Not Started" };
+  eq("a first report after the planned start records a late start", actualStartFromReport(notStarted, "2026-09-10", cal)?.start_date, "2026-09-10");
+  eq("and pushes the finish with it", actualStartFromReport(notStarted, "2026-09-10", cal)?.end_date, "2026-09-15");
+  eq("a first report on a Saturday starts on Monday", actualStartFromReport(notStarted, "2026-09-12", cal)?.start_date, "2026-09-14");
+
+  const correct = { start_date: "2026-09-10", end_date: "2026-09-11", duration_days: 2, pct_complete: 40, status: "In Progress" };
+  eq("a started task is never pushed later by a report", actualStartFromReport(correct, "2026-09-14", cal), null);
+  eq("a start that already matches is left alone", actualStartFromReport(correct, "2026-09-10", cal), null);
+  eq("no approved report, no change", actualStartFromReport(notStarted, null, cal), null);
+
+  const ms = { start_date: "2026-09-21", end_date: "2026-09-21", duration_days: 0, pct_complete: null, status: null, is_milestone: true };
+  const msMoved = actualStartFromReport(ms, "2026-09-16", cal);
+  check("a milestone moves as an instant", msMoved?.start_date === "2026-09-16" && msMoved?.end_date === "2026-09-16" && msMoved?.duration_days === 0, JSON.stringify(msMoved));
 }
 
 // ============================================================================

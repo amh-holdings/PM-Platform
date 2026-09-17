@@ -789,6 +789,65 @@ export function reconcileDates(
 }
 
 /**
+ * Where an approved field report says a task actually started.
+ *
+ * Approving a report used to write the percent and the status and nothing
+ * else, so the schedule knew a task had started but not WHEN. Basin 2
+ * Embankment was reported at 5% on 16 Sep 2026 and still carried the 28 Sep
+ * start from the last reflow, so the forecast held its 29 Sep finish and
+ * nothing behind it moved.
+ *
+ * `firstReportDate` is the earliest approved report that showed progress on
+ * the task. The start moves to it, and the finish follows at the same
+ * duration, when:
+ *   - the task had not started before this approval - its first report IS its
+ *     actual start, early or late; or
+ *   - it had started, but an approved report is earlier than its start date -
+ *     an older report cleared from the backlog, or a start that was never
+ *     recorded. A started task's start is never pushed LATER, so an AHC
+ *     correction to the actual start survives the next approval.
+ *
+ * Returns null when nothing should change.
+ */
+export function actualStartFromReport(
+  task: DateTriple & {
+    pct_complete: number | null;
+    status: string | null;
+    is_milestone?: boolean | null;
+  },
+  firstReportDate: string | null,
+  cal: CalendarLike,
+): DateTriple | null {
+  if (!firstReportDate) return null;
+  const wasStarted =
+    Number(task.pct_complete ?? 0) > 0 ||
+    task.status === "In Progress" ||
+    task.status === "Complete";
+  const report = snapForward(firstReportDate, cal);
+  if (
+    wasStarted &&
+    task.start_date &&
+    parseIso(report) >= parseIso(task.start_date)
+  ) {
+    return null;
+  }
+  const next = reconcileDates(
+    { start_date: report, end_date: task.end_date, duration_days: task.duration_days },
+    "start_date",
+    cal,
+    { isMilestone: !!task.is_milestone },
+  );
+  if (
+    next.start_date === task.start_date &&
+    next.end_date === task.end_date &&
+    next.duration_days === task.duration_days
+  ) {
+    return null;
+  }
+  return next;
+}
+
+/**
  * The duration a stored row should carry, or null when it cannot be known.
  * Used by the backfill and by the health check that stops this drifting again.
  */

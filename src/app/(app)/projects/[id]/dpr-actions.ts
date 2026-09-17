@@ -7,6 +7,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { proposeProductionForReport } from "@/lib/production-proposal-run";
 import type { Database, TablesUpdate } from "@/lib/database.types";
+import { makeCalendar } from "@/lib/schedule-calendar";
+import { actualStartFromReport } from "@/lib/schedule-edit";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -399,6 +401,20 @@ export async function approveDpr(
     .eq("dpr_id", dprId);
   if (upErr) return { ok: false, error: upErr.message };
 
+  const { data: project } = await auth.supabase
+    .from("projects")
+    .select("work_week")
+    .eq("id", projectId)
+    .maybeSingle();
+  const { data: exceptions } = await auth.supabase
+    .from("project_calendar_exceptions")
+    .select("exception_date, kind")
+    .eq("project_id", projectId);
+  const calendar = makeCalendar(
+    project?.work_week === 6 ? 6 : 5,
+    (exceptions ?? []) as { exception_date: string; kind: "nonworking" | "working" }[],
+  );
+
   const now = new Date().toISOString();
   let applied = 0;
   for (const u of updates ?? []) {
@@ -406,6 +422,31 @@ export async function approveDpr(
       status_source: "dpr",
       last_dpr_at: now,
     };
+    // Record when the work started, same rule as pin approval - see
+    // actualStartFromReport. Read before the patch so "had it started" means
+    // before this report.
+    const showsProgress =
+      Number(u.new_pct_complete ?? 0) > 0 ||
+      u.new_status === "In Progress" ||
+      u.new_status === "Complete";
+    if (showsProgress) {
+      const { data: task } = await auth.supabase
+        .from("schedule_tasks")
+        .select("wbs_code, pct_complete, status, start_date, end_date, duration_days, is_milestone")
+        .eq("id", u.schedule_task_id)
+        .maybeSingle();
+      // Summary dates roll up from their children, so they get no actual start.
+      const { count: children } = task
+        ? await auth.supabase
+            .from("schedule_tasks")
+            .select("id", { count: "exact", head: true })
+            .eq("project_id", projectId)
+            .eq("parent_wbs_code", task.wbs_code)
+        : { count: 0 };
+      const dates =
+        task && !children ? actualStartFromReport(task, dpr.report_date, calendar) : null;
+      if (dates) Object.assign(patch, dates);
+    }
     if (u.new_status) patch.status = u.new_status;
     if (u.new_pct_complete != null) patch.pct_complete = u.new_pct_complete;
     if (u.installed_quantity != null) patch.installed_quantity = u.installed_quantity;

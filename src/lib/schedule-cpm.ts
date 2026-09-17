@@ -623,7 +623,8 @@ export function computeCpm(
       : snapForward(t.start_date ?? workStart, cal);
     if (!started && parseIso(start) < parseIso(workStart)) start = workStart;
 
-    // A predecessor can only push a task later, never earlier.
+    // Where the predecessors let this task start (or, once it has started,
+    // finish).
     //
     // Once a task has started, the links that govern its START are spent: the
     // start happened, so FS and SS have nothing left to say. Holding them was
@@ -667,10 +668,19 @@ export function computeCpm(
           : addWorkingDays(workStart, remainingDuration(t, d), cal);
       if (depFinish && parseIso(depFinish) > parseIso(end)) end = depFinish;
       else driver = null;
+    } else if (depStart) {
+      // Not started, and tied into the network. Its logic decides when it can
+      // begin - earlier than the plan as well as later. The planned start is
+      // only where the predecessors USED to land; holding it as a floor meant
+      // Basin 2 Embankment reporting early moved nothing behind it until
+      // somebody reflowed by hand. A start that genuinely cannot come earlier -
+      // a mobilization date, a delivery, a permit window - is a date
+      // constraint (SNET), which still holds below.
+      start = parseIso(depStart) > parseIso(workStart) ? depStart : workStart;
+      end = addWorkingDays(start, d, cal);
     } else {
-      // Not started. If a predecessor pushes it, or its own start has already
-      // slipped past, it runs its full duration from wherever it can begin.
-      if (depStart && parseIso(depStart) > parseIso(start)) start = depStart;
+      // Not started, nothing driving it. The planned dates are all that anchor
+      // it, so they stand unless they have already slipped past the data date.
       end =
         plannedEnd &&
         parseIso(start) <= parseIso(t.start_date ?? start) &&

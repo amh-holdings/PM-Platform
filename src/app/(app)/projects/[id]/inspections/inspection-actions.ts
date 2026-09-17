@@ -7,6 +7,8 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { TablesUpdate } from "@/lib/database.types";
+import { makeCalendar } from "@/lib/schedule-calendar";
+import { actualStartFromReport } from "@/lib/schedule-edit";
 import { generateInspectionToken, isLinkUsable } from "@/lib/inspection-token";
 import { proposeProductionForReport } from "@/lib/production-proposal-run";
 import { INSPECTION_BUCKET, sanitizeFileName } from "./inspection-constants";
@@ -578,7 +580,7 @@ async function applyPinProgressToSchedule(
   // word, whoever had it, becomes the floor.
   const { data: task } = await auth.supabase
     .from("schedule_tasks")
-    .select("pct_complete")
+    .select("project_id, wbs_code, pct_complete, status, start_date, end_date, duration_days, is_milestone")
     .eq("id", taskId)
     .maybeSingle();
   const currentPct = task?.pct_complete != null ? Number(task.pct_complete) : null;
@@ -596,10 +598,55 @@ async function applyPinProgressToSchedule(
   }
   if (governing.quantity != null) patch.installed_quantity = governing.quantity;
 
+  // Record WHEN the work started, not just that it has. The earliest approved
+  // report showing progress is the actual start; without it the forecast kept
+  // using the planned start and the finish behind it. See actualStartFromReport.
+  // Summary rows are skipped: their dates roll up from their children, and a
+  // pin left on one from before a split (Basin 2 ESC, 9/9) is not its start.
+  const { count: children } = task
+    ? await auth.supabase
+        .from("schedule_tasks")
+        .select("id", { count: "exact", head: true })
+        .eq("project_id", task.project_id)
+        .eq("parent_wbs_code", task.wbs_code)
+    : { count: 0 };
+  if (task && !children) {
+    const firstReportDate =
+      pins
+        .filter(
+          (p) =>
+            Number(p.task_new_pct ?? 0) > 0 ||
+            p.task_new_status === "In Progress" ||
+            p.task_new_status === "Complete",
+        )
+        .map(reportDate)
+        .filter(Boolean)
+        .sort()[0] ?? null;
+    const calendar = await loadProjectCalendar(auth, task.project_id);
+    const dates = actualStartFromReport(task, firstReportDate, calendar);
+    if (dates) Object.assign(patch, dates);
+  }
+
   await auth.supabase
     .from("schedule_tasks")
     .update(patch)
     .eq("id", taskId);
+}
+
+async function loadProjectCalendar(auth: Authed, projectId: string) {
+  const { data: project } = await auth.supabase
+    .from("projects")
+    .select("work_week")
+    .eq("id", projectId)
+    .maybeSingle();
+  const { data: exceptions } = await auth.supabase
+    .from("project_calendar_exceptions")
+    .select("exception_date, kind")
+    .eq("project_id", projectId);
+  return makeCalendar(
+    project?.work_week === 6 ? 6 : 5,
+    (exceptions ?? []) as { exception_date: string; kind: "nonworking" | "working" }[],
+  );
 }
 
 // Shared transition guard: load current status, verify project ownership and
