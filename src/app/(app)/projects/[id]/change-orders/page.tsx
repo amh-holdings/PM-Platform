@@ -167,22 +167,22 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
         <table className="w-full text-sm">
           <thead className="text-xs uppercase tracking-wide text-muted-foreground">
             <tr className="border-b">
-              <th className="px-3 py-2 text-left font-medium">CO #</th>
-              <th className="px-3 py-2 text-left font-medium">Description</th>
+              <th className="whitespace-nowrap px-3 py-2 text-left font-medium">CO #</th>
+              <th className="w-full px-3 py-2 text-left font-medium">Description</th>
               {showCosts && (
-                <th className="px-3 py-2 text-right font-medium">Cost</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right font-medium">Cost</th>
               )}
               {showCosts && (
-                <th className="px-3 py-2 text-right font-medium">Profit %</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right font-medium">Profit %</th>
               )}
-              <th className="px-3 py-2 text-right font-medium">Billable</th>
+              <th className="whitespace-nowrap px-3 py-2 text-right font-medium">Billable</th>
               {showCosts && (
-                <th className="px-3 py-2 text-right font-medium">Backup</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right font-medium">Backup</th>
               )}
-              <th className="px-3 py-2 text-right font-medium">SOV lines</th>
-              <th className="px-3 py-2 text-right font-medium">Days</th>
-              <th className="px-3 py-2 text-left font-medium">Status</th>
-              <th className="px-3 py-2 text-left font-medium">Approved</th>
+              <th className="whitespace-nowrap px-3 py-2 text-right font-medium">SOV lines</th>
+              <th className="whitespace-nowrap px-3 py-2 text-right font-medium">Days</th>
+              <th className="whitespace-nowrap px-3 py-2 text-left font-medium">Status</th>
+              <th className="whitespace-nowrap px-3 py-2 text-left font-medium">Approved</th>
             </tr>
           </thead>
           <tbody>
@@ -192,7 +192,7 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
               const backedCount = backedLinesPerCo.get(r.id)?.size ?? 0;
               return (
                 <tr key={r.id} className="border-b last:border-0 hover:bg-muted/30">
-                  <td className="px-3 py-2 font-mono font-medium">
+                  <td className="whitespace-nowrap px-3 py-2 font-mono font-medium">
                     <Link
                       href={`/projects/${params.id}/change-orders/${r.id}`}
                       className="hover:underline"
@@ -204,20 +204,20 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
                     <span className="line-clamp-2">{r.description ?? "-"}</span>
                   </td>
                   {showCosts && (
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">
+                    <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">
                       {r.cost_amount != null ? formatCurrency(Number(r.cost_amount)) : "-"}
                     </td>
                   )}
                   {showCosts && (
-                    <td className="px-3 py-2 text-right text-xs text-muted-foreground">
+                    <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-muted-foreground">
                       {r.profit_pct != null ? `${Number(r.profit_pct)}%` : "-"}
                     </td>
                   )}
-                  <td className="px-3 py-2 text-right font-mono tabular-nums font-semibold">
+                  <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums font-semibold">
                     {formatCurrency(Number(r.co_value ?? 0))}
                   </td>
                   {showCosts && (
-                    <td className="px-3 py-2 text-right text-xs">
+                    <td className="whitespace-nowrap px-3 py-2 text-right text-xs">
                       {costLineCount === 0 ? (
                         <span className="text-muted-foreground">no buildup</span>
                       ) : (
@@ -234,15 +234,15 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
                       )}
                     </td>
                   )}
-                  <td className="px-3 py-2 text-right text-xs">
+                  <td className="whitespace-nowrap px-3 py-2 text-right text-xs">
                     {lineInfo
                       ? `${lineInfo.count} (${formatCurrency(lineInfo.total)})`
                       : "0"}
                   </td>
-                  <td className="px-3 py-2 text-right text-xs">
+                  <td className="whitespace-nowrap px-3 py-2 text-right text-xs">
                     {r.schedule_impact_days ?? "-"}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="whitespace-nowrap px-3 py-2">
                     <span
                       className={cn(
                         "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
@@ -252,7 +252,7 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
                       {CO_STATUS_LABELS[r.status as CoStatus] ?? r.status}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">
+                  <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
                     {r.approved_at ? formatDate(r.approved_at) : "-"}
                   </td>
                 </tr>
