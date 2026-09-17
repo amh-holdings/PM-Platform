@@ -339,6 +339,7 @@ function revalidateReport(projectId: string, dprId: string) {
 // wants the old photos-and-a-note behaviour can send nothing.
 export type PinCorrection = {
   scheduleTaskId?: string | null;
+  title?: string | null;
   taskNewStatus?: string | null;
   taskNewPct?: number | null;
   installedQuantity?: number | null;
@@ -407,6 +408,29 @@ export async function resubmitFieldReportPin(input: {
       patch.schedule_task_id = nextTaskId;
       patch.title = task.label;
       changeLines.push(`Activity: ${oldLabel} -> ${task.label}`);
+    }
+  }
+
+  // --- The card's own title. It is derived from the WBS activity, and most of
+  //     the time that is right. But a schedule line is not always what the
+  //     field calls the work: 5.1.1.7 was named "Construct Basin 2 ESC" for the
+  //     basin the drawings call Basin 1, and the only way to correct the card
+  //     was to delete the day's report and refile it. So the title is editable
+  //     on its own, and an explicit one WINS OVER the activity-derived label -
+  //     it is applied after the block above for exactly that reason.
+  //
+  //     Renaming the card does not rename the schedule. If the WBS line itself
+  //     is wrong, fix it on the Schedule screen; this only fixes what this pin
+  //     is called.
+  if (c.title !== undefined) {
+    const next = c.title?.trim() ?? "";
+    if (!next) return { ok: false, error: "The work item needs a short title." };
+    if (next.length > 200)
+      return { ok: false, error: "Keep the work item title under 200 characters." };
+    const before = patch.title ?? pin.title;
+    if (next !== before) {
+      patch.title = next;
+      changeLines.push(`Title: ${before} -> ${next}`);
     }
   }
 
