@@ -38,7 +38,17 @@ export function planScheduleSync(
   const next = new Map<string, { start: string; end: string }>();
   for (const t of leaves) {
     const c = cpm.byWbs.get(t.wbs_code);
-    if (c) next.set(t.wbs_code, { start: c.projectedStart, end: c.projectedEnd });
+    if (!c) continue;
+    // A deliverable that is past due keeps the dates it was given. Its forecast
+    // has rolled up to the data date - the package could arrive tomorrow - but
+    // writing that back would overwrite the date the engineer committed to, and
+    // a day later it would overwrite it again. The commitment is the record;
+    // the roll is the forecast, and successors already read the forecast.
+    if (c.forecastBasis === "overdue" && t.start_date && t.end_date) {
+      next.set(t.wbs_code, { start: t.start_date, end: t.end_date });
+      continue;
+    }
+    next.set(t.wbs_code, { start: c.projectedStart, end: c.projectedEnd });
   }
 
   // A summary row spans its work. Its own stored dates are display only - the

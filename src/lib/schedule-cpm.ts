@@ -83,6 +83,8 @@ export type CpmInput = {
   pct_complete: number | null;
   status: string | null;
   is_milestone?: boolean | null;
+  /** "construction" | "deliverable" (0051). Null = not classified. */
+  task_type?: string | null;
   date_constraint_type?: string | null;
   date_constraint_date?: string | null;
   // Progress history (schedule-progress-history.ts). Optional: a caller that
@@ -126,7 +128,7 @@ export type CpmResult = {
   // How the projected finish was reached, for a started task: "pace" from its
   // reported rate of progress, "plan" from its duration, "held" on its own
   // finish date. Null for work not under way.
-  forecastBasis: "pace" | "plan" | "held" | null;
+  forecastBasis: "pace" | "plan" | "held" | "committed" | "overdue" | null;
   // Set when a hard constraint and the logic disagree.
   constraintViolation: string | null;
   // Links this task's reported progress has already broken - it started before
@@ -284,6 +286,22 @@ function isComplete(t: CpmInput): boolean {
 
 function hasStarted(t: CpmInput): boolean {
   return Number(t.pct_complete ?? 0) > 0 || t.status === "In Progress";
+}
+
+// A deliverable is not measured, it is received: a design package, a signed
+// contract, a permit, a passed inspection. Percent complete never arrives for
+// one, so forecasting "duration times the percent left" from the data date is
+// wrong twice over - it invents remaining work nobody reported, and it moves a
+// date the engineer committed to. Sussex 30% Design was the case that showed
+// it: a 9/14 submission read as 10/8 the moment the 14th passed.
+//
+// So its own dates are a commitment. They hold while the date is still ahead,
+// and once it has passed the task is overdue - the forecast rolls to the data
+// date and moves a day at a time, because the package could arrive tomorrow.
+// Logic still governs: a predecessor landing later pushes it like anything
+// else, and a task waiting on a chain takes its dates from the chain.
+function isDeliverable(t: CpmInput): boolean {
+  return t.task_type === "deliverable";
 }
 
 // Remaining duration for work already under way, used only to forecast a task
@@ -732,8 +750,17 @@ export function computeCpm(
       // Under way. With a pace worth trusting, forecast from it. Otherwise the
       // plan stands while its finish is still ahead of the data date, and only
       // once that date has passed do we forecast from remaining work.
-      const pace = paceRemaining(t, d, dataDate, cal);
-      if (pace != null) {
+      const pace = isDeliverable(t) ? null : paceRemaining(t, d, dataDate, cal);
+      if (isDeliverable(t)) {
+        // Committed while the date is ahead; overdue once it is behind.
+        if (plannedEnd && parseIso(plannedEnd) >= parseIso(workStart)) {
+          end = plannedEnd;
+          basis = "committed";
+        } else {
+          end = workStart;
+          basis = "overdue";
+        }
+      } else if (pace != null) {
         end = addWorkingDays(workStart, pace, cal);
         basis = "pace";
       } else if (plannedEnd && parseIso(plannedEnd) >= parseIso(workStart)) {
@@ -758,12 +785,22 @@ export function computeCpm(
     } else {
       // Not started, nothing driving it. The planned dates are all that anchor
       // it, so they stand unless they have already slipped past the data date.
-      end =
+      if (isDeliverable(t) && plannedEnd) {
+        // Nothing is driving it but its own commitment, so the commitment is
+        // the forecast - including the start, which is not pushed to today the
+        // way remaining work would be.
+        if (t.start_date) start = t.start_date;
+        end =
+          parseIso(plannedEnd) >= parseIso(workStart) ? plannedEnd : workStart;
+        basis = parseIso(plannedEnd) >= parseIso(workStart) ? "committed" : "overdue";
+      } else {
+        end =
         plannedEnd &&
         parseIso(start) <= parseIso(t.start_date ?? start) &&
         parseIso(plannedEnd) >= parseIso(start)
           ? plannedEnd
           : addWorkingDays(start, d, cal);
+      }
     }
 
     // A dependency landing after the forecast finish drags the finish with it.
@@ -788,6 +825,11 @@ export function computeCpm(
       const bound = snapForward(c.date, cal);
       if (parseIso(bound) > parseIso(end)) end = bound;
     }
+
+    // An overdue deliverable keeps a start in the past and a finish that has
+    // rolled up to the data date. Anything else that leaves start after finish
+    // is bad data, and the engine should not pass it on.
+    if (parseIso(start) > parseIso(end)) start = end;
 
     pStart.set(wbs, start);
     pEnd.set(wbs, end);

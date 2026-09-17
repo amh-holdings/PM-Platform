@@ -766,6 +766,66 @@ section("Pace - forecast from how the work is actually going");
 }
 
 // ============================================================================
+section("Deliverables - received, not measured");
+// ============================================================================
+
+{
+  // Sussex 30% Civil Design as it actually stood: In Progress, no percent (no
+  // report can ever set one), committed to Mon 14 Sep, read on Thu 17 Sep.
+  const design = (extra: Partial<CpmInput> = {}) =>
+    task({
+      wbs_code: "1", start_date: "2026-08-21", end_date: "2026-09-14",
+      duration_days: 17, status: "In Progress", task_type: "deliverable", ...extra,
+    });
+
+  const before = computeCpm([design()], { dataDate: "2026-09-11" });
+  eq("a deliverable holds the date it was committed to", before.byWbs.get("1")!.projectedEnd, "2026-09-14");
+  eq("and says so", before.byWbs.get("1")!.forecastBasis, "committed");
+
+  const after = computeCpm([design()], { dataDate: "2026-09-17" });
+  eq("once the date passes it is overdue, not re-planned", after.byWbs.get("1")!.projectedEnd, "2026-09-17");
+  eq("and it rolls a day at a time", computeCpm([design()], { dataDate: "2026-09-18" }).byWbs.get("1")!.projectedEnd, "2026-09-18");
+  eq("the overdue basis is reported", after.byWbs.get("1")!.forecastBasis, "overdue");
+
+  // The same task as a construction activity is the old behaviour: 17 days of
+  // remaining work forecast from the data date.
+  const asWork = computeCpm([design({ task_type: "construction" })], { dataDate: "2026-09-17" });
+  eq("a construction activity still forecasts from remaining work", asWork.byWbs.get("1")!.projectedEnd, "2026-10-09");
+
+  // Not started and nothing driving it: the commitment stands either side.
+  const notStarted = task({ wbs_code: "1", start_date: "2026-10-01", end_date: "2026-10-08", duration_days: 6, task_type: "deliverable" });
+  eq("an unstarted deliverable keeps its start", computeCpm([notStarted], { dataDate: "2026-09-17" }).byWbs.get("1")!.projectedStart, "2026-10-01");
+  eq("and its committed finish", computeCpm([notStarted], { dataDate: "2026-09-17" }).byWbs.get("1")!.projectedEnd, "2026-10-08");
+
+  // Logic still wins. The internal review cannot start before the package
+  // lands, and it follows the overdue forecast rather than the commitment.
+  const chain = [
+    design(),
+    task({ wbs_code: "2", duration_days: 5, predecessors: "1", task_type: "deliverable", start_date: "2026-09-15", end_date: "2026-09-21" }),
+  ];
+  const withReview = computeCpm(chain, { dataDate: "2026-09-17" });
+  eq("a successor waits for the overdue package", withReview.byWbs.get("2")!.projectedStart, "2026-09-18");
+  eq("and runs its own duration after it", withReview.byWbs.get("2")!.projectedEnd, "2026-09-24");
+
+  // A pushed predecessor moves a deliverable like anything else.
+  const pushed = computeCpm(
+    [task({ wbs_code: "1", start_date: "2026-09-01", end_date: "2026-10-30", duration_days: 40, status: "In Progress", pct_complete: 10, task_type: "construction" }),
+     task({ wbs_code: "2", duration_days: 5, predecessors: "1", task_type: "deliverable", start_date: "2026-09-15", end_date: "2026-09-21" })],
+    { dataDate: "2026-09-17" },
+  );
+  eq("a deliverable driven by logic takes the logic's dates", pushed.byWbs.get("2")!.projectedEnd, "2026-11-06");
+
+  // The sync must not overwrite the commitment, today or any day after.
+  const live = [design(), task({ wbs_code: "2", duration_days: 5, predecessors: "1", task_type: "deliverable", start_date: "2026-09-15", end_date: "2026-09-21" })];
+  const plan = planScheduleSync(live, { dataDate: "2026-09-17" });
+  eq("an overdue deliverable's dates are left alone", plan.find((u) => u.wbs === "1"), undefined);
+  eq("its successor is rescheduled behind it", plan.find((u) => u.wbs === "2")?.end, "2026-09-24");
+  const applied = live.map((t) => { const u = plan.find((x) => x.wbs === t.wbs_code); return u ? { ...t, start_date: u.start, end_date: u.end } : t; });
+  eq("and the sync settles in one pass", planScheduleSync(applied, { dataDate: "2026-09-17" }).length, 0);
+  eq("a day later the commitment is still there", planScheduleSync(applied, { dataDate: "2026-09-18" }).find((u) => u.wbs === "1"), undefined);
+}
+
+// ============================================================================
 section("Progress reporting check");
 // ============================================================================
 
