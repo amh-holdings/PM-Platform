@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
 import { friendlyAppNumberError, nextAppNumber } from "@/lib/afp-number";
+import { canUndoPayApplication } from "@/lib/pay-app-undo";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -367,6 +368,81 @@ export async function setPayApplicationStatus(
   revalidatePath(`/projects/${projectId}/pay-apps/${payAppId}`);
   revalidatePath(`/projects/${projectId}/billing`);
   return { ok: true };
+}
+
+// Put an AFP's lines back. The counterpart to "Create AFP from selected",
+// reachable from the billing page where the mistake is made rather than from a
+// screen the reader has no reason to be on.
+//
+// Draft only - canUndoPayApplication() refuses anything that has gone to the
+// owner, and the refusal is returned rather than thrown so the caller can show
+// it. See src/lib/pay-app-undo.ts for why the timestamps are checked as well as
+// the status.
+//
+// Entries are restored, never deleted. Rows that this AFP created from schedule
+// suggestions come back as ordinary forecast entries carrying the amount that
+// was billed, rather than disappearing to be re-suggested. That is deliberate:
+// createAfpFromBillThisPeriod UPDATES a pre-existing entry when one is already
+// sitting at (billing_line_id, period_month), so after the fact there is no way
+// to tell a row it created from a row it edited. Deleting on that guess would
+// throw away somebody's forecast. An extra forecast row is visible and
+// correctable; a deleted one is neither.
+//
+// actual_amount is left as stamped. Since migration 0037, v_billing_line_totals
+// only counts actual_amount as billed when the row still carries billing
+// evidence - a pay_application_id, an afp_number, or a status past forecast -
+// so clearing the first two is what makes the line billable again.
+export async function undoPayApplication(
+  payAppId: string,
+  projectId: string,
+): Promise<
+  | { ok: true; releasedEntries: number; appNumber: string | null }
+  | { ok: false; error: string }
+> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { data: app, error: appErr } = await auth.supabase
+    .from("pay_applications")
+    .select("id, app_number, status, submitted_at, approved_at, paid_at, project_id")
+    .eq("id", payAppId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (appErr) return { ok: false, error: appErr.message };
+  if (!app) return { ok: false, error: "That AFP no longer exists" };
+
+  const check = canUndoPayApplication({
+    app_number: app.app_number,
+    status: app.status,
+    submitted_at: app.submitted_at,
+    approved_at: app.approved_at,
+    paid_at: app.paid_at,
+  });
+  if (!check.ok) return { ok: false, error: check.reason };
+
+  const { data: released, error: relErr } = await auth.supabase
+    .from("billing_entries")
+    .update({ pay_application_id: null, status: "forecast" })
+    .eq("pay_application_id", payAppId)
+    .select("id");
+  if (relErr) return { ok: false, error: relErr.message };
+
+  // pay_application_lines cascade on this delete (migration 0010).
+  const { error: delErr } = await auth.supabase
+    .from("pay_applications")
+    .delete()
+    .eq("id", payAppId)
+    .eq("project_id", projectId);
+  if (delErr) return { ok: false, error: delErr.message };
+
+  revalidatePath(`/projects/${projectId}`, "layout");
+  revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}/pay-apps`);
+  return {
+    ok: true,
+    releasedEntries: (released ?? []).length,
+    appNumber: app.app_number,
+  };
 }
 
 export async function deletePayApplication(

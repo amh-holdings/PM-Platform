@@ -17,6 +17,7 @@ import {
 } from "@/lib/progress";
 import { progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
+import { canUndoPayApplication } from "@/lib/pay-app-undo";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -548,11 +549,105 @@ export type HiddenForecast = {
   reason: string;
 };
 
+// Which AFP, if any, swallowed this period. Looks at the entries rather than at
+// pay_applications.period_start, because what matters to the reader is "the
+// rows I was looking at are on that document", and an AFP can span months.
+//
+// Picks the AFP holding the most of this period's entries when more than one
+// does. That is the one to offer an undo for; the panel names it, so a second
+// AFP holding a stray line is visible the moment the first is undone.
+async function loadBilledElsewhere(
+  supabase: ReturnType<typeof createClient>,
+  projectId: string,
+  period: string,
+): Promise<BilledElsewhere | null> {
+  const { data: onApp } = await supabase
+    .from("billing_entries")
+    .select(
+      "id, planned_amount, actual_amount, pay_application_id, billing_lines!inner(project_id)",
+    )
+    .eq("billing_lines.project_id", projectId)
+    .eq("period_month", period)
+    .not("pay_application_id", "is", null);
+  if (!onApp || onApp.length === 0) return null;
+
+  const byApp = new Map<string, { count: number; amount: number }>();
+  for (const e of onApp) {
+    const id = e.pay_application_id as string;
+    const prior = byApp.get(id) ?? { count: 0, amount: 0 };
+    const actual = Number(e.actual_amount ?? 0);
+    prior.count += 1;
+    prior.amount += actual > 0 ? actual : Number(e.planned_amount ?? 0);
+    byApp.set(id, prior);
+  }
+
+  let winnerId: string | null = null;
+  let winner = { count: 0, amount: 0 };
+  byApp.forEach((v, id) => {
+    if (v.count > winner.count) {
+      winner = v;
+      winnerId = id;
+    }
+  });
+  if (!winnerId) return null;
+
+  const { data: app } = await supabase
+    .from("pay_applications")
+    .select("id, app_number, status, submitted_at, approved_at, paid_at")
+    .eq("id", winnerId)
+    .maybeSingle();
+  if (!app) return null;
+
+  const check = canUndoPayApplication({
+    app_number: app.app_number,
+    status: app.status,
+    submitted_at: app.submitted_at,
+    approved_at: app.approved_at,
+    paid_at: app.paid_at,
+  });
+
+  return {
+    payAppId: app.id,
+    appNumber: app.app_number,
+    status: app.status,
+    undoable: check.ok,
+    blockedReason: check.ok ? null : check.reason,
+    entryCount: winner.count,
+    amount: Math.round(winner.amount * 100) / 100,
+  };
+}
+
+/**
+ * Set when this period's lines are sitting on an AFP rather than missing.
+ *
+ * An empty panel has two completely different causes and they send the reader
+ * to opposite places: nothing was ever billable, or everything was billed
+ * ninety seconds ago by whoever clicked Create AFP. The panel used to say the
+ * first in both cases.
+ */
+export type BilledElsewhere = {
+  payAppId: string;
+  appNumber: string | null;
+  status: string | null;
+  /** True when it is still a draft, so the billing page can offer the undo. */
+  undoable: boolean;
+  /** Why not, when it is not. */
+  blockedReason: string | null;
+  entryCount: number;
+  amount: number;
+};
+
 export async function getBillThisPeriodRows(
   projectId: string,
   periodMonth?: string,
 ): Promise<
-  | { ok: true; rows: BillableRow[]; hidden: HiddenForecast[]; periodMonth: string }
+  | {
+      ok: true;
+      rows: BillableRow[];
+      hidden: HiddenForecast[];
+      periodMonth: string;
+      billedTo: BilledElsewhere | null;
+    }
   | { ok: false; error: string }
 > {
   const auth = await assertAhcUser();
@@ -615,6 +710,7 @@ export async function getBillThisPeriodRows(
       rows: allForecastRows.map((x) => x.row),
       hidden: [],
       periodMonth: period,
+      billedTo: await loadBilledElsewhere(auth.supabase, projectId, period),
     };
   }
   const { suggestions, nextMonthIso } = suggResult;
@@ -872,7 +968,9 @@ export async function getBillThisPeriodRows(
     return (a.itemNumber || "").localeCompare(b.itemNumber || "");
   });
 
-  return { ok: true, rows: all, hidden, periodMonth: period };
+  const billedTo = await loadBilledElsewhere(auth.supabase, projectId, period);
+
+  return { ok: true, rows: all, hidden, periodMonth: period, billedTo };
 }
 
 export async function promoteSuggestionsToPlanned(
