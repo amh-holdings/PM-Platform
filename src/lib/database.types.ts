@@ -1765,6 +1765,53 @@ export type Database = {
           },
         ]
       }
+      procurement_order_lines: {
+        Row: {
+          created_at: string | null
+          description: string
+          extended_price: number | null
+          id: string
+          line_no: number
+          notes: string | null
+          procurement_order_id: string
+          quantity: number | null
+          unit: string | null
+          unit_price: number | null
+        }
+        Insert: {
+          created_at?: string | null
+          description: string
+          extended_price?: never
+          id?: string
+          line_no: number
+          notes?: string | null
+          procurement_order_id: string
+          quantity?: number | null
+          unit?: string | null
+          unit_price?: number | null
+        }
+        Update: {
+          created_at?: string | null
+          description?: string
+          extended_price?: never
+          id?: string
+          line_no?: number
+          notes?: string | null
+          procurement_order_id?: string
+          quantity?: number | null
+          unit?: string | null
+          unit_price?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "procurement_order_lines_procurement_order_id_fkey"
+            columns: ["procurement_order_id"]
+            isOneToOne: false
+            referencedRelation: "procurement_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       procurement_orders: {
         Row: {
           actual_delivery_date: string | null

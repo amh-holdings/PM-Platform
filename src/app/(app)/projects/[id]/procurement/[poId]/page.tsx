@@ -35,6 +35,7 @@ export default async function ProcurementDetailPage({
     { data: deliveryTasks },
     { data: allocations },
     { data: billingLines },
+    { data: poLines },
   ] = await Promise.all([
     supabase
       .from("procurement_orders")
@@ -68,6 +69,11 @@ export default async function ProcurementDetailPage({
       .eq("project_id", params.id)
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("item_number"),
+    supabase
+      .from("procurement_order_lines")
+      .select("id, line_no, description, quantity, unit, unit_price, extended_price, notes")
+      .eq("procurement_order_id", params.poId)
+      .order("line_no", { ascending: true }),
   ]);
   if (error || !po) notFound();
 
@@ -125,6 +131,13 @@ export default async function ProcurementDetailPage({
   );
   const poValue = Number(po.total_value ?? 0);
   const drift = poValue > 0 ? totalPlanned - poValue : 0;
+
+  const lines = poLines ?? [];
+  const linesTotal = lines.reduce(
+    (s, l) => s + Number(l.extended_price ?? 0),
+    0,
+  );
+  const unpricedLines = lines.filter((l) => l.extended_price == null).length;
 
   return (
     <div className="space-y-4">
@@ -193,6 +206,74 @@ export default async function ProcurementDetailPage({
           value={po.actual_delivery_date ? formatDate(po.actual_delivery_date) : "-"}
         />
       </section>
+
+      {lines.length > 0 && (
+        <section className="rounded-lg border bg-card shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">
+            <div>
+              <h3 className="text-sm font-semibold">Line items</h3>
+              <p className="text-xs text-muted-foreground">
+                {lines.length} line{lines.length === 1 ? "" : "s"}
+                {unpricedLines > 0 &&
+                  ` - ${unpricedLines} without a price, not in the total`}
+              </p>
+            </div>
+            <div className="text-right text-xs">
+              <div className="text-muted-foreground">Total</div>
+              <div className="font-semibold tabular-nums">
+                {formatCurrency(linesTotal)}
+              </div>
+            </div>
+          </div>
+          <div className="overflow-x-auto p-3">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead>
+                <tr className="text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <th className="w-8 pb-1 pr-2 font-medium">#</th>
+                  <th className="pb-1 pr-2 font-medium">Description</th>
+                  <th className="w-20 pb-1 pr-2 text-right font-medium">Qty</th>
+                  <th className="w-16 pb-1 pr-2 font-medium">Unit</th>
+                  <th className="w-28 pb-1 pr-2 text-right font-medium">
+                    Unit price
+                  </th>
+                  <th className="w-28 pb-1 text-right font-medium">Extended</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((l) => (
+                  <tr key={l.id} className="border-t">
+                    <td className="py-1.5 pr-2 text-xs text-muted-foreground">
+                      {l.line_no}
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      {l.description}
+                      {l.notes && (
+                        <div className="text-xs text-muted-foreground">
+                          {l.notes}
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-1.5 pr-2 text-right tabular-nums">
+                      {l.quantity == null ? "-" : Number(l.quantity)}
+                    </td>
+                    <td className="py-1.5 pr-2">{l.unit ?? "-"}</td>
+                    <td className="py-1.5 pr-2 text-right tabular-nums">
+                      {l.unit_price == null
+                        ? "-"
+                        : formatCurrency(Number(l.unit_price))}
+                    </td>
+                    <td className="py-1.5 text-right font-medium tabular-nums">
+                      {l.extended_price == null
+                        ? "-"
+                        : formatCurrency(Number(l.extended_price))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {po.payment_terms_summary && (
         <section className="rounded-lg border bg-muted/30 p-3 text-sm">

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
 import type { TablesInsert, TablesUpdate } from "@/lib/database.types";
+import { parsePoLinesField, poLinesTotal, type PoLine } from "@/lib/po-lines";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -37,6 +38,41 @@ function getDate(value: FormDataEntryValue | null): string | null {
   return value;
 }
 
+// Replace the whole line-item set for a PO. Delete-then-insert rather than a
+// diff: the form posts the entire grid every save, so the submitted set IS the
+// set, and a partial update is how a deleted row survives.
+//
+// extended_price is a generated column - it is deliberately not written here.
+async function replacePoLines(
+  supabase: ReturnType<typeof createClient>,
+  poId: string,
+  lines: PoLine[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { error: delErr } = await supabase
+    .from("procurement_order_lines")
+    .delete()
+    .eq("procurement_order_id", poId);
+  if (delErr) return { ok: false, error: delErr.message };
+
+  if (lines.length === 0) return { ok: true };
+
+  const rows: TablesInsert<"procurement_order_lines">[] = lines.map((l) => ({
+    procurement_order_id: poId,
+    line_no: l.lineNo,
+    description: l.description,
+    quantity: l.quantity,
+    unit: l.unit,
+    unit_price: l.unitPrice,
+    notes: l.notes,
+  }));
+
+  const { error: insErr } = await supabase
+    .from("procurement_order_lines")
+    .insert(rows);
+  if (insErr) return { ok: false, error: insErr.message };
+  return { ok: true };
+}
+
 export type ProcurementOrderResult =
   | { ok: true; id: string }
   | { ok: false; error: string; fieldErrors?: Record<string, string> };
@@ -53,12 +89,19 @@ export async function createProcurementOrder(
     return { ok: false, error: "Vendor name is required", fieldErrors: { vendor_name: "Required" } };
   }
 
+  // Lines are optional. When they exist they OWN the total - a header figure
+  // that can disagree with the lines under it is the bug this replaces.
+  const parsedLines = parsePoLinesField(formData.get("po_lines"));
+  if (!parsedLines.ok) return { ok: false, error: parsedLines.error };
+  const lines = parsedLines.lines;
+
   const insert: TablesInsert<"procurement_orders"> = {
     project_id: projectId,
     vendor_name: vendor,
     po_number: getStr(formData.get("po_number")),
     description: getStr(formData.get("description")),
-    total_value: getNum(formData.get("total_value")),
+    total_value:
+      lines.length > 0 ? poLinesTotal(lines) : getNum(formData.get("total_value")),
     ordered_date: getDate(formData.get("ordered_date")),
     expected_delivery_date: getDate(formData.get("expected_delivery_date")),
     actual_delivery_date: getDate(formData.get("actual_delivery_date")),
@@ -74,6 +117,12 @@ export async function createProcurementOrder(
     .select("id")
     .single();
   if (error) return { ok: false, error: error.message };
+
+  if (lines.length > 0) {
+    const linesResult = await replacePoLines(auth.supabase, data.id, lines);
+    if (!linesResult.ok) return { ok: false, error: linesResult.error };
+  }
+
   revalidatePath(`/projects/${projectId}/procurement`);
   return { ok: true, id: data.id };
 }
@@ -86,11 +135,20 @@ export async function updateProcurementOrder(
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
+  // A caller that does not post the field at all (the AI extraction path, a
+  // future partial form) leaves the stored lines alone. Posting an empty grid
+  // is an explicit "this PO has no lines" and does clear them.
+  const submittedLines = formData.has("po_lines");
+  const parsedLines = parsePoLinesField(formData.get("po_lines"));
+  if (!parsedLines.ok) return { ok: false, error: parsedLines.error };
+  const lines = parsedLines.lines;
+
   const update: TablesUpdate<"procurement_orders"> = {
     vendor_name: getStr(formData.get("vendor_name")) ?? undefined,
     po_number: getStr(formData.get("po_number")),
     description: getStr(formData.get("description")),
-    total_value: getNum(formData.get("total_value")),
+    total_value:
+      lines.length > 0 ? poLinesTotal(lines) : getNum(formData.get("total_value")),
     ordered_date: getDate(formData.get("ordered_date")),
     expected_delivery_date: getDate(formData.get("expected_delivery_date")),
     actual_delivery_date: getDate(formData.get("actual_delivery_date")),
@@ -104,6 +162,12 @@ export async function updateProcurementOrder(
     .update(update)
     .eq("id", poId);
   if (error) return { ok: false, error: error.message };
+
+  if (submittedLines) {
+    const linesResult = await replacePoLines(auth.supabase, poId, lines);
+    if (!linesResult.ok) return { ok: false, error: linesResult.error };
+  }
+
   revalidatePath(`/projects/${projectId}/procurement`);
   revalidatePath(`/projects/${projectId}/procurement/${poId}`);
   return { ok: true, id: poId };

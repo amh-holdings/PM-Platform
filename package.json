@@ -27,7 +27,8 @@
     "test:nav": "tsx scripts/nav/check-nav.ts",
     "test:sub-sov-import": "tsx scripts/sub-billing/run-sov-import-tests.ts",
     "commodity:propose-reports": "tsx scripts/commodity/propose-from-reports.ts",
-    "test:sov-import": "tsx scripts/billing/run-sov-import-tests.ts"
+    "test:sov-import": "tsx scripts/billing/run-sov-import-tests.ts",
+    "test:procurement-lines": "tsx scripts/procurement-lines/run-tests.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",

@@ -8,8 +8,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { formatCurrency } from "@/lib/format";
 import { createProcurementOrder, updateProcurementOrder } from "../procurement-actions";
 import { recordDocument } from "../documents-actions";
+import {
+  PoLinesEditor,
+  hasAnyRow,
+  rowsTotal,
+  toRows,
+  type PoLineRow,
+} from "./po-lines-editor";
 import {
   ACCEPTED_MIME_PREFIXES,
   DOCUMENT_BUCKET,
@@ -31,10 +39,19 @@ export type ProcurementFormValues = {
   notes: string | null;
 };
 
+export type ProcurementFormLine = {
+  description: string;
+  quantity: number | null;
+  unit: string | null;
+  unit_price: number | null;
+  notes?: string | null;
+};
+
 type Props = {
   projectId: string;
   mode: "create" | "edit";
   initial?: ProcurementFormValues;
+  initialLines?: ProcurementFormLine[];
   documents: { id: string; label: string }[];
 };
 
@@ -67,9 +84,18 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function ProcurementForm({ projectId, mode, initial, documents }: Props) {
+export function ProcurementForm({
+  projectId,
+  mode,
+  initial,
+  initialLines,
+  documents,
+}: Props) {
   const router = useRouter();
   const values = initial ?? EMPTY;
+  const [lineRows, setLineRows] = useState<PoLineRow[]>(() =>
+    initialLines && initialLines.length > 0 ? toRows(initialLines) : [],
+  );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -146,6 +172,12 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
     }
   }
 
+  // The lines own the total the moment any of them is priced. Mirrors the rule
+  // the server action applies, so the field cannot show one number and save
+  // another.
+  const linesTotal = rowsTotal(lineRows);
+  const linesDriveTotal = hasAnyRow(lineRows) && linesTotal > 0;
+
   return (
     <form action={action} className="space-y-4">
       <section className="rounded-lg border bg-card p-4 shadow-sm">
@@ -175,13 +207,26 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
           </div>
           <div>
             <Label htmlFor="total_value">Total PO value</Label>
-            <Input
-              id="total_value"
-              name="total_value"
-              type="number"
-              step="0.01"
-              defaultValue={values.total_value ?? ""}
-            />
+            {linesDriveTotal ? (
+              <>
+                <div className="flex h-10 w-full items-center rounded-md border border-input bg-muted px-3 text-sm font-medium tabular-nums">
+                  {formatCurrency(linesTotal)}
+                </div>
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  Summed from the {lineRows.length} line item
+                  {lineRows.length === 1 ? "" : "s"} below. Remove the lines to
+                  type a total by hand.
+                </p>
+              </>
+            ) : (
+              <Input
+                id="total_value"
+                name="total_value"
+                type="number"
+                step="0.01"
+                defaultValue={values.total_value ?? ""}
+              />
+            )}
           </div>
           <div>
             <Label htmlFor="status">Status</Label>
@@ -328,6 +373,25 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
         </div>
         {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
       </section>
+
+      <PoLinesEditor
+        rows={lineRows}
+        onChange={setLineRows}
+        disabled={submitting}
+      />
+      <input
+        type="hidden"
+        name="po_lines"
+        value={JSON.stringify(
+          lineRows.map((r) => ({
+            description: r.description,
+            quantity: r.quantity,
+            unit: r.unit,
+            unitPrice: r.unitPrice,
+            notes: r.notes,
+          })),
+        )}
+      />
 
       <div className="flex items-center justify-end gap-2">
         <Button

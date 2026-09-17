@@ -14,7 +14,7 @@ export default async function EditProcurementPage({
 }) {
   const supabase = createClient();
 
-  const [{ data: po }, { data: docs }] = await Promise.all([
+  const [{ data: po }, { data: docs }, { data: lines }] = await Promise.all([
     supabase
       .from("procurement_orders")
       .select(
@@ -27,6 +27,11 @@ export default async function EditProcurementPage({
       .select("id, file_name, category")
       .eq("project_id", params.id)
       .order("uploaded_at", { ascending: false }),
+    supabase
+      .from("procurement_order_lines")
+      .select("description, quantity, unit, unit_price, notes")
+      .eq("procurement_order_id", params.poId)
+      .order("line_no", { ascending: true }),
   ]);
 
   if (!po) notFound();
@@ -47,6 +52,13 @@ export default async function EditProcurementPage({
         projectId={params.id}
         mode="edit"
         initial={po}
+        initialLines={(lines ?? []).map((l) => ({
+          description: l.description,
+          quantity: l.quantity == null ? null : Number(l.quantity),
+          unit: l.unit,
+          unit_price: l.unit_price == null ? null : Number(l.unit_price),
+          notes: l.notes,
+        }))}
         documents={(docs ?? []).map((d) => ({ id: d.id, label: d.file_name }))}
       />
     </div>
