@@ -10,7 +10,9 @@ import { formatCurrency } from "@/lib/format";
 import { shortMonthLabel } from "@/lib/cashflow";
 
 import { createAfpFromBillThisPeriod } from "../pay-app-actions";
-import type { BillableRow, HiddenForecast } from "../billing-actions";
+import type { BillableRow, BilledElsewhere, HiddenForecast } from "../billing-actions";
+import { billedElsewhereMessage } from "@/lib/pay-app-undo";
+import { UndoAfpButton } from "./undo-afp-button";
 import { periodLabel } from "@/lib/billing-period";
 
 type Props = {
@@ -20,6 +22,8 @@ type Props = {
   variant: "page" | "widget";
   /** YYYY-MM-01 of the month being billed. */
   periodMonth: string;
+  /** Set when the period is empty because its lines went onto an AFP. */
+  billedTo?: BilledElsewhere | null;
 };
 
 const CONF_STYLES: Record<string, string> = {
@@ -35,6 +39,7 @@ export function BillThisPeriodClient({
   hidden,
   variant,
   periodMonth,
+  billedTo,
 }: Props) {
   // Default selection: ALL forecast rows checked, suggestion rows unchecked
   // (so the panel acts like the old Next AFP panel by default - lower friction).
@@ -173,6 +178,35 @@ export function BillThisPeriodClient({
               </div>
             ),
           )}
+
+        {billedTo && (
+          <div className="mb-2 flex flex-wrap items-start justify-between gap-2 rounded-md border border-blue-500/30 bg-blue-50/60 p-2.5">
+            <div className="text-xs">
+              <div className="font-medium text-blue-900">
+                {billedElsewhereMessage({
+                  periodLabel: periodLabel(periodMonth),
+                  appNumber: billedTo.appNumber,
+                  lineCount: billedTo.entryCount,
+                  amount: billedTo.amount,
+                  formatAmount: formatCurrency,
+                })}
+              </div>
+              <div className="mt-0.5 text-blue-900/80">
+                {billedTo.undoable
+                  ? "Created by mistake? Undo puts the lines back on this panel and deletes the draft."
+                  : billedTo.blockedReason}
+              </div>
+            </div>
+            {billedTo.undoable && (
+              <UndoAfpButton
+                projectId={projectId}
+                payAppId={billedTo.payAppId}
+                appNumber={billedTo.appNumber}
+                entryCount={billedTo.entryCount}
+              />
+            )}
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -334,9 +368,17 @@ export function BillThisPeriodClient({
               {visibleRows.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-4 text-center text-muted-foreground">
-                    {unsupported.length > 0
-                      ? `Nothing billable for ${periodLabel(periodMonth)}. ${unsupported.length} line${unsupported.length === 1 ? "" : "s"} could not be supported - see below.`
-                      : "Nothing to bill: no forecast entries queued up, no schedule progress detected."}
+                    {billedTo
+                      ? billedElsewhereMessage({
+                          periodLabel: periodLabel(periodMonth),
+                          appNumber: billedTo.appNumber,
+                          lineCount: billedTo.entryCount,
+                          amount: billedTo.amount,
+                          formatAmount: formatCurrency,
+                        })
+                      : unsupported.length > 0
+                        ? `Nothing billable for ${periodLabel(periodMonth)}. ${unsupported.length} line${unsupported.length === 1 ? "" : "s"} could not be supported - see below.`
+                        : "Nothing to bill: no forecast entries queued up, no schedule progress detected."}
                   </td>
                 </tr>
               )}

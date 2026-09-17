@@ -30,6 +30,7 @@ export async function BillThisPeriodPanel({
       hidden={result.hidden}
       variant={variant}
       periodMonth={result.periodMonth}
+      billedTo={result.billedTo}
     />
   );
 }
