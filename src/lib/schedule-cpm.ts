@@ -129,6 +129,11 @@ export type CpmResult = {
   // reported rate of progress, "plan" from its duration, "held" on its own
   // finish date. Null for work not under way.
   forecastBasis: "pace" | "plan" | "held" | "committed" | "overdue" | null;
+  // Working days a deliverable is past the date it was committed to, counted
+  // at the data date. Zero for everything else - a construction activity that
+  // is running long shows as slip against its own forecast, not as a package
+  // that has not turned up.
+  daysOverdue: number;
   // Set when a hard constraint and the logic disagree.
   constraintViolation: string | null;
   // Links this task's reported progress has already broken - it started before
@@ -870,6 +875,10 @@ export function computeCpm(
         : 0,
       drivenBy: drivenBy.get(wbs) ?? null,
       forecastBasis: forecastBasisOf.get(wbs) ?? null,
+      daysOverdue:
+        forecastBasisOf.get(wbs) === "overdue" && t.end_date
+          ? Math.max(0, workingDaysBetween(t.end_date, dataDate, cal))
+          : 0,
       constraintViolation: violationOf.get(wbs) ?? null,
       outOfSequence: outOfSequenceOf.get(wbs) ?? [],
     });

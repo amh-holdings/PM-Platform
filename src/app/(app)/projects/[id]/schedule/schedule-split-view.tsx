@@ -447,6 +447,7 @@ export function ScheduleSplitView({
   const [hideComplete, setHideComplete] = useState(false);
   const [hideInternal, setHideInternal] = useState(false);
   const [reportedOnly, setReportedOnly] = useState(false);
+  const [overdueOnly, setOverdueOnly] = useState(false);
   const [criticalOnly, setCriticalOnly] = useState(false);
   const [slippingOnly, setSlippingOnly] = useState(false);
   const [blockedOnly, setBlockedOnly] = useState(false);
@@ -539,6 +540,7 @@ export function ScheduleSplitView({
       if (criticalOnly && !c?.critical) return false;
       if (slippingOnly && !(c && c.slipDays > 0)) return false;
       if (blockedOnly && !(constraintState.get(t.wbs_code)?.open ?? 0)) return false;
+      if (overdueOnly && !(c && c.daysOverdue > 0)) return false;
       if (query.trim()) {
         const q = query.trim().toLowerCase();
         const hay = `${t.wbs_code} ${t.task_name} ${t.assigned_to ?? ""} ${t.phase ?? ""}`.toLowerCase();
@@ -548,13 +550,14 @@ export function ScheduleSplitView({
     },
     [
       cpm, phaseFilter, statusFilter, hideComplete, hideInternal, reportedOnly,
-      criticalOnly, slippingOnly, blockedOnly, constraintState, query,
+      criticalOnly, slippingOnly, blockedOnly, overdueOnly, constraintState, query,
     ],
   );
 
   const anyFilter =
     !!phaseFilter || !!statusFilter || hideComplete || hideInternal ||
-    reportedOnly || criticalOnly || slippingOnly || blockedOnly || !!query.trim();
+    reportedOnly || criticalOnly || slippingOnly || blockedOnly || overdueOnly ||
+    !!query.trim();
 
   // Filtering a tree is not filtering a list. Dropping a summary because its
   // own name does not match would orphan every matching task beneath it, so a
@@ -1351,15 +1354,16 @@ export function ScheduleSplitView({
   }, [allTasks, selected, byId]);
 
   const counts = useMemo(() => {
-    let critical = 0, nearCritical = 0, slipping = 0, blocked = 0;
+    let critical = 0, nearCritical = 0, slipping = 0, blocked = 0, overdue = 0;
     for (const t of tasks) {
       const c = cpm.byWbs.get(t.wbs_code);
       if (c?.critical) critical++;
       if (c?.nearCritical) nearCritical++;
       if (c && c.slipDays > 0) slipping++;
+      if (c && c.daysOverdue > 0) overdue++;
       if (constraintState.get(t.wbs_code)?.open) blocked++;
     }
-    return { total: tasks.length, critical, nearCritical, slipping, blocked };
+    return { total: tasks.length, critical, nearCritical, slipping, blocked, overdue };
   }, [tasks, cpm, constraintState]);
 
   // A find that jumps to the first match, expanding whatever hides it.
@@ -1528,6 +1532,9 @@ export function ScheduleSplitView({
           {counts.blocked > 0 && (
             <> &middot; <span className="font-medium text-destructive">{counts.blocked}</span> blocked</>
           )}
+          {counts.overdue > 0 && (
+            <> &middot; <span className="font-medium text-destructive" title="Deliverables past the date they were committed to">{counts.overdue}</span> overdue</>
+          )}
         </span>
       </div>
 
@@ -1552,6 +1559,7 @@ export function ScheduleSplitView({
         <Check label="Critical" checked={criticalOnly} onChange={setCriticalOnly} />
         <Check label="Slipping" checked={slippingOnly} onChange={setSlippingOnly} />
         <Check label="Blocked" checked={blockedOnly} onChange={setBlockedOnly} />
+        <Check label="Overdue" checked={overdueOnly} onChange={setOverdueOnly} />
         <Check label="Field-reported" checked={reportedOnly} onChange={setReportedOnly} />
         <Check label="Hide complete" checked={hideComplete} onChange={setHideComplete} />
         <Check label="Hide internal" checked={hideInternal} onChange={setHideInternal} />
@@ -2585,6 +2593,14 @@ function RowBadges({
       {collapsed && (
         <span className="rounded bg-muted px-1 text-[9px] font-medium text-muted-foreground" title="Collapsed">
           &hellip;
+        </span>
+      )}
+      {!!c?.daysOverdue && (
+        <span
+          className="rounded bg-destructive px-1 text-[9px] font-medium text-destructive-foreground"
+          title={`Committed to ${t.end_date}. Not received, so it is ${c.daysOverdue} working day${c.daysOverdue === 1 ? "" : "s"} late. The date stays as the commitment; the forecast moves a day at a time until the task is closed out.`}
+        >
+          LATE {c.daysOverdue}d
         </span>
       )}
       {c?.critical && (

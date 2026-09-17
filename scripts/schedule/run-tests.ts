@@ -786,11 +786,14 @@ section("Deliverables - received, not measured");
   eq("once the date passes it is overdue, not re-planned", after.byWbs.get("1")!.projectedEnd, "2026-09-17");
   eq("and it rolls a day at a time", computeCpm([design()], { dataDate: "2026-09-18" }).byWbs.get("1")!.projectedEnd, "2026-09-18");
   eq("the overdue basis is reported", after.byWbs.get("1")!.forecastBasis, "overdue");
+  eq("and how many working days late it is", after.byWbs.get("1")!.daysOverdue, 3);
+  eq("a deliverable still inside its date is not late", before.byWbs.get("1")!.daysOverdue, 0);
 
   // The same task as a construction activity is the old behaviour: 17 days of
   // remaining work forecast from the data date.
   const asWork = computeCpm([design({ task_type: "construction" })], { dataDate: "2026-09-17" });
   eq("a construction activity still forecasts from remaining work", asWork.byWbs.get("1")!.projectedEnd, "2026-10-09");
+  eq("a construction activity running long is not counted as late", asWork.byWbs.get("1")!.daysOverdue, 0);
 
   // Not started and nothing driving it: the commitment stands either side.
   const notStarted = task({ wbs_code: "1", start_date: "2026-10-01", end_date: "2026-10-08", duration_days: 6, task_type: "deliverable" });
