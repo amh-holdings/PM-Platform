@@ -495,6 +495,76 @@ section("Data date");
 }
 
 // ============================================================================
+section("Progress override - a started task stops waiting on its start logic");
+// ============================================================================
+
+{
+  // Sweet Springs, 17 Sep 2026: Basin 2 Embankment was reported at 5% while its
+  // FS predecessor chain still ran back through Basin 1. Retained logic dragged
+  // it - and County Inspection behind it - two weeks past what the crew was
+  // doing. A reported start is a fact; the FS link was a guess about it.
+  const tasks = [
+    // 1: not started, 1-4 Sep.
+    task({ wbs_code: "1", start_date: "2026-09-01", end_date: "2026-09-04", duration_days: 4 }),
+    // 2: FS on 1, but the field has it at 50% already.
+    task({ wbs_code: "2", start_date: "2026-09-02", end_date: "2026-09-03", duration_days: 2, predecessors: "1", pct_complete: 50, status: "In Progress" }),
+    // 3: FS on 1, not started. Still has to wait.
+    task({ wbs_code: "3", duration_days: 1, predecessors: "1" }),
+    // 4: FS on 2. Follows 2's forecast, not 1's.
+    task({ wbs_code: "4", duration_days: 1, predecessors: "2" }),
+    // 5: SS on 3, started anyway.
+    task({ wbs_code: "5", start_date: "2026-09-01", end_date: "2026-09-02", duration_days: 2, predecessors: "3SS", pct_complete: 10 }),
+  ];
+  const out = computeCpm(tasks, { dataDate: "2026-09-01" });
+  const b = out.byWbs.get("2")!;
+
+  eq("a started task keeps its own finish, not its predecessor's", b.projectedEnd, "2026-09-03");
+  eq("and nothing is reported as driving it", b.drivenBy, null);
+  // 1 finishes Fri 4 Sep, Mon 7 is Labor Day.
+  eq("a task that has not started still waits on its FS link", out.byWbs.get("3")!.projectedStart, "2026-09-08");
+  eq("a successor follows the started task's forecast", out.byWbs.get("4")!.projectedStart, "2026-09-04");
+  eq("a started task ignores an SS link too", out.byWbs.get("5")!.projectedEnd, "2026-09-02");
+
+  eq("both broken links are reported", out.outOfSequence.length, 2);
+  check("2 started before 1 finished", out.outOfSequence.some((o) => o.wbs === "2" && o.pred === "1" && o.type === "FS"));
+  check("5 started before 3 started", out.outOfSequence.some((o) => o.wbs === "5" && o.pred === "3" && o.type === "SS"));
+  eq("and it is on the task's own result", b.outOfSequence.length, 1);
+  eq("a task waiting correctly is not out of sequence", out.byWbs.get("3")!.outOfSequence.length, 0);
+
+  const health = assessSchedule(tasks, out, { dataDate: "2026-09-01" });
+  const oos = health.checks.find((c) => c.id === "out_of_sequence")!;
+  eq("the health check lists them", oos.affected.length, 2);
+  eq("as a warning, not a failure - the crew may be right", oos.status, "warn");
+  check("and says which link", oos.affected.some((a) => a.wbs === "2" && /started before 1/.test(a.note ?? "")), oos.affected[0]?.note);
+}
+
+{
+  // FF still binds a started task, because it is about the FINISH. "The
+  // entrance is not complete until the culvert is in" does not stop being true
+  // when the entrance starts.
+  const tasks = [
+    // 1, culvert: not started, planned 1-4 Sep. At a 10 Sep data date it runs 10-15.
+    task({ wbs_code: "1", start_date: "2026-09-01", end_date: "2026-09-04", duration_days: 4 }),
+    // 2, entrance: 50% done, FF on the culvert.
+    task({ wbs_code: "2", start_date: "2026-09-01", end_date: "2026-09-04", duration_days: 4, predecessors: "1FF", pct_complete: 50, status: "In Progress" }),
+    // 3, the same, with two days' lag.
+    task({ wbs_code: "3", start_date: "2026-09-01", end_date: "2026-09-04", duration_days: 4, predecessors: "1FF+2", pct_complete: 50, status: "In Progress" }),
+  ];
+  const out = computeCpm(tasks, { dataDate: "2026-09-10" });
+  eq("the culvert runs from the data date", out.byWbs.get("1")!.projectedEnd, "2026-09-15");
+  eq("the started entrance cannot finish before the culvert", out.byWbs.get("2")!.projectedEnd, "2026-09-15");
+  eq("and the culvert is what drives it", out.byWbs.get("2")!.drivenBy, "1");
+  eq("FF lag is honoured on a started task", out.byWbs.get("3")!.projectedEnd, "2026-09-17");
+  eq("an unfinished FF successor is not out of sequence", out.outOfSequence.length, 0);
+
+  const done = computeCpm(
+    tasks.map((t) => (t.wbs_code === "2" ? { ...t, pct_complete: 100, status: "Complete" } : t)),
+    { dataDate: "2026-09-10" },
+  );
+  check("finishing before an FF predecessor is", done.outOfSequence.some((o) => o.wbs === "2" && o.type === "FF"));
+}
+
+// ============================================================================
 section("Isolated tasks and cycles");
 // ============================================================================
 
@@ -549,10 +619,10 @@ section("Schedule health - DCMA checks");
   eq("logic check counts the unlinked task", logic.affected.length, 1);
   check("logic check names it", logic.affected.some((a) => a.wbs === "9"));
   check("a score comes out", health.score >= 0 && health.score <= 100, String(health.score));
-  // 14 DCMA checks plus our own duration-against-dates check, which is not
-  // part of the standard but is the one that catches a Gantt bar and a
-  // forecast describing different schedules.
-  eq("all 15 checks run", health.checks.length, 15);
+  // 14 DCMA checks plus two of our own: duration against dates, which catches
+  // a Gantt bar and a forecast describing different schedules, and out of
+  // sequence, which lists every link field progress has already broken.
+  eq("all 16 checks run", health.checks.length, 16);
   check(
     "the duration check is one of them",
     health.checks.some((c) => c.id === "duration_vs_dates"),

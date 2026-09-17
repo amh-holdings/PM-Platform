@@ -118,6 +118,10 @@ export type CpmResult = {
   drivenBy: string | null;
   // Set when a hard constraint and the logic disagree.
   constraintViolation: string | null;
+  // Links this task's reported progress has already broken - it started before
+  // an FS predecessor finished, say. The projection believes the field over
+  // the logic; this is the record that it had to.
+  outOfSequence: Link[];
 };
 
 export type CpmOutput = {
@@ -133,6 +137,7 @@ export type CpmOutput = {
   // surfacing them is how the missing links get noticed and fixed.
   isolated: string[];
   constraintViolations: { wbs: string; message: string }[];
+  outOfSequence: { wbs: string; pred: string; type: RelType }[];
 };
 
 const REL_RE = /^([0-9.]+?)(FS|SS|FF|SF)?([+-]\d+)?$/i;
@@ -283,6 +288,23 @@ function remainingDuration(t: CpmInput, duration: number): number {
   return Math.max(1, Math.ceil(duration * (1 - pct / 100)));
 }
 
+// Has reported progress already broken this link? FS and SS are about when the
+// successor may START, so any progress on it counts. FF is about when it may
+// FINISH, so only completion does. SF is too rare to be worth a rule.
+function breaksLink(t: CpmInput, pred: CpmInput, type: RelType): boolean {
+  if (!hasStarted(t) && !isComplete(t)) return false;
+  switch (type) {
+    case "FS":
+      return !isComplete(pred);
+    case "SS":
+      return !hasStarted(pred) && !isComplete(pred);
+    case "FF":
+      return isComplete(t) && !isComplete(pred);
+    default:
+      return false;
+  }
+}
+
 // Given a finish date and a duration, the start that produces it.
 function backIntoStart(finish: string, duration: number, cal: Calendar): string {
   return subWorkingDays(finish, Math.max(0, duration - 1), cal);
@@ -394,6 +416,7 @@ export function computeCpm(
       unscheduled: [],
       isolated: [],
       constraintViolations: [],
+      outOfSequence: [],
     };
   }
 
@@ -570,10 +593,18 @@ export function computeCpm(
   const pEnd = new Map<string, string>();
   const drivenBy = new Map<string, string | null>();
   const workStart = snapForward(dataDate, cal);
+  const outOfSequenceOf = new Map<string, Link[]>();
+  const outOfSequence: { wbs: string; pred: string; type: RelType }[] = [];
 
   for (const wbs of order) {
     const t = byWbs.get(wbs)!;
     const d = dur.get(wbs)!;
+
+    const broken = (links.get(wbs) ?? []).filter((l) =>
+      breaksLink(t, byWbs.get(l.pred)!, l.type),
+    );
+    outOfSequenceOf.set(wbs, broken);
+    for (const l of broken) outOfSequence.push({ wbs, pred: l.pred, type: l.type });
 
     if (isComplete(t)) {
       // Finished. Hold the recorded dates; nothing downstream waits on it.
@@ -593,12 +624,32 @@ export function computeCpm(
     if (!started && parseIso(start) < parseIso(workStart)) start = workStart;
 
     // A predecessor can only push a task later, never earlier.
+    //
+    // Once a task has started, the links that govern its START are spent: the
+    // start happened, so FS and SS have nothing left to say. Holding them was
+    // "retained logic", and on Sweet Springs it forecast Basin 2 Embankment -
+    // reported at 5% - to wait for Basin 1 to be seeded, which pushed County
+    // Inspection two weeks past what the crew on site was actually doing. The
+    // field report wins. FF and SF still bound the FINISH, because "the
+    // entrance is not complete until the culvert is in" stays true after the
+    // entrance starts. The links the field broke are reported, not hidden.
     let depStart: string | null = null;
+    let depFinish: string | null = null;
     let driver: string | null = null;
     for (const l of links.get(wbs) ?? []) {
       const predEnd = pEnd.get(l.pred);
       const predStart = pStart.get(l.pred);
       if (!predEnd || !predStart) continue;
+      if (started) {
+        if (l.type === "FS" || l.type === "SS") continue;
+        // FF: succ.EF >= pred.EF + lag.  SF: succ.EF >= pred.ES + lag.
+        const bound = advance(l.type === "FF" ? predEnd : predStart, l.lag, cal);
+        if (!depFinish || parseIso(bound) > parseIso(depFinish)) {
+          depFinish = bound;
+          driver = l.pred;
+        }
+        continue;
+      }
       const candidate = candidateStart(l.type, l.lag, predStart, predEnd, d, cal);
       if (!depStart || parseIso(candidate) > parseIso(depStart)) {
         depStart = candidate;
@@ -614,6 +665,8 @@ export function computeCpm(
         plannedEnd && parseIso(plannedEnd) >= parseIso(workStart)
           ? plannedEnd
           : addWorkingDays(workStart, remainingDuration(t, d), cal);
+      if (depFinish && parseIso(depFinish) > parseIso(end)) end = depFinish;
+      else driver = null;
     } else {
       // Not started. If a predecessor pushes it, or its own start has already
       // slipped past, it runs its full duration from wherever it can begin.
@@ -687,6 +740,7 @@ export function computeCpm(
         : 0,
       drivenBy: drivenBy.get(wbs) ?? null,
       constraintViolation: violationOf.get(wbs) ?? null,
+      outOfSequence: outOfSequenceOf.get(wbs) ?? [],
     });
   }
 
@@ -708,5 +762,6 @@ export function computeCpm(
     unscheduled,
     isolated,
     constraintViolations,
+    outOfSequence,
   };
 }

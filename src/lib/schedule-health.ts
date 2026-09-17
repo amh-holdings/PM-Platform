@@ -50,6 +50,7 @@ export type HealthCheckId =
   | "high_duration"
   | "invalid_dates"
   | "duration_vs_dates"
+  | "out_of_sequence"
   | "resources"
   | "missed_tasks"
   | "critical_path_test"
@@ -535,6 +536,52 @@ export function assessSchedule(
         : "Every task's duration matches the working days between its own start and finish.",
       fix: "Open the task and set whichever of the two is right - typing a finish restates the duration, typing a duration moves the finish. Where the dates are a long window around a short job, the duration is usually the true one and the dates want tightening.",
       weight: 2,
+      affected,
+    });
+  }
+
+  // ---- 9c. Out of sequence -----------------------------------------------
+  // Not a DCMA check. The projection lets a started task stop waiting on its
+  // FS and SS links, because the field report proves the start happened. That
+  // is right for Basin 2 starting alongside Basin 1 and wrong for clearing that
+  // started ahead of the county inspection. The engine cannot tell those apart,
+  // so every broken link is listed here and a human decides which one it is.
+  {
+    const verb: Record<RelType, string> = {
+      FS: "started before",
+      SS: "started before",
+      FF: "finished before",
+      SF: "is out of order with",
+    };
+    const ending: Record<RelType, string> = {
+      FS: "finished",
+      SS: "started",
+      FF: "finished",
+      SF: "",
+    };
+    const affected: AffectedTask[] = cpm.outOfSequence.map((o) => {
+      const pred = byWbs.get(o.pred);
+      return {
+        wbs: o.wbs,
+        name: nameOf(byWbs.get(o.wbs)!),
+        note: `${verb[o.type]} ${o.pred} ${pred ? nameOf(pred) : ""} ${ending[o.type]} (${o.type})`
+          .replace(/\s+/g, " ")
+          .trim(),
+      };
+    });
+    add({
+      id: "out_of_sequence",
+      name: "Out of sequence",
+      question: "Has field progress run ahead of the logic?",
+      status: affected.length === 0 ? "pass" : "warn",
+      value: affected.length,
+      display: `${affected.length} link${affected.length === 1 ? "" : "s"}`,
+      threshold: "0",
+      detail: affected.length
+        ? "These tasks have reported progress their predecessors say should not have happened yet. The projection follows the field, so the forecast already assumes the work can run this way."
+        : "Every started task's predecessors are where its logic says they should be.",
+      fix: "For each one, decide: if the crew is right, change the link (usually FS to SS) so the plan matches how the work is being built. If the link is a real hold - a permit, an inspection - the crew is working ahead of it, and that is a conversation with the sub, not a schedule edit.",
+      weight: 1,
       affected,
     });
   }
