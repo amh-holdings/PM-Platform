@@ -31,6 +31,7 @@ import type { Database } from "@/lib/database.types";
 import {
   activityScore,
   proposeForDay,
+  reportsNeedingProposal,
   type ConfirmedHistory,
   type DayEvidence,
   type ProposalCommodity,
@@ -388,6 +389,17 @@ export type ProductionSyncResult = {
   rowsWritten: number;
   /** Approved days still blank after the run, and why. */
   daysUnfilled: { date: string; reason: string }[];
+  /**
+   * Days that DID fill something but left a commodity the report mentions
+   * without a number, and why.
+   *
+   * These reasons used to be thrown away. The run collected them either way,
+   * but only read them when a day wrote nothing at all - so the day that filled
+   * its truck loads and skipped its civil percent went into daysFilled and
+   * reported itself as a success. That is the shape of the Sweet Springs gap:
+   * not a blank day anybody could see, a half-filled one that looked done.
+   */
+  daysIncomplete: { date: string; reason: string }[];
   error: string | null;
 };
 
@@ -399,6 +411,7 @@ export async function syncProductionFromReports(
     daysFilled: [],
     rowsWritten: 0,
     daysUnfilled: [],
+    daysIncomplete: [],
     error: null,
   };
   try {
@@ -413,19 +426,21 @@ export async function syncProductionFromReports(
         .order("report_date", { ascending: true }),
       client
         .from("daily_production")
-        .select("production_date")
+        .select("production_date, dpr_id")
         .eq("project_id", input.projectId)
         .gte("production_date", input.from)
         .lte("production_date", input.to),
     ]);
     if (repErr) return { ...empty, error: repErr.message };
 
-    const has = new Set((filed ?? []).map((r) => r.production_date));
-    const gaps = (reports ?? []).filter((r) => !has.has(r.report_date));
+    // See reportsNeedingProposal: a day is owed a proposal when THIS REPORT has
+    // never written to it, not merely when the date is empty.
+    const gaps = reportsNeedingProposal(reports ?? [], filed ?? []);
     if (gaps.length === 0) return empty;
 
     const daysFilled: string[] = [];
     const daysUnfilled: ProductionSyncResult["daysUnfilled"] = [];
+    const daysIncomplete: ProductionSyncResult["daysIncomplete"] = [];
     let rowsWritten = 0;
 
     // One day at a time, in date order. Each proposal calibrates its rate off
@@ -443,6 +458,11 @@ export async function syncProductionFromReports(
       if (result.written > 0) {
         daysFilled.push(gap.report_date);
         rowsWritten += result.written;
+        // What it could NOT value on a day it otherwise filled. Silence here is
+        // what let a missing civil percent read as a finished day.
+        for (const note of result.notes) {
+          daysIncomplete.push({ date: gap.report_date, reason: note });
+        }
       } else {
         daysUnfilled.push({
           date: gap.report_date,
@@ -452,7 +472,7 @@ export async function syncProductionFromReports(
         });
       }
     }
-    return { daysFilled, rowsWritten, daysUnfilled, error: null };
+    return { daysFilled, rowsWritten, daysUnfilled, daysIncomplete, error: null };
   } catch (e) {
     return { ...empty, error: e instanceof Error ? e.message : "Sync failed" };
   }
