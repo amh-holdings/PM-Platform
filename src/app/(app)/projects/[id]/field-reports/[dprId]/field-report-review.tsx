@@ -15,7 +15,9 @@ import {
 } from "@/lib/inspection-map";
 import {
   PICKER_GROUP_LABEL,
+  pickerLeafLabel,
   pickerOptionLabel,
+  withParentHeadings,
   type PickerGroup,
 } from "@/lib/schedule-picker";
 import { checkPinSanity, type SanityTask } from "@/lib/pin-sanity";
@@ -86,6 +88,8 @@ export type PickerOption = {
   parentName?: string | null;
   /** Another pinnable leaf shares this task name. */
   nameIsAmbiguous?: boolean;
+  /** Immediate parent's WBS code, used to group the options under it. */
+  parentWbsCode?: string | null;
 };
 
 // A pending pin move: the sheet and normalised coordinates the sub tapped,
@@ -637,11 +641,19 @@ function PinReview({
                 if (inGroup.length === 0) return null;
                 return (
                   <optgroup key={g} label={PICKER_GROUP_LABEL[g]}>
-                    {inGroup.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {pickerOptionLabel(t)}
-                      </option>
-                    ))}
+                    {withParentHeadings(inGroup).map((row) =>
+                      row.kind === "heading" ? (
+                        <option key={row.key} value="" disabled>
+                          {row.name}
+                        </option>
+                      ) : (
+                        <option key={row.key} value={row.task.id}>
+                          {row.task.parentName
+                            ? pickerLeafLabel(row.task)
+                            : pickerOptionLabel(row.task)}
+                        </option>
+                      ),
+                    )}
                   </optgroup>
                 );
               })}
