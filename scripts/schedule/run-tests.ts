@@ -18,6 +18,7 @@ import {
   makeCalendar,
   retreat,
   subWorkingDays,
+  todayIso,
   workingDaysBetween,
 } from "@/lib/schedule-calendar";
 import {
@@ -819,6 +820,43 @@ section("Sister durations");
   eq("a Thursday's week starts Monday", weekStartOf("2026-09-17"), "2026-09-14");
   eq("a Monday is its own week start", weekStartOf("2026-09-14"), "2026-09-14");
   eq("a Sunday belongs to the week before", weekStartOf("2026-09-20"), "2026-09-14");
+}
+
+// ============================================================================
+section("Closing out by hand, and what today is");
+// ============================================================================
+
+{
+  // Basin 1 Riser marked Complete in the grid on Thu 17 Sep while its stored
+  // finish still said the 23rd.
+  const tasks = [
+    task({ wbs_code: "1", start_date: "2026-09-02", end_date: "2026-09-23", duration_days: 7, pct_complete: 40, status: "Complete" }),
+    task({ wbs_code: "2", duration_days: 1, predecessors: "1" }),
+  ];
+  const out = computeCpm(tasks, { dataDate: "2026-09-17" });
+  eq("a task closed by hand finishes no later than today", out.byWbs.get("1")!.projectedEnd, "2026-09-17");
+  eq("so what waits on it starts tomorrow", out.byWbs.get("2")!.projectedStart, "2026-09-18");
+  const weekend = computeCpm(tasks, { dataDate: "2026-09-19" });
+  eq("closed on a Saturday, it finished Friday", weekend.byWbs.get("1")!.projectedEnd, "2026-09-18");
+  const quick = computeCpm(
+    [task({ wbs_code: "1", start_date: "2026-09-21", end_date: "2026-09-23", duration_days: 3, status: "Complete" })],
+    { dataDate: "2026-09-17" },
+  );
+  eq("a start after that finish comes back with it", quick.byWbs.get("1")!.projectedStart, "2026-09-17");
+  const past = computeCpm([task({ wbs_code: "1", start_date: "2026-09-01", end_date: "2026-09-04", duration_days: 4, status: "Complete" })], { dataDate: "2026-09-17" });
+  eq("a finish already in the past is left alone", past.byWbs.get("1")!.projectedEnd, "2026-09-04");
+
+  const synced = planScheduleSync(tasks, { dataDate: "2026-09-17" });
+  const applied = tasks.map((t) => { const u = synced.find((x) => x.wbs === t.wbs_code); return u ? { ...t, start_date: u.start, end_date: u.end } : t; });
+  eq("and the sync settles it in one pass", planScheduleSync(applied, { dataDate: "2026-09-17" }).length, 0);
+}
+
+{
+  // 9:30pm EDT Thursday is already Friday in UTC.
+  eq("today is the Eastern date in the evening", todayIso(new Date("2026-09-18T01:30:00Z")), "2026-09-17");
+  eq("and in the morning", todayIso(new Date("2026-09-17T12:00:00Z")), "2026-09-17");
+  // 11pm EST in January is UTC-5, not -4.
+  eq("and across daylight saving", todayIso(new Date("2027-01-15T04:30:00Z")), "2027-01-14");
 }
 
 // ============================================================================

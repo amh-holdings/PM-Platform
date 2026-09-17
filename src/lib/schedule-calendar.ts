@@ -76,8 +76,21 @@ export function toIso(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-export function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+// Today's date where the work is. Every AHC job is on Eastern time, and the
+// UTC date rolls over at 8pm EDT: an evening look at the schedule forecast
+// from tomorrow, showing tasks due today as already slipped. Pinned to the
+// job's zone rather than the server's (UTC on Vercel) or the viewer's browser,
+// so the page, the sync and a snapshot all agree on what "today" is.
+export const PROJECT_TIME_ZONE = "America/New_York";
+
+export function todayIso(now: Date = new Date()): string {
+  // en-CA formats as YYYY-MM-DD.
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: PROJECT_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
 }
 
 // nth weekday of a month, e.g. nthWeekday(2026, 9, 1, 1) = first Monday in

@@ -73,6 +73,11 @@ export function ScheduleHealthView({
     health.findings[0]?.id ?? null,
   );
   const [copied, setCopied] = useState(false);
+  // Planned and Slip in the update history are a baseline comparison; without
+  // one they repeat Projected and 0. Move is the column that means something.
+  const showPlan = updates.some(
+    (u) => u.planned_finish !== u.projected_finish || (u.finish_slip_days ?? 0) !== 0,
+  );
 
   const text = healthToText(health, projectName);
 
@@ -256,9 +261,9 @@ export function ScheduleHealthView({
                 <tr>
                   <th className="px-3 py-3 font-medium">Data date</th>
                   <th className="px-3 py-3 font-medium">Label</th>
-                  <th className="px-3 py-3 font-medium">Planned</th>
+                  {showPlan && <th className="px-3 py-3 font-medium">Planned</th>}
                   <th className="px-3 py-3 font-medium">Projected</th>
-                  <th className="px-3 py-3 text-right font-medium">Slip</th>
+                  {showPlan && <th className="px-3 py-3 text-right font-medium">Slip</th>}
                   <th className="px-3 py-3 text-right font-medium">Move</th>
                   <th className="px-3 py-3 text-right font-medium">Health</th>
                   <th className="px-3 py-3 text-right font-medium"></th>
@@ -284,10 +289,13 @@ export function ScheduleHealthView({
                       <td className="px-3 py-2.5 text-xs text-muted-foreground">
                         {u.label ?? "-"}
                       </td>
+                      {showPlan && (
                       <td className="px-3 py-2.5 text-muted-foreground">
                         {fmt(u.planned_finish)}
                       </td>
+                      )}
                       <td className="px-3 py-2.5">{fmt(u.projected_finish)}</td>
+                      {showPlan && (
                       <td className="px-3 py-2.5 text-right tabular-nums">
                         {u.finish_slip_days == null ? (
                           "-"
@@ -305,6 +313,7 @@ export function ScheduleHealthView({
                           </span>
                         )}
                       </td>
+                      )}
                       <td className="px-3 py-2.5 text-right tabular-nums">
                         {moved == null ? (
                           <span className="text-xs text-muted-foreground">-</span>

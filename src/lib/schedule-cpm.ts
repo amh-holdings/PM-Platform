@@ -31,6 +31,7 @@ import {
   durationInWorkingDays,
   parseIso,
   retreat,
+  snapBack,
   snapForward,
   subWorkingDays,
   todayIso,
@@ -663,8 +664,20 @@ export function computeCpm(
 
     if (isComplete(t)) {
       // Finished. Hold the recorded dates; nothing downstream waits on it.
-      pStart.set(wbs, t.start_date ?? es.get(wbs)!);
-      pEnd.set(wbs, t.end_date ?? ef.get(wbs)!);
+      //
+      // Except a finish still in the future, which cannot be true of work that
+      // is done. It happens whenever a task is closed out by hand - Status set
+      // to Complete in the grid - rather than by a report, which records its
+      // own actual finish. Left alone, Basin 1 Riser marked complete on 9/17
+      // would keep its forecast 9/23 finish and hold everything behind it until
+      // the 24th. Done means done by the data date.
+      const today = snapBack(dataDate, cal);
+      let finish = t.end_date ?? ef.get(wbs)!;
+      if (parseIso(finish) > parseIso(today)) finish = today;
+      let begun = t.start_date ?? es.get(wbs)!;
+      if (parseIso(begun) > parseIso(finish)) begun = finish;
+      pStart.set(wbs, begun);
+      pEnd.set(wbs, finish);
       drivenBy.set(wbs, null);
       continue;
     }

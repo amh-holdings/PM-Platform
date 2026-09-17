@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database } from "@/lib/database.types";
-import { makeCalendar, type Calendar } from "@/lib/schedule-calendar";
+import { makeCalendar, todayIso, type Calendar } from "@/lib/schedule-calendar";
 import { computeCpm, type CpmInput } from "@/lib/schedule-cpm";
 import { assessSchedule, type HealthInput } from "@/lib/schedule-health";
 import { loadProgressHistory, withProgressHistory } from "@/lib/schedule-progress-history";
@@ -40,7 +40,7 @@ export async function loadScheduleContext(
   const proj = (project ?? {}) as Record<string, unknown>;
   return {
     dataDate:
-      (proj.schedule_data_date as string | null) ?? new Date().toISOString().slice(0, 10),
+      (proj.schedule_data_date as string | null) ?? todayIso(),
     calendar: makeCalendar(
       (proj.work_week as number | null) === 6 ? 6 : 5,
       (exceptions ?? []) as { exception_date: string; kind: "nonworking" | "working" }[],
@@ -144,7 +144,7 @@ export async function ensureWeeklySnapshot(supabase: Client, projectId: string):
       .limit(1)
       .maybeSingle();
     if (error) return false;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayIso();
     if (latest && latest.data_date >= weekStartOf(today)) return false;
     const {
       data: { user },

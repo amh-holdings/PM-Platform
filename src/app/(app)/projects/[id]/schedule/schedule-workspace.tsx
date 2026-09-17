@@ -267,11 +267,22 @@ export function ScheduleWorkspace({
   const slip = cpm.finishSlipDays;
   const lastUpdate = updates[0] ?? null;
 
+  // Planned finish and slip compare the forecast against a plan. Since Start
+  // and Finish became the live forecast (schedule-sync.ts) the only plan left
+  // to compare against is a baseline, so without one both cards would read
+  // the forecast back as "on plan" forever. They come back when one is set.
+  const hasBaseline = tasks.some((t) => t.baseline_end);
+
   return (
     <div className="space-y-4">
       {/* Forecast banner - the numbers that matter, side by side. */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <Card label="Planned finish" value={fmt(cpm.plannedFinish)} />
+      <div
+        className={cn(
+          "grid gap-3 sm:grid-cols-2",
+          hasBaseline ? "lg:grid-cols-5" : "lg:grid-cols-4",
+        )}
+      >
+        {hasBaseline && <Card label="Planned finish" value={fmt(cpm.plannedFinish)} />}
         {/* While an edit is pending these read the draft, so the headline
             numbers answer "what would this do" rather than "what did the
             schedule say before you started". The card says which it is. */}
@@ -281,7 +292,9 @@ export function ScheduleWorkspace({
           tone={
             draftDirty
               ? "warn"
-              : slip > 0 ? "bad" : slip < 0 ? "good" : undefined
+              : !hasBaseline
+                ? undefined
+                : slip > 0 ? "bad" : slip < 0 ? "good" : undefined
           }
           note={
             draftDirty
@@ -290,11 +303,13 @@ export function ScheduleWorkspace({
                     ? `, was ${fmt(cpm.projectedFinish)}`
                     : ""
                 }`
-              : slip === 0
-                ? "on plan"
-                : slip > 0
-                  ? `${slip} working days late`
-                  : `${-slip} working days early`
+              : !hasBaseline
+                ? "live, from field reports"
+                : slip === 0
+                  ? "on plan"
+                  : slip > 0
+                    ? `${slip} working days late`
+                    : `${-slip} working days early`
           }
         />
         <Card
