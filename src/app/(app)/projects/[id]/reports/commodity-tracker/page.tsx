@@ -24,6 +24,51 @@ function isIsoDate(s: string | undefined): s is string {
   return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
+function isoDaysBefore(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * How far back the page will reach on its own looking for an unfilled approved
+ * day. A bound is required in both directions: without one the lookback either
+ * scans the whole project every load, or - as it did - stops after a fixed
+ * number of rows and silently concludes there is no gap.
+ */
+const GAP_LOOKBACK_DAYS = 90;
+
+/**
+ * Every production row on the project, in pages.
+ *
+ * PostgREST caps an unbounded select at 1000 rows and says nothing about it. At
+ * eighteen commodities a day that is under two months, so the percent-of-scope
+ * figures and the "which commodities are active" column picker were both
+ * computed off a truncated slice of the project and quietly understated it. A
+ * total that is wrong by omission is worse than one that fails.
+ */
+async function allProductionRows(
+  supabase: ReturnType<typeof createClient>,
+  projectId: string,
+): Promise<{ commodity_id: string; quantity: number }[]> {
+  const PAGE = 1000;
+  const out: { commodity_id: string; quantity: number }[] = [];
+  for (let offset = 0; offset < 100_000; offset += PAGE) {
+    const { data, error } = await supabase
+      .from("daily_production")
+      .select("commodity_id, quantity")
+      .eq("project_id", projectId)
+      // Deterministic order, or a page boundary can drop or repeat a row.
+      .order("production_date", { ascending: true })
+      .order("commodity_id", { ascending: true })
+      .range(offset, offset + PAGE - 1);
+    if (error || !data) break;
+    out.push(...data.map((r) => ({ commodity_id: r.commodity_id, quantity: Number(r.quantity) })));
+    if (data.length < PAGE) break;
+  }
+  return out;
+}
+
 function eachDate(from: string, to: string): string[] {
   const out: string[] = [];
   const cur = new Date(`${from}T00:00:00Z`);
@@ -56,26 +101,42 @@ export default async function ProductionPage({
   // the problem this page was built to surface: when the tracker had gone weeks
   // without an entry, the untouched days were off the bottom of the range and it
   // looked idle rather than behind. An explicit ?from/?to always wins.
+  //
+  // Both halves of this used to be unbounded in the wrong direction. The
+  // reports query took the SIXTY OLDEST approved days on the project, so on a
+  // job that had been filing since spring it only ever examined the opening
+  // weeks - all long since backfilled - concluded there was no gap, and never
+  // looked at this month at all. The filed-dates query had no limit, which
+  // PostgREST answers by returning the first 1000 rows and saying nothing, so
+  // the set it was compared against was truncated too. Between them the
+  // fallback could neither find a recent gap nor trust what it did find.
+  //
+  // Both are now bounded by DATE over the same window, with explicit row
+  // limits well clear of what 90 days can hold.
   const fallback = defaultRange();
   let defaultFrom = fallback.from;
   if (!isIsoDate(searchParams.from)) {
-    const [{ data: oldestApproved }, { data: filedDates }] = await Promise.all([
+    const lookbackFrom = isoDaysBefore(defaultFrom, GAP_LOOKBACK_DAYS);
+    const [{ data: approvedBefore }, { data: filedDates }] = await Promise.all([
       supabase
         .from("dprs")
         .select("report_date")
         .eq("project_id", params.id)
         .eq("status", "approved")
+        .gte("report_date", lookbackFrom)
         .lt("report_date", defaultFrom)
         .order("report_date", { ascending: true })
-        .limit(60),
+        .limit(200),
       supabase
         .from("daily_production")
         .select("production_date")
         .eq("project_id", params.id)
-        .lt("production_date", defaultFrom),
+        .gte("production_date", lookbackFrom)
+        .lt("production_date", defaultFrom)
+        .limit(5000),
     ]);
     const filed = new Set((filedDates ?? []).map((r) => r.production_date));
-    const firstGap = (oldestApproved ?? [])
+    const firstGap = (approvedBefore ?? [])
       .map((r) => r.report_date)
       .find((d) => !filed.has(d));
     if (firstGap && firstGap < defaultFrom) defaultFrom = firstGap;
@@ -208,18 +269,15 @@ export default async function ProductionPage({
 
   // Cumulative totals across the WHOLE project, not just this window, so the
   // percent scopes show true progress rather than a slice of it.
-  const { data: allRows } = await supabase
-    .from("daily_production")
-    .select("commodity_id, quantity")
-    .eq("project_id", params.id);
+  const allRows = await allProductionRows(supabase, params.id);
   // One total. Every row on the tracker is filed production, so the percent the
   // owner sees is the percent this page shows - there is no second figure held
   // back behind it.
   const projectTotals: Record<string, number> = {};
-  for (const row of allRows ?? []) {
+  for (const row of allRows) {
     const key = keyById.get(row.commodity_id);
     if (!key) continue;
-    projectTotals[key] = (projectTotals[key] ?? 0) + Number(row.quantity);
+    projectTotals[key] = (projectTotals[key] ?? 0) + row.quantity;
   }
 
   return (
@@ -263,6 +321,32 @@ export default async function ProductionPage({
             {sync.daysFilled.join(", ")}. Hover a filled cell to see how the
             number was reached, and correct anything the report got wrong.
           </p>
+        </div>
+      )}
+
+      {/* A day that filled something but could not value everything the report
+          describes. This used to be the silent case: it went into "brought up
+          to date" and the commodity it skipped was just a blank cell among
+          filled ones, which is how 09-02 to 09-04 read as done. */}
+      {sync && sync.daysIncomplete.length > 0 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          <p className="font-medium">
+            {sync.daysIncomplete.length}{" "}
+            {sync.daysIncomplete.length === 1 ? "figure" : "figures"} the
+            reports describe but could not be valued.
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            These days filled in part. The rest is yours to read off the report
+            and enter.
+          </p>
+          <ul className="mt-2 space-y-1 text-muted-foreground">
+            {sync.daysIncomplete.map((d, i) => (
+              <li key={`${d.date}-${i}`}>
+                <span className="font-medium text-foreground">{d.date}</span> -{" "}
+                {d.reason}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

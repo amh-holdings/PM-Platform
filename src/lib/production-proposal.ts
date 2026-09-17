@@ -206,6 +206,40 @@ export type ProposalResult = {
   skipped: { commodityKey: string; reason: string }[];
 };
 
+/**
+ * Which approved reports the tracker still owes a proposal.
+ *
+ * THE BUG THIS REPLACES. The sync used to ask "does this DATE have any
+ * production row?" and skip the day if it did. But proposeForDay is per
+ * COMMODITY - it fills what is missing and leaves the rest - so the two halves
+ * disagreed. One row written on a day, from a backfill, a hand-entered figure
+ * or an earlier report, froze that whole day: every other commodity on it was
+ * unreachable from then on, and because the day counted as filled, the page
+ * reported nothing about it. Sweet Springs 09-02 to 09-04 sat like that,
+ * carrying a number, missing their civil percent, and raising no alarm.
+ *
+ * Asking it per commodity instead would break the other way. The proposer can
+ * only value the two or three commodities the day's evidence actually speaks
+ * to, so "missing a row for some commodity" is true of nearly every day
+ * forever, and the sync would re-run the whole window on every page load.
+ *
+ * So the question is neither. It is "has the proposer already been here?" -
+ * and a row it wrote carries the report's `dpr_id`. A day it visited has one; a
+ * day it has not visited does not, whatever else has been filed there. Days
+ * where it ran and could value nothing have no row and are retried, exactly as
+ * they were before.
+ */
+export function reportsNeedingProposal<R extends { id: string }>(
+  reports: R[],
+  filed: { dpr_id?: string | null }[],
+): R[] {
+  const visited = new Set<string>();
+  for (const row of filed) {
+    if (row.dpr_id) visited.add(row.dpr_id);
+  }
+  return reports.filter((r) => !visited.has(r.id));
+}
+
 export function proposeForDay(input: ProposalInput): ProposalResult {
   const { day, commodities, history, committedPercent } = input;
   const byKey = new Map(commodities.map((c) => [c.key, c]));

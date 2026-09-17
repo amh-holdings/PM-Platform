@@ -31,6 +31,7 @@ import {
   countLoads,
   percentRate,
   proposeForDay,
+  reportsNeedingProposal,
   type ProposalCommodity,
 } from "@/lib/production-proposal";
 
@@ -603,6 +604,66 @@ async function main() {
     "PROP-11 measured pin quantities are proposed as-is",
     pinned.values.some((v) => v.commodityKey === "piles" && v.quantity === 42),
     JSON.stringify(pinned.values)
+  );
+
+  // ---------- unit: which days the sync still owes ----------
+  // The Sweet Springs 09-02 to 09-04 defect. The sync asked "is this DATE
+  // empty?" while the proposer works per COMMODITY, so one row on a day - from
+  // a backfill, a correction, an earlier report - froze every other commodity
+  // on it, permanently and without a word on the page.
+  const REPORTS = [
+    { id: "dpr-a", report_date: "2026-09-02" },
+    { id: "dpr-b", report_date: "2026-09-03" },
+    { id: "dpr-c", report_date: "2026-09-04" },
+  ];
+  const owedAll = reportsNeedingProposal(REPORTS, []);
+  check(
+    "SYNC-01 a window with nothing filed owes every approved day",
+    owedAll.length === 3,
+    `got ${owedAll.map((r) => r.id).join(",")}`
+  );
+
+  // The regression itself: a hand-entered or backfilled row carries no dpr_id,
+  // so it must not stand in for a proposal the tracker never made.
+  const owedBackfilled = reportsNeedingProposal(REPORTS, [
+    { dpr_id: null },
+    { dpr_id: null },
+  ]);
+  check(
+    "SYNC-02 rows the proposer did not write never mark a day as visited",
+    owedBackfilled.length === 3,
+    `got ${owedBackfilled.map((r) => r.id).join(",")}`
+  );
+
+  const owedAfterOne = reportsNeedingProposal(REPORTS, [{ dpr_id: "dpr-b" }]);
+  check(
+    "SYNC-03 a day the proposer has already filled is not revisited",
+    owedAfterOne.length === 2 && !owedAfterOne.some((r) => r.id === "dpr-b"),
+    `got ${owedAfterOne.map((r) => r.id).join(",")}`
+  );
+
+  // A day carrying somebody else's row AND its own proposal is done. The two
+  // must not cancel out.
+  const owedMixed = reportsNeedingProposal(REPORTS, [
+    { dpr_id: null },
+    { dpr_id: "dpr-a" },
+    { dpr_id: "dpr-c" },
+  ]);
+  check(
+    "SYNC-04 a proposed day stays done even beside a hand-entered row",
+    owedMixed.length === 1 && owedMixed[0].id === "dpr-b",
+    `got ${owedMixed.map((r) => r.id).join(",")}`
+  );
+
+  // A day the proposer visited and could value nothing writes no row, so it has
+  // no dpr_id and is retried. That is deliberate - the evidence may improve.
+  const owedAfterEmptyRun = reportsNeedingProposal(REPORTS, [
+    { dpr_id: "dpr-a" },
+  ]);
+  check(
+    "SYNC-05 a day that could be valued at nothing is retried, not written off",
+    owedAfterEmptyRun.some((r) => r.id === "dpr-b"),
+    `got ${owedAfterEmptyRun.map((r) => r.id).join(",")}`
   );
 
   // ---------- integration: provenance, not a gate ----------
