@@ -14,4 +14,7 @@ export type ScheduleTaskRow = TaskFormValues & {
   last_dpr_at: string | null;
   baseline_start?: string | null;
   baseline_end?: string | null;
+  // Report history, merged in by the page (schedule-progress-history.ts).
+  last_report_date?: string | null;
+  last_progress_date?: string | null;
 };

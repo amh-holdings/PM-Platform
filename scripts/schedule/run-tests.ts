@@ -28,6 +28,9 @@ import {
 } from "@/lib/schedule-cpm";
 import { assessSchedule } from "@/lib/schedule-health";
 import { planScheduleSync } from "@/lib/schedule-sync";
+import { summarizeProgressHistory } from "@/lib/schedule-progress-history";
+import { sisterDurationSuggestions } from "@/lib/schedule-sister-durations";
+import { weekStartOf } from "@/lib/schedule-sync-server";
 import { resolveMilestoneTask } from "@/lib/progress";
 import { hasLinkErrors } from "@/app/(app)/projects/[id]/schedule/predecessor-editor";
 import {
@@ -708,6 +711,117 @@ section("Live dates - Start and Finish follow the forecast");
 }
 
 // ============================================================================
+section("Progress history - reported, and moving");
+// ============================================================================
+
+{
+  const h = summarizeProgressHistory([
+    // Basin 1 Embankment, including the 9/14 typo.
+    { taskId: "emb", reportDate: "2026-09-09", pct: 85 },
+    { taskId: "emb", reportDate: "2026-09-11", pct: 95 },
+    { taskId: "emb", reportDate: "2026-09-14", pct: 25 },
+    { taskId: "emb", reportDate: "2026-09-15", pct: 95 },
+    // Debris Removal: reported, never moving.
+    { taskId: "deb", reportDate: "2026-08-20", pct: 10 },
+    { taskId: "deb", reportDate: "2026-09-16", pct: 10 },
+  ]);
+  eq("last report is the newest report", h.get("emb")?.last_report_date, "2026-09-15");
+  eq("a typo and its correction are not progress", h.get("emb")?.last_progress_date, "2026-09-11");
+  eq("a percent that never moves dates from its first report", h.get("deb")?.last_progress_date, "2026-08-20");
+  eq("while the last report is recent", h.get("deb")?.last_report_date, "2026-09-16");
+}
+
+// ============================================================================
+section("Pace - forecast from how the work is actually going");
+// ============================================================================
+
+{
+  // 10-day task, started Tue 1 Sep. Labor Day Mon 7 Sep.
+  const base = { wbs_code: "1", start_date: "2026-09-01", end_date: "2026-09-14", duration_days: 10, status: "In Progress" };
+  // Slow: 20% after 8 working days (1-11 Sep), reported the 11th, data date 14th.
+  const slow = computeCpm([task({ ...base, pct_complete: 20, last_progress_date: "2026-09-11" })], { dataDate: "2026-09-14" });
+  const r = slow.byWbs.get("1")!;
+  eq("a slow task forecasts from its pace", r.forecastBasis, "pace");
+  // byPace = 80*8/20 = 32, byPlan = 8, blend 0.2*32 + 0.8*8 = 12.8 -> 13 days from Mon 14th.
+  eq("and shows the slip before its finish date passes", r.projectedEnd, "2026-09-30");
+
+  // Fast: 80% after 4 days (1-4 Sep).
+  const fast = computeCpm([task({ ...base, pct_complete: 80, last_progress_date: "2026-09-04" })], { dataDate: "2026-09-08" });
+  // byPace = 20*4/80 = 1, byPlan = 2, blend 0.8*1 + 0.2*2 = 1.2 -> 2 days from Tue 8th.
+  eq("a fast task can forecast early", fast.byWbs.get("1")!.projectedEnd, "2026-09-09");
+
+  const stale = computeCpm([task({ ...base, pct_complete: 20, last_progress_date: "2026-09-01" })], { dataDate: "2026-09-14" });
+  check("a stale percent does not set a pace", stale.byWbs.get("1")!.forecastBasis !== "pace", String(stale.byWbs.get("1")!.forecastBasis));
+  const early = computeCpm([task({ ...base, pct_complete: 5, last_progress_date: "2026-09-11" })], { dataDate: "2026-09-14" });
+  check("too little done does not set a pace", early.byWbs.get("1")!.forecastBasis !== "pace");
+  const noHistory = computeCpm([task({ ...base, pct_complete: 20 })], { dataDate: "2026-09-14" });
+  eq("without report history the planned finish is held", noHistory.byWbs.get("1")!.forecastBasis, "held");
+
+  // The live sync must still settle in one pass with pace in play.
+  const tasks = [task({ ...base, pct_complete: 20, last_progress_date: "2026-09-11" }), task({ wbs_code: "2", duration_days: 2, predecessors: "1" })];
+  const once = planScheduleSync(tasks, { dataDate: "2026-09-14" });
+  const applied = tasks.map((t) => { const u = once.find((x) => x.wbs === t.wbs_code); return u ? { ...t, start_date: u.start, end_date: u.end } : t; });
+  eq("pace forecasts still sync in one pass", planScheduleSync(applied, { dataDate: "2026-09-14" }).length, 0);
+}
+
+// ============================================================================
+section("Progress reporting check");
+// ============================================================================
+
+{
+  const dd = "2026-09-17";
+  const tasks = [
+    task({ wbs_code: "1", task_name: "Riser", pct_complete: 40, status: "In Progress", last_report_date: null, last_progress_date: null }),
+    task({ wbs_code: "2", task_name: "Rough Road", pct_complete: 10, status: "In Progress", last_report_date: "2026-09-02", last_progress_date: "2026-09-01" }),
+    task({ wbs_code: "3", task_name: "Debris", pct_complete: 10, status: "In Progress", last_report_date: "2026-09-16", last_progress_date: "2026-08-20" }),
+    task({ wbs_code: "4", task_name: "Embankment", pct_complete: 95, status: "In Progress", last_report_date: "2026-09-15", last_progress_date: "2026-09-15" }),
+    task({ wbs_code: "5", task_name: "Not started", last_report_date: null, last_progress_date: null }),
+  ];
+  const health = assessSchedule(tasks, computeCpm(tasks, { dataDate: dd }), { dataDate: dd });
+  const c = health.checks.find((x) => x.id === "progress_reporting")!;
+  eq("three problem tasks are named", c.affected.length, 3);
+  check("hand-entered progress is called out", /entered by hand/.test(c.affected.find((a) => a.wbs === "1")?.note ?? ""));
+  check("a task gone quiet is called out", /no report in/.test(c.affected.find((a) => a.wbs === "2")?.note ?? ""));
+  check("a task reported but not moving is called out", /still 10%/.test(c.affected.find((a) => a.wbs === "3")?.note ?? ""));
+  check("a task reported and moving is fine", !c.affected.some((a) => a.wbs === "4"));
+  eq("three is a failure", c.status, "fail");
+
+  const untracked = assessSchedule([task({ wbs_code: "1", pct_complete: 40 })], computeCpm([task({ wbs_code: "1", pct_complete: 40 })], { dataDate: dd }), { dataDate: dd });
+  eq("without history the check is not scored", untracked.checks.find((x) => x.id === "progress_reporting")!.status, "na");
+}
+
+// ============================================================================
+section("Sister durations");
+// ============================================================================
+
+{
+  const tasks = [
+    task({ wbs_code: "5.1.1.6", task_name: "Basin 1" }),
+    task({ wbs_code: "5.1.1.6.5", task_name: "Embankment", start_date: "2026-08-19", end_date: "2026-09-17", duration_days: 18, pct_complete: 95, status: "In Progress", last_progress_date: "2026-09-11" }),
+    task({ wbs_code: "5.1.1.6.4", task_name: "Emergency Spillway", start_date: "2026-09-01", end_date: "2026-09-02", duration_days: 2, pct_complete: 100, status: "Complete" }),
+    task({ wbs_code: "5.1.1.7", task_name: "Basin 2" }),
+    task({ wbs_code: "5.1.1.7.5", task_name: "Embankment", start_date: "2026-09-16", end_date: "2026-09-17", duration_days: 2, pct_complete: 5, status: "In Progress" }),
+    task({ wbs_code: "5.1.1.7.4", task_name: "Emergency spillway", duration_days: 1 }),
+    task({ wbs_code: "5.2.5", task_name: "Embankment", duration_days: 2 }),
+  ];
+  const s = sisterDurationSuggestions(tasks, { calendar: 5 });
+  const emb = s.find((g) => g.wbs === "5.1.1.7.5");
+  // 8/19 to 9/11 is 17 working days (Labor Day out) for 95% -> 18.
+  eq("Basin 2 Embankment is sized off Basin 1", emb?.suggested, 18);
+  eq("from its sister", emb?.fromWbs, "5.1.1.6.5");
+  eq("which is still tracking, not finished", emb?.basis, "tracking");
+  check("a close enough duration is left alone", !s.some((g) => g.wbs === "5.1.1.7.4"));
+  check("a same-named task elsewhere is not a sister", !s.some((g) => g.wbs === "5.2.5"));
+  check("the source is not sized off the target", !s.some((g) => g.wbs === "5.1.1.6.5"));
+}
+
+{
+  eq("a Thursday's week starts Monday", weekStartOf("2026-09-17"), "2026-09-14");
+  eq("a Monday is its own week start", weekStartOf("2026-09-14"), "2026-09-14");
+  eq("a Sunday belongs to the week before", weekStartOf("2026-09-20"), "2026-09-14");
+}
+
+// ============================================================================
 section("Isolated tasks and cycles");
 // ============================================================================
 
@@ -762,10 +876,9 @@ section("Schedule health - DCMA checks");
   eq("logic check counts the unlinked task", logic.affected.length, 1);
   check("logic check names it", logic.affected.some((a) => a.wbs === "9"));
   check("a score comes out", health.score >= 0 && health.score <= 100, String(health.score));
-  // 14 DCMA checks plus two of our own: duration against dates, which catches
-  // a Gantt bar and a forecast describing different schedules, and out of
-  // sequence, which lists every link field progress has already broken.
-  eq("all 16 checks run", health.checks.length, 16);
+  // 14 DCMA checks plus four of our own: duration against dates, out of
+  // sequence, progress reporting, and durations from sister tasks.
+  eq("all 18 checks run", health.checks.length, 18);
   check(
     "the duration check is one of them",
     health.checks.some((c) => c.id === "duration_vs_dates"),

@@ -23,8 +23,13 @@ export type ScheduleUpdateRow = {
   taken_at: string | null;
 };
 
+// Applying a sister-duration suggestion is a schedule edit, so the workspace
+// owns it and hands the view one callback per suggested task.
+export type ApplySuggestion = (wbs: string) => void;
+
 type Props = {
   health: HealthResult;
+  onApplyDuration?: ApplySuggestion;
   cpm: CpmOutput;
   projectName: string;
   projectId: string;
@@ -54,6 +59,7 @@ const STATUS_STYLE: Record<HealthStatus, { chip: string; label: string }> = {
 
 export function ScheduleHealthView({
   health,
+  onApplyDuration,
   cpm,
   projectName,
   projectId,
@@ -143,6 +149,7 @@ export function ScheduleHealthView({
               check={c}
               open={expanded === c.id}
               onToggle={() => setExpanded(expanded === c.id ? null : c.id)}
+              onApply={c.id === "sister_durations" ? onApplyDuration : undefined}
             />
           ))}
         </div>
@@ -175,7 +182,7 @@ export function ScheduleHealthView({
       {/* All fourteen, including the passes */}
       <div className="space-y-2">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          All fourteen checks
+          All checks
         </h3>
         <div className="overflow-x-auto rounded-lg border bg-card shadow-sm">
           <table className="w-full text-sm">
@@ -219,6 +226,7 @@ export function ScheduleHealthView({
             check={health.checks.find((c) => c.id === expanded)!}
             open
             onToggle={() => setExpanded(null)}
+            onApply={expanded === "sister_durations" ? onApplyDuration : undefined}
           />
         )}
       </div>
@@ -357,10 +365,12 @@ function CheckRow({
   check,
   open,
   onToggle,
+  onApply,
 }: {
   check: HealthCheck;
   open: boolean;
   onToggle: () => void;
+  onApply?: ApplySuggestion;
 }) {
   return (
     <div
@@ -416,6 +426,14 @@ function CheckRow({
                     <span>{a.name}</span>
                     {a.note && (
                       <span className="text-muted-foreground">- {a.note}</span>
+                    )}
+                    {onApply && (
+                      <button
+                        className="font-medium text-primary hover:underline"
+                        onClick={() => onApply(a.wbs)}
+                      >
+                        Apply
+                      </button>
                     )}
                   </li>
                 ))}

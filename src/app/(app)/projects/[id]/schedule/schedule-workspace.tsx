@@ -18,10 +18,12 @@ import {
   summarizeConstraints,
   type ScheduleConstraint,
 } from "@/lib/schedule-constraints";
-import { applyDraft, type TaskDraft } from "@/lib/schedule-edit";
+import { applyDraft, reconcileDates, type TaskDraft } from "@/lib/schedule-edit";
+import { sisterDurationSuggestions } from "@/lib/schedule-sister-durations";
 import { SCOPE_ORDER, scopeOf, type TaskScope } from "@/lib/schedule-scope";
 import {
   applyProjectedDates,
+  bulkUpdateScheduleTasks,
   setScheduleBaseline,
   setScheduleDataDate,
   takeScheduleUpdate,
@@ -210,6 +212,25 @@ export function ScheduleWorkspace({
       setMsg(res.ok ? onOk() : `Failed: ${res.error}`);
       if (res.ok) router.refresh();
     });
+  }
+
+  // Size a task off its sister (schedule-sister-durations.ts). Only ever on a
+  // click: two tasks with the same name are not always the same job. The dates
+  // settle to the new duration on the next sync.
+  function applySisterDuration(wbs: string) {
+    const suggestion = sisterDurationSuggestions(tasks, { calendar }).find((g) => g.wbs === wbs);
+    const task = tasks.find((t) => t.wbs_code === wbs);
+    if (!suggestion || !task) return;
+    const dates = reconcileDates(
+      { start_date: task.start_date, end_date: task.end_date, duration_days: suggestion.suggested },
+      "duration_days",
+      calendar,
+      { isMilestone: !!task.is_milestone },
+    );
+    run(
+      () => bulkUpdateScheduleTasks(projectId, [{ id: task.id, ...dates }]),
+      () => `${wbs} set to ${suggestion.suggested} days, from ${suggestion.fromWbs}.`,
+    );
   }
 
   function takeBaseline(onlyUnbaselined: boolean) {
@@ -584,6 +605,7 @@ export function ScheduleWorkspace({
       {view === "health" && (
         <ScheduleHealthView
           health={health}
+          onApplyDuration={applySisterDuration}
           cpm={cpm}
           projectName={projectName}
           projectId={projectId}

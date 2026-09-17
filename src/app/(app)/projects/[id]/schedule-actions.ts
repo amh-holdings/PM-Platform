@@ -4,14 +4,9 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
 import type { TablesUpdate } from "@/lib/database.types";
-import { makeCalendar } from "@/lib/schedule-calendar";
-import {
-  computeCpm,
-  parsePredecessors,
-  serializeLinks,
-} from "@/lib/schedule-cpm";
+import { parsePredecessors, serializeLinks } from "@/lib/schedule-cpm";
 import { orderRenames } from "@/lib/schedule-edit";
-import { assessSchedule, type HealthInput } from "@/lib/schedule-health";
+import { captureScheduleSnapshot } from "@/lib/schedule-sync-server";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -286,68 +281,25 @@ export async function takeScheduleUpdate(
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
-  const { data: project, error: projectError } = await auth.supabase
-    .from("projects")
-    .select("*")
-    .eq("id", projectId)
-    .maybeSingle();
-  if (projectError) return { ok: false, error: projectError.message };
-
-  const proj = (project ?? {}) as Record<string, unknown>;
-  const dataDate =
-    (proj.schedule_data_date as string | null) ?? new Date().toISOString().slice(0, 10);
-  const workWeek = (proj.work_week as 5 | 6 | null) ?? 5;
-
-  const { data: tasks, error: tasksError } = await auth.supabase
-    .from("schedule_tasks")
-    .select("*")
-    .eq("project_id", projectId)
-    .order("sort_order", { ascending: true, nullsFirst: false });
-  if (tasksError) return { ok: false, error: tasksError.message };
-  if (!tasks?.length)
-    return { ok: false, error: "No schedule tasks to snapshot." };
-
-  const { data: exceptions } = await auth.supabase
-    .from("project_calendar_exceptions")
-    .select("exception_date, kind")
-    .eq("project_id", projectId);
-
-  const calendar = makeCalendar(
-    workWeek,
-    (exceptions ?? []) as { exception_date: string; kind: "nonworking" | "working" }[],
-  );
-  const rows = tasks as unknown as HealthInput[];
-  const cpm = computeCpm(rows, { calendar, dataDate });
-  const health = assessSchedule(rows, cpm, { calendar, dataDate });
-
+  // Same capture the weekly snapshot uses, so a hand-taken update and an
+  // automatic one are the same record.
   const { data: { user } } = await auth.supabase.auth.getUser();
-
-  const { error } = await auth.supabase.from("schedule_updates").insert({
-    project_id: projectId,
-    data_date: dataDate,
-    label: opts.label?.trim() || `Update ${dataDate}`,
-    notes: opts.notes?.trim() || null,
-    planned_finish: cpm.plannedFinish,
-    projected_finish: cpm.projectedFinish,
-    finish_slip_days: cpm.finishSlipDays,
-    task_count: rows.length,
-    critical_count: cpm.criticalPath.length,
-    health_score: health.score,
-    tasks: tasks,
-    taken_by: user?.id ?? null,
+  const res = await captureScheduleSnapshot(auth.supabase, projectId, {
+    label: opts.label,
+    notes: opts.notes,
+    userId: user?.id ?? null,
   });
-
-  if (error) {
-    if (error.code === "23505")
+  if (!res.ok) {
+    if (res.code === "23505")
       return {
         ok: false,
-        error: `An update already exists at data date ${dataDate}. Move the data date forward before taking another - two updates on the same date cannot both be the record.`,
+        error: "An update already exists at this data date. Move the data date forward before taking another - two updates on the same date cannot both be the record.",
       };
-    return { ok: false, error: error.message };
+    return { ok: false, error: res.error };
   }
 
   revalidatePath(`/projects/${projectId}/schedule`);
-  return { ok: true, dataDate, taskCount: rows.length };
+  return { ok: true, dataDate: res.dataDate, taskCount: res.taskCount };
 }
 
 export async function deleteScheduleUpdate(

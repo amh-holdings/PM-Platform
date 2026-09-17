@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
-import { syncScheduleDates } from "@/lib/schedule-sync-server";
+import { ensureWeeklySnapshot, syncScheduleDates } from "@/lib/schedule-sync-server";
+import { loadProgressHistory, withProgressHistory } from "@/lib/schedule-progress-history";
 
 import { ScheduleWorkspace } from "./schedule-workspace";
 
@@ -27,6 +28,7 @@ export default async function ProjectSchedulePage({ params }: { params: Params }
   // Start and Finish are the live forecast, so bring them up to date before
   // they are read. Nothing to write means nothing is written.
   await syncScheduleDates(supabase, params.id);
+  await ensureWeeklySnapshot(supabase, params.id);
 
   const proj = (project ?? {}) as Record<string, unknown>;
   const projectName = (proj.name as string | undefined) ?? "Project";
@@ -104,11 +106,15 @@ export default async function ProjectSchedulePage({ params }: { params: Params }
       .limit(24),
   ]);
 
+  // Report history drives the pace forecast and the progress-reporting check.
+  // Merged here so the page's forecast matches the dates the sync just wrote.
+  const history = await loadProgressHistory(supabase, params.id);
+
   return (
     <ScheduleWorkspace
       projectId={params.id}
       projectName={projectName}
-      tasks={(tasks ?? []) as never}
+      tasks={withProgressHistory((tasks ?? []) as never as { id: string }[], history) as never}
       baselineAvailable={baselineAvailable}
       phase1Available={phase1Available}
       dataDate={dataDate}

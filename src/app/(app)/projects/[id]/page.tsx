@@ -12,7 +12,7 @@ import { redirect } from "next/navigation";
 import { DashboardToday } from "./dashboard-today";
 import { ProjectChat } from "./project-chat";
 import { can } from "@/lib/roles";
-import { syncScheduleDates } from "@/lib/schedule-sync-server";
+import { ensureWeeklySnapshot, syncScheduleDates } from "@/lib/schedule-sync-server";
 import { createClient } from "@/lib/supabase/server";
 import { getEffectiveRole } from "@/lib/roles-server";
 
@@ -46,7 +46,9 @@ export default async function ProjectDashboardPage({ params }: { params: Params 
 
   // The schedule panels, milestones and cash-flow projection all read Start and
   // Finish, which are the live forecast - sync before any of them render.
-  await syncScheduleDates(createClient(), params.id);
+  const supabase = createClient();
+  await syncScheduleDates(supabase, params.id);
+  await ensureWeeklySnapshot(supabase, params.id);
 
   return (
     <div className="space-y-8">

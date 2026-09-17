@@ -27,7 +27,9 @@ import {
   workingDaysBetween,
   type CalendarLike,
 } from "@/lib/schedule-calendar";
+import { sisterDurationSuggestions } from "@/lib/schedule-sister-durations";
 import {
+  PACE_FRESH_DAYS,
   HARD_CONSTRAINTS,
   leavesOf,
   parsePredecessors,
@@ -51,6 +53,8 @@ export type HealthCheckId =
   | "invalid_dates"
   | "duration_vs_dates"
   | "out_of_sequence"
+  | "progress_reporting"
+  | "sister_durations"
   | "resources"
   | "missed_tasks"
   | "critical_path_test"
@@ -587,6 +591,98 @@ export function assessSchedule(
       fix: "For each one, decide: if the crew is right, change the link (usually FS to SS) so the plan matches how the work is being built. If the link is a real hold - a permit, an inspection - the crew is working ahead of it, and that is a conversation with the sub, not a schedule edit.",
       weight: 1,
       affected,
+    });
+  }
+
+  // ---- 9d. Progress reporting ---------------------------------------------
+  // Not a DCMA check. Start and Finish are driven by approved field reports,
+  // so a task whose reports stopped - or never started - is a date nobody is
+  // actually forecasting. Three ways that happens, all seen on Sweet Springs:
+  //   never reported  - Basin 1 Riser at 40%, typed in by hand
+  //   gone quiet      - Rough Road, no report since 9/2
+  //   not moving      - Debris Removal reported most days at 10% since 8/20
+  {
+    const tracked = tasks.some((t) => t.last_report_date !== undefined);
+    const affected: AffectedTask[] = [];
+    if (tracked) {
+      for (const t of tasks) {
+        if (isComplete(t)) continue;
+        const pct = Number(t.pct_complete ?? 0);
+        const started = pct > 0 || t.status === "In Progress";
+        if (!started) continue;
+        const shown = pct > 0 ? `${pct}%` : "In Progress with no percent";
+        if (!t.last_report_date) {
+          affected.push({
+            wbs: t.wbs_code,
+            name: nameOf(t),
+            note: `${shown}, entered by hand - never reported by the sub`,
+          });
+          continue;
+        }
+        const quiet = workingDaysBetween(t.last_report_date, dataDate, cal);
+        if (quiet > PACE_FRESH_DAYS) {
+          affected.push({
+            wbs: t.wbs_code,
+            name: nameOf(t),
+            note: `no report in ${quiet} working days (last ${t.last_report_date}, ${shown})`,
+          });
+          continue;
+        }
+        const still = t.last_progress_date
+          ? workingDaysBetween(t.last_progress_date, dataDate, cal)
+          : null;
+        if (still == null || still > PACE_FRESH_DAYS) {
+          affected.push({
+            wbs: t.wbs_code,
+            name: nameOf(t),
+            note: t.last_progress_date
+              ? `reported, but still ${shown} since ${t.last_progress_date}`
+              : `reported, but never above 0%`,
+          });
+        }
+      }
+    }
+    add({
+      id: "progress_reporting",
+      name: "Progress reporting",
+      question: "Is every task under way still being reported, and moving?",
+      status: !tracked ? "na" : affected.length === 0 ? "pass" : affected.length <= 2 ? "warn" : "fail",
+      value: affected.length,
+      display: tracked ? `${affected.length} task${affected.length === 1 ? "" : "s"}` : "not loaded",
+      threshold: "0",
+      detail: !tracked
+        ? "Report history was not loaded for this assessment."
+        : affected.length
+          ? `The schedule forecasts these from a percent nobody has updated in over ${PACE_FRESH_DAYS} working days, or ever. Their dates - and everything waiting on them - are only as current as that number.`
+          : "Every task under way has a recent approved report with progress on it.",
+      fix: "Ask the sub to report these on the next daily report. Where the work is genuinely stopped, say so on the task; where the percent was typed in by hand, get it onto a report so it keeps moving.",
+      weight: 2,
+      affected,
+    });
+  }
+
+  // ---- 9e. Durations from sister tasks ------------------------------------
+  // Not a DCMA check. See schedule-sister-durations.ts.
+  {
+    const suggestions = sisterDurationSuggestions(tasks, { calendar: cal });
+    add({
+      id: "sister_durations",
+      name: "Durations vs sister tasks",
+      question: "Do repeated tasks carry the duration the first one actually took?",
+      status: suggestions.length === 0 ? "pass" : "warn",
+      value: suggestions.length,
+      display: `${suggestions.length} suggestion${suggestions.length === 1 ? "" : "s"}`,
+      threshold: "0",
+      detail: suggestions.length
+        ? "A task with the same name has already shown how long this work takes, and these are sized very differently. Every date behind them is built on the smaller number."
+        : "No repeated task is sized far from what its sister actually took.",
+      fix: "Review each suggestion and apply it where the jobs really are the same size. Nothing is applied automatically.",
+      weight: 1,
+      affected: suggestions.map((g) => ({
+        wbs: g.wbs,
+        name: nameOf(byWbs.get(g.wbs)!),
+        note: `${g.current ?? "-"}d now; ${g.fromWbs} ${g.basis === "took" ? "took" : "is tracking to"} ${g.suggested}d`,
+      })),
     });
   }
 

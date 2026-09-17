@@ -84,6 +84,12 @@ export type CpmInput = {
   is_milestone?: boolean | null;
   date_constraint_type?: string | null;
   date_constraint_date?: string | null;
+  // Progress history (schedule-progress-history.ts). Optional: a caller that
+  // does not load it gets the plan-based forecast, which holds the dates the
+  // live sync last wrote - so the answers agree either way.
+  last_report_date?: string | null;
+  last_progress_date?: string | null;
+  status_source?: string | null;
 };
 
 export type Link = { pred: string; type: RelType; lag: number };
@@ -116,6 +122,10 @@ export type CpmResult = {
   projectedEnd: string;
   slipDays: number;
   drivenBy: string | null;
+  // How the projected finish was reached, for a started task: "pace" from its
+  // reported rate of progress, "plan" from its duration, "held" on its own
+  // finish date. Null for work not under way.
+  forecastBasis: "pace" | "plan" | "held" | null;
   // Set when a hard constraint and the logic disagree.
   constraintViolation: string | null;
   // Links this task's reported progress has already broken - it started before
@@ -281,6 +291,10 @@ function hasStarted(t: CpmInput): boolean {
 // a half. So this is never used to pull a finish date earlier than the plan -
 // see the projected pass, which holds the planned finish while it is still in
 // the future and only forecasts from remaining work once it has passed.
+//
+// A percent that arrives with a measured rate behind it is different: the
+// crew HAS shown its productivity. That case goes through paceRemaining, which
+// may move a finish either way.
 function remainingDuration(t: CpmInput, duration: number): number {
   if (isComplete(t)) return 0;
   if (duration === 0) return 0;
@@ -303,6 +317,46 @@ function breaksLink(t: CpmInput, pred: CpmInput, type: RelType): boolean {
     default:
       return false;
   }
+}
+
+// Forecasting from pace.
+//
+// Plan-based remaining work - duration times the percent left - ignores how
+// the work is actually going. Basin 1 Embankment was a 1-day task that took
+// eighteen, and the forecast said nothing until its finish date had already
+// passed, because until then it simply held the planned finish.
+//
+// Pace is the percent reported divided by the working days it took. It is only
+// used when it can be trusted:
+//   - the percent went up within the last PACE_FRESH_DAYS working days. A stale
+//     percent says the reports stopped, not that the crew slowed down; Rough
+//     Road at 10% for two weeks would otherwise forecast into next year.
+//   - at least PACE_MIN_PCT done and PACE_MIN_DAYS elapsed, so one early report
+//     does not set the rate for the whole task.
+// It is blended with the plan, weighted by percent complete: at 20% done the
+// plan still carries most of the answer, at 90% the field does.
+export const PACE_FRESH_DAYS = 5;
+const PACE_MIN_PCT = 10;
+const PACE_MIN_DAYS = 3;
+
+export function paceRemaining(
+  t: CpmInput,
+  duration: number,
+  dataDate: string,
+  cal: Calendar,
+): number | null {
+  if (isComplete(t) || duration === 0) return null;
+  const pct = Number(t.pct_complete ?? 0);
+  if (pct < PACE_MIN_PCT || pct >= 100) return null;
+  if (!t.start_date || !t.last_progress_date) return null;
+  if (workingDaysBetween(t.last_progress_date, dataDate, cal) > PACE_FRESH_DAYS) return null;
+  if (parseIso(t.last_progress_date) < parseIso(t.start_date)) return null;
+  const elapsed = durationInWorkingDays(t.start_date, t.last_progress_date, cal);
+  if (elapsed < PACE_MIN_DAYS) return null;
+  const byPace = ((100 - pct) * elapsed) / pct;
+  const byPlan = duration * (1 - pct / 100);
+  const w = pct / 100;
+  return Math.max(1, Math.ceil(w * byPace + (1 - w) * byPlan));
 }
 
 // Given a finish date and a duration, the start that produces it.
@@ -594,6 +648,7 @@ export function computeCpm(
   const drivenBy = new Map<string, string | null>();
   const workStart = snapForward(dataDate, cal);
   const outOfSequenceOf = new Map<string, Link[]>();
+  const forecastBasisOf = new Map<string, CpmResult["forecastBasis"]>();
   const outOfSequence: { wbs: string; pred: string; type: RelType }[] = [];
 
   for (const wbs of order) {
@@ -659,13 +714,22 @@ export function computeCpm(
     }
 
     let end: string;
+    let basis: CpmResult["forecastBasis"] = null;
     if (started) {
-      // Under way. The plan stands while its finish is still ahead of the data
-      // date; only once that date has passed do we forecast from remaining work.
-      end =
-        plannedEnd && parseIso(plannedEnd) >= parseIso(workStart)
-          ? plannedEnd
-          : addWorkingDays(workStart, remainingDuration(t, d), cal);
+      // Under way. With a pace worth trusting, forecast from it. Otherwise the
+      // plan stands while its finish is still ahead of the data date, and only
+      // once that date has passed do we forecast from remaining work.
+      const pace = paceRemaining(t, d, dataDate, cal);
+      if (pace != null) {
+        end = addWorkingDays(workStart, pace, cal);
+        basis = "pace";
+      } else if (plannedEnd && parseIso(plannedEnd) >= parseIso(workStart)) {
+        end = plannedEnd;
+        basis = "held";
+      } else {
+        end = addWorkingDays(workStart, remainingDuration(t, d), cal);
+        basis = "plan";
+      }
       if (depFinish && parseIso(depFinish) > parseIso(end)) end = depFinish;
       else driver = null;
     } else if (depStart) {
@@ -715,6 +779,7 @@ export function computeCpm(
     pStart.set(wbs, start);
     pEnd.set(wbs, end);
     drivenBy.set(wbs, driver);
+    forecastBasisOf.set(wbs, basis);
   }
 
   const projectedFinish =
@@ -749,6 +814,7 @@ export function computeCpm(
         ? workingDaysBetween(t.end_date, pEnd.get(wbs)!, cal)
         : 0,
       drivenBy: drivenBy.get(wbs) ?? null,
+      forecastBasis: forecastBasisOf.get(wbs) ?? null,
       constraintViolation: violationOf.get(wbs) ?? null,
       outOfSequence: outOfSequenceOf.get(wbs) ?? [],
     });
