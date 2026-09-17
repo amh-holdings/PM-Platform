@@ -172,6 +172,70 @@ export function buildTaskPicker<
 }
 
 /**
+ * The list as the dropdown renders it: each summary row appears as its own
+ * heading, with the leaves that belong to it underneath.
+ *
+ * Summary rows are still not selectable - pinning to one writes a rollup
+ * percent onto the schedule, which is why they were filtered out in the first
+ * place. But filtering them out entirely meant a scope the whole crew calls by
+ * its parent's name was nowhere in the list: "Construct Basin 1 ESC" is
+ * 5.1.1.6, a summary, and after the 9 Sep split its work lives in six leaves
+ * with names like "Culvert outflow". Somebody looking for Basin 1 ESC found
+ * nothing and concluded the schedule had lost it.
+ *
+ * So the parent comes back as a disabled heading. The scope is findable, and
+ * what gets picked is still a leaf.
+ *
+ * Leaves arrive sorted by WBS code within their group, which already keeps
+ * siblings adjacent, so a heading is emitted wherever the parent changes.
+ * Grouping keys on the parent's WBS code rather than its name: two summary rows
+ * may legitimately share a name, and merging them would put one basin's leaves
+ * under the other's heading.
+ */
+export type PickerRow<T> =
+  | { kind: "heading"; key: string; name: string }
+  | { kind: "task"; key: string; task: T };
+
+export function withParentHeadings<
+  T extends { id: string; parentName?: string | null; parentWbsCode?: string | null },
+>(options: T[]): PickerRow<T>[] {
+  const rows: PickerRow<T>[] = [];
+  let lastParent: string | null = null;
+  let started = false;
+  for (const t of options) {
+    const key = t.parentWbsCode ?? t.parentName ?? null;
+    if (!started || key !== lastParent) {
+      if (t.parentName) {
+        rows.push({
+          kind: "heading",
+          key: `heading:${key ?? t.parentName}`,
+          name: t.parentName,
+        });
+      }
+      lastParent = key;
+      started = true;
+    }
+    rows.push({ kind: "task", key: t.id, task: t });
+  }
+  return rows;
+}
+
+/**
+ * A leaf under its parent's heading. The parent is already on screen one line
+ * up, so repeating it here would just push the part that tells two siblings
+ * apart off the right edge of a phone.
+ * "  Embankment - 5.1.1.6.5 (25%)"
+ */
+export function pickerLeafLabel(t: {
+  wbsCode: string;
+  taskName: string;
+  currentPct: number | null;
+}): string {
+  const pct = t.currentPct != null ? ` (${t.currentPct}%)` : "";
+  return `\u00a0\u00a0\u00a0${t.taskName} - ${t.wbsCode}${pct}`;
+}
+
+/**
  * The one option label, shared by the report form and the review screen so the
  * crew and the CM are never reading the same task two different ways.
  * "Construct Basin 1 ESC / Embankment - 5.1.1.6.5 (25%)"

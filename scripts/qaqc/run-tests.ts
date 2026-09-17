@@ -37,6 +37,7 @@ import {
 } from "@/lib/inspection-map";
 import { isLinkUsable, generateInspectionToken } from "@/lib/inspection-token";
 import { splitPinNotes, joinPinNotes } from "@/lib/pin-notes";
+import { withParentHeadings } from "@/lib/schedule-picker";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATION = join(__dirname, "..", "..", "db", "migrations", "0021_qaqc_inspections.sql");
@@ -415,6 +416,30 @@ async function main() {
   check("U-31 body may be empty with several trail blocks", twoRounds.body === "" && twoRounds.trail.length === 2);
   check("U-32 empty body + empty trail -> null, not a blank string", joinPinNotes("", []) === null);
   check("U-33 splitPinNotes tolerates null", splitPinNotes(null).body === "" && splitPinNotes(null).trail.length === 0);
+
+  // -- unit: work-pin picker headings --
+  // A summary row is not pinnable, but the crew calls the scope by its name, so
+  // it has to be visible above the leaves it owns. Basin 1 and Basin 2 are the
+  // live case: same leaf names, different parents.
+  console.log("\n  -- unit: picker parent headings --");
+  const basins = [
+    { id: "a", wbsCode: "5.1.1.6.1", taskName: "Culvert outflow", currentPct: 90, parentName: "Construct Basin 1 ESC", parentWbsCode: "5.1.1.6" },
+    { id: "b", wbsCode: "5.1.1.6.5", taskName: "Embankment", currentPct: 25, parentName: "Construct Basin 1 ESC", parentWbsCode: "5.1.1.6" },
+    { id: "c", wbsCode: "5.1.1.7.5", taskName: "Embankment", currentPct: 0, parentName: "Construct Basin 2 ESC", parentWbsCode: "5.1.1.7" },
+  ];
+  const rows = withParentHeadings(basins);
+  check("U-34 each parent gets one heading above its leaves", rows.length === 5 && rows[0].kind === "heading" && rows[3].kind === "heading", JSON.stringify(rows.map((r) => r.kind)));
+  check("U-35 the heading names the summary row the crew looks for", rows[0].kind === "heading" && rows[0].name === "Construct Basin 1 ESC");
+  check("U-36 a second parent does not absorb the first one's leaves", rows[3].kind === "heading" && rows[3].name === "Construct Basin 2 ESC" && rows[4].kind === "task" && rows[4].task.id === "c");
+  const sameName = withParentHeadings([
+    { id: "x", wbsCode: "5.1.1", taskName: "Grading", currentPct: 0, parentName: "Sitework", parentWbsCode: "5.1" },
+    { id: "y", wbsCode: "5.2.1", taskName: "Grading", currentPct: 0, parentName: "Sitework", parentWbsCode: "5.2" },
+  ]);
+  check("U-37 two summaries sharing a name stay two headings", sameName.filter((r) => r.kind === "heading").length === 2, JSON.stringify(sameName.map((r) => r.kind)));
+  const orphan = withParentHeadings([
+    { id: "z", wbsCode: "6", taskName: "Commissioning", currentPct: 0, parentName: null, parentWbsCode: null },
+  ]);
+  check("U-38 a top-level leaf gets no heading", orphan.length === 1 && orphan[0].kind === "task");
 
   await db.close();
 

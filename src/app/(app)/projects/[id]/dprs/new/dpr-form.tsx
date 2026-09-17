@@ -30,7 +30,9 @@ import {
 import { DprPhotoUploader, type StagedPhoto } from "./dpr-photo-uploader";
 import {
   PICKER_GROUP_LABEL,
+  pickerLeafLabel,
   pickerOptionLabel,
+  withParentHeadings,
   type PickerGroup,
 } from "@/lib/schedule-picker";
 import { UNIT_OPTIONS, WORK_STATUS_OPTIONS } from "@/lib/work-pin-options";
@@ -95,6 +97,8 @@ type Task = {
   parentName?: string | null;
   /** Another pinnable leaf shares this task name. */
   nameIsAmbiguous?: boolean;
+  /** Immediate parent's WBS code, used to group the options under it. */
+  parentWbsCode?: string | null;
 };
 
 type Sub = { id: string; companyName: string; trade: string | null };
@@ -1189,11 +1193,26 @@ export function DprForm({
                                       key={g}
                                       label={PICKER_GROUP_LABEL[g]}
                                     >
-                                      {inGroup.map((t) => (
-                                        <option key={t.id} value={t.id}>
-                                          {pickerOptionLabel(t)}
-                                        </option>
-                                      ))}
+                                      {withParentHeadings(inGroup).map((row) =>
+                                        row.kind === "heading" ? (
+                                          <option
+                                            key={row.key}
+                                            value=""
+                                            disabled
+                                          >
+                                            {row.name}
+                                          </option>
+                                        ) : (
+                                          <option
+                                            key={row.key}
+                                            value={row.task.id}
+                                          >
+                                            {row.task.parentName
+                                              ? pickerLeafLabel(row.task)
+                                              : pickerOptionLabel(row.task)}
+                                          </option>
+                                        ),
+                                      )}
                                     </optgroup>
                                   );
                                 },
