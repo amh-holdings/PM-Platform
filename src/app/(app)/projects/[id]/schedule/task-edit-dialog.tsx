@@ -31,6 +31,7 @@ import {
   hasLinkErrors,
   type LinkTask,
 } from "./predecessor-editor";
+import { TASK_TYPES, TASK_TYPE_HELP, TASK_TYPE_LABELS } from "@/lib/schedule-task-type";
 
 export type TaskFormValues = {
   id: string;
@@ -50,6 +51,7 @@ export type TaskFormValues = {
   is_milestone?: boolean | null;
   date_constraint_type?: string | null;
   date_constraint_date?: string | null;
+  task_type?: string | null;
 };
 
 const BLANK: TaskFormValues = {
@@ -70,6 +72,7 @@ const BLANK: TaskFormValues = {
   is_milestone: false,
   date_constraint_type: null,
   date_constraint_date: null,
+  task_type: null,
 };
 
 type DeleteImpact = Awaited<ReturnType<typeof describeTaskDeletion>>;
@@ -89,6 +92,8 @@ type Props = {
   // than typed, and so cycles can be caught before the form is submitted.
   allTasks: LinkTask[];
   phase1Available: boolean;
+  /** Migration 0051 applied. Without it the Type field is left off the form. */
+  typeAvailable?: boolean;
   // Needed to turn a duration into a finish date. Optional so the older call
   // sites keep working; without it the three boxes behave as they always did.
   calendar?: CalendarLike;
@@ -109,6 +114,7 @@ export function TaskEditDialog({
   trigger,
   allTasks,
   phase1Available,
+  typeAvailable = false,
   calendar = 5,
   rowIndex,
   onDone,
@@ -361,6 +367,24 @@ export function TaskEditDialog({
                   defaultValue={values.predecessors}
                   rowIndex={rowIndex}
                 />
+
+                {typeAvailable && (
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label htmlFor="task_type">Type</Label>
+                    <select
+                      id="task_type"
+                      name="task_type"
+                      defaultValue={values.task_type ?? ""}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="">Not classified</option>
+                      {TASK_TYPES.map((k) => (
+                        <option key={k} value={k}>{TASK_TYPE_LABELS[k]}</option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-muted-foreground">{TASK_TYPE_HELP}</p>
+                  </div>
+                )}
 
                 {phase1Available && (
                   <div className="space-y-3 rounded-md border bg-muted/20 p-3 sm:col-span-2">

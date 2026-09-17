@@ -7,6 +7,7 @@ import type { TablesUpdate } from "@/lib/database.types";
 import { parsePredecessors, serializeLinks } from "@/lib/schedule-cpm";
 import { orderRenames } from "@/lib/schedule-edit";
 import { captureScheduleSnapshot } from "@/lib/schedule-sync-server";
+import { TASK_TYPES, type TaskType } from "@/lib/schedule-task-type";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -84,6 +85,9 @@ export async function updateScheduleTask(
     date_constraint_type: constraintType,
     date_constraint_date: constraintType ? constraintDate : null,
   };
+  // The form only carries Type once 0051 is applied. Leaving the key out
+  // otherwise keeps the update from naming a column that does not exist.
+  if (formData.has("task_type")) update.task_type = parseTaskType(formData.get("task_type"));
 
   const { error } = await auth.supabase
     .from("schedule_tasks")
@@ -369,6 +373,7 @@ const BULK_EDITABLE = [
   "is_milestone",
   "date_constraint_type",
   "date_constraint_date",
+  "task_type",
   "wbs_code",
   "level_code",
   "parent_wbs_code",
@@ -394,6 +399,10 @@ function cleanPatch(patch: TaskPatch): Record<string, unknown> {
 // PostgREST as PGRST204, so a first attempt that trips either is retried
 // without the Phase 1 fields.
 const PHASE1_FIELDS = ["is_milestone", "date_constraint_type", "date_constraint_date"];
+
+function parseTaskType(v: FormDataEntryValue | null): TaskType | null {
+  return TASK_TYPES.includes(v as TaskType) ? (v as TaskType) : null;
+}
 
 function isMissingColumn(error: { code?: string; message?: string } | null): boolean {
   if (!error) return false;
@@ -474,6 +483,7 @@ export async function createScheduleTask(
       level_code: wbs.split(".").length,
       parent_wbs_code: parent,
       sort_order: sortOrder,
+      ...(formData.has("task_type") ? { task_type: parseTaskType(formData.get("task_type")) } : {}),
   };
 
   let { data, error } = await auth.supabase

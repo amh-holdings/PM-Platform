@@ -2388,6 +2388,7 @@ export type Database = {
           status_source: string | null
           target_quantity: number | null
           task_name: string
+          task_type: string | null
           unit_of_measure: string | null
           wbs_code: string
         }
@@ -2424,6 +2425,7 @@ export type Database = {
           status_source?: string | null
           target_quantity?: number | null
           task_name: string
+          task_type?: string | null
           unit_of_measure?: string | null
           wbs_code: string
         }
@@ -2460,6 +2462,7 @@ export type Database = {
           status_source?: string | null
           target_quantity?: number | null
           task_name?: string
+          task_type?: string | null
           unit_of_measure?: string | null
           wbs_code?: string
         }

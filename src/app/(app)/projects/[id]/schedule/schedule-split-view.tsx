@@ -108,6 +108,7 @@ import {
 import { TaskEditDialog } from "./task-edit-dialog";
 import { hasLinkErrors } from "./predecessor-editor";
 import type { ScheduleTaskRow } from "./schedule-types";
+import { TASK_TYPES, TASK_TYPE_HELP, TASK_TYPE_LABELS } from "@/lib/schedule-task-type";
 
 // Fields the grid edits in place. Anything not here is either derived (float,
 // projected dates), owned by another workflow (progress comes from approved
@@ -122,6 +123,7 @@ const FIELDS = [
   "start_date",
   "end_date",
   "predecessors",
+  "task_type",
 ] as const;
 
 type Field = (typeof FIELDS)[number];
@@ -137,6 +139,7 @@ type ColumnKey =
   | "assigned"
   | "phase"
   | "status"
+  | "type"
   | "progress"
   | "dur"
   | "start"
@@ -178,6 +181,7 @@ const ALL_COLUMNS: Column[] = [
   { key: "code", label: "Code", width: 70 },
   { key: "task", label: "Task", width: 232 },
   { key: "status", label: "Status", width: 106 },
+  { key: "type", label: "Type", width: 104, title: TASK_TYPE_HELP },
   { key: "assigned", label: "Assigned", width: 110 },
   { key: "phase", label: "Phase", width: 104 },
   { key: "progress", label: "Progress", width: 96, derived: true, title: "Percent complete. Green is from an approved field report, amber was set by hand, grey is rolled up from the leaves below. Hover for the report date." },
@@ -220,7 +224,7 @@ const ALL_COLUMNS: Column[] = [
 // repeated Finish. It stays in the picker: while an edit is unsaved it is the
 // one column that shows what the edit would do.
 const DEFAULT_COLUMNS: ColumnKey[] = [
-  "row", "code", "task", "progress", "dur", "start", "finish", "float",
+  "row", "code", "task", "type", "progress", "dur", "start", "finish", "float",
 ];
 
 // Below this a header label is unreadable and a date input collapses to its
@@ -297,6 +301,8 @@ type Props = {
   phaseOptions: string[];
   statusOptions: string[];
   phase1Available: boolean;
+  /** Migration 0051 applied. Without it the Type column is not offered. */
+  typeAvailable: boolean;
   constraintState: Map<string, TaskConstraintState>;
   draft: TaskDraft;
   setDraft: React.Dispatch<React.SetStateAction<TaskDraft>>;
@@ -322,6 +328,7 @@ export function ScheduleSplitView({
   phaseOptions,
   statusOptions,
   phase1Available,
+  typeAvailable,
   constraintState,
   draft,
   setDraft,
@@ -339,8 +346,9 @@ export function ScheduleSplitView({
   const [zoom, setZoom] = useState(2);
   // Wide enough that the default columns all fit without horizontal scrolling.
   // A finish date you have to scroll to is the problem this view exists to fix,
-  // and that now includes the PROJECTED finish: 44+70+232+96+44+120+120+104+72.
-  const [gridWidth, setGridWidth] = useState(905);
+  // and that now includes the PROJECTED finish: 44+70+232+96+44+120+120+104+72,
+  // plus Type (104) since 0051.
+  const [gridWidth, setGridWidth] = useState(1009);
   const [query, setQuery] = useState("");
   const [columns, setColumns] = useState<ColumnKey[]>(DEFAULT_COLUMNS);
   // Arrows default to the focused task's own logic rather than all of it.
@@ -409,9 +417,12 @@ export function ScheduleSplitView({
   const shownColumns = useMemo(
     () =>
       ALL_COLUMNS.filter(
-        (c) => columns.includes(c.key) && (c.key !== "variance" || anyBaseline),
+        (c) =>
+          columns.includes(c.key) &&
+          (c.key !== "variance" || anyBaseline) &&
+          (c.key !== "type" || typeAvailable),
       ),
-    [columns, anyBaseline],
+    [columns, anyBaseline, typeAvailable],
   );
   // The columns as drawn: the definitions with any user width folded in, so
   // the header, the rows and the width arithmetic cannot disagree.
@@ -1255,6 +1266,7 @@ export function ScheduleSplitView({
           case "assigned": text = valueOf(t, "assigned_to"); break;
           case "phase": text = valueOf(t, "phase"); break;
           case "status": text = valueOf(t, "status"); break;
+          case "type": text = TASK_TYPE_LABELS[valueOf(t, "task_type") as keyof typeof TASK_TYPE_LABELS] ?? ""; break;
           case "dur": text = valueOf(t, "duration_days"); break;
           case "predecessors": text = valueOf(t, "predecessors"); break;
           // Dates render in a native input of a fixed size, and the derived
@@ -1474,7 +1486,7 @@ export function ScheduleSplitView({
                   </button>
                 )}
               </div>
-              {ALL_COLUMNS.map((c) => (
+              {ALL_COLUMNS.filter((c) => c.key !== "type" || typeAvailable).map((c) => (
                 <label key={c.key} className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted">
                   <input
                     type="checkbox"
@@ -1590,6 +1602,7 @@ export function ScheduleSplitView({
           statusOptions={statusOptions}
           allTasks={allTasks}
           phase1Available={phase1Available}
+          typeAvailable={typeAvailable}
           calendar={calendar}
           trigger={<Button size="sm" className="h-8">Add task</Button>}
         />
@@ -1684,6 +1697,19 @@ export function ScheduleSplitView({
           <option value="">Set status...</option>
           {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
+        {typeAvailable && (
+          <select
+            value=""
+            disabled={!selected.size}
+            onChange={(e) => e.target.value && bulkSet("task_type", e.target.value === "none" ? "" : e.target.value)}
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+            title={TASK_TYPE_HELP}
+          >
+            <option value="">Set type...</option>
+            {TASK_TYPES.map((k) => <option key={k} value={k}>{TASK_TYPE_LABELS[k]}</option>)}
+            <option value="none">Not classified</option>
+          </select>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -1957,6 +1983,7 @@ export function ScheduleSplitView({
                     phaseOptions={phaseOptions}
                     allTasks={allTasks}
                     phase1Available={phase1Available}
+                    typeAvailable={typeAvailable}
                   />
                 ))
               )}
@@ -2216,6 +2243,7 @@ type GridRowProps = {
   phaseOptions: string[];
   allTasks: ScheduleTaskRow[];
   phase1Available: boolean;
+  typeAvailable: boolean;
   rowIndex: RowIndex;
   predAsRows: boolean;
 };
@@ -2225,7 +2253,7 @@ function GridRow({
   focused, onFocusRow, selected, onSelect, valueOf, isDirty, setCell, onCellKeyDown, setCellRef,
   statusOptions, calendar, constraint, dragging, dropAt,
   onDragStart, onDragEnd, onDragOver, onDrop,
-  projectId, phaseOptions, allTasks, phase1Available, rowIndex, predAsRows,
+  projectId, phaseOptions, allTasks, phase1Available, typeAvailable, rowIndex, predAsRows,
 }: GridRowProps) {
   const indent = Math.max(0, (t.level_code ?? 1) - 1) * 10;
   const rowDirty = columns.some((col) => {
@@ -2395,6 +2423,25 @@ function GridRow({
                 </select>
               );
 
+            case "type":
+              return (
+                <select
+                  className={cn(
+                    cellCls(isDirty(t, "task_type")),
+                    "text-xs",
+                    !valueOf(t, "task_type") && "text-muted-foreground",
+                  )}
+                  value={valueOf(t, "task_type")}
+                  onChange={(e) => setCell(t.id, "task_type", e.target.value)}
+                  onKeyDown={(e) => onCellKeyDown(e, r, ci, t, "task_type")}
+                  ref={(el) => setCellRef(`${r}:${ci}`, el)}
+                  title={TASK_TYPE_HELP}
+                >
+                  <option value="">-</option>
+                  {TASK_TYPES.map((k) => <option key={k} value={k}>{TASK_TYPE_LABELS[k]}</option>)}
+                </select>
+              );
+
             case "progress":
               return <ProgressCell progress={p} />;
 
@@ -2503,6 +2550,7 @@ function GridRow({
           statusOptions={statusOptions}
           allTasks={allTasks}
           phase1Available={phase1Available}
+          typeAvailable={typeAvailable}
           calendar={calendar}
           rowIndex={rowIndex}
           trigger={<Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]">Open</Button>}
@@ -2517,6 +2565,7 @@ const FIELD_OF: Partial<Record<ColumnKey, Field>> = {
   assigned: "assigned_to",
   phase: "phase",
   status: "status",
+  type: "task_type",
   dur: "duration_days",
   start: "start_date",
   finish: "end_date",

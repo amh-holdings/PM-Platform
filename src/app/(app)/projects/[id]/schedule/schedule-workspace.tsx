@@ -42,6 +42,8 @@ type Props = {
   tasks: ScheduleTaskRow[];
   baselineAvailable: boolean;
   phase1Available: boolean;
+  /** Migration 0051 applied - the Type column can be shown and written. */
+  typeAvailable: boolean;
   dataDate: string | null;
   workWeek: 5 | 6;
   calendarExceptions: CalendarExceptionRow[];
@@ -71,6 +73,7 @@ export function ScheduleWorkspace({
   tasks,
   baselineAvailable,
   phase1Available,
+  typeAvailable,
   dataDate,
   workWeek,
   calendarExceptions,
@@ -603,6 +606,7 @@ export function ScheduleWorkspace({
           phaseOptions={phaseOptions}
           statusOptions={statusOptions}
           phase1Available={phase1Available}
+          typeAvailable={typeAvailable}
           constraintState={constraintState}
           draft={draft}
           setDraft={setDraft}

@@ -80,6 +80,26 @@ export default async function ProjectSchedulePage({ params }: { params: Params }
     );
   }
 
+  // 0051 task_type is probed on its own rather than folded into the fallback
+  // chain above, so a database without it only loses the Type column and not
+  // the milestone and constraint columns along with it.
+  let typeAvailable = false;
+  let rows = (tasks ?? []) as Record<string, unknown>[];
+  if (rows.length) {
+    const typeQuery = await supabase
+      .from("schedule_tasks")
+      .select("id, task_type")
+      .eq("project_id", params.id);
+    if (!typeQuery.error) {
+      typeAvailable = true;
+      const typeById = new Map(typeQuery.data.map((r) => [r.id, r.task_type]));
+      rows = rows.map((t) => ({ ...t, task_type: typeById.get(t.id as string) ?? null }));
+    }
+  } else {
+    const probe = await supabase.from("schedule_tasks").select("task_type").limit(1);
+    typeAvailable = !probe.error;
+  }
+
   // Calendar exceptions and the constraint log both arrive with their own
   // migrations. Neither is load-bearing for the schedule itself, so a missing
   // table degrades to an empty list and the tab says why.
@@ -114,9 +134,10 @@ export default async function ProjectSchedulePage({ params }: { params: Params }
     <ScheduleWorkspace
       projectId={params.id}
       projectName={projectName}
-      tasks={withProgressHistory((tasks ?? []) as never as { id: string }[], history) as never}
+      tasks={withProgressHistory(rows as never as { id: string }[], history) as never}
       baselineAvailable={baselineAvailable}
       phase1Available={phase1Available}
+      typeAvailable={typeAvailable}
       dataDate={dataDate}
       workWeek={workWeek}
       calendarExceptions={(exceptionsQuery.data ?? []) as never}
