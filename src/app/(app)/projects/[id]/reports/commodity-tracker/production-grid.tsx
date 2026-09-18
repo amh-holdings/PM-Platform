@@ -7,6 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import {
+  blankDayReason,
+  isFlaggedBlankDay,
+  type BlankDayFlag,
+} from "@/lib/production-blank-day";
 
 import { saveDailyProduction } from "../../production-actions";
 
@@ -62,38 +67,6 @@ function weekday(iso: string): string {
 function isWeekend(iso: string): boolean {
   const d = new Date(`${iso}T00:00:00Z`).getUTCDay();
   return d === 0 || d === 6;
-}
-
-/**
- * Why a day on the tracker is empty, and whose move it is.
- *
- * Four different situations used to render as the same blank row: an approved
- * day nobody has valued, a report still in the CM's queue, a report returned to
- * the sub, and a day with no report at all. Only the first is Phil's to act on,
- * and it was indistinguishable from the three that are not - which is how a
- * report sitting returned for a week reads as "quiet week on site".
- *
- * `mine` drives the colour: red for the day Phil must fill, grey for a day that
- * is waiting on somebody else. Returns null for an approved day that already
- * carries production.
- */
-export function blankDayReason(
-  reportStatus: string | null,
-): { label: string; mine: boolean } | null {
-  switch (reportStatus) {
-    case "approved":
-      // The alarm this page exists for. An approved report is work that
-      // happened, and a blank row is the owner being told it did not.
-      return { label: "nothing filed", mine: true };
-    case "submitted":
-      return { label: "awaiting CM review", mine: false };
-    case "returned":
-      return { label: "returned to sub", mine: false };
-    case "draft":
-      return { label: "sub has not filed", mine: false };
-    default:
-      return { label: "no field report", mine: false };
-  }
 }
 
 export function ProductionGrid({
@@ -173,18 +146,30 @@ export function ProductionGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCommodities, dates, edits, initialValues]);
 
-  // The alarm this page needed: a day whose report the CM approved but which
-  // carries no production at all. Under-billing hides here - an approved report
-  // is work that happened, and a blank row is the owner being told it did not.
-  const uncoveredDays = useMemo(
-    () =>
-      dates.filter((d) => {
-        if (evidence[d]?.reportStatus !== "approved") return false;
-        return !commodities.some((c) => currentValue(d, c.key) !== "");
-      }),
+  // The alarm this page needed: a day somebody was demonstrably on site for,
+  // carrying no production at all. Under-billing hides here - a CM log or an
+  // approved report is work that happened, and a blank row is the owner being
+  // told it did not.
+  //
+  // Keyed on EVIDENCE rather than on approval, so the day the CM wrote up and
+  // no sub ever filed stops reading as a quiet day. Split by whose move it is:
+  // the page has always distinguished those and the banners should too.
+  const flaggedBlankDays = useMemo(() => {
+    const mine: { date: string; label: string }[] = [];
+    const waiting: { date: string; label: string }[] = [];
+    for (const d of dates) {
+      if (commodities.some((c) => currentValue(d, c.key) !== "")) continue;
+      const ev = evidence[d];
+      const flag = blankDayReason({
+        reportStatus: ev?.reportStatus ?? null,
+        hasCmLog: Boolean(ev?.cm),
+      });
+      if (!isFlaggedBlankDay(flag)) continue;
+      (flag.tone === "mine" ? mine : waiting).push({ date: d, label: flag.label });
+    }
+    return { mine, waiting };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [dates, evidence, commodities, edits, initialValues],
-  );
+  }, [dates, evidence, commodities, edits, initialValues]);
 
   const dirtyCount = edits.size;
 
@@ -292,15 +277,33 @@ export function ProductionGrid({
             over any that reads wrong.
           </p>
         )}
-        {uncoveredDays.length > 0 && (
+        {flaggedBlankDays.mine.length > 0 && (
           <p className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
             <span className="font-medium">
-              {uncoveredDays.length} approved report
-              {uncoveredDays.length === 1 ? "" : "s"} with nothing on the tracker:
+              {flaggedBlankDays.mine.length} day
+              {flaggedBlankDays.mine.length === 1 ? "" : "s"} with work on
+              record and nothing on the tracker:
             </span>{" "}
-            {uncoveredDays.join(", ")}. The report described work the classifier
-            could not put a number to - read it in the right-hand column and
-            enter the quantities.
+            {flaggedBlankDays.mine.map((d) => `${d.date} (${d.label})`).join(", ")}
+            . Somebody was on site and the owner&apos;s sheet says otherwise.
+            Read the day in the right-hand column and enter the quantities.
+          </p>
+        )}
+        {/* Real work, but the next move is not Phil's. These used to render
+            grey and identical to a day nobody was on site, which is how a
+            report sitting returned for a week read as a quiet week. */}
+        {flaggedBlankDays.waiting.length > 0 && (
+          <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+            <span className="font-medium">
+              {flaggedBlankDays.waiting.length} day
+              {flaggedBlankDays.waiting.length === 1 ? "" : "s"} blank and
+              waiting on somebody else:
+            </span>{" "}
+            {flaggedBlankDays.waiting
+              .map((d) => `${d.date} (${d.label})`)
+              .join(", ")}
+            . Nothing to enter until the report clears review, but the day is
+            not idle.
           </p>
         )}
         {syncedCount > 0 && (
@@ -346,11 +349,14 @@ export function ProductionGrid({
                 // A blank row used to mean four different things and show one
                 // of them. Say which, and say whose move it is: red is Phil's
                 // to act on, grey is somebody else's.
-                const blank = commodities.some(
+                const blank: BlankDayFlag | null = commodities.some(
                   (c) => currentValue(date, c.key) !== "",
                 )
                   ? null
-                  : blankDayReason(ev?.reportStatus ?? null);
+                  : blankDayReason({
+                      reportStatus: ev?.reportStatus ?? null,
+                      hasCmLog: Boolean(ev?.cm),
+                    });
                 return (
                   <tr
                     key={date}
@@ -404,9 +410,11 @@ export function ProductionGrid({
                         <span
                           className={cn(
                             "mr-1 rounded px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                            blank.mine
+                            blank.tone === "mine"
                               ? "bg-destructive/15 text-destructive"
-                              : "bg-muted text-muted-foreground",
+                              : blank.tone === "waiting"
+                                ? "bg-amber-500/15 text-amber-700"
+                                : "bg-muted text-muted-foreground",
                           )}
                         >
                           {blank.label}
