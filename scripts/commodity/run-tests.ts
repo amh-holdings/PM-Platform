@@ -34,6 +34,7 @@ import {
   reportsNeedingProposal,
   type ProposalCommodity,
 } from "@/lib/production-proposal";
+import { blankDayReason, isFlaggedBlankDay } from "@/lib/production-blank-day";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS = [
@@ -664,6 +665,56 @@ async function main() {
     "SYNC-05 a day that could be valued at nothing is retried, not written off",
     owedAfterEmptyRun.some((r) => r.id === "dpr-b"),
     `got ${owedAfterEmptyRun.map((r) => r.id).join(",")}`
+  );
+
+  // ---------- unit: why a blank day is blank ----------
+  // Four situations rendered as one empty row, and the rule only looked at the
+  // field report's status. A day the CM wrote up with no sub report came back
+  // "no field report" in grey, indistinguishable from a day nobody was on site
+  // - when in fact it is the loudest case on the page, because no approval is
+  // coming to fill it.
+  console.log("\n  -- unit: blank day flags --");
+  const approved = blankDayReason({ reportStatus: "approved", hasCmLog: true });
+  check(
+    "BLANK-01 an approved report with nothing on the tracker is Phil's to fix",
+    approved.tone === "mine" && approved.label === "nothing filed",
+    JSON.stringify(approved)
+  );
+
+  const cmOnly = blankDayReason({ reportStatus: null, hasCmLog: true });
+  check(
+    "BLANK-02 a CM log with no field report is flagged, not called quiet",
+    cmOnly.tone === "mine" && cmOnly.label === "CM logged work, no report",
+    JSON.stringify(cmOnly)
+  );
+
+  const submitted = blankDayReason({ reportStatus: "submitted", hasCmLog: true });
+  check(
+    "BLANK-03 a report still in review waits on the CM, not on Phil",
+    submitted.tone === "waiting" && submitted.label === "awaiting CM review",
+    JSON.stringify(submitted)
+  );
+
+  const returned = blankDayReason({ reportStatus: "returned", hasCmLog: false });
+  check(
+    "BLANK-04 a returned report is flagged even with no CM log",
+    returned.tone === "waiting" && returned.label === "returned to sub",
+    JSON.stringify(returned)
+  );
+
+  const quiet = blankDayReason({ reportStatus: null, hasCmLog: false });
+  check(
+    "BLANK-05 no report and no CM log stays quiet",
+    quiet.tone === "quiet" && !isFlaggedBlankDay(quiet),
+    JSON.stringify(quiet)
+  );
+
+  check(
+    "BLANK-06 every tone but quiet raises the day",
+    isFlaggedBlankDay(approved) &&
+      isFlaggedBlankDay(cmOnly) &&
+      isFlaggedBlankDay(submitted) &&
+      isFlaggedBlankDay(returned)
   );
 
   // ---------- integration: provenance, not a gate ----------
