@@ -1,3 +1,5 @@
+import { formatCurrency } from "@/lib/format";
+
 // The CEO Report: where the project actually is, where the plan says it should
 // be, when it finishes, and what it looks like on the ground.
 //
@@ -100,13 +102,9 @@ export function pctOf(part: number, whole: number): number | null {
   return (part / whole) * 100;
 }
 
-/** Whole-dollar money. Used only by the dormant financial module. */
+/** Money for the report. Used only by the dormant financial module. */
 export function fmtMoney(n: number): string {
-  return n.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  });
+  return formatCurrency(n);
 }
 
 // ------------------------------------------------------------------ calendar

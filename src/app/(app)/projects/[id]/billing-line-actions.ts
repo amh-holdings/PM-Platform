@@ -14,6 +14,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/database.types";
 import type { TablesInsert, TablesUpdate } from "@/lib/database.types";
 import type { SovImportPlan } from "@/lib/sov-import";
+import { formatCurrency } from "@/lib/format";
 
 type Db = SupabaseClient<Database>;
 
@@ -330,7 +331,7 @@ async function checkDeletable(
     const total = billed.reduce((s, e) => s + Number(e.actual_amount ?? 0), 0);
     blockers.push(
       `${billed.length} billed month${billed.length === 1 ? "" : "s"} sit against it${
-        total ? ` (${total.toLocaleString("en-US", { style: "currency", currency: "USD" })})` : ""
+        total ? ` (${formatCurrency(total)})` : ""
       }. Previous-billed on every later AFP is computed from those.`,
     );
   }
