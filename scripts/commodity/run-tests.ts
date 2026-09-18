@@ -34,7 +34,12 @@ import {
   reportsNeedingProposal,
   type ProposalCommodity,
 } from "@/lib/production-proposal";
-import { blankDayReason, isFlaggedBlankDay } from "@/lib/production-blank-day";
+import {
+  blankDayReason,
+  isFlaggedBlankDay,
+  unfinalizedReportFlag,
+  TONE_CLASS,
+} from "@/lib/production-blank-day";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS = [
@@ -677,28 +682,28 @@ async function main() {
   const approved = blankDayReason({ reportStatus: "approved", hasCmLog: true });
   check(
     "BLANK-01 an approved report with nothing on the tracker is Phil's to fix",
-    approved.tone === "mine" && approved.label === "nothing filed",
+    approved.mine && approved.tone === "unfilled" && approved.label === "nothing filed",
     JSON.stringify(approved)
   );
 
   const cmOnly = blankDayReason({ reportStatus: null, hasCmLog: true });
   check(
     "BLANK-02 a CM log with no field report is flagged, not called quiet",
-    cmOnly.tone === "mine" && cmOnly.label === "CM logged work, no report",
+    cmOnly.mine && cmOnly.label === "CM logged work, no report",
     JSON.stringify(cmOnly)
   );
 
   const submitted = blankDayReason({ reportStatus: "submitted", hasCmLog: true });
   check(
     "BLANK-03 a report still in review waits on the CM, not on Phil",
-    submitted.tone === "waiting" && submitted.label === "awaiting CM review",
+    !submitted.mine && submitted.label === "awaiting CM review",
     JSON.stringify(submitted)
   );
 
   const returned = blankDayReason({ reportStatus: "returned", hasCmLog: false });
   check(
     "BLANK-04 a returned report is flagged even with no CM log",
-    returned.tone === "waiting" && returned.label === "returned to sub",
+    !returned.mine && returned.label === "returned to sub",
     JSON.stringify(returned)
   );
 
@@ -715,6 +720,44 @@ async function main() {
       isFlaggedBlankDay(cmOnly) &&
       isFlaggedBlankDay(submitted) &&
       isFlaggedBlankDay(returned)
+  );
+
+  // Returned and awaiting-review are both somebody else's move but they are not
+  // the same news, so they must not paint the same colour.
+  check(
+    "BLANK-07 every situation has its own colour",
+    new Set([approved.tone, returned.tone, submitted.tone, quiet.tone]).size === 4 &&
+      TONE_CLASS[returned.tone] !== TONE_CLASS[submitted.tone],
+    `${approved.tone}/${returned.tone}/${submitted.tone}/${quiet.tone}`
+  );
+
+  check(
+    "BLANK-08 every tone has a colour defined",
+    ([approved, cmOnly, submitted, returned, quiet] as const).every(
+      (f) => typeof TONE_CLASS[f.tone] === "string" && TONE_CLASS[f.tone].length > 0
+    )
+  );
+
+  // The top-of-page summary. An approved report is finalized; everything else
+  // in the window is not, whether or not the day carries numbers.
+  check(
+    "BLANK-09 an approved report is not counted as unfinalized",
+    unfinalizedReportFlag("approved") === null
+  );
+  check(
+    "BLANK-10 a day with no report at all is not an unfinalized report",
+    unfinalizedReportFlag(null) === null
+  );
+  check(
+    "BLANK-11 submitted, returned and draft all count as unfinalized",
+    ["submitted", "returned", "draft"].every(
+      (s) => unfinalizedReportFlag(s) !== null
+    )
+  );
+  check(
+    "BLANK-12 an unknown status still counts rather than disappearing",
+    unfinalizedReportFlag("escalated")?.label === "not finalized",
+    JSON.stringify(unfinalizedReportFlag("escalated"))
   );
 
   // ---------- integration: provenance, not a gate ----------

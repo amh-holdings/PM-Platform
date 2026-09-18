@@ -10,6 +10,8 @@ import { cn } from "@/lib/utils";
 import {
   blankDayReason,
   isFlaggedBlankDay,
+  unfinalizedReportFlag,
+  TONE_CLASS,
   type BlankDayFlag,
 } from "@/lib/production-blank-day";
 
@@ -165,11 +167,35 @@ export function ProductionGrid({
         hasCmLog: Boolean(ev?.cm),
       });
       if (!isFlaggedBlankDay(flag)) continue;
-      (flag.tone === "mine" ? mine : waiting).push({ date: d, label: flag.label });
+      (flag.mine ? mine : waiting).push({ date: d, label: flag.label });
     }
     return { mine, waiting };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dates, evidence, commodities, edits, initialValues]);
+
+  // Every report in the window that has not reached 'approved'. Counted whether
+  // or not the day carries numbers: a day with hand-entered quantities and a
+  // returned report is still not settled, and those figures are standing on
+  // evidence the CM rejected.
+  const unfinalizedReports = useMemo(
+    () =>
+      dates
+        .map((date) => {
+          const flag = unfinalizedReportFlag(evidence[date]?.reportStatus ?? null);
+          return flag ? { date, flag } : null;
+        })
+        .filter((d): d is { date: string; flag: BlankDayFlag } => d != null),
+    [dates, evidence],
+  );
+
+  // Open the day's report in the grid and bring the row into view. The summary
+  // is at the top and the day it names can be twenty rows down.
+  function revealDay(date: string) {
+    setOpenDate(date);
+    document
+      .getElementById(`tracker-day-${date}`)
+      ?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
 
   const dirtyCount = edits.size;
 
@@ -208,6 +234,40 @@ export function ProductionGrid({
 
   return (
     <div className="space-y-4">
+      {/* ===== Open reports ===== */}
+      {/* First thing on the page, because an unfinalized report is the reason a
+          day on the tracker is not settled. Each date opens its own row below. */}
+      {unfinalizedReports.length > 0 && (
+        <section className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 shadow-sm">
+          <p className="text-sm font-medium">
+            {unfinalizedReports.length} report
+            {unfinalizedReports.length === 1 ? " has" : "s have"} not been
+            finalized in this window.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            The tracker cannot fill a day from a report the CM has not approved.
+            Click a date to open the day below.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {unfinalizedReports.map(({ date, flag }) => (
+              <button
+                key={date}
+                type="button"
+                onClick={() => revealDay(date)}
+                className={cn(
+                  "rounded-md px-2 py-1 text-xs font-medium tabular-nums",
+                  "ring-1 ring-inset ring-current/25 hover:ring-current/50",
+                  TONE_CLASS[flag.tone],
+                )}
+              >
+                {date}{" "}
+                <span className="font-normal opacity-80">({flag.label})</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* ===== Range picker ===== */}
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <div className="flex flex-wrap items-end gap-3">
@@ -289,23 +349,6 @@ export function ProductionGrid({
             Read the day in the right-hand column and enter the quantities.
           </p>
         )}
-        {/* Real work, but the next move is not Phil's. These used to render
-            grey and identical to a day nobody was on site, which is how a
-            report sitting returned for a week read as a quiet week. */}
-        {flaggedBlankDays.waiting.length > 0 && (
-          <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
-            <span className="font-medium">
-              {flaggedBlankDays.waiting.length} day
-              {flaggedBlankDays.waiting.length === 1 ? "" : "s"} blank and
-              waiting on somebody else:
-            </span>{" "}
-            {flaggedBlankDays.waiting
-              .map((d) => `${d.date} (${d.label})`)
-              .join(", ")}
-            . Nothing to enter until the report clears review, but the day is
-            not idle.
-          </p>
-        )}
         {syncedCount > 0 && (
           <p className="mt-3 text-xs text-muted-foreground">
             {syncedCount} value{syncedCount === 1 ? " has" : "s have"} already been
@@ -360,6 +403,7 @@ export function ProductionGrid({
                 return (
                   <tr
                     key={date}
+                    id={`tracker-day-${date}`}
                     className={cn(
                       "border-b last:border-b-0",
                       isWeekend(date) && "bg-muted/20",
@@ -410,11 +454,7 @@ export function ProductionGrid({
                         <span
                           className={cn(
                             "mr-1 rounded px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                            blank.tone === "mine"
-                              ? "bg-destructive/15 text-destructive"
-                              : blank.tone === "waiting"
-                                ? "bg-amber-500/15 text-amber-700"
-                                : "bg-muted text-muted-foreground",
+                            TONE_CLASS[blank.tone],
                           )}
                         >
                           {blank.label}
