@@ -5,6 +5,8 @@
 // estimate with a confidence level so the UI can shade "we know this" vs
 // "we're guessing." Pure function, no DB dependencies.
 
+import { formatCurrency } from "@/lib/format";
+
 export type ProgressSource =
   | "pct_complete"      // DPR set the % directly - highest signal
   | "status"            // status text mapped to %
@@ -353,7 +355,7 @@ export function estimateProcurementProgress(
       const { fired, why } = milestoneTriggered(m, po);
       if (fired) earned += amount;
       detail.push(
-        `${label} ${m.milestone_name ?? "milestone"}: ${fired ? "EARNED" : "not earned"} $${Math.round(amount).toLocaleString("en-US")} (${why})`,
+        `${label} ${m.milestone_name ?? "milestone"}: ${fired ? "EARNED" : "not earned"} ${formatCurrency(amount)} (${why})`,
       );
     }
   }
@@ -375,7 +377,7 @@ export function estimateProcurementProgress(
     source: "pct_complete",
     earnedValue: earned,
     detail,
-    reason: `$${Math.round(earned).toLocaleString("en-US")} of triggered payment milestones against scope $${scheduledValue.toLocaleString("en-US")} = ${Math.round(pct * 100)}%`,
+    reason: `${formatCurrency(earned)} of triggered payment milestones against scope ${formatCurrency(scheduledValue)} = ${Math.round(pct * 100)}%`,
   };
 }
 

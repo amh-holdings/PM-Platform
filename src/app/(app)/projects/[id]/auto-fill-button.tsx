@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { formatCurrency } from "@/lib/format";
 import {
   applyProjectFields,
   extractProjectDetails,
@@ -35,14 +36,9 @@ const APPLICABLE_FIELDS: ApplicableField[] = [
   {
     key: "contract_value",
     label: "Contract value",
-    format: (v) =>
-      v == null
-        ? "-"
-        : new Intl.NumberFormat("en-US", {
-            style: "currency",
-            currency: "USD",
-            maximumFractionDigits: 0,
-          }).format(Number(v)),
+    // One formatter for the whole app, or this field disagrees with the value
+    // it is offering to overwrite.
+    format: (v) => (v == null ? "-" : formatCurrency(Number(v))),
   },
   { key: "ntp_date", label: "NTP date", format: (v) => (v == null ? "-" : String(v)) },
   { key: "cod_date", label: "COD date", format: (v) => (v == null ? "-" : String(v)) },

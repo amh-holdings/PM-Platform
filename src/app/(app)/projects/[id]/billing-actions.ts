@@ -18,6 +18,7 @@ import {
 import { progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import { canUndoPayApplication } from "@/lib/pay-app-undo";
+import { formatCurrency } from "@/lib/format";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -870,7 +871,7 @@ export async function getBillThisPeriodRows(
       } else if (est.earnedValue > 0) {
         blockRow(
           x.row,
-          `$${Math.round(est.earnedValue).toLocaleString("en-US")} of milestones triggered, but $${Math.round(alreadyBilled).toLocaleString("en-US")} already billed on this line - nothing further earned`,
+          `${formatCurrency(est.earnedValue)} of milestones triggered, but ${formatCurrency(alreadyBilled)} already billed on this line - nothing further earned`,
         );
       } else {
         blockRow(x.row, est.reason);

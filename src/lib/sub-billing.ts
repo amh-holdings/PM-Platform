@@ -16,6 +16,7 @@
 // Pure functions, no DB. The caller loads rows and hands them in.
 
 import { estimateTaskProgress, type Confidence, type TaskLike } from "@/lib/progress";
+import { formatCurrency } from "@/lib/format";
 
 // ------------------------------- tolerances -------------------------------
 
@@ -129,8 +130,7 @@ export type SubContext = {
 const n = (v: number | null | undefined) => Number(v ?? 0);
 const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
 const round2 = (v: number) => Math.round(v * 100) / 100;
-const money = (v: number) =>
-  v.toLocaleString("en-US", { style: "currency", currency: "USD" });
+const money = (v: number) => formatCurrency(v);
 
 /**
  * Cumulative approved-to-date per SOV item, across a set of prior applications.
