@@ -49,8 +49,12 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
   const { effective } = await getEffectiveRole();
   const showCosts = can(effective, "viewCosts");
 
-  const [{ data: projectRow }, { data: sovLines }, { data: unlinkedSovLines }] =
-    await Promise.all([
+  const [
+    { data: projectRow },
+    { data: sovLines },
+    { data: allSovLines },
+    { data: coNumbers },
+  ] = await Promise.all([
     coClient(supabase)
       .from("projects")
       // "*" so this page still renders on a database where migration 0052
@@ -64,20 +68,48 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
       .eq("change_order_id", params.coId)
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("item_number"),
-    // SOV lines attached to nothing. A CO billed on paper before the app
-    // existed already has its line on the sheet - what is missing is the link,
-    // not the money, and adding a second line is how the SOV outgrows the
-    // contract.
+    // EVERY SOV line on the project, not only the unlinked ones.
+    //
+    // A CO billed on paper before the app existed already has its line on the
+    // sheet - what is missing is the link, not the money, and adding a second
+    // line is how the SOV outgrows the contract. So the picker offers the
+    // unlinked lines.
+    //
+    // But a line missing from that list has two very different explanations -
+    // it does not exist, or it is already linked to another change order - and
+    // an absence cannot tell you which. Showing the linked ones too, greyed and
+    // naming the CO that holds them, turns "14.00 is missing" into "14.00 is on
+    // CO-04".
+    //
+    // Ordered in JS, not here. Postgres sorts item_number as text, which puts
+    // "10.00" before "9.00". See compareItemNumbers.
     supabase
       .from("billing_lines")
-      .select("id, item_number, description, scheduled_value")
+      .select("id, item_number, description, scheduled_value, change_order_id")
       .eq("project_id", params.id)
-      .is("change_order_id", null)
-      // Ordered in JS, not here. Postgres sorts item_number as text, which puts
-      // "10.00" before "9.00" and hides everything past section 9 in the middle
-      // of the list. See compareItemNumbers.
       .limit(2000),
+    supabase
+      .from("change_orders")
+      .select("id, co_number")
+      .eq("project_id", params.id),
   ]);
+
+  // The whole SOV, each line saying whether a change order already holds it.
+  const coNumberById = new Map((coNumbers ?? []).map((c) => [c.id, c.co_number]));
+  const sovPicker = (allSovLines ?? [])
+    .map((l) => ({
+      id: l.id,
+      itemNumber: l.item_number,
+      description: l.description,
+      scheduledValue: Number(l.scheduled_value ?? 0),
+      // null on this CO's own lines too: they are already in the table above,
+      // so offering them again would be noise.
+      linkedTo:
+        l.change_order_id == null
+          ? null
+          : coNumberById.get(l.change_order_id) ?? "another change order",
+    }))
+    .sort((a, b) => compareItemNumbers(a.itemNumber, b.itemNumber));
 
   // Backup files live in a private bucket, so hand the client short-lived
   // signed links rather than raw paths.
@@ -281,14 +313,7 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         }))}
         linesTotal={linesTotal}
         drift={ownerValue - linesTotal}
-        linkable={(unlinkedSovLines ?? [])
-          .map((l) => ({
-            id: l.id,
-            itemNumber: l.item_number,
-            description: l.description,
-            scheduledValue: Number(l.scheduled_value ?? 0),
-          }))
-          .sort((a, b) => compareItemNumbers(a.itemNumber, b.itemNumber))}
+        linkable={sovPicker}
       />
     </div>
   );

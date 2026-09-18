@@ -28,11 +28,14 @@ type Props = {
   linesTotal: number;
   drift: number;
   /**
-   * SOV lines on this project attached to no change order. Most of Sweet
-   * Springs' COs were billed on paper before the app, so their line is already
-   * on the sheet and only the link is missing.
+   * EVERY SOV line on the project, each saying which change order holds it.
+   *
+   * The unlinked ones are selectable. The rest are shown greyed with the CO
+   * that has them, because a line missing from a picker has two very different
+   * explanations - it does not exist, or somebody already linked it - and an
+   * absence cannot tell you which.
    */
-  linkable: LineRow[];
+  linkable: (LineRow & { linkedTo: string | null })[];
 };
 
 export function CoLineEditor({
@@ -54,6 +57,8 @@ export function CoLineEditor({
   const [linking, setLinking] = useState(false);
   const [linkId, setLinkId] = useState("");
   const [busy, setBusy] = useState(false);
+  const freeLines = linkable.filter((l) => l.linkedTo == null);
+  const takenLines = linkable.filter((l) => l.linkedTo != null);
 
   function refresh() {
     startTransition(() => router.refresh());
@@ -188,9 +193,14 @@ export function CoLineEditor({
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">
               Pick the line this change order is already billed on. Linking
-              moves no money - it records which CO the line came from.{" "}
+              moves no money - it records which CO the line came from.
+            </p>
+            <p className="text-[10px] text-muted-foreground">
               {linkable.length} SOV line{linkable.length === 1 ? "" : "s"} on
-              this project are linked to no change order.
+              this project &middot; {freeLines.length} free to link &middot;{" "}
+              {linkable.length - freeLines.length} already on a change order.
+              The taken ones are listed below, greyed, so you can see where they
+              went.
             </p>
             <div className="flex flex-wrap gap-2">
               <select
@@ -199,11 +209,20 @@ export function CoLineEditor({
                 className="h-9 min-w-[22rem] flex-1 rounded-md border border-input bg-background px-2 text-xs"
               >
                 <option value="">- Select an unlinked SOV line -</option>
-                {linkable.map((l) => (
+                {freeLines.map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.itemNumber} - {l.description} ({formatCurrency(l.scheduledValue)})
                   </option>
                 ))}
+                {takenLines.length > 0 && (
+                  <optgroup label="Already linked - detach there first">
+                    {takenLines.map((l) => (
+                      <option key={l.id} value={l.id} disabled>
+                        {l.itemNumber} - {l.description} ({formatCurrency(l.scheduledValue)}) &rarr; {l.linkedTo}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
               <Button size="sm" onClick={onLink} disabled={busy}>
                 {busy ? "Linking..." : "Link"}
@@ -232,7 +251,16 @@ export function CoLineEditor({
                   second line for scope the sheet already carries is what put
                   Sweet Springs' SOV over its own contract. */}
               {linkable.length > 0 && (
-                <Button size="sm" onClick={() => setLinking(true)}>
+                <Button
+                  size="sm"
+                  onClick={() => setLinking(true)}
+                  disabled={freeLines.length === 0}
+                  title={
+                    freeLines.length === 0
+                      ? "Every SOV line on this project is already on a change order"
+                      : undefined
+                  }
+                >
                   Link existing SOV line
                 </Button>
               )}
