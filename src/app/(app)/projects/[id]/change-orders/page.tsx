@@ -90,6 +90,13 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
   const totalProfit = totalCoValue - totalCost;
   const pendingValue = pendingRows.reduce((s, r) => s + Number(r.co_value ?? 0), 0);
   const approvedCount = approvedRows.length;
+  // Margin on the approved book. "Profit" on its own is a number with no scale
+  // - $8,143 reads fine until you notice it sits on $1.27M of cost.
+  const marginPct = totalCost > 0 ? (totalProfit / totalCost) * 100 : null;
+  // Every money tile counts APPROVED change orders only, while the count tile
+  // counts all of them. Saying so on each card is the whole point: the row
+  // otherwise reads as four totals of the same seven things.
+  const approvedBasis = `${approvedCount} approved CO${approvedCount === 1 ? "" : "s"}`;
 
   // How much of each CO's priced scope has a quote behind it.
   const linesPerCo = new Map<string, Set<string>>();
@@ -126,39 +133,53 @@ export default async function ChangeOrdersPage({ params }: { params: Params }) {
           <div className="mt-1 text-2xl font-semibold">{rows.length}</div>
           <div className="mt-1 text-[10px] text-muted-foreground">
             {approvedCount} approved &middot; {pendingRows.length} in progress
+            {rows.length !== approvedCount + pendingRows.length
+              ? ` · ${rows.length - approvedCount - pendingRows.length} rejected or void`
+              : ""}
+          </div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            Every figure to the right counts the approved ones only
           </div>
         </div>
         {showCosts && (
           <div className="rounded-md border bg-card p-3">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">
-              Total cost (AHC)
+              Approved CO cost
             </div>
             <div className="mt-1 text-2xl font-semibold">
               {formatCurrency(totalCost)}
+            </div>
+            <div className="mt-1 text-[10px] text-muted-foreground">
+              What AHC pays out, across {approvedBasis}
             </div>
           </div>
         )}
         {showCosts && (
           <div className="rounded-md border bg-card p-3">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">
-              Total profit
+              Approved CO profit
             </div>
             <div className="mt-1 text-2xl font-semibold text-emerald-700">
               {formatCurrency(totalProfit)}
+            </div>
+            <div className="mt-1 text-[10px] text-muted-foreground">
+              Owner value minus AHC cost
+              {marginPct == null ? "" : ` · ${marginPct.toFixed(1)}% margin`}
             </div>
           </div>
         )}
         <div className="rounded-md border bg-card p-3">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
-            Approved (owner)
+            Approved CO value
           </div>
           <div className="mt-1 text-2xl font-semibold text-emerald-700">
             {formatCurrency(totalCoValue)}
           </div>
           <div className="mt-1 text-[10px] text-muted-foreground">
+            Added to the contract price by {approvedBasis}
             {pendingValue !== 0
-              ? `${formatCurrency(pendingValue)} pending approval`
-              : "Nothing pending"}
+              ? ` · ${formatCurrency(pendingValue)} still pending`
+              : ""}
           </div>
         </div>
       </div>
