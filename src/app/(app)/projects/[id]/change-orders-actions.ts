@@ -9,7 +9,9 @@ import {
   CO_STATUS_LABELS,
   CONTRACT_MARKUP_PCT,
   COST_CATEGORIES,
+  canDeleteCo,
   canTransition,
+  coApprovalBlocker,
   countsTowardContract,
   nextCoNumber,
   parsePastedCostLines,
@@ -134,6 +136,24 @@ export async function deleteChangeOrder(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
+
+  // Void and draft only. An approved CO is in the contract value and on the
+  // owner's G703, a submitted one is in their hands, and a rejected one is the
+  // record of a decision they made. This action had no status check at all,
+  // which was survivable only because nothing called it.
+  const { data: co } = await auth.supabase
+    .from("change_orders")
+    .select("co_number, status")
+    .eq("id", coId)
+    .maybeSingle();
+  if (!co) return { ok: false, error: "Change order not found" };
+  const status = co.status ?? "draft";
+  if (!canDeleteCo(status)) {
+    return {
+      ok: false,
+      error: `${co.co_number} is ${status}. Only a void or draft change order can be deleted - void it first if it is being withdrawn.`,
+    };
+  }
 
   // Detach billing_lines (FK is on delete set null already, but be explicit)
   await auth.supabase
@@ -504,7 +524,9 @@ export async function transitionCoStatus(
 
   const { data: co } = await db
     .from("change_orders")
-    .select("id, co_number, description, status, co_value, billing_line_id")
+    .select(
+      "id, co_number, description, status, co_value, billing_line_id, mech_completion_delta_days, subst_completion_delta_days",
+    )
     .eq("id", coId)
     .maybeSingle();
   if (!co) return { ok: false, error: "Change order not found" };
@@ -516,6 +538,23 @@ export async function transitionCoStatus(
       ok: false,
       error: `Cannot move a ${CO_STATUS_LABELS[fromStatus as CoStatus] ?? fromStatus} change order to ${CO_STATUS_LABELS[toStatus as CoStatus] ?? toStatus}`,
     };
+  }
+
+  // An approval has to be worth something: priced scope, or a date change.
+  // Enforced here and not only on the button, because a disabled button is a
+  // suggestion and this one puts a line on the owner's G703.
+  if (toStatus === "approved") {
+    const { count } = await db
+      .from("change_order_cost_lines")
+      .select("id", { count: "exact", head: true })
+      .eq("change_order_id", coId);
+    const blocker = coApprovalBlocker({
+      hasCostLines: (count ?? 0) > 0,
+      coValue: Number(co.co_value ?? 0),
+      mechCompletionDeltaDays: co.mech_completion_delta_days,
+      substCompletionDeltaDays: co.subst_completion_delta_days,
+    });
+    if (blocker) return { ok: false, error: blocker };
   }
 
   const today = new Date().toISOString().slice(0, 10);
@@ -884,11 +923,28 @@ export async function updateCoNumber(
     .update({ co_number: trimmed })
     .eq("id", coId);
   if (error) {
+    if (!error.message.includes("duplicate")) {
+      return { ok: false, error: error.message };
+    }
+    // Say WHICH change order holds it and what state it is in. "Already used"
+    // on its own leaves you hunting for a number that may well be sitting on a
+    // withdrawn CO you are allowed to delete.
+    const { data: holder } = await db
+      .from("change_orders")
+      .select("status")
+      .eq("project_id", projectId)
+      .eq("co_number", trimmed)
+      .maybeSingle();
+    const held = holder?.status ?? null;
     return {
       ok: false,
-      error: error.message.includes("duplicate")
-        ? `${trimmed} is already used by another change order on this project`
-        : error.message,
+      error: held
+        ? `${trimmed} is already used on this project by a change order in ${held} status.${
+            canDeleteCo(held)
+              ? " Delete that one from its own page to free the number."
+              : " Pick another number."
+          }`
+        : `${trimmed} is already used by another change order on this project`,
     };
   }
 

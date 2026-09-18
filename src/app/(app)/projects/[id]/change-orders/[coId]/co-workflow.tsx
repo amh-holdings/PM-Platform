@@ -12,15 +12,22 @@ import {
   type CoStatus,
 } from "@/lib/change-order-pricing";
 import type { CoEvent } from "@/lib/change-order-load";
-import { transitionCoStatus } from "../../change-orders-actions";
+import { canDeleteCo } from "@/lib/change-order-pricing";
+import { deleteChangeOrder, transitionCoStatus } from "../../change-orders-actions";
 
 type Props = {
   projectId: string;
   changeOrderId: string;
   status: string;
   events: CoEvent[];
-  /** Blocks approval until the CO actually has priced scope. */
-  hasLines: boolean;
+  /** CO number, so the delete confirmation names what it is about to remove. */
+  coNumber: string;
+  /**
+   * What the CO is still missing before it can be approved, or null when it is
+   * ready. Null for a time-only CO that moves a completion date and carries no
+   * cost - those used to be unapprovable forever.
+   */
+  approvalBlocker: string | null;
   linesMissingBackup: number;
 };
 
@@ -32,7 +39,8 @@ export function CoWorkflow({
   changeOrderId,
   status,
   events,
-  hasLines,
+  coNumber,
+  approvalBlocker,
   linesMissingBackup,
 }: Props) {
   const router = useRouter();
@@ -70,6 +78,24 @@ export function CoWorkflow({
     router.refresh();
   }
 
+  // Void and draft only, enforced on the server too. Everything else is
+  // history the project is answerable for.
+  const deletable = canDeleteCo(current);
+
+  async function remove() {
+    const ok = confirm(
+      `Delete ${coNumber} permanently?\n\nThis cannot be undone. Its cost lines and backup go with it, and the number becomes free for reuse - only do that if this change order never reached the owner.`,
+    );
+    if (!ok) return;
+    setError(null);
+    setBusy(true);
+    const res = await deleteChangeOrder(changeOrderId, projectId);
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
+    router.push(`/projects/${projectId}/change-orders`);
+    router.refresh();
+  }
+
   return (
     <section className="rounded-lg border bg-card shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
@@ -98,13 +124,13 @@ export function CoWorkflow({
 
         <div className="flex flex-wrap gap-2">
           {next.map((s) => {
-            const blocked = s === "approved" && !hasLines;
+            const blocked = s === "approved" && approvalBlocker != null;
             return (
               <button
                 key={s}
                 type="button"
                 disabled={busy || blocked}
-                title={blocked ? "Add at least one cost line before approving" : undefined}
+                title={blocked ? approvalBlocker ?? undefined : undefined}
                 onClick={() => move(s)}
                 className={cn(
                   "rounded-md px-3 py-1.5 text-xs font-medium disabled:opacity-40",
@@ -117,6 +143,21 @@ export function CoWorkflow({
               </button>
             );
           })}
+          {deletable && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={remove}
+              title={
+                current === "void"
+                  ? "Remove this withdrawn change order and free its number"
+                  : "Remove this draft"
+              }
+              className="rounded-md border border-destructive/40 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-40"
+            >
+              Delete
+            </button>
+          )}
         </div>
       </div>
 

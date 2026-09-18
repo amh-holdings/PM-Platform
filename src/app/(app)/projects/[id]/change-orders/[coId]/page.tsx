@@ -11,6 +11,7 @@ import { loadChangeOrder } from "@/lib/change-order-load";
 import {
   CO_STATUS_LABELS,
   CONTRACT_MARKUP_PCT,
+  coApprovalBlocker,
   type CoStatus,
 } from "@/lib/change-order-pricing";
 
@@ -140,7 +141,13 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         changeOrderId={params.coId}
         status={co.status}
         events={events}
-        hasLines={buildup.lines.length > 0 || co.coValue > 0}
+        coNumber={co.coNumber}
+        approvalBlocker={coApprovalBlocker({
+          hasCostLines: buildup.lines.length > 0,
+          coValue: co.coValue,
+          mechCompletionDeltaDays: co.mechCompletionDeltaDays,
+          substCompletionDeltaDays: co.substCompletionDeltaDays,
+        })}
         linesMissingBackup={linesMissingBackup}
       />
 
