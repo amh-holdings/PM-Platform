@@ -28,7 +28,8 @@
     "test:sub-sov-import": "tsx scripts/sub-billing/run-sov-import-tests.ts",
     "commodity:propose-reports": "tsx scripts/commodity/propose-from-reports.ts",
     "test:sov-import": "tsx scripts/billing/run-sov-import-tests.ts",
-    "test:pay-app-undo": "tsx scripts/pay-app-undo/run-tests.ts"
+    "test:pay-app-undo": "tsx scripts/pay-app-undo/run-tests.ts",
+    "test:project-financials": "tsx scripts/project-financials/run-tests.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
