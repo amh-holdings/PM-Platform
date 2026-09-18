@@ -188,7 +188,9 @@ export function CoLineEditor({
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">
               Pick the line this change order is already billed on. Linking
-              moves no money - it records which CO the line came from.
+              moves no money - it records which CO the line came from.{" "}
+              {linkable.length} SOV line{linkable.length === 1 ? "" : "s"} on
+              this project are linked to no change order.
             </p>
             <div className="flex flex-wrap gap-2">
               <select
