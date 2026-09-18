@@ -7,7 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
-import { addCoBillingLine, removeCoBillingLine } from "../../change-orders-actions";
+import {
+  addCoBillingLine,
+  linkCoBillingLine,
+  removeCoBillingLine,
+} from "../../change-orders-actions";
 
 type LineRow = {
   id: string;
@@ -23,6 +27,12 @@ type Props = {
   lines: LineRow[];
   linesTotal: number;
   drift: number;
+  /**
+   * SOV lines on this project attached to no change order. Most of Sweet
+   * Springs' COs were billed on paper before the app, so their line is already
+   * on the sheet and only the link is missing.
+   */
+  linkable: LineRow[];
 };
 
 export function CoLineEditor({
@@ -32,6 +42,7 @@ export function CoLineEditor({
   lines,
   linesTotal,
   drift,
+  linkable,
 }: Props) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -40,6 +51,9 @@ export function CoLineEditor({
   const [description, setDescription] = useState("");
   const [scheduledValue, setScheduledValue] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [linking, setLinking] = useState(false);
+  const [linkId, setLinkId] = useState("");
+  const [busy, setBusy] = useState(false);
 
   function refresh() {
     startTransition(() => router.refresh());
@@ -71,6 +85,24 @@ export function CoLineEditor({
     setDescription("");
     setScheduledValue("");
     setAdding(false);
+    refresh();
+  }
+
+  async function onLink() {
+    setErr(null);
+    if (!linkId) {
+      setErr("Pick the SOV line this change order is billed on");
+      return;
+    }
+    setBusy(true);
+    const res = await linkCoBillingLine(linkId, changeOrderId, projectId);
+    setBusy(false);
+    if (!res.ok) {
+      setErr(res.error);
+      return;
+    }
+    setLinkId("");
+    setLinking(false);
     refresh();
   }
 
@@ -152,16 +184,60 @@ export function CoLineEditor({
       )}
 
       <div className="border-t p-3">
-        {!adding ? (
-          <div className="flex items-center justify-between">
+        {linking ? (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              Pick the line this change order is already billed on. Linking
+              moves no money - it records which CO the line came from.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <select
+                value={linkId}
+                onChange={(e) => setLinkId(e.target.value)}
+                className="h-9 min-w-[22rem] flex-1 rounded-md border border-input bg-background px-2 text-xs"
+              >
+                <option value="">- Select an unlinked SOV line -</option>
+                {linkable.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.itemNumber} - {l.description} ({formatCurrency(l.scheduledValue)})
+                  </option>
+                ))}
+              </select>
+              <Button size="sm" onClick={onLink} disabled={busy}>
+                {busy ? "Linking..." : "Link"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setLinking(false);
+                  setErr(null);
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : !adding ? (
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-muted-foreground">
               {lines.length === 0
-                ? "No SOV lines yet for this CO. Add one to make it billable."
+                ? "No SOV lines yet for this CO. Link the line it already bills on, or add a new one."
                 : "Add another sub-line if the CO covers multiple components."}
             </p>
-            <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
-              Add SOV line
-            </Button>
+            <div className="flex gap-2">
+              {/* Link first, and deliberately the primary of the two. Adding a
+                  second line for scope the sheet already carries is what put
+                  Sweet Springs' SOV over its own contract. */}
+              {linkable.length > 0 && (
+                <Button size="sm" onClick={() => setLinking(true)}>
+                  Link existing SOV line
+                </Button>
+              )}
+              <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+                Add SOV line
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="space-y-2">

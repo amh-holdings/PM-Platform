@@ -47,7 +47,8 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
   const { effective } = await getEffectiveRole();
   const showCosts = can(effective, "viewCosts");
 
-  const [{ data: projectRow }, { data: sovLines }] = await Promise.all([
+  const [{ data: projectRow }, { data: sovLines }, { data: unlinkedSovLines }] =
+    await Promise.all([
     coClient(supabase)
       .from("projects")
       // "*" so this page still renders on a database where migration 0052
@@ -60,6 +61,16 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
       .select("id, item_number, description, scheduled_value, sort_order")
       .eq("change_order_id", params.coId)
       .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("item_number"),
+    // SOV lines attached to nothing. A CO billed on paper before the app
+    // existed already has its line on the sheet - what is missing is the link,
+    // not the money, and adding a second line is how the SOV outgrows the
+    // contract.
+    supabase
+      .from("billing_lines")
+      .select("id, item_number, description, scheduled_value")
+      .eq("project_id", params.id)
+      .is("change_order_id", null)
       .order("item_number"),
   ]);
 
@@ -265,6 +276,12 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         }))}
         linesTotal={linesTotal}
         drift={ownerValue - linesTotal}
+        linkable={(unlinkedSovLines ?? []).map((l) => ({
+          id: l.id,
+          itemNumber: l.item_number,
+          description: l.description,
+          scheduledValue: Number(l.scheduled_value ?? 0),
+        }))}
       />
     </div>
   );
