@@ -40,6 +40,13 @@ function revalidateBilling(projectId: string) {
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/billing`);
   revalidatePath(`/projects/${projectId}/pay-apps`);
+  // Change orders read the SOV too: every CO page offers the unlinked lines to
+  // link against, and the dashboard reconciles the SOV total to the contract.
+  // Without this, a line added here does not appear in that picker until the
+  // cache happens to expire, and the page shows a list that is quietly stale.
+  // "layout" so every /change-orders/[coId] under it is refreshed, not just
+  // the list page.
+  revalidatePath(`/projects/${projectId}/change-orders`, "layout");
 }
 
 export type BillingLineResult =

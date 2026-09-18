@@ -80,3 +80,32 @@ export function deriveContractValue(input: ContractValueInput): ContractValue {
 function round2(n: number): number {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
+
+/**
+ * SOV item numbers in the order a human reads them.
+ *
+ * "10.00" sorts BEFORE "9.00" as text, because "1" < "9". Postgres orders
+ * item_number as text, so a schedule of values that runs past nine sections
+ * comes back with 10 through 16 buried between 1.09 and 2.00 - which reads,
+ * to anyone scrolling to the bottom of a picker, as a list that stops at 9.
+ *
+ * Split on the dots and compare each part as a number, falling back to text
+ * for anything that is not one ("CO-03", "GC", a lettered line).
+ */
+export function compareItemNumbers(a: string, b: string): number {
+  const pa = String(a ?? "").split(".");
+  const pb = String(b ?? "").split(".");
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const sa = pa[i] ?? "";
+    const sb = pb[i] ?? "";
+    const na = Number(sa);
+    const nb = Number(sb);
+    if (sa !== "" && sb !== "" && Number.isFinite(na) && Number.isFinite(nb)) {
+      if (na !== nb) return na - nb;
+      continue;
+    }
+    const c = sa.localeCompare(sb, undefined, { numeric: true, sensitivity: "base" });
+    if (c !== 0) return c;
+  }
+  return 0;
+}

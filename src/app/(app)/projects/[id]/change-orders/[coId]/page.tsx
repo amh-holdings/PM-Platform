@@ -15,6 +15,8 @@ import {
   type CoStatus,
 } from "@/lib/change-order-pricing";
 
+import { compareItemNumbers } from "@/lib/project-financials";
+
 import { DOCUMENT_BUCKET } from "../../documents-constants";
 import { CoLineEditor } from "./co-line-editor";
 import { CoBuildupEditor } from "./co-buildup-editor";
@@ -71,7 +73,10 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
       .select("id, item_number, description, scheduled_value")
       .eq("project_id", params.id)
       .is("change_order_id", null)
-      .order("item_number"),
+      // Ordered in JS, not here. Postgres sorts item_number as text, which puts
+      // "10.00" before "9.00" and hides everything past section 9 in the middle
+      // of the list. See compareItemNumbers.
+      .limit(2000),
   ]);
 
   // Backup files live in a private bucket, so hand the client short-lived
@@ -276,12 +281,14 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         }))}
         linesTotal={linesTotal}
         drift={ownerValue - linesTotal}
-        linkable={(unlinkedSovLines ?? []).map((l) => ({
-          id: l.id,
-          itemNumber: l.item_number,
-          description: l.description,
-          scheduledValue: Number(l.scheduled_value ?? 0),
-        }))}
+        linkable={(unlinkedSovLines ?? [])
+          .map((l) => ({
+            id: l.id,
+            itemNumber: l.item_number,
+            description: l.description,
+            scheduledValue: Number(l.scheduled_value ?? 0),
+          }))
+          .sort((a, b) => compareItemNumbers(a.itemNumber, b.itemNumber))}
       />
     </div>
   );

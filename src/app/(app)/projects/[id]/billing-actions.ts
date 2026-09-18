@@ -80,6 +80,7 @@ export async function updateLinkedTasks(
 
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}/change-orders`, "layout");
   return { ok: true, unknownCodes };
 }
 
@@ -474,6 +475,7 @@ export async function updateBillingLineProcurementLinks(
 
   revalidatePath(`/projects/${projectId}/billing`);
   revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/change-orders`, "layout");
   return { ok: true };
 }
 
@@ -1020,5 +1022,6 @@ export async function promoteSuggestionsToPlanned(
 
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}/change-orders`, "layout");
   return { ok: true, written, period_month: nextMonthIso };
 }
