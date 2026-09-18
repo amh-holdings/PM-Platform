@@ -50,9 +50,9 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
   const [{ data: projectRow }, { data: sovLines }] = await Promise.all([
     coClient(supabase)
       .from("projects")
-      .select(
-        "original_contract_value, agreement_date, guaranteed_mechanical_completion_date, guaranteed_substantial_completion_date",
-      )
+      // "*" so this page still renders on a database where migration 0052
+      // has not run. PostgREST errors on a named column it cannot find.
+      .select("*")
       .eq("id", params.id)
       .maybeSingle(),
     supabase
@@ -230,6 +230,7 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         coId={co.id}
         projectId={params.id}
         mechDeltaDays={co.mechCompletionDeltaDays}
+        pisDeltaDays={co.pisCompletionDeltaDays}
         substDeltaDays={co.substCompletionDeltaDays}
         originalContractValue={
           projectRow?.original_contract_value == null
@@ -238,6 +239,10 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         }
         agreementDate={projectRow?.agreement_date ?? null}
         guaranteedMechanicalDate={projectRow?.guaranteed_mechanical_completion_date ?? null}
+        guaranteedPlacedInServiceDate={
+          (projectRow as { guaranteed_placed_in_service_date?: string | null } | null)
+            ?.guaranteed_placed_in_service_date ?? null
+        }
         guaranteedSubstantialDate={projectRow?.guaranteed_substantial_completion_date ?? null}
       />
 

@@ -212,6 +212,8 @@ export type ExhibitHProject = {
   /** Current contract price, used only as a fallback for the original. */
   contractValue: number | null;
   guaranteedMechanicalCompletionDate: string | null;
+  /** Sits between the other two on the owner's form. Migration 0052. */
+  guaranteedPlacedInServiceDate: string | null;
   guaranteedSubstantialCompletionDate: string | null;
 };
 
@@ -220,6 +222,7 @@ export type ExhibitHCo = {
   dateOfChangeOrder: string | null;
   billable: number;
   mechCompletionDeltaDays: number | null;
+  pisCompletionDeltaDays: number | null;
   substCompletionDeltaDays: number | null;
 };
 
@@ -253,6 +256,7 @@ export type ExhibitH = {
   /** Line 5 = line 3 + line 4. */
   newContractPrice: number | null;
   mechanical: CompletionAdjustment;
+  placedInService: CompletionAdjustment;
   substantial: CompletionAdjustment;
   /** Fields Exhibit H needs that the project record does not yet carry. */
   missing: string[];
@@ -324,6 +328,15 @@ export function deriveExhibitH(
   if (!project.agreementDate) missing.push("Date of agreement");
   if (!project.guaranteedMechanicalCompletionDate)
     missing.push("Guaranteed Mechanical Completion Date");
+  // Only reported missing once the CO actually moves it. A project with no PIS
+  // date is ordinary - not every agreement names one - and listing it on every
+  // change order would train Phil to ignore the missing-fields list.
+  if (
+    !project.guaranteedPlacedInServiceDate &&
+    (co.pisCompletionDeltaDays ?? 0) !== 0
+  ) {
+    missing.push("Guaranteed Placed-in-Service Date");
+  }
   if (!project.guaranteedSubstantialCompletionDate)
     missing.push("Guaranteed Substantial Completion Date");
   if (!co.dateOfChangeOrder) missing.push("Date of change order");
@@ -345,6 +358,7 @@ export function deriveExhibitH(
       thisChangeOrderAmount > 0 ? "increased" : thisChangeOrderAmount < 0 ? "decreased" : "unchanged",
     newContractPrice,
     mechanical: adjust(project.guaranteedMechanicalCompletionDate, co.mechCompletionDeltaDays),
+    placedInService: adjust(project.guaranteedPlacedInServiceDate, co.pisCompletionDeltaDays),
     substantial: adjust(project.guaranteedSubstantialCompletionDate, co.substCompletionDeltaDays),
     missing,
   };
@@ -406,11 +420,13 @@ export function coApprovalBlocker(co: {
   hasCostLines: boolean;
   coValue: number;
   mechCompletionDeltaDays: number | null;
+  pisCompletionDeltaDays?: number | null;
   substCompletionDeltaDays: number | null;
 }): string | null {
   if (co.hasCostLines || co.coValue !== 0) return null;
   const movesTime =
     (co.mechCompletionDeltaDays ?? 0) !== 0 ||
+    (co.pisCompletionDeltaDays ?? 0) !== 0 ||
     (co.substCompletionDeltaDays ?? 0) !== 0;
   if (movesTime) return null;
   return "Add a cost line, or a completion date change on the Exhibit H panel, before approving.";
