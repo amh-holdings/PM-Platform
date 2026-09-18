@@ -17,6 +17,7 @@ type Props = {
   coId: string;
   projectId: string;
   mechDeltaDays: number | null;
+  pisDeltaDays: number | null;
   substDeltaDays: number | null;
   /**
    * Project facts, editable here because this is where you need them. The two
@@ -26,6 +27,7 @@ type Props = {
   originalContractValue: number | null;
   agreementDate: string | null;
   guaranteedMechanicalDate: string | null;
+  guaranteedPlacedInServiceDate: string | null;
   guaranteedSubstantialDate: string | null;
 };
 
@@ -42,15 +44,18 @@ export function ExhibitHPanel({
   coId,
   projectId,
   mechDeltaDays,
+  pisDeltaDays,
   substDeltaDays,
   originalContractValue,
   agreementDate,
   guaranteedMechanicalDate,
+  guaranteedPlacedInServiceDate,
   guaranteedSubstantialDate,
 }: Props) {
   const router = useRouter();
   const [copied, setCopied] = useState<string | null>(null);
   const [mech, setMech] = useState(mechDeltaDays == null ? "" : String(mechDeltaDays));
+  const [pis, setPis] = useState(pisDeltaDays == null ? "" : String(pisDeltaDays));
   const [subst, setSubst] = useState(substDeltaDays == null ? "" : String(substDeltaDays));
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
@@ -76,12 +81,14 @@ export function ExhibitHPanel({
 
   const dirty =
     mech !== (mechDeltaDays == null ? "" : String(mechDeltaDays)) ||
+    pis !== (pisDeltaDays == null ? "" : String(pisDeltaDays)) ||
     subst !== (substDeltaDays == null ? "" : String(substDeltaDays));
 
   async function saveDeltas() {
     setBusy(true);
     await updateCoFormFields(coId, projectId, {
       mechCompletionDeltaDays: toIntOrNull(mech),
+      pisCompletionDeltaDays: toIntOrNull(pis),
       substCompletionDeltaDays: toIntOrNull(subst),
     });
     setBusy(false);
@@ -224,6 +231,26 @@ export function ExhibitHPanel({
         <Row
           label="Guaranteed Mechanical Completion Date (revised)"
           value={h.mechanical.revisedDate ? formatDate(h.mechanical.revisedDate) : "-"}
+          onCopy={copy}
+          copied={copied}
+          accent
+        />
+        <EditRow
+          label="Guaranteed Placed-in-Service Date (current)"
+          type="date"
+          defaultValue={guaranteedPlacedInServiceDate ?? ""}
+          saving={saving === "pisDate"}
+          onCommit={(v) => saveDates({ guaranteedPlacedInServiceDate: v || null }, "pisDate")}
+        />
+        <DeltaRow
+          label="Placed in Service - change by"
+          value={pis}
+          onChange={setPis}
+          direction={h.placedInService.direction}
+        />
+        <Row
+          label="Guaranteed Placed-in-Service Date (revised)"
+          value={h.placedInService.revisedDate ? formatDate(h.placedInService.revisedDate) : "-"}
           onCopy={copy}
           copied={copied}
           accent

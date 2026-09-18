@@ -337,6 +337,7 @@ const sweetSprings: ExhibitHProject = {
   originalContractValue: 2507500,
   contractValue: 2876175.48,
   guaranteedMechanicalCompletionDate: "2024-11-29",
+  guaranteedPlacedInServiceDate: null,
   guaranteedSubstantialCompletionDate: "2025-02-28",
 };
 
@@ -350,6 +351,7 @@ const sweetSprings: ExhibitHProject = {
       dateOfChangeOrder: "2025-10-31",
       billable: 368675.48,
       mechCompletionDeltaDays: 0,
+      pisCompletionDeltaDays: null,
       substCompletionDeltaDays: 0,
     },
     [],
@@ -373,6 +375,7 @@ const sweetSprings: ExhibitHProject = {
       dateOfChangeOrder: "2026-01-15",
       billable: 100000,
       mechCompletionDeltaDays: null,
+      pisCompletionDeltaDays: null,
       substCompletionDeltaDays: null,
     },
     [
@@ -390,7 +393,7 @@ const sweetSprings: ExhibitHProject = {
   // CO numbers must sort naturally, so CO-10 lands after CO-9 on the form.
   const h = deriveExhibitH(
     sweetSprings,
-    { coNumber: "CO-11", dateOfChangeOrder: null, billable: 0, mechCompletionDeltaDays: null, substCompletionDeltaDays: null },
+    { coNumber: "CO-11", dateOfChangeOrder: null, billable: 0, mechCompletionDeltaDays: null, pisCompletionDeltaDays: null, substCompletionDeltaDays: null },
     [
       { id: "c", coNumber: "CO-10", coValue: 1, status: "approved" },
       { id: "a", coNumber: "CO-2", coValue: 1, status: "approved" },
@@ -408,12 +411,102 @@ const sweetSprings: ExhibitHProject = {
       dateOfChangeOrder: "2026-02-01",
       billable: -25000,
       mechCompletionDeltaDays: null,
+      pisCompletionDeltaDays: null,
       substCompletionDeltaDays: null,
     },
     [],
   );
   eq("a credit CO reads as a decrease", h.direction, "decreased");
   eq("a credit CO lowers the new contract price", h.newContractPrice, 2482500);
+}
+
+section("Exhibit H - Placed in Service");
+
+{
+  // The owner's form carries three guaranteed dates. Placed in Service sits
+  // between Mechanical and Substantial on it, and had nowhere to live until
+  // migration 0052.
+  const h = deriveExhibitH(
+    {
+      name: "Sweet Springs",
+      client: "Dimension",
+      contractorLegalName: "AHC",
+      agreementDate: "2025-01-15",
+      originalContractValue: 1000000,
+      contractValue: 1000000,
+      guaranteedMechanicalCompletionDate: "2025-01-31",
+      guaranteedPlacedInServiceDate: "2025-02-14",
+      guaranteedSubstantialCompletionDate: "2025-02-28",
+    },
+    {
+      coNumber: "CO-03",
+      dateOfChangeOrder: "2026-09-18",
+      billable: 0,
+      mechCompletionDeltaDays: null,
+      pisCompletionDeltaDays: 21,
+      substCompletionDeltaDays: null,
+    },
+    [],
+  );
+  eq("the current PIS date carries through", h.placedInService.currentDate, "2025-02-14");
+  eq("a positive delta pushes it out", h.placedInService.revisedDate, "2025-03-07");
+  eq("and reads as an increase", h.placedInService.direction, "increased");
+  // The other two are untouched by a PIS-only change order.
+  eq("mechanical is unmoved", h.mechanical.direction, "unchanged");
+  eq("substantial is unmoved", h.substantial.direction, "unchanged");
+}
+
+{
+  // A project with no PIS date is ordinary - not every agreement names one -
+  // so it is only reported missing once a CO actually moves it.
+  const project = {
+    name: "P",
+    client: null,
+    contractorLegalName: null,
+    agreementDate: "2025-01-15",
+    originalContractValue: 1000,
+    contractValue: 1000,
+    guaranteedMechanicalCompletionDate: "2025-01-31",
+    guaranteedPlacedInServiceDate: null,
+    guaranteedSubstantialCompletionDate: "2025-02-28",
+  };
+  const quiet = deriveExhibitH(
+    project,
+    { coNumber: "CO-01", dateOfChangeOrder: "2026-09-18", billable: 100, mechCompletionDeltaDays: null, pisCompletionDeltaDays: null, substCompletionDeltaDays: null },
+    [],
+  );
+  check(
+    "no PIS date is not reported missing when nothing moves it",
+    !quiet.missing.includes("Guaranteed Placed-in-Service Date"),
+    quiet.missing.join(" | "),
+  );
+  const moved = deriveExhibitH(
+    project,
+    { coNumber: "CO-02", dateOfChangeOrder: "2026-09-18", billable: 0, mechCompletionDeltaDays: null, pisCompletionDeltaDays: 10, substCompletionDeltaDays: null },
+    [],
+  );
+  check(
+    "but it is the moment a CO moves it",
+    moved.missing.includes("Guaranteed Placed-in-Service Date"),
+    moved.missing.join(" | "),
+  );
+  // With no date to adjust there is nothing to revise, and it must not crash.
+  eq("a delta with no base date revises to nothing", moved.placedInService.revisedDate, null);
+}
+
+{
+  // A CO that only moves Placed in Service is a real change order.
+  eq(
+    "a PIS-only change order is approvable",
+    coApprovalBlocker({
+      hasCostLines: false,
+      coValue: 0,
+      mechCompletionDeltaDays: null,
+      pisCompletionDeltaDays: 30,
+      substCompletionDeltaDays: null,
+    }),
+    null,
+  );
 }
 
 section("Exhibit H - schedule adjustment");
@@ -426,6 +519,7 @@ section("Exhibit H - schedule adjustment");
       dateOfChangeOrder: "2025-01-02",
       billable: 1000,
       mechCompletionDeltaDays: 14,
+      pisCompletionDeltaDays: null,
       substCompletionDeltaDays: 0,
     },
     [],
@@ -441,7 +535,7 @@ section("Exhibit H - schedule adjustment");
   // the current date printed, so it must survive rather than come back null.
   const h = deriveExhibitH(
     sweetSprings,
-    { coNumber: "CO-05", dateOfChangeOrder: null, billable: 0, mechCompletionDeltaDays: null, substCompletionDeltaDays: null },
+    { coNumber: "CO-05", dateOfChangeOrder: null, billable: 0, mechCompletionDeltaDays: null, pisCompletionDeltaDays: null, substCompletionDeltaDays: null },
     [],
   );
   eq("a null delta keeps the current date", h.mechanical.revisedDate, "2024-11-29");
@@ -466,11 +560,12 @@ section("Exhibit H - missing project data");
     originalContractValue: null,
     contractValue: 1000000,
     guaranteedMechanicalCompletionDate: null,
+    guaranteedPlacedInServiceDate: null,
     guaranteedSubstantialCompletionDate: null,
   };
   const h = deriveExhibitH(
     bare,
-    { coNumber: "CO-01", dateOfChangeOrder: null, billable: 5000, mechCompletionDeltaDays: null, substCompletionDeltaDays: null },
+    { coNumber: "CO-01", dateOfChangeOrder: null, billable: 5000, mechCompletionDeltaDays: null, pisCompletionDeltaDays: null, substCompletionDeltaDays: null },
     [],
   );
   eq("line 1 falls back to the current contract value", h.originalContractPrice, 1000000);
@@ -648,6 +743,7 @@ section("Approval - what a change order must carry");
     hasCostLines: false,
     coValue: 0,
     mechCompletionDeltaDays: null as number | null,
+    pisCompletionDeltaDays: null as number | null,
     substCompletionDeltaDays: null as number | null,
     ...over,
   });

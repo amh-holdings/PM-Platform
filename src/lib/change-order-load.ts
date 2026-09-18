@@ -61,6 +61,7 @@ export type ChangeOrderDetail = {
   voidedAt: string | null;
   scheduleImpactDays: number | null;
   mechCompletionDeltaDays: number | null;
+  pisCompletionDeltaDays: number | null;
   substCompletionDeltaDays: number | null;
   exhibitEImpact: string | null;
   capacityRatioImpact: string | null;
@@ -123,9 +124,12 @@ export async function loadChangeOrder(
     await Promise.all([
       db
         .from("projects")
-        .select(
-          "name, client, contract_value, original_contract_value, agreement_date, guaranteed_mechanical_completion_date, guaranteed_substantial_completion_date, contractor_legal_name",
-        )
+        // "*" rather than a named list on purpose: PostgREST errors on a
+        // column that does not exist, so naming guaranteed_placed_in_service_date
+        // would take the whole change order page down on any database where
+        // migration 0052 has not run. A star select simply comes back without
+        // it and the field reads empty until the column is there.
+        .select("*")
         .eq("id", projectId)
         .maybeSingle(),
       db
@@ -192,6 +196,8 @@ export async function loadChangeOrder(
     voidedAt: coRow.voided_at,
     scheduleImpactDays: coRow.schedule_impact_days,
     mechCompletionDeltaDays: coRow.mech_completion_delta_days,
+    // Absent until 0052 runs, which reads as "this CO does not move the date".
+    pisCompletionDeltaDays: coRow.pis_completion_delta_days ?? null,
     substCompletionDeltaDays: coRow.subst_completion_delta_days,
     exhibitEImpact: coRow.exhibit_e_impact,
     capacityRatioImpact: coRow.capacity_ratio_impact,
@@ -223,6 +229,11 @@ export async function loadChangeOrder(
       contractValue: numOrNull(projectRow?.contract_value),
       guaranteedMechanicalCompletionDate:
         projectRow?.guaranteed_mechanical_completion_date ?? null,
+      // Not in the generated types until the next `npm run db:types`, and not
+      // in the database at all until 0052 runs. Both read as null.
+      guaranteedPlacedInServiceDate:
+        (projectRow as { guaranteed_placed_in_service_date?: string | null } | null)
+          ?.guaranteed_placed_in_service_date ?? null,
       guaranteedSubstantialCompletionDate:
         projectRow?.guaranteed_substantial_completion_date ?? null,
     },
@@ -231,6 +242,7 @@ export async function loadChangeOrder(
       dateOfChangeOrder: co.dateOfChangeOrder,
       billable: billableForForm,
       mechCompletionDeltaDays: co.mechCompletionDeltaDays,
+      pisCompletionDeltaDays: co.pisCompletionDeltaDays,
       substCompletionDeltaDays: co.substCompletionDeltaDays,
     },
     (priorRows ?? []).map((p) => ({

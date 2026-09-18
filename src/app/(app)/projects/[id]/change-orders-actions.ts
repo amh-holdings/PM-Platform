@@ -525,7 +525,9 @@ export async function transitionCoStatus(
   const { data: co } = await db
     .from("change_orders")
     .select(
-      "id, co_number, description, status, co_value, billing_line_id, mech_completion_delta_days, subst_completion_delta_days",
+      // "*" so a database without migration 0052 still approves a change
+      // order instead of erroring on a column PostgREST cannot find.
+      "*",
     )
     .eq("id", coId)
     .maybeSingle();
@@ -552,6 +554,7 @@ export async function transitionCoStatus(
       hasCostLines: (count ?? 0) > 0,
       coValue: Number(co.co_value ?? 0),
       mechCompletionDeltaDays: co.mech_completion_delta_days,
+      pisCompletionDeltaDays: co.pis_completion_delta_days ?? null,
       substCompletionDeltaDays: co.subst_completion_delta_days,
     });
     if (blocker) return { ok: false, error: blocker };
@@ -678,6 +681,7 @@ export type CoFormFieldsInput = {
   bondPct?: number | null;
   taxPct?: number | null;
   mechCompletionDeltaDays?: number | null;
+  pisCompletionDeltaDays?: number | null;
   substCompletionDeltaDays?: number | null;
 };
 
@@ -698,9 +702,13 @@ export async function updateCoFormFields(
   if ("taxPct" in input) patch.tax_pct = input.taxPct;
 
   const touchesSchedule =
-    "mechCompletionDeltaDays" in input || "substCompletionDeltaDays" in input;
+    "mechCompletionDeltaDays" in input ||
+    "pisCompletionDeltaDays" in input ||
+    "substCompletionDeltaDays" in input;
   if ("mechCompletionDeltaDays" in input)
     patch.mech_completion_delta_days = input.mechCompletionDeltaDays;
+  if ("pisCompletionDeltaDays" in input)
+    patch.pis_completion_delta_days = input.pisCompletionDeltaDays;
   if ("substCompletionDeltaDays" in input)
     patch.subst_completion_delta_days = input.substCompletionDeltaDays;
 
@@ -710,10 +718,13 @@ export async function updateCoFormFields(
   // entered elsewhere.
   if (
     touchesSchedule &&
-    (input.mechCompletionDeltaDays != null || input.substCompletionDeltaDays != null)
+    (input.mechCompletionDeltaDays != null ||
+      input.pisCompletionDeltaDays != null ||
+      input.substCompletionDeltaDays != null)
   ) {
     patch.schedule_impact_days = Math.max(
       input.mechCompletionDeltaDays ?? 0,
+      input.pisCompletionDeltaDays ?? 0,
       input.substCompletionDeltaDays ?? 0,
     );
   }
@@ -724,7 +735,7 @@ export async function updateCoFormFields(
     .from("change_orders")
     .update(patch as TablesUpdate<"change_orders">)
     .eq("id", coId);
-  if (error) return { ok: false, error: error.message };
+  if (error) return { ok: false, error: migrationHint(error.message) };
 
   // Markup, bond and tax all price off the cost total, so changing any of
   // them re-prices the CO. (A no-op on a legacy CO - resyncCoTotals declines.)
@@ -962,9 +973,22 @@ export async function updateCoNumber(
   return { ok: true };
 }
 
+/**
+ * PostgREST's answer when a write names a column the database does not have.
+ * Reads of the new 0052 columns are tolerant (star selects), so the only way
+ * to meet this is to actually edit a Placed-in-Service field before the
+ * migration has run. Say which migration rather than showing the raw error.
+ */
+function migrationHint(message: string): string {
+  return /placed_in_service|pis_completion_delta_days/.test(message)
+    ? "Placed-in-Service needs migration 0052_placed_in_service_date.sql applied in Supabase first. Everything else on this form still saves."
+    : message;
+}
+
 export type ContractDatesInput = {
   agreementDate?: string | null;
   guaranteedMechanicalCompletionDate?: string | null;
+  guaranteedPlacedInServiceDate?: string | null;
   guaranteedSubstantialCompletionDate?: string | null;
 };
 
@@ -989,12 +1013,16 @@ export async function updateContractDates(
   const patch: {
     agreement_date?: string | null;
     guaranteed_mechanical_completion_date?: string | null;
+    guaranteed_placed_in_service_date?: string | null;
     guaranteed_substantial_completion_date?: string | null;
   } = {};
   if ("agreementDate" in input) patch.agreement_date = input.agreementDate ?? null;
   if ("guaranteedMechanicalCompletionDate" in input)
     patch.guaranteed_mechanical_completion_date =
       input.guaranteedMechanicalCompletionDate ?? null;
+  if ("guaranteedPlacedInServiceDate" in input)
+    patch.guaranteed_placed_in_service_date =
+      input.guaranteedPlacedInServiceDate ?? null;
   if ("guaranteedSubstantialCompletionDate" in input)
     patch.guaranteed_substantial_completion_date =
       input.guaranteedSubstantialCompletionDate ?? null;
@@ -1002,9 +1030,12 @@ export async function updateContractDates(
 
   const { error } = await coClient(auth.supabase)
     .from("projects")
-    .update(patch)
+    // guaranteed_placed_in_service_date is not in the generated types yet -
+    // 0052 ships ahead of the next `npm run db:types`. Same pattern the
+    // sub-billing writes use for the 0038 columns.
+    .update(patch as never)
     .eq("id", projectId);
-  if (error) return { ok: false, error: error.message };
+  if (error) return { ok: false, error: migrationHint(error.message) };
 
   revalidatePath(`/projects/${projectId}`, "layout");
   return { ok: true };

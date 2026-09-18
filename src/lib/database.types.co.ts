@@ -74,6 +74,8 @@ type CoAdds = {
   date_of_change_order: string | null;
   reason: string | null;
   mech_completion_delta_days: number | null;
+  /** Optional until migration 0052 runs. */
+  pis_completion_delta_days?: number | null;
   subst_completion_delta_days: number | null;
   exhibit_e_impact: string | null;
   capacity_ratio_impact: string | null;
