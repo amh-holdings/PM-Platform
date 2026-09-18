@@ -13,6 +13,7 @@ import {
   priceBuildup,
   type Buildup,
   type CostCategory,
+  markupAppliesFromRate,
   type CostLine,
   type ExhibitH,
 } from "@/lib/change-order-pricing";
@@ -159,6 +160,7 @@ export async function loadChangeOrder(
     quantity: num(l.quantity, 0),
     unit: l.unit,
     unitCost: num(l.unit_cost, 0),
+    markupApplies: markupAppliesFromRate(l.markup_pct),
     costCodeId: l.cost_code_id,
     notes: l.notes,
   }));

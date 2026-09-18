@@ -31,6 +31,7 @@ type Draft = {
   unit: string;
   unitCost: string;
   notes: string;
+  markupApplies: boolean;
 };
 
 type Props = {
@@ -61,6 +62,8 @@ const EMPTY: Draft = {
   unit: "ls",
   unitCost: "",
   notes: "",
+  // Markup-bearing unless told otherwise. The exceptions are the exceptions.
+  markupApplies: true,
 };
 
 function toNum(s: string): number {
@@ -83,6 +86,7 @@ function draftFrom(l: CostLine): Draft {
     unit: l.unit ?? "",
     unitCost: String(l.unitCost),
     notes: l.notes ?? "",
+    markupApplies: l.markupApplies,
   };
 }
 
@@ -180,6 +184,7 @@ export function CoBuildupEditor({
       quantity: toNum(draft.quantity),
       unit: draft.unit || null,
       unitCost: toNum(draft.unitCost),
+      markupApplies: draft.markupApplies,
       costCodeId: null,
       notes: draft.notes || null,
     });
@@ -331,6 +336,9 @@ export function CoBuildupEditor({
               <th className="p-2 text-left font-medium">Unit</th>
               <th className="p-2 text-right font-medium">Unit cost</th>
               <th className="p-2 text-right font-medium">Extended</th>
+              <th className="p-2 text-center font-medium" title="Whether this line is in the markup base">
+                Markup
+              </th>
               <th className="p-2 text-left font-medium">Backup</th>
               <th className="p-2" />
             </tr>
@@ -338,7 +346,7 @@ export function CoBuildupEditor({
           <tbody>
             {priced.length === 0 && !adding && (
               <tr>
-                <td colSpan={8} className="p-6 text-center text-sm text-muted-foreground">
+                <td colSpan={9} className="p-6 text-center text-sm text-muted-foreground">
                   No cost lines yet. Add one for each quote, crew, or material package.
                 </td>
               </tr>
@@ -352,7 +360,7 @@ export function CoBuildupEditor({
                 <Fragment key={l.id}>
                   {isEditing ? (
                     <tr className="border-b bg-primary/5">
-                      <td colSpan={8} className="p-2">
+                      <td colSpan={9} className="p-2">
                         <DraftRow
                           draft={draft}
                           setDraft={setDraft}
@@ -386,6 +394,18 @@ export function CoBuildupEditor({
                       <td className="p-2 text-right tabular-nums">{formatCurrency(l.unitCost)}</td>
                       <td className="p-2 text-right font-medium tabular-nums">
                         {formatCurrency(l.extendedCost)}
+                      </td>
+                      {/* Cost only, held out of the markup base. The line is
+                          still billed to the owner - it is excluded from the
+                          multiplication, not from the change order. */}
+                      <td className="p-2 text-center">
+                        {l.markupApplies ? (
+                          <span className="text-[11px] text-muted-foreground">Yes</span>
+                        ) : (
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                            At cost
+                          </span>
+                        )}
                       </td>
                       <td className="p-2">
                         <button
@@ -471,8 +491,20 @@ export function CoBuildupEditor({
 
           <tfoot className="border-t-2 text-sm">
             <Total label="Direct cost" value={buildup.directCost} />
+            {buildup.excludedCost !== 0 && (
+              <Total
+                label={`  of which at cost, no markup (${buildup.excludedLineCount} line${
+                  buildup.excludedLineCount === 1 ? "" : "s"
+                })`}
+                value={buildup.excludedCost}
+              />
+            )}
             <Total
-              label={`Markup on total cost (${buildup.markupPct}%)`}
+              label={
+                buildup.excludedCost !== 0
+                  ? `Markup on ${formatCurrency(buildup.markupableCost)} (${buildup.markupPct}%)`
+                  : `Markup on total cost (${buildup.markupPct}%)`
+              }
               value={buildup.markup}
             />
             <Total label="Subtotal" value={buildup.subtotal} strong />
@@ -718,8 +750,21 @@ function DraftRow({
           value={draft.notes}
           onChange={(e) => set({ notes: e.target.value })}
           placeholder="Notes (optional)"
-          className="h-8 rounded border border-input bg-background px-2 text-xs sm:col-span-8"
+          className="h-8 rounded border border-input bg-background px-2 text-xs sm:col-span-5"
         />
+        {/* Permits at cost, sales tax, an owner-direct purchase AHC only
+            administers. The cost still reaches the owner; it just does not
+            earn markup. */}
+        <label className="flex items-center gap-1.5 text-xs sm:col-span-3">
+          <input
+            type="checkbox"
+            checked={draft.markupApplies}
+            onChange={(e) => set({ markupApplies: e.target.checked })}
+          />
+          <span title="Uncheck for a pass-through: permits, taxes, owner-direct purchases">
+            Apply markup to this line
+          </span>
+        </label>
         <div className="flex items-center justify-end gap-3 text-xs sm:col-span-4">
           <span className="tabular-nums text-muted-foreground">
             Extended <strong className="text-foreground">{formatCurrency(extended)}</strong>

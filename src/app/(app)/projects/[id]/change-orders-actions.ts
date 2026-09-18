@@ -16,6 +16,8 @@ import {
   priceBuildup,
   type CoStatus,
   type CostCategory,
+  markupAppliesFromRate,
+  rateFromMarkupApplies,
 } from "@/lib/change-order-pricing";
 import { ATTACHMENT_KINDS } from "./change-orders-constants";
 import { DOCUMENT_BUCKET } from "./documents-constants";
@@ -273,6 +275,7 @@ async function resyncCoTotals(
       quantity: Number(l.quantity ?? 0),
       unit: l.unit,
       unitCost: Number(l.unit_cost ?? 0),
+      markupApplies: markupAppliesFromRate(l.markup_pct),
       costCodeId: l.cost_code_id,
       notes: l.notes,
     })),
@@ -310,6 +313,8 @@ export type SaveCostLineInput = {
   quantity: number;
   unit: string | null;
   unitCost: number;
+  /** False holds the line out of the CO's markup base. Defaults true. */
+  markupApplies?: boolean;
   costCodeId: string | null;
   notes: string | null;
 };
@@ -336,9 +341,11 @@ export async function saveCostLine(
     quantity: input.quantity,
     unit: input.unit?.trim() || null,
     unit_cost: input.unitCost,
-    // markup_pct on the row is legacy. Markup lives on the change order and
-    // applies to the cost total, so a line never carries its own rate.
-    markup_pct: null,
+    // A line never carries its own markup RATE - markup is one CO-level rate on
+    // the cost total. This column now records only whether the line is in that
+    // base at all: 0 for held out, null for bears markup. See
+    // markupAppliesFromRate.
+    markup_pct: rateFromMarkupApplies(input.markupApplies !== false),
     cost_code_id: input.costCodeId,
     notes: input.notes?.trim() || null,
   };
@@ -785,7 +792,7 @@ export async function addCostLinesFromPaste(
       quantity: l.quantity,
       unit: l.unit,
       unit_cost: l.unitCost,
-      markup_pct: null,
+      markup_pct: rateFromMarkupApplies(l.markupApplies),
       sort_order: (sort += 10) - 10,
     })),
   );

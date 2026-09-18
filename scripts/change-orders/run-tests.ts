@@ -18,7 +18,9 @@ import {
   deriveExhibitH,
   nextCoNumber,
   parsePastedCostLines,
+  markupAppliesFromRate,
   priceBuildup,
+  rateFromMarkupApplies,
   type CostLine,
   type ExhibitHProject,
 } from "@/lib/change-order-pricing";
@@ -60,6 +62,7 @@ function line(over: Partial<CostLine> = {}): CostLine {
     quantity: 1,
     unit: "ls",
     unitCost: 0,
+    markupApplies: true,
     costCodeId: null,
     notes: null,
     ...over,
@@ -118,6 +121,118 @@ section("Buildup - markup sits on the total, not the lines");
   const b = priceBuildup({ lines: [], markupPct: 10, bondPct: 2, taxPct: 7 });
   eq("an empty buildup bills nothing", b.billable, 0);
   eq("an empty buildup has no margin percentage", b.effectiveMarginPct, null);
+}
+
+section("Buildup - a line held out of the markup base");
+
+{
+  // Permits at cost beside markup-bearing work. The permit is billed to the
+  // owner in full; it just does not earn margin.
+  const b = priceBuildup({
+    lines: [
+      line({ id: "work", unitCost: 1000 }),
+      line({ id: "permit", unitCost: 500, markupApplies: false }),
+    ],
+    markupPct: 10,
+    bondPct: null,
+    taxPct: null,
+  });
+  eq("direct cost still counts the excluded line", b.directCost, 1500);
+  eq("the markup base is the rest", b.markupableCost, 1000);
+  eq("the excluded amount is reported", b.excludedCost, 500);
+  eq("and so is how many lines it is", b.excludedLineCount, 1);
+  eq("markup is the rate on the base only", b.markup, 100);
+  eq("the owner is still billed the whole cost", b.billable, 1600);
+  eq("profit is the markup, not the pass-through", b.profit, 100);
+}
+
+{
+  // The default. Nothing about an ordinary CO changes, which is why the column
+  // defaults true and no existing change order needed resyncing.
+  const withFlag = priceBuildup({
+    lines: [line({ id: "a", unitCost: 2000, markupApplies: true })],
+    markupPct: 10,
+    bondPct: null,
+    taxPct: null,
+  });
+  eq("an all-markup CO prices exactly as before", withFlag.markup, 200);
+  eq("and reports nothing excluded", withFlag.excludedCost, 0);
+  eq("and no excluded lines", withFlag.excludedLineCount, 0);
+}
+
+{
+  // Bond and tax are percentages of cost + markup. Holding a line out lowers
+  // the markup, so it lowers those too - they must not quietly use the full
+  // direct cost instead.
+  const b = priceBuildup({
+    lines: [
+      line({ id: "work", unitCost: 1000 }),
+      line({ id: "tax", unitCost: 1000, markupApplies: false }),
+    ],
+    markupPct: 10,
+    bondPct: 1,
+    taxPct: null,
+  });
+  eq("subtotal is direct cost plus the reduced markup", b.subtotal, 2100);
+  eq("bond follows the reduced subtotal", b.bond, 21);
+  eq("billable carries it through", b.billable, 2121);
+  eq("bond is a cost to AHC, not margin", b.totalCost, 2021);
+  eq("profit is still just the markup", b.profit, 100);
+}
+
+{
+  // Every line held out. A pure pass-through CO earns nothing and must not
+  // divide by zero on the way there.
+  const b = priceBuildup({
+    lines: [
+      line({ id: "a", unitCost: 400, markupApplies: false }),
+      line({ id: "b", unitCost: 600, markupApplies: false }),
+    ],
+    markupPct: 10,
+    bondPct: null,
+    taxPct: null,
+  });
+  eq("nothing is marked up", b.markup, 0);
+  eq("the base is empty", b.markupableCost, 0);
+  eq("the owner is billed cost", b.billable, 1000);
+  eq("there is no profit", b.profit, 0);
+  eq("and no margin to report", b.effectiveMarginPct, 0);
+}
+
+section("Buildup - how the opt-out is stored");
+
+{
+  // No schema change: the flag rides markup_pct, the per-line RATE column 0046
+  // created and then abandoned. 0 means held out, null means bears markup.
+  eq("null bears the change order's markup", markupAppliesFromRate(null), true);
+  eq("undefined does too", markupAppliesFromRate(undefined), true);
+  eq("zero holds the line out", markupAppliesFromRate(0), false);
+  // numeric(5,2) can come back as a string depending on the driver.
+  eq("a string zero holds it out too", markupAppliesFromRate("0"), false);
+  eq("and so does 0.00", markupAppliesFromRate("0.00"), false);
+
+  // A per-line RATE is the thing 0046 removed. Reviving it through this column
+  // would put a sum of rounded products in front of the owner, so a stray rate
+  // reads as "bears markup" - exactly how such a row behaved before this
+  // feature existed.
+  eq("a stray rate is ignored, not honoured", markupAppliesFromRate(7.5), true);
+  eq("even a large one", markupAppliesFromRate(100), true);
+}
+
+{
+  eq("writing back: bearing markup stores null", rateFromMarkupApplies(true), null);
+  eq("writing back: held out stores zero", rateFromMarkupApplies(false), 0);
+  // Round trip, both ways, or a line changes meaning on save.
+  eq(
+    "true survives a round trip",
+    markupAppliesFromRate(rateFromMarkupApplies(true)),
+    true,
+  );
+  eq(
+    "false survives a round trip",
+    markupAppliesFromRate(rateFromMarkupApplies(false)),
+    false,
+  );
 }
 
 section("Buildup - the contract rate");
@@ -401,6 +516,38 @@ section("Bulk paste - column mapping");
   eq("quantity parses", r.lines[0].quantity, 3);
   eq("unit carries through", r.lines[0].unit, "mo");
   eq("a markup column is flagged as ignored", r.ignoredMarkupColumn, true);
+  eq("a rate does not hold the line out of the base", r.lines[0].markupApplies, true);
+  eq("nor does a blank markup cell", r.lines[1].markupApplies, true);
+}
+
+{
+  // A ZERO in the markup column is not a rate being dropped. It is the
+  // spreadsheet saying this line is a pass-through, which the buildup now
+  // carries - so it is honoured and nothing is flagged.
+  const r = parsePastedCostLines(
+    [
+      "Description\tQty\tUnit\tUnit Cost\tMarkup",
+      "Trenching\t100\tlf\t42.50\t10",
+      "County permit fee\t1\tls\t3,400.00\t0",
+    ].join("\n"),
+  );
+  eq("the marked-up line stays in the base", r.lines[0].markupApplies, true);
+  eq("a zero markup holds the line out", r.lines[1].markupApplies, false);
+  eq("the excluded line still parses its cost", r.lines[1].unitCost, 3400);
+  eq("only the real rate is reported as dropped", r.ignoredMarkupColumn, true);
+}
+
+{
+  // Zeros only. Nothing was dropped, so nothing is flagged - the paste said
+  // exactly what it meant and the buildup honoured all of it.
+  const r = parsePastedCostLines(
+    [
+      "Description\tQty\tUnit\tUnit Cost\tMarkup",
+      "County permit fee\t1\tls\t3,400.00\t0",
+    ].join("\n"),
+  );
+  eq("a zeros-only markup column drops nothing", r.ignoredMarkupColumn, false);
+  eq("and still holds the line out", r.lines[0].markupApplies, false);
 }
 
 {
