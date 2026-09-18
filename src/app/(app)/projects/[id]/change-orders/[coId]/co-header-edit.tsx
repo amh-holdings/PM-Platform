@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Pencil } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { updateCoFormFields, updateCoNumber } from "../../change-orders-actions";
@@ -63,11 +64,20 @@ export function CoHeaderEdit({
 
   if (!open) {
     return (
+      // A grey underlined phrase under the CO number reads as a caption, not a
+      // control, and the number is exactly what people come here to correct.
+      // Give it a border and an icon so it looks like the button it is.
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-md border bg-background",
+          "px-2.5 py-1.5 text-xs font-medium shadow-sm transition-colors",
+          "hover:border-primary/40 hover:bg-muted hover:text-foreground",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        )}
       >
+        <Pencil className="h-3.5 w-3.5" aria-hidden />
         Edit number, description or date
       </button>
     );
