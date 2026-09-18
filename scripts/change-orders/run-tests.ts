@@ -19,6 +19,8 @@ import {
   nextCoNumber,
   parsePastedCostLines,
   markupAppliesFromRate,
+  canDeleteCo,
+  coApprovalBlocker,
   priceBuildup,
   rateFromMarkupApplies,
   type CostLine,
@@ -638,6 +640,78 @@ section("Bulk paste - rows that cannot be used");
   eq("the default category applies when none is given", r.lines[0].category, "labor");
 }
 
+
+section("Approval - what a change order must carry");
+
+{
+  const co = (over: Partial<Parameters<typeof coApprovalBlocker>[0]> = {}) => ({
+    hasCostLines: false,
+    coValue: 0,
+    mechCompletionDeltaDays: null as number | null,
+    substCompletionDeltaDays: null as number | null,
+    ...over,
+  });
+
+  eq("priced scope is approvable", coApprovalBlocker(co({ hasCostLines: true })), null);
+
+  // The case this exists for. CO-03 moves a guaranteed completion date and
+  // costs nothing; under the old "at least one cost line" rule it could be
+  // drafted and submitted but never approved.
+  eq(
+    "a time-only CO on mechanical completion is approvable",
+    coApprovalBlocker(co({ mechCompletionDeltaDays: 21 })),
+    null,
+  );
+  eq(
+    "so is one on substantial completion",
+    coApprovalBlocker(co({ substCompletionDeltaDays: 14 })),
+    null,
+  );
+  eq(
+    "and one that pulls a date IN, not just out",
+    coApprovalBlocker(co({ mechCompletionDeltaDays: -5 })),
+    null,
+  );
+
+  // A credit CO is negative and is still priced scope. The old check was
+  // coValue > 0, which blocked those too.
+  eq(
+    "a credit change order is approvable",
+    coApprovalBlocker(co({ coValue: -12500 })),
+    null,
+  );
+  eq(
+    "a lump-sum CO with a value but no buildup is approvable",
+    coApprovalBlocker(co({ coValue: 40000 })),
+    null,
+  );
+
+  // Nothing at all. No cost, no date change - there is nothing to approve.
+  check(
+    "a CO that changes nothing is blocked",
+    coApprovalBlocker(co()) !== null,
+    JSON.stringify(coApprovalBlocker(co())),
+  );
+  // A zero delta is not a date change.
+  check(
+    "zero day deltas do not count as a schedule change",
+    coApprovalBlocker(co({ mechCompletionDeltaDays: 0, substCompletionDeltaDays: 0 })) !== null,
+  );
+}
+
+section("Deleting a change order");
+
+{
+  eq("a void CO can be deleted", canDeleteCo("void"), true);
+  eq("so can a draft", canDeleteCo("draft"), true);
+  // Everything else is history the project is answerable for: approved sits in
+  // the contract value and on the G703, submitted is in the owner's hands, and
+  // rejected records a decision they made.
+  eq("an approved CO cannot", canDeleteCo("approved"), false);
+  eq("a submitted CO cannot", canDeleteCo("submitted"), false);
+  eq("a rejected CO cannot", canDeleteCo("rejected"), false);
+  eq("nor can an unknown status", canDeleteCo("something_else"), false);
+}
 
 section("Numbering");
 

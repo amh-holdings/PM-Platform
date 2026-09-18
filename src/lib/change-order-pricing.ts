@@ -385,6 +385,50 @@ export const CO_TRANSITIONS: Record<CoStatus, CoStatus[]> = {
   void: ["draft"],
 };
 
+/**
+ * What a change order is still missing before anyone can approve it, or null
+ * when it is ready.
+ *
+ * The rule used to be "at least one cost line", which assumed every change
+ * order is about money. Most are. A time-only CO is not: it moves a guaranteed
+ * completion date and carries no cost at all, and under the old rule it could
+ * be drafted and submitted but never approved, so it sat in the owner's queue
+ * forever with the Approve button greyed out and a tooltip telling Phil to add
+ * a cost line that does not exist.
+ *
+ * So the question is whether the CO changes ANYTHING the contract cares about:
+ * priced scope, or the schedule.
+ *
+ * `coValue !== 0` rather than `> 0` on purpose. A credit change order is
+ * negative and is still priced scope - the old check quietly blocked those too.
+ */
+export function coApprovalBlocker(co: {
+  hasCostLines: boolean;
+  coValue: number;
+  mechCompletionDeltaDays: number | null;
+  substCompletionDeltaDays: number | null;
+}): string | null {
+  if (co.hasCostLines || co.coValue !== 0) return null;
+  const movesTime =
+    (co.mechCompletionDeltaDays ?? 0) !== 0 ||
+    (co.substCompletionDeltaDays ?? 0) !== 0;
+  if (movesTime) return null;
+  return "Add a cost line, or a completion date change on the Exhibit H panel, before approving.";
+}
+
+/**
+ * Whether a change order may be deleted outright rather than voided.
+ *
+ * Void and draft only. An approved CO is in the contract value and on the
+ * owner's G703, a submitted one is in their hands, and a rejected one is the
+ * record of a decision they made - deleting any of those loses history the
+ * project is answerable for. Void already means withdrawn, and a draft never
+ * left the building.
+ */
+export function canDeleteCo(status: string): boolean {
+  return status === "void" || status === "draft";
+}
+
 export function canTransition(from: string, to: string): boolean {
   const list = CO_TRANSITIONS[from as CoStatus];
   return Array.isArray(list) && list.includes(to as CoStatus);
