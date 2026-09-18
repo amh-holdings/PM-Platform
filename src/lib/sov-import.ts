@@ -281,6 +281,11 @@ export type SovBuild = {
   // Rows that cannot be imported at all, with the reason.
   rejected: { rowNumber: number; label: string; reason: string }[];
   notes: string[];
+  // False when the sheet carried no sort order column and buildSovRows stamped
+  // one from sheet position. A stamped order is good enough to place NEW lines,
+  // but it is not the sheet's opinion about where existing lines belong, so
+  // diffSov must not restate them from it.
+  sortOrderFromSheet: boolean;
 };
 
 // Rows a schedule of values carries that are not line items: the totals block
@@ -366,12 +371,13 @@ export function buildSovRows(
 
   // Sheet order is the SOV's order, and the billing table sorts on it. Only
   // stamp it when the sheet did not say otherwise.
-  if (!mapping.includes("sort_order")) {
+  const sortOrderFromSheet = mapping.includes("sort_order");
+  if (!sortOrderFromSheet) {
     rows.forEach((r, i) => {
       r.values.sort_order = (i + 1) * 10;
     });
     notes.push(
-      "No sort order column mapped, so lines are numbered in sheet order (10, 20, 30...). Existing lines keep their own order unless they appear here.",
+      "No sort order column mapped, so new lines are numbered in sheet order (10, 20, 30...). Lines that already exist keep the order they have.",
     );
   }
 
@@ -384,7 +390,7 @@ export function buildSovRows(
     notes.push(`${skippedBlank} blank row${skippedBlank === 1 ? "" : "s"} skipped.`);
   }
 
-  return { rows, rejected, notes };
+  return { rows, rejected, notes, sortOrderFromSheet };
 }
 
 export type ExistingLine = {
@@ -396,6 +402,11 @@ export type ExistingLine = {
   sort_order: number | null;
   notes: string | null;
   change_order_id: string | null;
+  // Billed through the end of the current period, when the caller knows it.
+  // The import has no delete side precisely because billed money hangs off a
+  // line; lowering a scheduled value under what is already billed is the same
+  // hazard wearing an edit's clothes, so it gets warned about too.
+  billed_to_date?: number | null;
 };
 
 export type SovFieldChange = {
@@ -411,6 +422,15 @@ export type SovDiff = {
   blocking: string[];
   warnings: string[];
 };
+
+function formatMoney(n: number): string {
+  return n.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
 
 function sameMoney(a: number | null, b: number | null): boolean {
   const x = a === null ? null : Math.round(a * 100);
@@ -488,7 +508,12 @@ export function diffSov(
         to: v.scheduled_value,
       });
     }
+    // Only restate the order when the sheet actually said something about it.
+    // Without this gate a paste of item numbers and amounts renumbers the whole
+    // SOV from its own row positions - and leaves any line NOT in the paste,
+    // change order lines above all, stranded at its old number.
     if (
+      build.sortOrderFromSheet &&
       v.sort_order !== undefined &&
       (v.sort_order ?? null) !== (match.sort_order ?? null)
     ) {
@@ -501,6 +526,17 @@ export function diffSov(
     if (!fields.length) {
       unchangedCount += 1;
       continue;
+    }
+
+    const valueChange = fields.find((f) => f.field === "scheduled_value");
+    const billed = Number(match.billed_to_date ?? 0);
+    if (valueChange && billed > 0) {
+      const next = Number(valueChange.to ?? 0);
+      if (Math.round(next * 100) < Math.round(billed * 100)) {
+        warnings.push(
+          `${match.item_number} has ${formatMoney(billed)} billed against it and this import drops its scheduled value to ${formatMoney(next)}. The line would read over 100% complete and the next pay application would bill against a number the owner never signed.`,
+        );
+      }
     }
 
     if (match.change_order_id && fields.some((f) => f.field === "scheduled_value")) {
