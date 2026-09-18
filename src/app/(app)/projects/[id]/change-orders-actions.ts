@@ -218,6 +218,65 @@ export async function addCoBillingLine(
   return { ok: true, lineId: data.id };
 }
 
+/**
+ * Attach an SOV line that already exists to this change order.
+ *
+ * The SOV usually predates the app. Sweet Springs' change orders were priced,
+ * signed and billed on paper, and their lines were imported with the rest of
+ * the schedule of values - so the money is already on the G703 and what is
+ * missing is only the link back to the CO that produced it.
+ *
+ * Without this the only option was "Add SOV line", which creates a SECOND line
+ * for scope the sheet already carries. That is how a schedule of values ends up
+ * totalling more than the contract it bills against.
+ *
+ * Refuses a line already attached to another CO. Moving one between change
+ * orders is a real decision - detach it there first, so it is deliberate and
+ * both change orders re-price.
+ */
+export async function linkCoBillingLine(
+  lineId: string,
+  changeOrderId: string,
+  projectId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { data: line, error: readErr } = await auth.supabase
+    .from("billing_lines")
+    .select("id, project_id, item_number, change_order_id")
+    .eq("id", lineId)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+  if (!line || line.project_id !== projectId) {
+    return { ok: false, error: "SOV line not found on this project" };
+  }
+  if (line.change_order_id === changeOrderId) return { ok: true };
+  if (line.change_order_id) {
+    const { data: holder } = await auth.supabase
+      .from("change_orders")
+      .select("co_number")
+      .eq("id", line.change_order_id)
+      .maybeSingle();
+    return {
+      ok: false,
+      error: `${line.item_number} is already linked to ${holder?.co_number ?? "another change order"}. Detach it there first.`,
+    };
+  }
+
+  const { error } = await auth.supabase
+    .from("billing_lines")
+    .update({ change_order_id: changeOrderId })
+    .eq("id", lineId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/change-orders/${changeOrderId}`);
+  revalidatePath(`/projects/${projectId}/change-orders`);
+  revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}`, "layout");
+  return { ok: true };
+}
+
 export async function removeCoBillingLine(
   lineId: string,
   changeOrderId: string,
@@ -236,6 +295,8 @@ export async function removeCoBillingLine(
 
   revalidatePath(`/projects/${projectId}/change-orders/${changeOrderId}`);
   revalidatePath(`/projects/${projectId}/change-orders`);
+  revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}`, "layout");
   return { ok: true };
 }
 
