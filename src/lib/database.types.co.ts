@@ -32,6 +32,12 @@ type CostLineRow = {
   unit_cost: number;
   /** Generated column - read only. */
   extended_cost: number;
+  /**
+   * Legacy per-line markup RATE from 0046, abandoned by that same migration
+   * and read by nothing since. It now carries the per-line opt-out: 0 means
+   * the line is held out of the change order's markup base, null means it
+   * bears markup. See markupAppliesFromRate in change-order-pricing.
+   */
   markup_pct: number | null;
   cost_code_id: string | null;
   notes: string | null;

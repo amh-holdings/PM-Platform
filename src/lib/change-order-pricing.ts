@@ -50,7 +50,48 @@ export type CostLine = {
   unitCost: number;
   costCodeId: string | null;
   notes: string | null;
+  /**
+   * Whether this line is in the markup base.
+   *
+   * A boolean, never a rate. Per-line rates were the old model and they are not
+   * coming back - see the note on `markup` below. But a permit paid at cost, a
+   * tax line, or an owner-direct purchase AHC only administers is not
+   * markup-bearing at all, and the only ways to handle that before this were to
+   * leave the cost off the buildup, which hides it from the owner's cost
+   * column, or to drop the whole CO's rate, which under-marks up everything
+   * else.
+   */
+  markupApplies: boolean;
 };
+
+/**
+ * How the opt-out is stored, without a schema change.
+ *
+ * `change_order_cost_lines.markup_pct` was created by 0046 for the per-line
+ * RATE model that the same migration then abandoned. Nothing has read it since
+ * and the app wrote null into it on every save, so it was free:
+ *
+ *   0     held out of the markup base
+ *   null  bears the change order's markup
+ *
+ * Which is the literal reading of the column, not a repurposing - a line whose
+ * markup rate is zero earns no markup.
+ *
+ * ANY OTHER VALUE READS AS "BEARS MARKUP". A rate written from outside the app
+ * is ignored rather than honoured, because a per-line rate is the thing 0046
+ * removed and reviving it here through the back door would put a sum of
+ * rounded products in front of the owner. That is also exactly how such a row
+ * behaved before this feature existed, so nothing regresses.
+ */
+export function markupAppliesFromRate(rate: number | string | null | undefined): boolean {
+  if (rate == null) return true;
+  return Number(rate) !== 0;
+}
+
+/** The inverse, for writing. */
+export function rateFromMarkupApplies(markupApplies: boolean): number | null {
+  return markupApplies ? null : 0;
+}
 
 export type PricedLine = CostLine & {
   /** quantity x unitCost. A line is cost only - markup is not per line. */
@@ -69,11 +110,17 @@ export type BuildupInput = {
 
 export type Buildup = {
   lines: PricedLine[];
-  /** Sum of every line's extendedCost. */
+  /** Sum of every line's extendedCost, markup-bearing or not. */
   directCost: number;
+  /** The part of directCost the markup is computed on. */
+  markupableCost: number;
+  /** The part held out of the markup base. directCost - markupableCost. */
+  excludedCost: number;
+  /** How many lines are held out, for the editor to report without recounting. */
+  excludedLineCount: number;
   /** The rate that produced `markup`. 0 when the CO sets none. */
   markupPct: number;
-  /** directCost x markupPct. This is the CO's profit. */
+  /** markupableCost x markupPct. This is the CO's profit. */
   markup: number;
   /** directCost + markup. Bond and tax are computed off this. */
   subtotal: number;
@@ -108,10 +155,17 @@ export function priceBuildup(input: BuildupInput): Buildup {
   }));
 
   const directCost = round2(lines.reduce((s, l) => s + l.extendedCost, 0));
-  // Once, on the total. Marking up each line and summing the results is the
-  // same number only when every line shares a rate, and it rounds per line,
-  // so the total the owner sees would drift by pennies from cost x rate.
-  const markup = round2(directCost * (markupPct / 100));
+  // The base is every line that bears markup. Lines held out still count toward
+  // direct cost and toward what the owner is billed - they are excluded from
+  // the multiplication, not from the change order.
+  const markupable = lines.filter((l) => l.markupApplies);
+  const markupableCost = round2(markupable.reduce((s, l) => s + l.extendedCost, 0));
+  const excludedCost = round2(directCost - markupableCost);
+  // Once, on the base. Marking up each line and summing the results is the same
+  // number only when every line shares a rate, and it rounds per line, so the
+  // total the owner sees would drift by pennies from cost x rate. Holding a
+  // line out changes WHAT is multiplied, never how many times.
+  const markup = round2(markupableCost * (markupPct / 100));
   const subtotal = round2(directCost + markup);
   const bond = round2(subtotal * ((input.bondPct ?? 0) / 100));
   const tax = round2(subtotal * ((input.taxPct ?? 0) / 100));
@@ -129,6 +183,9 @@ export function priceBuildup(input: BuildupInput): Buildup {
   return {
     lines,
     directCost,
+    markupableCost,
+    excludedCost,
+    excludedLineCount: lines.length - markupable.length,
     markupPct,
     markup,
     subtotal,
@@ -349,6 +406,8 @@ export type ParsedCostLine = {
   quantity: number;
   unit: string | null;
   unitCost: number;
+  /** False when the pasted markup column said zero for this row. */
+  markupApplies: boolean;
 };
 
 export type ParseResult = {
@@ -358,10 +417,14 @@ export type ParseResult = {
   /** True when a header row was detected and used to map columns. */
   usedHeader: boolean;
   /**
-   * True when the paste carried a markup column. It is still read, so the
-   * columns after it land in the right fields, but the values are dropped:
-   * markup is one CO-level rate, not a per-line number. Say so rather than
-   * letting a pasted 15% quietly disappear.
+   * True when the paste carried a NON-ZERO markup rate. The column is still
+   * read, so the columns after it land in the right fields, but a rate is
+   * dropped: markup is one CO-level rate, not a per-line number. Say so rather
+   * than letting a pasted 15% quietly disappear.
+   *
+   * A zero in that column is not dropped. It is the spreadsheet saying this
+   * line does not bear markup, which the buildup can now honour, so the row
+   * comes back with markupApplies false and nothing is flagged.
    */
   ignoredMarkupColumn: boolean;
 };
@@ -420,8 +483,9 @@ function matchHeader(cells: string[]): Record<string, number> | null {
  * Rows that cannot be read are reported rather than dropped - silently losing
  * a line from a buildup is how a CO gets submitted short.
  *
- * A markup column is recognized so the columns around it still map correctly,
- * but its values are discarded and flagged: the CO carries one markup rate.
+ * A markup column is recognized so the columns around it still map correctly.
+ * A rate in it is discarded and flagged, because the CO carries one rate. A
+ * ZERO in it is kept, as the row opting out of the markup base.
  */
 export function parsePastedCostLines(
   text: string,
@@ -477,7 +541,11 @@ export function parsePastedCostLines(
     // A blank quantity means one of whatever it is, which is how a lump-sum
     // quote line gets pasted.
     const quantity = parseMoney(at("quantity")) ?? 1;
-    if (parseMoney(at("markupPct")) != null) ignoredMarkupColumn = true;
+    // Zero means "no markup on this one" and is honoured. Any other rate is a
+    // per-line rate the buildup does not carry, so it is dropped and reported.
+    const pastedMarkup = parseMoney(at("markupPct"));
+    const markupApplies = pastedMarkup !== 0;
+    if (pastedMarkup != null && pastedMarkup !== 0) ignoredMarkupColumn = true;
 
     const rawCategory = at("category").toLowerCase().trim();
     const category = CATEGORY_ALIASES[rawCategory] ?? defaultCategory;
@@ -489,6 +557,7 @@ export function parsePastedCostLines(
       quantity,
       unit: at("unit").trim() || null,
       unitCost,
+      markupApplies,
     });
   });
 
