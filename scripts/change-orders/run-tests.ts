@@ -21,6 +21,7 @@ import {
   markupAppliesFromRate,
   canDeleteCo,
   coApprovalBlocker,
+  compareCoNumbers,
   priceBuildup,
   rateFromMarkupApplies,
   type CostLine,
@@ -418,6 +419,104 @@ const sweetSprings: ExhibitHProject = {
   );
   eq("a credit CO reads as a decrease", h.direction, "decreased");
   eq("a credit CO lowers the new contract price", h.newContractPrice, 2482500);
+}
+
+section("Exhibit H - line 2 counts only what came BEFORE");
+
+{
+  const project = {
+    name: "Sweet Springs",
+    client: "Dimension",
+    contractorLegalName: "AHC",
+    agreementDate: "2024-06-28",
+    originalContractValue: 2507500,
+    contractValue: 3787185.94,
+    guaranteedMechanicalCompletionDate: null,
+    guaranteedPlacedInServiceDate: null,
+    guaranteedSubstantialCompletionDate: null,
+  };
+  // The real shape: six approved COs, and the form being read is the first.
+  const all = [
+    { id: "1", coNumber: "CO-01", coValue: 368675.48, status: "approved" },
+    { id: "2", coNumber: "CO-02", coValue: 100000, status: "approved" },
+    { id: "3", coNumber: "CO-03", coValue: 200000, status: "approved" },
+    { id: "4", coNumber: "CO-04", coValue: 300000, status: "approved" },
+    { id: "5", coNumber: "CO-05", coValue: 150000, status: "approved" },
+    { id: "6", coNumber: "CO-06", coValue: 161010.46, status: "approved" },
+  ];
+  const others = (self: string) => all.filter((c) => c.coNumber !== self);
+  const form = (self: string) => {
+    const me = all.find((c) => c.coNumber === self)!;
+    return deriveExhibitH(
+      project,
+      { coNumber: self, dateOfChangeOrder: "2025-03-03", billable: me.coValue, mechCompletionDeltaDays: null, pisCompletionDeltaDays: null, substCompletionDeltaDays: null },
+      others(self),
+    );
+  };
+
+  // The bug Phil caught: CO-01's form was netting CO-02 through CO-06.
+  const first = form("CO-01");
+  eq("the first CO has no previous change orders", first.netPreviousChangeOrders, 0);
+  eq("and names none", first.previousChangeOrderNumbers.length, 0);
+  eq("so line 3 is the original contract price", first.contractPricePriorToThisCo, 2507500);
+  eq("and line 5 is the price this CO produced", first.newContractPrice, 2876175.48);
+
+  const third = form("CO-03");
+  eq("a middle CO nets only the lower numbers", third.netPreviousChangeOrders, 468675.48);
+  check(
+    "and names exactly those",
+    third.previousChangeOrderNumbers.join(",") === "CO-01,CO-02",
+    third.previousChangeOrderNumbers.join(","),
+  );
+
+  const last = form("CO-06");
+  eq("the last CO nets the other five", last.netPreviousChangeOrders, 1118675.48);
+  eq("and its line 5 is the project's current price", last.newContractPrice, 3787185.94);
+
+  // The property the whole set of forms depends on: each one's line 5 is the
+  // next one's line 3, so they telescope from the original price to today's.
+  const numbers = all.map((c) => c.coNumber);
+  let telescopes = true;
+  for (let i = 0; i < numbers.length - 1; i++) {
+    const a = form(numbers[i]);
+    const b = form(numbers[i + 1]);
+    if (a.newContractPrice !== b.contractPricePriorToThisCo) telescopes = false;
+  }
+  check("every form's line 5 is the next form's line 3", telescopes);
+}
+
+{
+  // A CO still in review is not authorized, whatever its number.
+  const h = deriveExhibitH(
+    {
+      name: "P", client: null, contractorLegalName: null, agreementDate: null,
+      originalContractValue: 1000, contractValue: 1000,
+      guaranteedMechanicalCompletionDate: null,
+      guaranteedPlacedInServiceDate: null,
+      guaranteedSubstantialCompletionDate: null,
+    },
+    { coNumber: "CO-03", dateOfChangeOrder: null, billable: 50, mechCompletionDeltaDays: null, pisCompletionDeltaDays: null, substCompletionDeltaDays: null },
+    [
+      { id: "1", coNumber: "CO-01", coValue: 100, status: "approved" },
+      { id: "2", coNumber: "CO-02", coValue: 999, status: "submitted" },
+      { id: "4", coNumber: "CO-04", coValue: 500, status: "approved" },
+    ],
+  );
+  eq("an earlier unapproved CO is not counted", h.netPreviousChangeOrders, 100);
+  check(
+    "and a later approved one is not either",
+    !h.previousChangeOrderNumbers.includes("CO-04"),
+    h.previousChangeOrderNumbers.join(","),
+  );
+}
+
+{
+  // Ordering is numeric, or CO-10 would sort before CO-9 and a project that
+  // runs past nine change orders would start netting the wrong set.
+  check("CO-09 comes before CO-10", compareCoNumbers("CO-09", "CO-10") < 0);
+  check("CO-9 comes before CO-10 unpadded too", compareCoNumbers("CO-9", "CO-10") < 0);
+  check("CO-02 comes after CO-01", compareCoNumbers("CO-02", "CO-01") > 0);
+  eq("a number equals itself", compareCoNumbers("CO-03", "CO-03"), 0);
 }
 
 section("Exhibit H - Placed in Service");

@@ -269,6 +269,14 @@ export type CompletionAdjustment = {
   revisedDate: string | null;
 };
 
+/**
+ * CO numbers in the order the owner's records read them, digits as numbers so
+ * CO-9 comes before CO-10.
+ */
+export function compareCoNumbers(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+}
+
 /** Adds whole days to a YYYY-MM-DD string without tripping over timezones. */
 export function addDays(iso: string, days: number): string {
   const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
@@ -303,9 +311,27 @@ export function deriveExhibitH(
   co: ExhibitHCo,
   priorCos: PriorCo[],
 ): ExhibitH {
+  // PREVIOUSLY authorized, not "every other approved CO on the project".
+  //
+  // This summed every approved change order except this one, in both
+  // directions, so CO-01's form reported the net of CO-02 through CO-06 -
+  // change orders that did not exist when CO-01 was written - and its line 5
+  // came out at the project's current contract price rather than the price
+  // CO-01 actually produced. Every form but the newest was wrong, and each one
+  // is a document that went to the owner.
+  //
+  // Ordered by CO number rather than by approval date. That is the sequence
+  // the owner's records follow, it is the list this very line prints, and it
+  // gives the property the form depends on: each CO's line 5 equals the next
+  // CO's line 3, so the set of forms telescopes from the original contract
+  // price to the current one.
+  //
+  // Still approved-only. A CO in review has not been authorized and must not
+  // move the contract price.
   const approved = priorCos
     .filter((p) => p.status === "approved")
-    .sort((a, b) => a.coNumber.localeCompare(b.coNumber, undefined, { numeric: true }));
+    .filter((p) => compareCoNumbers(p.coNumber, co.coNumber) < 0)
+    .sort((a, b) => compareCoNumbers(a.coNumber, b.coNumber));
 
   const netPreviousChangeOrders = round2(approved.reduce((s, p) => s + p.coValue, 0));
 
