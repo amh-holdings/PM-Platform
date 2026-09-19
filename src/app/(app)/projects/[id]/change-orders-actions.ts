@@ -22,6 +22,8 @@ import {
   rateFromMarkupApplies,
 } from "@/lib/change-order-pricing";
 import { nextSovItemNumber } from "@/lib/project-financials";
+import { allocatedFromLine, allocationBlocker } from "@/lib/sov-amendments";
+import { amendmentMigrationHint, readAmendments } from "@/lib/sov-amendments-db";
 import { ATTACHMENT_KINDS } from "./change-orders-constants";
 import { DOCUMENT_BUCKET } from "./documents-constants";
 
@@ -315,6 +317,120 @@ export async function removeCoBillingLine(
   revalidatePath(`/projects/${projectId}/billing`);
   revalidatePath(`/projects/${projectId}`, "layout");
   return { ok: true };
+}
+
+/* ==================================================================== */
+/* SOV amendments - a CO raising the price of an existing line (0054)    */
+/* ==================================================================== */
+
+export type AllocateCoLineInput = {
+  projectId: string;
+  changeOrderId: string;
+  /** The change order's own SOV line, the one carrying the money. */
+  amendmentLineId: string;
+  /** The contract line whose scope that money increases. */
+  baseLineId: string;
+  amount: number;
+};
+
+/**
+ * Records that part of a change order's SOV line belongs against a contract
+ * line, so that line's percent complete runs on its real scope.
+ *
+ * Nothing here writes a scheduled value. Both numbers stay on the sheet - see
+ * 0054's header for why erasing the contract figure is the wrong fix.
+ *
+ * Re-allocating the same pair is an update, never a second row, so a contract
+ * line's total can never be assembled from two stale halves.
+ */
+export async function allocateCoLineToSovLine(
+  input: AllocateCoLineInput,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  // Re-read both lines rather than trusting the form. The client built its
+  // picker from a render that may be minutes old.
+  const { data: lines, error: linesErr } = await auth.supabase
+    .from("billing_lines")
+    .select("id, item_number, description, scheduled_value, change_order_id")
+    .eq("project_id", input.projectId)
+    .limit(5000);
+  if (linesErr) return { ok: false, error: linesErr.message };
+
+  const amendment = (lines ?? []).find((l) => l.id === input.amendmentLineId);
+  const base = (lines ?? []).find((l) => l.id === input.baseLineId);
+  if (!amendment) return { ok: false, error: "That change order line is no longer on this project." };
+  if (!base) return { ok: false, error: "That contract line is no longer on the SOV." };
+
+  const existing = await readAmendments(auth.supabase, input.projectId);
+  if (existing.missing) {
+    return {
+      ok: false,
+      error: amendmentMigrationHint("billing_line_amendments is not there yet"),
+    };
+  }
+
+  // What this line has already handed to OTHER contract lines. The pair being
+  // edited is excluded, because saving it again replaces it.
+  const allocatedElsewhere = allocatedFromLine(
+    input.amendmentLineId,
+    existing.rows.filter((r) => r.base_line_id !== input.baseLineId),
+  );
+
+  const blocker = allocationBlocker({
+    amount: input.amount,
+    amendmentLineValue: Number(amendment.scheduled_value ?? 0),
+    allocatedElsewhere,
+    targetIsChangeOrderLine: base.change_order_id != null,
+    targetIsSameLine: input.amendmentLineId === input.baseLineId,
+  });
+  if (blocker) return { ok: false, error: blocker };
+
+  const { error } = await coClient(auth.supabase)
+    .from("billing_line_amendments")
+    .upsert(
+      {
+        project_id: input.projectId,
+        amendment_line_id: input.amendmentLineId,
+        base_line_id: input.baseLineId,
+        amount: input.amount,
+      },
+      { onConflict: "amendment_line_id,base_line_id" },
+    );
+  if (error) return { ok: false, error: amendmentMigrationHint(error.message) };
+
+  revalidateAmendment(input.projectId, input.changeOrderId);
+  return { ok: true };
+}
+
+export async function removeCoLineAllocation(
+  amendmentLineId: string,
+  baseLineId: string,
+  changeOrderId: string,
+  projectId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { error } = await coClient(auth.supabase)
+    .from("billing_line_amendments")
+    .delete()
+    .eq("project_id", projectId)
+    .eq("amendment_line_id", amendmentLineId)
+    .eq("base_line_id", baseLineId);
+  if (error) return { ok: false, error: amendmentMigrationHint(error.message) };
+
+  revalidateAmendment(projectId, changeOrderId);
+  return { ok: true };
+}
+
+/** Billing is included: an allocation changes a contract line's percent. */
+function revalidateAmendment(projectId: string, changeOrderId: string) {
+  revalidatePath(`/projects/${projectId}/change-orders/${changeOrderId}`);
+  revalidatePath(`/projects/${projectId}/change-orders`);
+  revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}`, "layout");
 }
 
 /* ==================================================================== */

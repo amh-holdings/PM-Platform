@@ -20,9 +20,12 @@ import {
   compareItemNumbers,
   nextSovItemNumber,
 } from "@/lib/project-financials";
+import { coSovImpact } from "@/lib/sov-amendments";
+import { readAmendments } from "@/lib/sov-amendments-db";
 
 import { DOCUMENT_BUCKET } from "../../documents-constants";
 import { CoLineEditor } from "./co-line-editor";
+import { CoSovImpactPanel } from "./co-sov-impact";
 import { CoBuildupEditor } from "./co-buildup-editor";
 import { CoHeaderEdit } from "./co-header-edit";
 import { CoWorkflow } from "./co-workflow";
@@ -114,6 +117,41 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
           : coNumberById.get(l.change_order_id) ?? "another change order",
     }))
     .sort((a, b) => compareItemNumbers(a.itemNumber, b.itemNumber));
+
+  // What this change order does to the SOV: adds new scope, raises the price
+  // of lines already on the sheet, or moves no money at all. See
+  // src/lib/sov-amendments.ts.
+  const amendments = await readAmendments(supabase, params.id);
+  const asSovLine = (l: {
+    id: string;
+    item_number: string;
+    description: string;
+    scheduled_value: number | string | null;
+    change_order_id: string | null;
+  }) => ({
+    id: l.id,
+    itemNumber: l.item_number,
+    description: l.description,
+    scheduledValue: Number(l.scheduled_value ?? 0),
+    changeOrderId: l.change_order_id,
+  });
+  const everyLine = (allSovLines ?? []).map(asSovLine);
+  const impact = coSovImpact(
+    (sovLines ?? []).map((l) => asSovLine({ ...l, change_order_id: params.coId })),
+    everyLine,
+    amendments.rows,
+  );
+  // A change order can only amend a CONTRACT line. Amending another change
+  // order's line has no meaning on a G703 and turns the roll-up into a graph
+  // walk - see allocationBlocker.
+  const contractLines = everyLine
+    .filter((l) => l.changeOrderId == null)
+    .map((l) => ({
+      id: l.id,
+      itemNumber: l.itemNumber,
+      description: l.description,
+      scheduledValue: l.scheduledValue,
+    }));
 
   // Backup files live in a private bucket, so hand the client short-lived
   // signed links rather than raw paths.
@@ -322,6 +360,15 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
           (allSovLines ?? []).map((l) => l.item_number),
         )}
         suggestedDescription={coLineDescription(co.coNumber, co.description)}
+      />
+
+      <CoSovImpactPanel
+        projectId={params.id}
+        changeOrderId={params.coId}
+        coNumber={co.coNumber}
+        impact={impact}
+        contractLines={contractLines}
+        needsMigration={amendments.missing}
       />
     </div>
   );
