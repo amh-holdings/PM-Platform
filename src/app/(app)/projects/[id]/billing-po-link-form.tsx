@@ -27,8 +27,10 @@ type Props = {
   availablePos?: PoOption[];
 };
 
-/** Chips shown before the "+N more" toggle takes over. */
-const COLLAPSED_CHIPS = 3;
+// Two, because 6.02 carries 17 linked tasks and 6.03 carries 21. At three the
+// chips wrapped onto a second line on every row that mattered, and the table
+// read as a wall of blue rather than as a schedule of values.
+const COLLAPSED_CHIPS = 2;
 
 // Inline UI to link a procurement-scope billing_line to one or more
 // procurement_orders. Used on the /billing page next to (or in place of)
@@ -107,16 +109,16 @@ export function BillingPoLinkForm({
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+            className="rounded-full px-1.5 py-0.5 text-[10px] font-medium text-primary underline underline-offset-2 hover:opacity-80"
           >
-            +{overflow} more
+            Show {overflow} more
           </button>
         )}
         {expanded && selectedPos.length > COLLAPSED_CHIPS && (
           <button
             type="button"
             onClick={() => setExpanded(false)}
-            className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+            className="rounded-full px-1.5 py-0.5 text-[10px] font-medium text-primary underline underline-offset-2 hover:opacity-80"
           >
             Show less
           </button>
