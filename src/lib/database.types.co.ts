@@ -1,6 +1,6 @@
 /**
- * Type overlay for migrations 0046 (change order buildup) and 0050
- * (legacy_pricing).
+ * Type overlay for migrations 0046 (change order buildup), 0050
+ * (legacy_pricing) and 0054 (billing line amendments).
  *
  * database.types.ts is generated from the LIVE database, and migrations here
  * are applied by hand in the Supabase SQL editor. So between "code written"
@@ -57,6 +57,20 @@ type AttachmentRow = {
   description: string | null;
   uploaded_by_id: string | null;
   uploaded_at: string | null;
+};
+
+/**
+ * Migration 0054. How much of a change order's SOV line belongs against which
+ * contract line - see src/lib/sov-amendments.ts.
+ */
+type AmendmentRow = {
+  id: string;
+  project_id: string;
+  amendment_line_id: string;
+  base_line_id: string;
+  amount: number;
+  note: string | null;
+  created_at: string | null;
 };
 
 type EventRow = {
@@ -150,6 +164,20 @@ export type DatabaseWithCo = Omit<Database, "public"> & {
           to_status: string;
         };
         Update: Optional<EventRow>;
+        Relationships: [];
+      };
+      billing_line_amendments: {
+        Row: AmendmentRow;
+        Insert: Omit<
+          Optional<AmendmentRow>,
+          "project_id" | "amendment_line_id" | "base_line_id" | "amount"
+        > & {
+          project_id: string;
+          amendment_line_id: string;
+          base_line_id: string;
+          amount: number;
+        };
+        Update: Optional<AmendmentRow>;
         Relationships: [];
       };
     };

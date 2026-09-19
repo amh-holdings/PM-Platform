@@ -23,6 +23,8 @@ import { BillThisPeriodPanel } from "./bill-this-period-panel";
 import { BillingPeriodSelector } from "./billing-period-selector";
 import { LinkCatalogProvider, type TaskOption } from "./link-catalog";
 import { periodEndOf, periodLabel } from "@/lib/billing-period";
+import { effectiveLineProgress } from "@/lib/sov-amendments";
+import { readAmendments } from "@/lib/sov-amendments-db";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 
 type Params = { id: string };
@@ -151,6 +153,56 @@ export default async function ProjectBillingPage({
   const coNumberById = new Map(
     (changeOrders ?? []).map((c) => [c.id, c.co_number]),
   );
+
+  // Change orders that raised the price of a line already on the sheet. With
+  // no allocations - and before 0054 is applied - every rollup reports the
+  // line's own scheduled value, so the page reads exactly as it did before.
+  const amendments = await readAmendments(supabase, params.id);
+  const coNumberByLineId = new Map<string, string>();
+  for (const l of lines ?? []) {
+    const n = l.change_order_id ? coNumberById.get(l.change_order_id) : null;
+    if (n) coNumberByLineId.set(l.id, n);
+  }
+  const rollups = effectiveLineProgress(
+    (lines ?? []).map((l) => ({
+      id: l.id,
+      itemNumber: l.item_number,
+      description: l.description,
+      scheduledValue: Number(l.scheduled_value ?? 0),
+      changeOrderId: l.change_order_id,
+    })),
+    amendments.rows,
+    periodByLine,
+    coNumberByLineId,
+  );
+
+  /**
+   * Scope and billing after allocations, for one line.
+   *
+   * An allocation moves both halves together, so a caller must never take
+   * scope from here and billing from `periodByLine` - that pairing is what
+   * makes a line read 226% complete. See src/lib/sov-amendments.ts.
+   */
+  const effectiveOf = (id: string, scheduledValue: number) => {
+    const hit = rollups.get(id);
+    if (hit) return hit;
+    // Unreachable today - the rollup is built from these same rows - but the
+    // fallback must be the line's OWN figures, never zeros. A default of zero
+    // billing would erase real money off the page the day this stops holding.
+    const p = periodByLine.get(id) ?? emptyLineBillingSummary();
+    return {
+      contractValue: scheduledValue,
+      amendedValue: 0,
+      allocatedAway: 0,
+      scope: scheduledValue,
+      previous: p.previous,
+      current: p.current,
+      billed: p.previous + p.current,
+      currentBilled: p.currentBilled,
+      stalePrior: p.stalePrior,
+      sources: [],
+    };
+  };
   const knownTypes = Array.from(
     new Set(rows.map((r) => (r.type ?? "").trim()).filter(Boolean)),
   ).sort();
@@ -173,11 +225,19 @@ export default async function ProjectBillingPage({
 
   const footer = rows.reduce(
     (acc, r) => {
-      const p = periodByLine.get(r.id) ?? emptyLineBillingSummary();
-      acc.scheduled += Number(r.scheduled_value ?? 0);
-      acc.previous += p.previous;
-      acc.current += p.current;
-      acc.remaining += remainingToFinish(p, Number(r.scheduled_value ?? 0));
+      // Totals run on the SAME rolled-up figures as the rows. Summing raw
+      // scheduled values here while the rows show current scope would leave a
+      // footer that does not add up its own column. The roll-up is
+      // conservative by construction - it only ever moves money between
+      // lines - so this total still equals the SOV total.
+      const e = effectiveOf(r.id, Number(r.scheduled_value ?? 0));
+      acc.scheduled += e.scope;
+      acc.previous += e.previous;
+      acc.current += e.current;
+      acc.remaining += remainingToFinish(
+        { previous: e.previous, current: e.current, currentBilled: e.currentBilled, stalePrior: e.stalePrior },
+        e.scope,
+      );
       return acc;
     },
     { scheduled: 0, previous: 0, current: 0, remaining: 0 },
@@ -228,7 +288,12 @@ export default async function ProjectBillingPage({
                 <th className="px-3 py-2 text-left font-medium">
                   Description / links
                 </th>
-                <th className="px-3 py-2 text-right font-medium">Scheduled</th>
+                <th className="px-3 py-2 text-right font-medium">
+                  Scheduled
+                  <span className="block text-[10px] font-normal normal-case text-muted-foreground/70">
+                    contract + change orders
+                  </span>
+                </th>
                 <th className="px-3 py-2 text-right font-medium">
                   Previous billed
                   <span className="block text-[10px] font-normal normal-case text-muted-foreground/70">
@@ -257,8 +322,21 @@ export default async function ProjectBillingPage({
             <tbody>
               {rows.map((r) => {
                 const t = totalsById.get(r.id) ?? { planned: 0 };
-                const p = periodByLine.get(r.id) ?? emptyLineBillingSummary();
-                const scheduled = Number(r.scheduled_value ?? 0);
+                // Current scope and the billing that belongs to it, taken
+                // together. A line a change order raised reads as finished the
+                // moment its ORIGINAL value is billed, which is how POI 5.05
+                // showed 100% on a job that was 71% done.
+                const contractValue = Number(r.scheduled_value ?? 0);
+                const eff = effectiveOf(r.id, contractValue);
+                const p = {
+                  previous: eff.previous,
+                  current: eff.current,
+                  currentBilled: eff.currentBilled,
+                  stalePrior: eff.stalePrior,
+                };
+                const scheduled = eff.scope;
+                const amended = eff.amendedValue;
+                const allocatedAway = eff.allocatedAway;
                 const pct = completionPct(p, scheduled);
                 const links = r.linked_task_wbs_codes ?? [];
                 // Balance to finish is measured through this period, not over
@@ -307,6 +385,25 @@ export default async function ProjectBillingPage({
                     </td>
                     <td className="px-3 py-2 text-right font-mono text-xs">
                       {formatCurrency(scheduled)}
+                      {amended !== 0 && (
+                        <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">
+                          {formatCurrency(contractValue)} contract
+                          {eff.sources.map((src) => (
+                            <span key={src.amendmentLineId} className="block">
+                              {src.amount < 0 ? "-" : "+"}
+                              {formatCurrency(Math.abs(src.amount))}{" "}
+                              {src.coNumber ?? `item ${src.itemNumber}`}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                      {allocatedAway !== 0 && (
+                        <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">
+                          {formatCurrency(contractValue)} less{" "}
+                          {formatCurrency(Math.abs(allocatedAway))} moved to the
+                          contract lines it increases
+                        </span>
+                      )}
                     </td>
                     <td
                       className="px-3 py-2 text-right font-mono text-xs"
