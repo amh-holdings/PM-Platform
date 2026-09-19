@@ -29,6 +29,18 @@ import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 
 type Params = { id: string };
 
+/**
+ * Tint for the two columns that hold money actually billed: Previous billed
+ * and Current bill.
+ *
+ * Neutral on purpose. Everything else coloured on this table means something -
+ * amber for a forecast with nothing behind it, emerald for a line at 100%,
+ * destructive for one billed past its value - so a green or red band here
+ * would read as a verdict on the numbers rather than as "these two belong
+ * together". Slate says grouping and nothing else.
+ */
+const BILLED_COL = "bg-slate-100/70 dark:bg-slate-800/40";
+
 /** "thru Jul 2026" - the month before the one being billed. */
 function priorPeriodLabel(periodMonth: string): string {
   const [y, m] = periodMonth.split("-").map(Number);
@@ -322,13 +334,13 @@ export default async function ProjectBillingPage({
                     </span>
                   )}
                 </th>
-                <th className="px-3 py-2 text-right font-medium">
+                <th className={cn("px-3 py-2 text-right font-medium", BILLED_COL)}>
                   Previous billed
                   <span className="block text-[10px] font-normal normal-case text-muted-foreground/70">
                     thru {priorPeriodLabel(period)}
                   </span>
                 </th>
-                <th className="px-3 py-2 text-right font-medium">
+                <th className={cn("px-3 py-2 text-right font-medium", BILLED_COL)}>
                   Current bill
                   <span className="block text-[10px] font-normal normal-case text-muted-foreground/70">
                     {periodLabel(period)}
@@ -441,7 +453,7 @@ export default async function ProjectBillingPage({
                       )}
                     </td>
                     <td
-                      className="px-3 py-2 text-right font-mono text-xs"
+                      className={cn("px-3 py-2 text-right font-mono text-xs", BILLED_COL)}
                       title={
                         p.stalePrior > 0
                           ? `${formatCurrency(
@@ -458,6 +470,7 @@ export default async function ProjectBillingPage({
                     <td
                       className={cn(
                         "px-3 py-2 text-right font-mono text-xs",
+                        BILLED_COL,
                         p.current > 0 && "font-medium text-foreground",
                       )}
                       title={
@@ -571,10 +584,10 @@ export default async function ProjectBillingPage({
                   <td className="px-3 py-2 text-right font-mono">
                     {formatCurrency(footer.scheduled)}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono">
+                  <td className={cn("px-3 py-2 text-right font-mono", BILLED_COL)}>
                     {formatCurrency(footer.previous)}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono">
+                  <td className={cn("px-3 py-2 text-right font-mono", BILLED_COL)}>
                     {formatCurrency(footer.current)}
                   </td>
                   <td className="px-3 py-2 text-right font-mono">
