@@ -15,7 +15,11 @@ import {
   type CoStatus,
 } from "@/lib/change-order-pricing";
 
-import { compareItemNumbers } from "@/lib/project-financials";
+import {
+  coLineDescription,
+  compareItemNumbers,
+  nextSovItemNumber,
+} from "@/lib/project-financials";
 
 import { DOCUMENT_BUCKET } from "../../documents-constants";
 import { CoLineEditor } from "./co-line-editor";
@@ -314,6 +318,10 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         linesTotal={linesTotal}
         drift={ownerValue - linesTotal}
         linkable={sovPicker}
+        suggestedItemNumber={nextSovItemNumber(
+          (allSovLines ?? []).map((l) => l.item_number),
+        )}
+        suggestedDescription={coLineDescription(co.coNumber, co.description)}
       />
     </div>
   );

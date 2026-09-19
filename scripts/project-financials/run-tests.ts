@@ -2,7 +2,12 @@
 //
 // Run: npx tsx scripts/project-financials/run-tests.ts
 
-import { compareItemNumbers, deriveContractValue } from "@/lib/project-financials";
+import {
+  coLineDescription,
+  compareItemNumbers,
+  deriveContractValue,
+  nextSovItemNumber,
+} from "@/lib/project-financials";
 
 let passed = 0;
 let failed = 0;
@@ -144,6 +149,53 @@ console.log("\nSOV item ordering\n-----------------");
   eq("and then the next one", s[1], "2.00");
   check("the lettered ones land after, in some stable order", s.includes("CO-03") && s.includes("GC"));
   eq("comparing a line to itself is zero", compareItemNumbers("CO-03", "CO-03"), 0);
+}
+
+{
+  // Sweet Springs: the contract runs 1.00-12.00 and the change orders that
+  // were billed on paper came in as 13.00-16.00. A new CO line is the next
+  // section, not a sub-line of the last one.
+  const sweetSprings = [
+    "1.00", "1.01", "1.09", "1.10", "1.12",
+    "2.00", "3.00", "4.00", "5.00", "5.08",
+    "6.00", "7.00", "8.00", "9.00", "10.00",
+    "11.00", "12.00", "13.00", "14.00", "15.00", "16.00",
+  ];
+  eq("the next SOV number is the next section", nextSovItemNumber(sweetSprings), "17.00");
+
+  // Text sorting is why this is worth a test at all: "9.00" reads as the max
+  // to anything comparing as strings, which would hand back "10.00" - a number
+  // the sheet already uses.
+  eq("not fooled by 9.00 sorting last as text", nextSovItemNumber(["8.00", "9.00", "10.00"]), "11.00");
+
+  // Same rule as nextCoNumber: a withdrawn number is not a free slot.
+  eq("a gap is not reused", nextSovItemNumber(["1.00", "2.00", "4.00"]), "5.00");
+
+  // Non-numeric lines are skipped rather than throwing or poisoning the max.
+  eq("lettered lines are ignored", nextSovItemNumber(["1.00", "CO-03", "GC"]), "2.00");
+  eq("an empty SOV starts at one", nextSovItemNumber([]), "1.00");
+  eq("blank entries are skipped", nextSovItemNumber(["", "  ", "3.00"]), "4.00");
+
+  // Decimal width follows the sheet rather than being imposed.
+  eq("a whole-number sheet stays whole", nextSovItemNumber(["1", "2"]), "3");
+  eq("a one-decimal sheet stays one", nextSovItemNumber(["1.0", "2.0"]), "3.0");
+
+  // Sub-lines do not raise the section. 5.08 is part of section five.
+  eq("sub-lines do not advance the section", nextSovItemNumber(["5.00", "5.08"]), "6.00");
+}
+
+{
+  eq(
+    "the line description names the CO and its scope",
+    coLineDescription("CO-03", "Completion date extension"),
+    "CO-03 - Completion date extension",
+  );
+  eq(
+    "a CO with no description still names itself",
+    coLineDescription("CO-03", null),
+    "CO-03",
+  );
+  eq("whitespace is not a description", coLineDescription("CO-03", "   "), "CO-03");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

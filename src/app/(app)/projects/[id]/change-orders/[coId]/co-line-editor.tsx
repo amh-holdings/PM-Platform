@@ -36,6 +36,9 @@ type Props = {
    * absence cannot tell you which.
    */
   linkable: (LineRow & { linkedTo: string | null })[];
+  /** Prefills for Add SOV line, computed from the whole project's SOV. */
+  suggestedItemNumber: string;
+  suggestedDescription: string;
 };
 
 export function CoLineEditor({
@@ -46,12 +49,18 @@ export function CoLineEditor({
   linesTotal,
   drift,
   linkable,
+  suggestedItemNumber,
+  suggestedDescription,
 }: Props) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [adding, setAdding] = useState(false);
-  const [itemNumber, setItemNumber] = useState("");
-  const [description, setDescription] = useState("");
+  const [itemNumber, setItemNumber] = useState(suggestedItemNumber);
+  // Untouched means "whatever the server decides". The suggestion is rendered
+  // from a snapshot of the SOV and another tab can move it, so an unedited
+  // field is sent blank and settled server side rather than posted stale.
+  const [itemTouched, setItemTouched] = useState(false);
+  const [description, setDescription] = useState(suggestedDescription);
   const [scheduledValue, setScheduledValue] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [linking, setLinking] = useState(false);
@@ -66,8 +75,8 @@ export function CoLineEditor({
 
   async function onAdd() {
     setErr(null);
-    if (!itemNumber.trim() || !description.trim()) {
-      setErr("Item number and description are required");
+    if (!description.trim()) {
+      setErr("Description is required");
       return;
     }
     const val = Number(scheduledValue.replace(/[$,\s]/g, ""));
@@ -78,7 +87,7 @@ export function CoLineEditor({
     const res = await addCoBillingLine({
       projectId,
       changeOrderId,
-      itemNumber: itemNumber.trim(),
+      itemNumber: itemTouched ? itemNumber.trim() : "",
       description: description.trim(),
       scheduledValue: val,
     });
@@ -86,8 +95,9 @@ export function CoLineEditor({
       setErr(res.error);
       return;
     }
-    setItemNumber("");
-    setDescription("");
+    // Deliberately not reset to the old suggestion - it has just been used.
+    // The next render supplies the new one through props.
+    setItemTouched(false);
     setScheduledValue("");
     setAdding(false);
     refresh();
@@ -264,7 +274,19 @@ export function CoLineEditor({
                   Link existing SOV line
                 </Button>
               )}
-              <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  // Read the suggestions now, not at mount: the SOV grows
+                  // under this component and useState seeds only once.
+                  setItemNumber(suggestedItemNumber);
+                  setDescription(suggestedDescription);
+                  setItemTouched(false);
+                  setErr(null);
+                  setAdding(true);
+                }}
+              >
                 Add SOV line
               </Button>
             </div>
@@ -274,13 +296,18 @@ export function CoLineEditor({
             <div className="grid gap-2 sm:grid-cols-[120px_1fr_140px_auto]">
               <Input
                 value={itemNumber}
-                onChange={(e) => setItemNumber(e.target.value)}
-                placeholder="e.g. 14.00"
+                onChange={(e) => {
+                  setItemTouched(true);
+                  setItemNumber(e.target.value);
+                }}
+                placeholder={suggestedItemNumber}
+                aria-label="SOV item number"
               />
               <Input
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="e.g. Equipment storage"
+                aria-label="SOV line description"
               />
               <Input
                 value={scheduledValue}
@@ -305,6 +332,12 @@ export function CoLineEditor({
                 </Button>
               </div>
             </div>
+            <p className="text-[10px] text-muted-foreground">
+              Item number and description are filled in from this change order
+              and the next free number on the SOV. Edit either before adding.
+              {!itemTouched &&
+                " Leave the number as it is and it is settled when you click Add, so a line added in another tab cannot take it first."}
+            </p>
             {drift > 0 && (
               <p className="text-[10px] text-muted-foreground">
                 Hint: {formatCurrency(drift)} of the CO value is still

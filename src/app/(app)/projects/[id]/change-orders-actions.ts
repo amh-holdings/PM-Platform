@@ -21,6 +21,7 @@ import {
   markupAppliesFromRate,
   rateFromMarkupApplies,
 } from "@/lib/change-order-pricing";
+import { nextSovItemNumber } from "@/lib/project-financials";
 import { ATTACHMENT_KINDS } from "./change-orders-constants";
 import { DOCUMENT_BUCKET } from "./documents-constants";
 
@@ -175,7 +176,8 @@ export async function deleteChangeOrder(
 export type AddCoBillingLineInput = {
   projectId: string;
   changeOrderId: string;
-  itemNumber: string;
+  /** Blank means "assign the next one" - see nextSovItemNumber. */
+  itemNumber?: string;
   description: string;
   scheduledValue: number;
 };
@@ -185,24 +187,29 @@ export async function addCoBillingLine(
 ): Promise<{ ok: true; lineId: string } | { ok: false; error: string }> {
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
-  if (!input.itemNumber?.trim()) return { ok: false, error: "Item number required" };
   if (!input.description?.trim()) return { ok: false, error: "Description required" };
 
-  // Place after the highest existing sort_order
-  const { data: maxRow } = await auth.supabase
+  // One read serves both jobs: where the line sorts, and what it is called.
+  // The form shows a suggested number, but the SOV can grow in another tab
+  // between the render and the click, so the number is settled here.
+  const { data: siblings, error: readErr } = await auth.supabase
     .from("billing_lines")
-    .select("sort_order")
+    .select("item_number, sort_order")
     .eq("project_id", input.projectId)
-    .order("sort_order", { ascending: false, nullsFirst: false })
-    .limit(1)
-    .maybeSingle();
-  const sortOrder = (maxRow?.sort_order ?? 0) + 10;
+    .limit(2000);
+  if (readErr) return { ok: false, error: readErr.message };
+
+  const sortOrder =
+    (siblings ?? []).reduce((max, l) => Math.max(max, l.sort_order ?? 0), 0) + 10;
+  const itemNumber =
+    input.itemNumber?.trim() ||
+    nextSovItemNumber((siblings ?? []).map((l) => l.item_number));
 
   const { data, error } = await auth.supabase
     .from("billing_lines")
     .insert({
       project_id: input.projectId,
-      item_number: input.itemNumber.trim(),
+      item_number: itemNumber,
       description: input.description.trim(),
       scheduled_value: input.scheduledValue,
       change_order_id: input.changeOrderId,
@@ -210,7 +217,17 @@ export async function addCoBillingLine(
     })
     .select("id")
     .single();
-  if (error || !data) return { ok: false, error: error?.message ?? "Insert failed" };
+  if (error || !data) {
+    // (project_id, item_number) is unique. Say which number collided rather
+    // than handing back a constraint name.
+    if (error?.code === "23505") {
+      return {
+        ok: false,
+        error: `SOV item ${itemNumber} already exists on this project. Leave the item number blank to be given the next free one.`,
+      };
+    }
+    return { ok: false, error: error?.message ?? "Insert failed" };
+  }
 
   revalidatePath(`/projects/${input.projectId}/change-orders/${input.changeOrderId}`);
   revalidatePath(`/projects/${input.projectId}/change-orders`);
