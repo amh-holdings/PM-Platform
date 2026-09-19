@@ -23,6 +23,7 @@ type Milestone = {
   amount: number | null;
   paid_at: string | null;
   paid_amount: number | null;
+  includes_freight: boolean;
   sort_order: number | null;
   notes: string | null;
 };
@@ -30,16 +31,38 @@ type Milestone = {
 type Props = {
   projectId: string;
   poId: string;
-  poTotalValue: number;
+  /** PO total minus freight. Milestone percentages apply to this. */
+  depositBasis: number;
+  /** Rolled up from the freight line items. Added whole to one milestone. */
+  freightValue: number;
   milestones: Milestone[];
 };
+
+function milestoneAmount(
+  pct: string,
+  includesFreight: boolean,
+  depositBasis: number,
+  freightValue: number,
+): number | null {
+  const pctNum = Number(pct);
+  const hasPct = pct !== "" && Number.isFinite(pctNum) && pctNum > 0;
+  if (!hasPct && !includesFreight) return null;
+  const base = hasPct ? (depositBasis * pctNum) / 100 : 0;
+  return Math.round((base + (includesFreight ? freightValue : 0)) * 100) / 100;
+}
 
 function todayIso() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: Props) {
+export function MilestoneEditor({
+  projectId,
+  poId,
+  depositBasis,
+  freightValue,
+  milestones,
+}: Props) {
   const router = useRouter();
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -113,6 +136,7 @@ export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: P
               <th className="px-2 py-2 text-left font-medium">Trigger</th>
               <th className="px-2 py-2 text-right font-medium">%</th>
               <th className="px-2 py-2 text-right font-medium">Amount</th>
+              <th className="px-2 py-2 text-center font-medium">Freight</th>
               <th className="px-2 py-2 text-left font-medium">Expected</th>
               <th className="px-2 py-2 text-left font-medium">Paid</th>
               <th className="px-2 py-2 text-right font-medium">Actions</th>
@@ -146,6 +170,15 @@ export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: P
                   </td>
                   <td className="px-2 py-1.5 text-right tabular-nums font-mono">
                     {formatCurrency(Number(m.amount ?? 0))}
+                  </td>
+                  <td className="px-2 py-1.5 text-center">
+                    {m.includes_freight ? (
+                      <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-900">
+                        + freight
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
                   </td>
                   <td className="px-2 py-1.5 text-muted-foreground">
                     {m.expected_date ? formatDate(m.expected_date) : "-"}
@@ -205,7 +238,7 @@ export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: P
             {milestones.length === 0 && !adding && (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="px-2 py-4 text-center text-muted-foreground"
                 >
                   No milestones yet. Add a deposit, delivery, and any
@@ -216,7 +249,8 @@ export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: P
 
             {adding && (
               <AddRow
-                poTotalValue={poTotalValue}
+                depositBasis={depositBasis}
+                freightValue={freightValue}
                 onCancel={() => setAdding(false)}
                 onSubmit={onAdd}
                 busy={busy}
@@ -244,22 +278,29 @@ export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: P
 }
 
 function AddRow({
-  poTotalValue,
+  depositBasis,
+  freightValue,
   onCancel,
   onSubmit,
   busy,
 }: {
-  poTotalValue: number;
+  depositBasis: number;
+  freightValue: number;
   onCancel: () => void;
   onSubmit: (fd: FormData) => void;
   busy: boolean;
 }) {
   const [pct, setPct] = useState("");
-  const computedAmount =
-    pct && Number(pct) > 0 ? (poTotalValue * Number(pct)) / 100 : null;
+  const [includesFreight, setIncludesFreight] = useState(false);
+  const computedAmount = milestoneAmount(
+    pct,
+    includesFreight,
+    depositBasis,
+    freightValue,
+  );
   return (
     <tr className="border-b bg-emerald-500/5">
-      <td colSpan={7} className="p-3">
+      <td colSpan={8} className="p-3">
         <form action={onSubmit} className="grid gap-2 sm:grid-cols-[1fr_140px_100px_140px_140px_auto]">
           <div>
             <Label htmlFor="m-name" className="text-[10px]">Milestone name *</Label>
@@ -270,7 +311,7 @@ function AddRow({
             <Input id="m-trigger" name="trigger_event" placeholder="PO signed / Delivered" />
           </div>
           <div>
-            <Label htmlFor="m-pct" className="text-[10px]">% of PO</Label>
+            <Label htmlFor="m-pct" className="text-[10px]">% of deposit basis</Label>
             <Input
               id="m-pct"
               name="pct_of_total"
@@ -303,9 +344,23 @@ function AddRow({
               Add
             </Button>
           </div>
-          <div className="sm:col-span-6">
-            <Input name="notes" placeholder="Notes (optional)" />
+          <div className="sm:col-span-6 flex flex-wrap items-center gap-3">
+            <Input name="notes" placeholder="Notes (optional)" className="flex-1 min-w-48" />
+            <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+              <input
+                type="checkbox"
+                name="includes_freight"
+                checked={includesFreight}
+                onChange={(e) => setIncludesFreight(e.target.checked)}
+                className="h-3.5 w-3.5 accent-blue-600"
+              />
+              Carries freight ({formatCurrency(freightValue)})
+            </label>
           </div>
+          <p className="sm:col-span-6 text-[10px] text-muted-foreground">
+            Deposit basis {formatCurrency(depositBasis)} - freight is excluded
+            from the percentage and only lands on the milestone flagged above.
+          </p>
         </form>
       </td>
     </tr>
@@ -323,9 +378,10 @@ function EditRow({
   onSubmit: (fd: FormData) => void;
   busy: boolean;
 }) {
+  const [includesFreight, setIncludesFreight] = useState(m.includes_freight);
   return (
     <tr className="border-b bg-amber-500/5">
-      <td colSpan={7} className="p-3">
+      <td colSpan={8} className="p-3">
         <form
           action={onSubmit}
           className="grid gap-2 sm:grid-cols-[1fr_140px_100px_140px_140px_auto]"
@@ -339,7 +395,7 @@ function EditRow({
             <Input id={`mt-${m.id}`} name="trigger_event" defaultValue={m.trigger_event ?? ""} />
           </div>
           <div>
-            <Label htmlFor={`mp-${m.id}`} className="text-[10px]">%</Label>
+            <Label htmlFor={`mp-${m.id}`} className="text-[10px]">% of basis</Label>
             <Input
               id={`mp-${m.id}`}
               name="pct_of_total"
@@ -375,12 +431,23 @@ function EditRow({
               Save
             </Button>
           </div>
-          <div className="sm:col-span-6">
+          <div className="sm:col-span-6 flex flex-wrap items-center gap-3">
             <Input
               name="notes"
               defaultValue={m.notes ?? ""}
               placeholder="Notes (optional)"
+              className="flex-1 min-w-48"
             />
+            <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+              <input
+                type="checkbox"
+                name="includes_freight"
+                checked={includesFreight}
+                onChange={(e) => setIncludesFreight(e.target.checked)}
+                className="h-3.5 w-3.5 accent-blue-600"
+              />
+              Carries freight
+            </label>
           </div>
         </form>
       </td>

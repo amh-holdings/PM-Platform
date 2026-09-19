@@ -36,6 +36,127 @@ function getDate(value: FormDataEntryValue | null): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
   return value;
 }
+function getBool(value: FormDataEntryValue | null): boolean {
+  return value === "on" || value === "true" || value === "1";
+}
+
+// ============ PO LINE ITEMS ============
+
+export type PoLineItemInput = {
+  item_number?: string | null;
+  description: string;
+  quantity?: number | string | null;
+  unit?: string | null;
+  unit_price?: number | string | null;
+  is_freight?: boolean;
+  notes?: string | null;
+};
+
+type ParsedLineItem = {
+  item_number: string | null;
+  description: string;
+  quantity: number;
+  unit: string | null;
+  unit_price: number;
+  is_freight: boolean;
+  notes: string | null;
+  amount: number;
+};
+
+function toNumber(value: unknown, fallback: number): number {
+  if (value == null || value === "") return fallback;
+  const n = typeof value === "number" ? value : Number(String(value).replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) ? n : fallback;
+}
+function toText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const t = value.trim();
+  return t ? t : null;
+}
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Parse the itemized PO body the form submits as `items_json`.
+ *
+ * Returns null when the field is absent, which means "leave the existing
+ * items alone" - an empty array means "the user removed every line".
+ */
+function parseLineItems(value: FormDataEntryValue | null): ParsedLineItem[] | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(raw)) return null;
+
+  const items: ParsedLineItem[] = [];
+  for (const entry of raw as PoLineItemInput[]) {
+    if (!entry || typeof entry !== "object") continue;
+    const description = toText(entry.description);
+    const quantity = toNumber(entry.quantity, 1);
+    const unitPrice = toNumber(entry.unit_price, 0);
+    const amount = round2(quantity * unitPrice);
+    // Drop rows the user opened but never filled in.
+    if (!description && amount === 0) continue;
+    items.push({
+      item_number: toText(entry.item_number),
+      description: description ?? "Line item",
+      quantity,
+      unit: toText(entry.unit),
+      unit_price: unitPrice,
+      is_freight: entry.is_freight === true,
+      notes: toText(entry.notes),
+      amount,
+    });
+  }
+  return items;
+}
+
+function lineItemTotals(items: ParsedLineItem[]) {
+  const total = round2(items.reduce((s, i) => s + i.amount, 0));
+  const freight = round2(
+    items.filter((i) => i.is_freight).reduce((s, i) => s + i.amount, 0),
+  );
+  return { total, freight, depositBasis: round2(total - freight) };
+}
+
+/**
+ * Replace this PO's line items wholesale. The DB trigger recomputes
+ * procurement_orders.total_value and freight_value from what lands here.
+ */
+async function replaceLineItems(
+  supabase: ReturnType<typeof createClient>,
+  poId: string,
+  items: ParsedLineItem[],
+): Promise<string | null> {
+  const { error: delErr } = await supabase
+    .from("procurement_order_items")
+    .delete()
+    .eq("procurement_order_id", poId);
+  if (delErr) return delErr.message;
+
+  if (items.length === 0) return null;
+
+  const rows = items.map((item, idx) => ({
+    procurement_order_id: poId,
+    sort_order: idx + 1,
+    item_number: item.item_number,
+    description: item.description,
+    quantity: item.quantity,
+    unit: item.unit,
+    unit_price: item.unit_price,
+    is_freight: item.is_freight,
+    notes: item.notes,
+  }));
+  const { error: insErr } = await supabase
+    .from("procurement_order_items")
+    .insert(rows);
+  return insErr ? insErr.message : null;
+}
 
 export type ProcurementOrderResult =
   | { ok: true; id: string }
@@ -53,12 +174,17 @@ export async function createProcurementOrder(
     return { ok: false, error: "Vendor name is required", fieldErrors: { vendor_name: "Required" } };
   }
 
+  const items = parseLineItems(formData.get("items_json"));
+  const totals = items && items.length > 0 ? lineItemTotals(items) : null;
+
   const insert: TablesInsert<"procurement_orders"> = {
     project_id: projectId,
     vendor_name: vendor,
     po_number: getStr(formData.get("po_number")),
     description: getStr(formData.get("description")),
-    total_value: getNum(formData.get("total_value")),
+    // When the PO is itemized the line items are the source of truth for
+    // the total - the DB trigger enforces the same thing on every write.
+    total_value: totals ? totals.total : getNum(formData.get("total_value")),
     ordered_date: getDate(formData.get("ordered_date")),
     expected_delivery_date: getDate(formData.get("expected_delivery_date")),
     actual_delivery_date: getDate(formData.get("actual_delivery_date")),
@@ -74,6 +200,12 @@ export async function createProcurementOrder(
     .select("id")
     .single();
   if (error) return { ok: false, error: error.message };
+
+  if (items) {
+    const itemErr = await replaceLineItems(auth.supabase, data.id, items);
+    if (itemErr) return { ok: false, error: `PO saved, but line items failed: ${itemErr}` };
+  }
+
   revalidatePath(`/projects/${projectId}/procurement`);
   return { ok: true, id: data.id };
 }
@@ -86,11 +218,14 @@ export async function updateProcurementOrder(
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
+  const items = parseLineItems(formData.get("items_json"));
+  const totals = items && items.length > 0 ? lineItemTotals(items) : null;
+
   const update: TablesUpdate<"procurement_orders"> = {
     vendor_name: getStr(formData.get("vendor_name")) ?? undefined,
     po_number: getStr(formData.get("po_number")),
     description: getStr(formData.get("description")),
-    total_value: getNum(formData.get("total_value")),
+    total_value: totals ? totals.total : getNum(formData.get("total_value")),
     ordered_date: getDate(formData.get("ordered_date")),
     expected_delivery_date: getDate(formData.get("expected_delivery_date")),
     actual_delivery_date: getDate(formData.get("actual_delivery_date")),
@@ -104,6 +239,12 @@ export async function updateProcurementOrder(
     .update(update)
     .eq("id", poId);
   if (error) return { ok: false, error: error.message };
+
+  if (items) {
+    const itemErr = await replaceLineItems(auth.supabase, poId, items);
+    if (itemErr) return { ok: false, error: `PO saved, but line items failed: ${itemErr}` };
+  }
+
   revalidatePath(`/projects/${projectId}/procurement`);
   revalidatePath(`/projects/${projectId}/procurement/${poId}`);
   return { ok: true, id: poId };
@@ -126,6 +267,26 @@ export async function deleteProcurementOrder(
 
 // ============ MILESTONES ============
 
+/**
+ * The two numbers milestone math needs: the deposit basis (PO total minus
+ * freight) and the freight itself. Falls back to the PO total when the row
+ * predates itemization, where freight_value is 0 anyway.
+ */
+async function poDepositBasis(
+  supabase: ReturnType<typeof createClient>,
+  poId: string,
+): Promise<{ basis: number; freight: number; total: number }> {
+  const { data: po } = await supabase
+    .from("procurement_orders")
+    .select("total_value, freight_value, deposit_basis")
+    .eq("id", poId)
+    .maybeSingle();
+  const total = Number(po?.total_value ?? 0);
+  const freight = Number(po?.freight_value ?? 0);
+  const basis = Number(po?.deposit_basis ?? total - freight);
+  return { basis, freight, total };
+}
+
 export type MilestoneResult =
   | { ok: true; id: string }
   | { ok: false; error: string };
@@ -143,17 +304,16 @@ export async function addMilestone(
 
   const pct = getNum(formData.get("pct_of_total"));
   const amount = getNum(formData.get("amount"));
+  const includesFreight = getBool(formData.get("includes_freight"));
 
-  // If pct is set but amount is missing, compute amount from pct * total_value
+  // If the amount is blank, derive it. Percentages apply to the deposit
+  // basis (PO total minus freight) so shipping never carries a deposit;
+  // freight is added whole to whichever milestone is flagged to carry it.
   let computedAmount = amount;
-  if (computedAmount == null && pct != null) {
-    const { data: po } = await auth.supabase
-      .from("procurement_orders")
-      .select("total_value")
-      .eq("id", poId)
-      .maybeSingle();
-    const total = Number(po?.total_value ?? 0);
-    computedAmount = total * (pct / 100);
+  if (computedAmount == null && (pct != null || includesFreight)) {
+    const { basis, freight } = await poDepositBasis(auth.supabase, poId);
+    computedAmount =
+      round2(basis * ((pct ?? 0) / 100) + (includesFreight ? freight : 0));
   }
 
   const insert: TablesInsert<"procurement_payments"> = {
@@ -163,6 +323,7 @@ export async function addMilestone(
     trigger_event: getStr(formData.get("trigger_event")),
     expected_date: getDate(formData.get("expected_date")),
     amount: computedAmount,
+    includes_freight: includesFreight,
     sort_order: getNum(formData.get("sort_order")),
     notes: getStr(formData.get("notes")),
   };
@@ -186,12 +347,21 @@ export async function updateMilestone(
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
+  const pct = getNum(formData.get("pct_of_total"));
+  const includesFreight = getBool(formData.get("includes_freight"));
+  let amount = getNum(formData.get("amount"));
+  if (amount == null && (pct != null || includesFreight)) {
+    const { basis, freight } = await poDepositBasis(auth.supabase, poId);
+    amount = round2(basis * ((pct ?? 0) / 100) + (includesFreight ? freight : 0));
+  }
+
   const update: TablesUpdate<"procurement_payments"> = {
     milestone_name: getStr(formData.get("milestone_name")) ?? undefined,
-    pct_of_total: getNum(formData.get("pct_of_total")),
+    pct_of_total: pct,
     trigger_event: getStr(formData.get("trigger_event")),
     expected_date: getDate(formData.get("expected_date")),
-    amount: getNum(formData.get("amount")),
+    amount,
+    includes_freight: includesFreight,
     sort_order: getNum(formData.get("sort_order")),
     notes: getStr(formData.get("notes")),
   };
@@ -356,6 +526,8 @@ export type ExtractedMilestone = {
   trigger_event: string;
   expected_date: string | null;
   notes: string;
+  /** This milestone also carries the PO's freight in full. */
+  includes_freight?: boolean;
 };
 
 export type ExtractPoTermsResult =
@@ -455,6 +627,7 @@ export async function applyExtractedMilestones(
     amount: m.amount == null ? null : Number(m.amount),
     trigger_event: m.trigger_event ?? null,
     expected_date: m.expected_date || null,
+    includes_freight: m.includes_freight === true,
     notes: m.notes ?? null,
     sort_order: idx + 1,
   }));

@@ -1765,13 +1765,68 @@ export type Database = {
           },
         ]
       }
+      procurement_order_items: {
+        Row: {
+          amount: number | null
+          created_at: string | null
+          description: string
+          id: string
+          is_freight: boolean
+          item_number: string | null
+          notes: string | null
+          procurement_order_id: string
+          quantity: number
+          sort_order: number | null
+          unit: string | null
+          unit_price: number
+        }
+        Insert: {
+          amount?: never
+          created_at?: string | null
+          description: string
+          id?: string
+          is_freight?: boolean
+          item_number?: string | null
+          notes?: string | null
+          procurement_order_id: string
+          quantity?: number
+          sort_order?: number | null
+          unit?: string | null
+          unit_price?: number
+        }
+        Update: {
+          amount?: never
+          created_at?: string | null
+          description?: string
+          id?: string
+          is_freight?: boolean
+          item_number?: string | null
+          notes?: string | null
+          procurement_order_id?: string
+          quantity?: number
+          sort_order?: number | null
+          unit?: string | null
+          unit_price?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "procurement_order_items_procurement_order_id_fkey"
+            columns: ["procurement_order_id"]
+            isOneToOne: false
+            referencedRelation: "procurement_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       procurement_orders: {
         Row: {
           actual_delivery_date: string | null
           created_at: string | null
           description: string | null
+          deposit_basis: number | null
           document_id: string | null
           expected_delivery_date: string | null
+          freight_value: number
           id: string
           linked_delivery_task_wbs_code: string | null
           notes: string | null
@@ -1789,8 +1844,10 @@ export type Database = {
           actual_delivery_date?: string | null
           created_at?: string | null
           description?: string | null
+          deposit_basis?: never
           document_id?: string | null
           expected_delivery_date?: string | null
+          freight_value?: number
           id?: string
           linked_delivery_task_wbs_code?: string | null
           notes?: string | null
@@ -1808,8 +1865,10 @@ export type Database = {
           actual_delivery_date?: string | null
           created_at?: string | null
           description?: string | null
+          deposit_basis?: never
           document_id?: string | null
           expected_delivery_date?: string | null
+          freight_value?: number
           id?: string
           linked_delivery_task_wbs_code?: string | null
           notes?: string | null
@@ -1853,6 +1912,7 @@ export type Database = {
           created_at: string | null
           expected_date: string | null
           id: string
+          includes_freight: boolean
           milestone_name: string
           notes: string | null
           paid_amount: number | null
@@ -1867,6 +1927,7 @@ export type Database = {
           created_at?: string | null
           expected_date?: string | null
           id?: string
+          includes_freight?: boolean
           milestone_name: string
           notes?: string | null
           paid_amount?: number | null
@@ -1881,6 +1942,7 @@ export type Database = {
           created_at?: string | null
           expected_date?: string | null
           id?: string
+          includes_freight?: boolean
           milestone_name?: string
           notes?: string | null
           paid_amount?: number | null

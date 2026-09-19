@@ -1,13 +1,20 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { formatCurrency } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
+import {
+  PoLineItems,
+  isRealLineItem,
+  summarizeLineItems,
+  type PoLineItemValue,
+} from "./po-line-items";
 import { createProcurementOrder, updateProcurementOrder } from "../procurement-actions";
 import { recordDocument } from "../documents-actions";
 import {
@@ -35,6 +42,7 @@ type Props = {
   projectId: string;
   mode: "create" | "edit";
   initial?: ProcurementFormValues;
+  initialItems?: PoLineItemValue[];
   documents: { id: string; label: string }[];
 };
 
@@ -67,9 +75,18 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function ProcurementForm({ projectId, mode, initial, documents }: Props) {
+export function ProcurementForm({
+  projectId,
+  mode,
+  initial,
+  initialItems,
+  documents,
+}: Props) {
   const router = useRouter();
   const values = initial ?? EMPTY;
+  const [items, setItems] = useState<PoLineItemValue[]>(initialItems ?? []);
+  const itemTotals = useMemo(() => summarizeLineItems(items), [items]);
+  const itemized = itemTotals.count > 0;
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -120,6 +137,13 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
 
   async function action(formData: FormData) {
     setError(null);
+    const realItems = items.filter(isRealLineItem);
+    const unnamed = realItems.find((i) => !i.description.trim());
+    if (unnamed) {
+      setError("Every line item needs a description");
+      return;
+    }
+    formData.set("items_json", JSON.stringify(realItems));
     setSubmitting(true);
     try {
       // Upload picked file first if any. If upload succeeds, override the
@@ -165,23 +189,45 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
             <Input id="po_number" name="po_number" defaultValue={values.po_number ?? ""} />
           </div>
           <div className="sm:col-span-2">
-            <Label htmlFor="description">Description</Label>
+            <Label htmlFor="description">Summary description</Label>
             <Input
               id="description"
               name="description"
               defaultValue={values.description ?? ""}
-              placeholder="e.g. SMA SHP-150 inverters, 12 units"
+              placeholder="e.g. Inverters and racking - itemized below"
             />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              One line for the PO list view. The itemized scope goes in the
+              line items below.
+            </p>
           </div>
           <div>
             <Label htmlFor="total_value">Total PO value</Label>
-            <Input
-              id="total_value"
-              name="total_value"
-              type="number"
-              step="0.01"
-              defaultValue={values.total_value ?? ""}
-            />
+            {itemized ? (
+              <div className="flex h-10 items-center justify-between rounded-md border border-input bg-muted/40 px-2 text-sm">
+                <span className="font-mono tabular-nums">
+                  {formatCurrency(itemTotals.total)}
+                </span>
+                <span className="text-[10px] text-muted-foreground">
+                  from {itemTotals.count} line
+                  {itemTotals.count === 1 ? "" : "s"}
+                </span>
+              </div>
+            ) : (
+              <Input
+                id="total_value"
+                name="total_value"
+                type="number"
+                step="0.01"
+                defaultValue={values.total_value ?? ""}
+              />
+            )}
+            {itemized && (
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                Deposit basis {formatCurrency(itemTotals.depositBasis)} +
+                freight {formatCurrency(itemTotals.freight)}
+              </p>
+            )}
           </div>
           <div>
             <Label htmlFor="status">Status</Label>
@@ -328,6 +374,8 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
         </div>
         {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
       </section>
+
+      <PoLineItems items={items} onChange={setItems} disabled={submitting} />
 
       <div className="flex items-center justify-end gap-2">
         <Button

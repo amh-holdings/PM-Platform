@@ -248,6 +248,8 @@ export type ProcurementMilestone = {
   milestone_name?: string | null;
   amount?: number | null;
   pct_of_total?: number | null;
+  /** This milestone carries the PO's freight on top of its percentage. */
+  includes_freight?: boolean | null;
   /** Free text from the PO, e.g. "PO release - Net 30", "Delivery to site". */
   trigger_event?: string | null;
   paid_at?: string | null;
@@ -257,6 +259,10 @@ export type LinkedPo = {
   po_number?: string | null;
   vendor_name?: string | null;
   total_value?: number | null;
+  /** Freight rolled up from the PO line items. Carries no deposit. */
+  freight_value?: number | null;
+  /** total_value minus freight_value - what a percentage applies to. */
+  deposit_basis?: number | null;
   status?: string | null;
   signed_at?: string | null;
   actual_delivery_date?: string | null;
@@ -347,11 +353,18 @@ export function estimateProcurementProgress(
       detail.push(`${label}: no payment milestones recorded - contributes $0`);
       continue;
     }
+    // Percentages apply to the deposit basis (PO total minus freight), so
+    // shipping never gets deposited against; freight lands whole on the
+    // milestone flagged to carry it. Pre-itemization POs have no freight,
+    // where the basis collapses back to the total.
+    const freight = Number(po.freight_value ?? 0);
+    const basis = Number(po.deposit_basis ?? Number(po.total_value ?? 0) - freight);
     for (const m of ms) {
       const amount =
         Number(m.amount ?? 0) > 0
           ? Number(m.amount)
-          : (Number(m.pct_of_total ?? 0) / 100) * Number(po.total_value ?? 0);
+          : (Number(m.pct_of_total ?? 0) / 100) * basis +
+            (m.includes_freight ? freight : 0);
       const { fired, why } = milestoneTriggered(m, po);
       if (fired) earned += amount;
       detail.push(

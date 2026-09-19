@@ -197,7 +197,9 @@ export async function computeBillingSuggestions(
       .eq("project_id", projectId),
     auth.supabase
       .from("procurement_orders")
-      .select("id, po_number, vendor_name, total_value, status, signed_at, actual_delivery_date")
+      .select(
+      "id, po_number, vendor_name, total_value, freight_value, deposit_basis, status, signed_at, actual_delivery_date",
+    )
       .eq("project_id", projectId),
   ]);
 
@@ -205,7 +207,9 @@ export async function computeBillingSuggestions(
   // See estimateProcurementProgress: a signed PO is a commitment, not value.
   const { data: milestones } = await auth.supabase
     .from("procurement_payments")
-    .select("procurement_order_id, milestone_name, amount, pct_of_total, trigger_event, paid_at")
+    .select(
+      "procurement_order_id, milestone_name, amount, pct_of_total, trigger_event, paid_at, includes_freight",
+    )
     .in("procurement_order_id", (pos ?? []).map((p) => p.id));
   const msByPo = new Map<string, Array<Record<string, unknown>>>();
   for (const m of milestones ?? []) {
@@ -258,6 +262,8 @@ export async function computeBillingSuggestions(
       po_number: p.po_number,
       vendor_name: p.vendor_name,
       total_value: p.total_value,
+      freight_value: p.freight_value,
+      deposit_basis: p.deposit_basis,
       status: p.status,
       signed_at: p.signed_at,
       actual_delivery_date: (p as { actual_delivery_date?: string | null }).actual_delivery_date ?? null,
@@ -730,11 +736,15 @@ export async function getBillThisPeriodRows(
     .eq("project_id", projectId);
   const { data: posInfo } = await auth.supabase
     .from("procurement_orders")
-    .select("id, po_number, vendor_name, total_value, status, signed_at, actual_delivery_date")
+    .select(
+      "id, po_number, vendor_name, total_value, freight_value, deposit_basis, status, signed_at, actual_delivery_date",
+    )
     .eq("project_id", projectId);
   const { data: msInfo } = await auth.supabase
     .from("procurement_payments")
-    .select("procurement_order_id, milestone_name, amount, pct_of_total, trigger_event, paid_at")
+    .select(
+      "procurement_order_id, milestone_name, amount, pct_of_total, trigger_event, paid_at, includes_freight",
+    )
     .in("procurement_order_id", (posInfo ?? []).map((p) => p.id));
   const msByPoId = new Map<string, ProcurementMilestone[]>();
   for (const m of msInfo ?? []) {
@@ -795,6 +805,8 @@ export async function getBillThisPeriodRows(
       po_number: p.po_number,
       vendor_name: p.vendor_name,
       total_value: p.total_value,
+      freight_value: p.freight_value,
+      deposit_basis: p.deposit_basis,
       status: p.status,
       signed_at: p.signed_at,
       actual_delivery_date: (p as { actual_delivery_date?: string | null }).actual_delivery_date ?? null,

@@ -14,7 +14,7 @@ export default async function EditProcurementPage({
 }) {
   const supabase = createClient();
 
-  const [{ data: po }, { data: docs }] = await Promise.all([
+  const [{ data: po }, { data: items }, { data: docs }] = await Promise.all([
     supabase
       .from("procurement_orders")
       .select(
@@ -22,6 +22,13 @@ export default async function EditProcurementPage({
       )
       .eq("id", params.poId)
       .maybeSingle(),
+    supabase
+      .from("procurement_order_items")
+      .select(
+        "id, sort_order, item_number, description, quantity, unit, unit_price, is_freight, notes",
+      )
+      .eq("procurement_order_id", params.poId)
+      .order("sort_order", { ascending: true, nullsFirst: false }),
     supabase
       .from("project_documents")
       .select("id, file_name, category")
@@ -47,6 +54,16 @@ export default async function EditProcurementPage({
         projectId={params.id}
         mode="edit"
         initial={po}
+        initialItems={(items ?? []).map((i) => ({
+          id: i.id,
+          item_number: i.item_number ?? "",
+          description: i.description,
+          quantity: String(i.quantity ?? 1),
+          unit: i.unit ?? "",
+          unit_price: String(i.unit_price ?? 0),
+          is_freight: i.is_freight === true,
+          notes: i.notes ?? "",
+        }))}
         documents={(docs ?? []).map((d) => ({ id: d.id, label: d.file_name }))}
       />
     </div>

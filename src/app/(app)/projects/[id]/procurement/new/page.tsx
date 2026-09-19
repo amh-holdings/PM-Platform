@@ -27,9 +27,11 @@ export default async function NewProcurementPage({ params }: { params: Params })
         </Link>
         <h2 className="mt-1 text-lg font-semibold">Add purchase order</h2>
         <p className="text-xs text-muted-foreground">
-          Capture vendor, PO number, total value, and delivery timing. Link
-          a contract document if you&apos;ve uploaded it to the project.
-          Milestone payment schedule lives on the detail page after saving.
+          Capture vendor, PO number, and delivery timing, then itemize the
+          scope below - one row per line on the vendor quote. Flag shipping
+          rows as Freight and they stay out of the deposit basis. Link a
+          contract document if you&apos;ve uploaded it to the project. The
+          milestone payment schedule lives on the detail page after saving.
         </p>
       </div>
 

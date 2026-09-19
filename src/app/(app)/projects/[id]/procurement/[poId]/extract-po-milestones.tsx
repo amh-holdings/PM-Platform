@@ -17,7 +17,10 @@ import {
 type Props = {
   poId: string;
   projectId: string;
-  poTotalValue: number;
+  /** PO total minus freight. Extracted percentages apply to this. */
+  depositBasis: number;
+  /** Freight rolled up from the line items, added whole to one milestone. */
+  freightValue: number;
   hasLinkedDocument: boolean;
 };
 
@@ -26,7 +29,8 @@ type EditableMilestone = ExtractedMilestone & { include: boolean };
 export function ExtractPoMilestones({
   poId,
   projectId,
-  poTotalValue,
+  depositBasis,
+  freightValue,
   hasLinkedDocument,
 }: Props) {
   const router = useRouter();
@@ -73,6 +77,7 @@ export function ExtractPoMilestones({
         trigger_event: m.trigger_event,
         expected_date: m.expected_date,
         notes: m.notes,
+        includes_freight: m.includes_freight === true,
       }));
       const result = await applyExtractedMilestones(poId, projectId, stripped, summary);
       if (!result.ok) {
@@ -107,7 +112,10 @@ export function ExtractPoMilestones({
           </h4>
           <p className="text-[10px] text-muted-foreground">
             Reads the linked PO document, asks Claude to extract the payment
-            schedule, shows it here for review before insertion.
+            schedule, shows it here for review before insertion. Percentages
+            apply to the {formatCurrency(depositBasis)} deposit basis; tick
+            Freight on the milestone that carries the{" "}
+            {formatCurrency(freightValue)} shipping.
           </p>
         </div>
         <Button
@@ -179,6 +187,7 @@ export function ExtractPoMilestones({
                   <th className="py-1.5 pr-2 text-left font-medium">Trigger</th>
                   <th className="py-1.5 pr-2 text-right font-medium">%</th>
                   <th className="py-1.5 pr-2 text-right font-medium">Amount</th>
+                  <th className="py-1.5 pr-2 text-center font-medium">Freight</th>
                   <th className="py-1.5 pr-2 text-left font-medium">Expected date</th>
                 </tr>
               </thead>
@@ -235,9 +244,11 @@ export function ExtractPoMilestones({
                               ? Number(e.target.value)
                               : null,
                             amount:
-                              e.target.value && poTotalValue
+                              e.target.value && depositBasis
                                 ? Math.round(
-                                    poTotalValue * (Number(e.target.value) / 100) * 100,
+                                    (depositBasis * (Number(e.target.value) / 100) +
+                                      (m.includes_freight ? freightValue : 0)) *
+                                      100,
                                   ) / 100
                                 : m.amount,
                           })
@@ -256,6 +267,28 @@ export function ExtractPoMilestones({
                           })
                         }
                         className="h-7 w-24 text-right text-xs"
+                      />
+                    </td>
+                    <td className="py-1.5 pr-2 text-center">
+                      <input
+                        type="checkbox"
+                        checked={m.includes_freight === true}
+                        onChange={(e) =>
+                          updateMilestone(i, {
+                            includes_freight: e.target.checked,
+                            amount:
+                              m.pct_of_total != null
+                                ? Math.round(
+                                    (depositBasis * (m.pct_of_total / 100) +
+                                      (e.target.checked ? freightValue : 0)) *
+                                      100,
+                                  ) / 100
+                                : m.amount,
+                          })
+                        }
+                        disabled={freightValue <= 0}
+                        className="h-3.5 w-3.5 accent-blue-600"
+                        aria-label="Milestone carries freight"
                       />
                     </td>
                     <td className="py-1.5 pr-2">

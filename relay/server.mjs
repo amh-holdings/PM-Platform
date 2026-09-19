@@ -529,7 +529,7 @@ fastify.post("/extract-po-payment-terms", async (request, reply) => {
   const { data: po, error: poErr } = await supabase
     .from("procurement_orders")
     .select(
-      "po_number, vendor_name, total_value, ordered_date, expected_delivery_date, actual_delivery_date, signed_at, linked_delivery_task_wbs_code, document_id, project_id",
+      "po_number, vendor_name, total_value, freight_value, deposit_basis, ordered_date, expected_delivery_date, actual_delivery_date, signed_at, linked_delivery_task_wbs_code, document_id, project_id",
     )
     .eq("id", procurement_order_id)
     .maybeSingle();
@@ -581,7 +581,8 @@ fastify.post("/extract-po-payment-terms", async (request, reply) => {
     '      "amount": number | null,       // dollar amount; if only a pct is given compute it from PO total',
     '      "trigger_event": string,       // what triggers the payment: "PO release", "Delivery", "Commissioning", "Net 30 from invoice", "Substantial completion", etc.',
     '      "expected_date": string | null,// YYYY-MM-DD if a specific date is given OR computable (e.g. "Net 30 after delivery" + expected delivery date)',
-    '      "notes": string                // any caveats, conditions, or source phrasing',
+    '      "notes": string,               // any caveats, conditions, or source phrasing',
+    '      "includes_freight": boolean    // true for the ONE milestone that also pays the freight/shipping in full (normally delivery)',
     "    }",
     "  ],",
     '  "total_pct": number | null,         // sum of pct_of_total across milestones (should be 100 if all percentages)',
@@ -593,6 +594,8 @@ fastify.post("/extract-po-payment-terms", async (request, reply) => {
     `  Vendor: ${po.vendor_name}`,
     `  PO Number: ${po.po_number ?? "(unknown)"}`,
     `  Total Value: $${po.total_value ?? "(unknown)"}`,
+    `  Deposit Basis (equipment only, freight excluded): $${po.deposit_basis ?? po.total_value ?? "(unknown)"}`,
+    `  Freight / Shipping: $${po.freight_value ?? 0}`,
     `  Ordered Date: ${po.ordered_date ?? "(unknown)"}`,
     `  Signed Date: ${po.signed_at ? po.signed_at.slice(0, 10) : "(unknown)"}`,
     `  Expected Delivery: ${po.expected_delivery_date ?? "(unknown)"}`,
@@ -602,8 +605,9 @@ fastify.post("/extract-po-payment-terms", async (request, reply) => {
     `IMPORTANT: When 'Expected Delivery' is set above, USE IT as the anchor for any Net X after delivery calculations - it comes from the project schedule and is more authoritative than any shipping estimate in the PDF text. Use the PDF shipping boilerplate (e.g. '5-7 day shipping') ONLY when Expected Delivery is unknown.`,
     "",
     "Rules:",
-    "- If the PO uses percentages, fill pct_of_total AND compute amount from the PO total value.",
+    "- If the PO uses percentages, fill pct_of_total AND compute amount as pct x the DEPOSIT BASIS above (equipment only), not the total value. Vendors quote deposits against equipment; freight bills on delivery.",
     "- If the PO uses fixed dollar amounts, fill amount and leave pct_of_total null.",
+    "- FREIGHT: set includes_freight true on exactly ONE milestone - the one the PO says covers shipping, normally delivery - and add the freight amount above to that milestone's amount. Set it false everywhere else. If the freight is $0 or the PO folds shipping into the unit prices, set it false on every milestone.",
     "- IMPORTANT - Net X interpretation rule for solar EPC equipment POs: When the PO is for EQUIPMENT (transformers, modules, inverters, racking, reclosers, switchgear, monitoring gear, etc.) and the payment term reads 'Net 30' / 'Net 45' / 'Net X' WITHOUT explicitly stating what it runs from, ALWAYS interpret it as 'Net X after DELIVERY' - never as 'Net X from invoice'. AHC's standard is: equipment doesn't get paid until it arrives on site. So set trigger_event = 'Net X after delivery', and include a note that the PO was ambiguous and you applied the equipment default.",
     "- Use 'Net X from invoice' or 'Net X from PO release' only when the PO EXPLICITLY says so.",
     "",

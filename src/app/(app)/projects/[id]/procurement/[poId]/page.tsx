@@ -31,6 +31,7 @@ export default async function ProcurementDetailPage({
 
   const [
     { data: po, error },
+    { data: items },
     { data: payments },
     { data: deliveryTasks },
     { data: allocations },
@@ -39,14 +40,21 @@ export default async function ProcurementDetailPage({
     supabase
       .from("procurement_orders")
       .select(
-        "id, project_id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, document_id, notes, signed_at, linked_delivery_task_wbs_code",
+        "id, project_id, vendor_name, po_number, description, total_value, freight_value, deposit_basis, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, document_id, notes, signed_at, linked_delivery_task_wbs_code",
       )
       .eq("id", params.poId)
       .maybeSingle(),
     supabase
+      .from("procurement_order_items")
+      .select(
+        "id, sort_order, item_number, description, quantity, unit, unit_price, amount, is_freight, notes",
+      )
+      .eq("procurement_order_id", params.poId)
+      .order("sort_order", { ascending: true, nullsFirst: false }),
+    supabase
       .from("procurement_payments")
       .select(
-        "id, milestone_name, pct_of_total, trigger_event, expected_date, amount, paid_amount, paid_at, sort_order, notes",
+        "id, milestone_name, pct_of_total, trigger_event, expected_date, amount, paid_amount, paid_at, sort_order, notes, includes_freight",
       )
       .eq("procurement_order_id", params.poId)
       .order("sort_order", { ascending: true, nullsFirst: false })
@@ -124,6 +132,9 @@ export default async function ProcurementDetailPage({
     0,
   );
   const poValue = Number(po.total_value ?? 0);
+  const freightValue = Number(po.freight_value ?? 0);
+  const depositBasis = Number(po.deposit_basis ?? poValue - freightValue);
+  const lineItems = items ?? [];
   const drift = poValue > 0 ? totalPlanned - poValue : 0;
 
   return (
@@ -181,9 +192,21 @@ export default async function ProcurementDetailPage({
         options={deliveryOptions}
       />
 
-      <section className="grid gap-3 sm:grid-cols-4">
+      <section className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <SmallCell label="PO #" value={po.po_number ?? "-"} mono />
         <SmallCell label="PO value" value={formatCurrency(poValue)} mono />
+        <SmallCell
+          label="Deposit basis"
+          value={formatCurrency(depositBasis)}
+          mono
+          hint="Excludes freight"
+        />
+        <SmallCell
+          label="Freight"
+          value={formatCurrency(freightValue)}
+          mono
+          hint="No deposit charged"
+        />
         <SmallCell
           label="Expected delivery"
           value={po.expected_delivery_date ? formatDate(po.expected_delivery_date) : "-"}
@@ -192,6 +215,102 @@ export default async function ProcurementDetailPage({
           label="Actual delivery"
           value={po.actual_delivery_date ? formatDate(po.actual_delivery_date) : "-"}
         />
+      </section>
+
+      <section className="rounded-lg border bg-card shadow-sm">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 border-b p-3">
+          <h3 className="text-sm font-semibold">Line items</h3>
+          <p className="text-xs text-muted-foreground">
+            {lineItems.length} line{lineItems.length === 1 ? "" : "s"}
+          </p>
+        </div>
+        {lineItems.length === 0 ? (
+          <p className="p-3 text-xs text-muted-foreground">
+            This PO is not itemized. Edit it to break the scope into line
+            items and split freight onto its own line.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-muted/30 text-muted-foreground">
+                <tr className="border-b">
+                  <th className="px-2 py-2 text-left font-medium">Item #</th>
+                  <th className="px-2 py-2 text-left font-medium">Description</th>
+                  <th className="px-2 py-2 text-right font-medium">Qty</th>
+                  <th className="px-2 py-2 text-left font-medium">Unit</th>
+                  <th className="px-2 py-2 text-right font-medium">Unit price</th>
+                  <th className="px-2 py-2 text-right font-medium">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lineItems.map((item) => (
+                  <tr
+                    key={item.id}
+                    className={cn(
+                      "border-b last:border-0",
+                      item.is_freight && "bg-blue-500/5",
+                    )}
+                  >
+                    <td className="px-2 py-1.5 font-mono text-[10px] text-muted-foreground">
+                      {item.item_number ?? "-"}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <span className="font-medium">{item.description}</span>
+                      {item.is_freight && (
+                        <span className="ml-2 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-900">
+                          freight
+                        </span>
+                      )}
+                      {item.notes && (
+                        <div className="text-[10px] text-muted-foreground">
+                          {item.notes}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">
+                      {Number(item.quantity ?? 0).toLocaleString()}
+                    </td>
+                    <td className="px-2 py-1.5 text-muted-foreground">
+                      {item.unit ?? "-"}
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                      {formatCurrency(Number(item.unit_price ?? 0))}
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                      {formatCurrency(Number(item.amount ?? 0))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="border-t bg-muted/20 font-medium">
+                <tr>
+                  <td colSpan={5} className="px-2 py-1.5 text-right">
+                    Equipment subtotal (deposit basis)
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                    {formatCurrency(depositBasis)}
+                  </td>
+                </tr>
+                <tr>
+                  <td colSpan={5} className="px-2 py-1.5 text-right text-muted-foreground">
+                    Freight / shipping (no deposit)
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
+                    {formatCurrency(freightValue)}
+                  </td>
+                </tr>
+                <tr className="border-t">
+                  <td colSpan={5} className="px-2 py-1.5 text-right">
+                    Total PO value
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                    {formatCurrency(poValue)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
       </section>
 
       {po.payment_terms_summary && (
@@ -223,7 +342,8 @@ export default async function ProcurementDetailPage({
               {milestones.length} milestone{milestones.length === 1 ? "" : "s"}
               {" - "}
               total {formatCurrency(totalPlanned)} of {formatCurrency(poValue)}
-              {totalPct > 0 && ` (${totalPct.toFixed(0)}% of PO)`}
+              {totalPct > 0 &&
+                ` (${totalPct.toFixed(0)}% of the ${formatCurrency(depositBasis)} deposit basis)`}
               {Math.abs(drift) > 1 && (
                 <span className="ml-2 text-amber-600">
                   drift {drift > 0 ? "+" : ""}
@@ -243,14 +363,16 @@ export default async function ProcurementDetailPage({
         <ExtractPoMilestones
           poId={params.poId}
           projectId={params.id}
-          poTotalValue={poValue}
+          depositBasis={depositBasis}
+          freightValue={freightValue}
           hasLinkedDocument={Boolean(po.document_id)}
         />
 
         <MilestoneEditor
           projectId={params.id}
           poId={params.poId}
-          poTotalValue={poValue}
+          depositBasis={depositBasis}
+          freightValue={freightValue}
           milestones={milestones.map((m) => ({
             id: m.id,
             milestone_name: m.milestone_name,
@@ -260,6 +382,7 @@ export default async function ProcurementDetailPage({
             amount: m.amount == null ? null : Number(m.amount),
             paid_at: m.paid_at,
             paid_amount: m.paid_amount == null ? null : Number(m.paid_amount),
+            includes_freight: m.includes_freight === true,
             sort_order: m.sort_order,
             notes: m.notes,
           }))}
@@ -302,10 +425,12 @@ function SmallCell({
   label,
   value,
   mono,
+  hint,
 }: {
   label: string;
   value: string;
   mono?: boolean;
+  hint?: string;
 }) {
   return (
     <div className="rounded-md border bg-card p-3">
@@ -313,6 +438,7 @@ function SmallCell({
         {label}
       </div>
       <div className={cn("mt-1 text-sm", mono && "font-mono")}>{value}</div>
+      {hint && <div className="text-[10px] text-muted-foreground">{hint}</div>}
     </div>
   );
 }
