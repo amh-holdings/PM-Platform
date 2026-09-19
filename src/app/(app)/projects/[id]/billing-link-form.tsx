@@ -16,8 +16,10 @@ type Props = {
   initialCodes: string[];
 };
 
-/** Chips shown before the "+N more" toggle takes over. */
-const COLLAPSED_CHIPS = 3;
+// Two, because 6.02 carries 17 linked tasks and 6.03 carries 21. At three the
+// chips wrapped onto a second line on every row that mattered, and the table
+// read as a wall of blue rather than as a schedule of values.
+const COLLAPSED_CHIPS = 2;
 
 // A render guard, not a browse limit. The list used to stop at eight with no
 // scroll and no sign that more existed, so on an 86-task schedule opening the
@@ -214,16 +216,16 @@ export function BillingLinkForm({
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+            className="rounded-full px-1.5 py-0.5 text-[10px] font-medium text-primary underline underline-offset-2 hover:opacity-80"
           >
-            +{overflow} more
+            Show {overflow} more
           </button>
         )}
         {expanded && codes.length > COLLAPSED_CHIPS && (
           <button
             type="button"
             onClick={() => setExpanded(false)}
-            className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+            className="rounded-full px-1.5 py-0.5 text-[10px] font-medium text-primary underline underline-offset-2 hover:opacity-80"
           >
             Show less
           </button>
