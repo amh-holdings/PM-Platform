@@ -425,6 +425,91 @@ export async function removeCoLineAllocation(
   return { ok: true };
 }
 
+export type AcceptSuggestionsInput = {
+  projectId: string;
+  changeOrderId: string;
+  amendmentLineId: string;
+  allocations: { baseLineId: string; amount: number }[];
+};
+
+/**
+ * Accepts a set of suggested allocations in one go.
+ *
+ * Nine separate saves for one change order is nine chances to be interrupted
+ * half way and leave a contract line holding a share of a split that was never
+ * finished. This validates the whole set against the change order line's value
+ * first, then writes it.
+ */
+export async function acceptSuggestedAllocations(
+  input: AcceptSuggestionsInput,
+): Promise<{ ok: true; written: number } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+  if (!input.allocations.length) {
+    return { ok: false, error: "Nothing selected to link." };
+  }
+
+  const { data: lines, error: linesErr } = await auth.supabase
+    .from("billing_lines")
+    .select("id, item_number, scheduled_value, change_order_id")
+    .eq("project_id", input.projectId)
+    .limit(5000);
+  if (linesErr) return { ok: false, error: linesErr.message };
+
+  const byId = new Map((lines ?? []).map((l) => [l.id, l]));
+  const amendment = byId.get(input.amendmentLineId);
+  if (!amendment) {
+    return { ok: false, error: "That change order line is no longer on this project." };
+  }
+
+  // Duplicated targets would each overwrite the last, so the total checked
+  // here would not be the total stored.
+  const seen = new Set<string>();
+  for (const a of input.allocations) {
+    if (seen.has(a.baseLineId)) {
+      return { ok: false, error: "The same contract line appears twice. Merge those rows first." };
+    }
+    seen.add(a.baseLineId);
+    const target = byId.get(a.baseLineId);
+    if (!target) return { ok: false, error: "One of the contract lines is no longer on the SOV." };
+    if (target.change_order_id != null) {
+      return {
+        ok: false,
+        error: `${target.item_number} belongs to another change order. Amendments point at contract lines.`,
+      };
+    }
+    if (a.baseLineId === input.amendmentLineId) {
+      return { ok: false, error: "A line cannot amend itself." };
+    }
+  }
+
+  // The whole set against the line's value, not each row against the whole.
+  const lineValue = Number(amendment.scheduled_value ?? 0);
+  const total = input.allocations.reduce((s2, a) => s2 + Number(a.amount ?? 0), 0);
+  if (Math.abs(total) - Math.abs(lineValue) > 0.005) {
+    return {
+      ok: false,
+      error: `Those allocations total ${total.toFixed(2)}, more than the ${lineValue.toFixed(2)} this change order line carries.`,
+    };
+  }
+
+  const { error } = await coClient(auth.supabase)
+    .from("billing_line_amendments")
+    .upsert(
+      input.allocations.map((a) => ({
+        project_id: input.projectId,
+        amendment_line_id: input.amendmentLineId,
+        base_line_id: a.baseLineId,
+        amount: a.amount,
+      })),
+      { onConflict: "amendment_line_id,base_line_id" },
+    );
+  if (error) return { ok: false, error: amendmentMigrationHint(error.message) };
+
+  revalidateAmendment(input.projectId, input.changeOrderId);
+  return { ok: true, written: input.allocations.length };
+}
+
 /** Billing is included: an allocation changes a contract line's percent. */
 function revalidateAmendment(projectId: string, changeOrderId: string) {
   revalidatePath(`/projects/${projectId}/change-orders/${changeOrderId}`);

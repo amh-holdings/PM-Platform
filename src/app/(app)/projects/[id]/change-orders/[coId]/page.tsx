@@ -21,6 +21,10 @@ import {
   nextSovItemNumber,
 } from "@/lib/project-financials";
 import { coSovImpact } from "@/lib/sov-amendments";
+import {
+  suggestAllocations,
+  type SuggestionSet,
+} from "@/lib/sov-amendment-suggest";
 import { readAmendments } from "@/lib/sov-amendments-db";
 
 import { DOCUMENT_BUCKET } from "../../documents-constants";
@@ -152,6 +156,29 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
       description: l.description,
       scheduledValue: l.scheduledValue,
     }));
+
+  // What the cost buildup says the money is for. CO-02's nine lines are named
+  // "6.01 Mobilization", "6.02 Civil, Roads and Landscaping if applicable" and
+  // so on: whoever priced the change order already wrote down which SOV line
+  // each cost belongs to, and nothing was reading it. Suggestions only - a
+  // person confirms before anything is written.
+  //
+  // Only offered when the change order has exactly ONE SOV line. With two or
+  // more, the buildup cannot say which of them owns which cost, and suggesting
+  // the whole buildup against each would propose the money twice. That split
+  // is a human decision, so the manual Link control handles it.
+  const suggestions: Record<string, SuggestionSet> = {};
+  for (const line of impact.lines.length === 1 ? impact.lines : []) {
+    suggestions[line.lineId] = suggestAllocations(
+      buildup.lines.map((b) => ({
+        id: b.id,
+        description: b.description,
+        extendedCost: b.extendedCost,
+      })),
+      contractLines,
+      line.scheduledValue,
+    );
+  }
 
   // Backup files live in a private bucket, so hand the client short-lived
   // signed links rather than raw paths.
@@ -369,6 +396,7 @@ export default async function ChangeOrderDetailPage({ params }: { params: Params
         impact={impact}
         contractLines={contractLines}
         needsMigration={amendments.missing}
+        suggestions={suggestions}
       />
     </div>
   );
