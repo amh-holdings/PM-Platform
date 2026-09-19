@@ -177,6 +177,23 @@ export default async function ProjectBillingPage({
   );
 
   /**
+   * Whether ANY line on this project has been touched by a change order
+   * allocation. The Original column only exists when there is something to
+   * compare against - on a project with no allocations it would be a tenth
+   * column repeating the ninth, and this table is already wide enough to get
+   * squeezed on a laptop.
+   */
+  let anyAmended = false;
+  rollups.forEach((r) => {
+    if (r.amendedValue !== 0 || r.allocatedAway !== 0) anyAmended = true;
+  });
+
+  const footerOriginal = rows.reduce(
+    (acc, r) => acc + Number(r.scheduled_value ?? 0),
+    0,
+  );
+
+  /**
    * Scope and billing after allocations, for one line.
    *
    * An allocation moves both halves together, so a caller must never take
@@ -289,11 +306,21 @@ export default async function ProjectBillingPage({
                 <th className="px-3 py-2 text-left font-medium">
                   Description / links
                 </th>
+                {anyAmended && (
+                  <th className="px-3 py-2 text-right font-medium">
+                    Original
+                    <span className="block text-[10px] font-normal normal-case text-muted-foreground/70">
+                      before change orders
+                    </span>
+                  </th>
+                )}
                 <th className="px-3 py-2 text-right font-medium">
                   Scheduled
-                  <span className="block text-[10px] font-normal normal-case text-muted-foreground/70">
-                    original + change orders
-                  </span>
+                  {anyAmended && (
+                    <span className="block text-[10px] font-normal normal-case text-muted-foreground/70">
+                      after change orders
+                    </span>
+                  )}
                 </th>
                 <th className="px-3 py-2 text-right font-medium">
                   Previous billed
@@ -384,17 +411,18 @@ export default async function ProjectBillingPage({
                         )}
                       </div>
                     </td>
+                    {anyAmended && (
+                      <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground">
+                        {formatCurrency(contractValue)}
+                      </td>
+                    )}
                     <td className="px-3 py-2 text-right font-mono text-xs">
                       {formatCurrency(scheduled)}
-                      {/* Plain words under the number, not a second column.
-                          "Original" rather than "contract", because half the
-                          rows on this sheet ARE change orders and calling
-                          their own value "contract" reads as a contradiction. */}
+                      {/* The two columns show the arithmetic, so the note only
+                          has to name WHICH change order - the part a column
+                          cannot carry. */}
                       {amended !== 0 && (
                         <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">
-                          <span className="block">
-                            Original {formatCurrency(contractValue)}
-                          </span>
                           {eff.sources.map((src) => (
                             <span key={src.amendmentLineId} className="block">
                               {src.amount < 0 ? "-" : "+"}
@@ -535,6 +563,11 @@ export default async function ProjectBillingPage({
                   <td className="px-3 py-2" colSpan={3}>
                     Total
                   </td>
+                  {anyAmended && (
+                    <td className="px-3 py-2 text-right font-mono text-muted-foreground">
+                      {formatCurrency(footerOriginal)}
+                    </td>
+                  )}
                   <td className="px-3 py-2 text-right font-mono">
                     {formatCurrency(footer.scheduled)}
                   </td>
