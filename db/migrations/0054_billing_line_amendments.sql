@@ -76,6 +76,18 @@ create policy "ahc_write_billing_line_amendments" on public.billing_line_amendme
   using (public.current_user_role() in ('phil','zarina','ahc_super'))
   with check (public.current_user_role() in ('phil','zarina','ahc_super'));
 
+-- PostgREST answers from a cached copy of the schema, so a brand new table is
+-- invisible to the app until that cache reloads. Supabase normally reloads it
+-- on its own within a minute or so, but not always, and a stale cache looks
+-- exactly like a migration that was never run: the change order page keeps
+-- saying it needs 0054 and Link to a contract line stays greyed out. Asking
+-- for the reload here means re-running this file is the fix.
+notify pgrst, 'reload schema';
+
+-- To check by hand that this worked:
+--   select count(*) from public.billing_line_amendments;
+-- Zero rows is the right answer. An error means the table is not there.
+
 -- AFTER RUNNING, on Sweet Springs, allocate CO-04's line 14.00 against the
 -- contract's POI Procurement line 5.05 from the change order page. Billing
 -- should then read POI as $235,793.63 of current scope rather than
