@@ -194,6 +194,7 @@ export default async function ProjectBillingPage({
       contractValue: scheduledValue,
       amendedValue: 0,
       allocatedAway: 0,
+      allocatedToCount: 0,
       scope: scheduledValue,
       previous: p.previous,
       current: p.current,
@@ -291,7 +292,7 @@ export default async function ProjectBillingPage({
                 <th className="px-3 py-2 text-right font-medium">
                   Scheduled
                   <span className="block text-[10px] font-normal normal-case text-muted-foreground/70">
-                    contract + change orders
+                    original + change orders
                   </span>
                 </th>
                 <th className="px-3 py-2 text-right font-medium">
@@ -385,13 +386,19 @@ export default async function ProjectBillingPage({
                     </td>
                     <td className="px-3 py-2 text-right font-mono text-xs">
                       {formatCurrency(scheduled)}
+                      {/* Plain words under the number, not a second column.
+                          "Original" rather than "contract", because half the
+                          rows on this sheet ARE change orders and calling
+                          their own value "contract" reads as a contradiction. */}
                       {amended !== 0 && (
                         <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">
-                          {formatCurrency(contractValue)} contract
+                          <span className="block">
+                            Original {formatCurrency(contractValue)}
+                          </span>
                           {eff.sources.map((src) => (
                             <span key={src.amendmentLineId} className="block">
                               {src.amount < 0 ? "-" : "+"}
-                              {formatCurrency(Math.abs(src.amount))}{" "}
+                              {formatCurrency(Math.abs(src.amount))} from{" "}
                               {src.coNumber ?? `item ${src.itemNumber}`}
                             </span>
                           ))}
@@ -399,9 +406,9 @@ export default async function ProjectBillingPage({
                       )}
                       {allocatedAway !== 0 && (
                         <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">
-                          {formatCurrency(contractValue)} less{" "}
-                          {formatCurrency(Math.abs(allocatedAway))} moved to the
-                          contract lines it increases
+                          {formatCurrency(Math.abs(allocatedAway))} moved into{" "}
+                          {eff.allocatedToCount} contract line
+                          {eff.allocatedToCount === 1 ? "" : "s"}
                         </span>
                       )}
                     </td>
