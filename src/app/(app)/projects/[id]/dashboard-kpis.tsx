@@ -21,8 +21,15 @@ type Kpi = {
 export async function DashboardKpis({ projectId, showCosts = true }: Props) {
   const supabase = createClient();
 
-  const [projectRes, billingSumRes, tasksRes, costsRes, costForecastsRes, cosRes] =
-    await Promise.all([
+  const [
+    projectRes,
+    billingSumRes,
+    sovLinesRes,
+    tasksRes,
+    costsRes,
+    costForecastsRes,
+    cosRes,
+  ] = await Promise.all([
       supabase
         .from("projects")
         // "*" because original_contract_value (0046) is not in the generated
@@ -32,9 +39,17 @@ export async function DashboardKpis({ projectId, showCosts = true }: Props) {
         .maybeSingle(),
       supabase
         .from("v_project_billing_summary")
-        .select("total_scheduled, total_billed, future_planned, total_retainage")
+        // total_billed and future_planned only. NOT total_scheduled - see the
+        // note where sovTotal is computed.
+        .select("total_billed, future_planned, total_retainage")
         .eq("project_id", projectId)
         .maybeSingle(),
+      // The SOV total, summed here rather than taken from the view.
+      supabase
+        .from("billing_lines")
+        .select("scheduled_value")
+        .eq("project_id", projectId)
+        .limit(2000),
       supabase
         .from("schedule_tasks")
         .select("status, is_at_risk")
@@ -75,7 +90,20 @@ export async function DashboardKpis({ projectId, showCosts = true }: Props) {
     originalContractValue:
       originalContractValue == null ? null : Number(originalContractValue),
     approvedCoValue,
-    sovTotal: Number(billingSumRes.data?.total_scheduled ?? 0),
+    // v_project_billing_summary.total_scheduled IS WRONG and must not be used.
+    // The view left-joins billing_entries and then sums bl.scheduled_value, so
+    // every line is counted once per monthly entry it has. Migration 0007
+    // fixed exactly this with split CTEs; 0037 rewrote the view to add an
+    // AFP-aware total_billed and carried the old broken total back in with it.
+    // On Sweet Springs it reports $8.14M against a $3.79M SOV, which is where
+    // the "SOV does not match +$4.36M" alarm came from - the SOV was fine, the
+    // view was not. ceo-report-financials.ts has refused to read it since.
+    //
+    // Summed from billing_lines here, which cannot fan out.
+    sovTotal: (sovLinesRes.data ?? []).reduce(
+      (sum, l) => sum + Number(l.scheduled_value ?? 0),
+      0,
+    ),
   });
   const contractValue = contract.value;
   const billedToDate = Number(billingSumRes.data?.total_billed ?? 0);

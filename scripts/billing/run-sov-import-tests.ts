@@ -286,16 +286,123 @@ section("Plan handed to the server");
 const plan = planFromDiff(diff, MAP);
 eq("plan adds only the new line", plan.adds.map((a) => a.item_number), ["1.02"]);
 eq("add carries its description", plan.adds[0].description, "Electrical 30% Design");
+// CO-05 sits at sort_order 900 on purpose - change order lines are parked
+// below the base SOV. It is row 3 of this paste, and the sheet carries no sort
+// order column, so the old behaviour stamped it 30 and hauled it up into the
+// middle of the contract lines. A paste of item numbers and amounts is not an
+// opinion about ordering.
 eq(
   "change patch touches only changed fields",
   Object.keys(
     plan.changes.find((c) => c.id === "id-co5")?.patch ?? {},
   ).sort(),
-  ["scheduled_value", "sort_order"],
+  ["scheduled_value"],
 );
 check(
   "no delete side exists on the plan at all",
   !("deleteIds" in (plan as Record<string, unknown>)),
+);
+
+section("An import cannot quietly bill a line over 100%");
+
+// 1.01 is billed to $22,580.68 - its full scheduled value. A paste that cuts
+// the scheduled value to $10,000 does not undo the billing; it leaves the line
+// reading 226% complete and the next AFP computing against the new number.
+const billedExisting: ExistingLine[] = [
+  { ...existing[0], billed_to_date: 22580.68 },
+  { ...existing[1], billed_to_date: 0 },
+];
+const cut = diffSov(
+  billedExisting,
+  buildSovRows(
+    parseSovGrid(
+      ["Item Number\tSchedule of Value", "1.01\t $10,000.00 "].join("\n"),
+    ),
+    ["item_number", "scheduled_value"],
+  ),
+  ["item_number", "scheduled_value"],
+);
+check(
+  "cutting a scheduled value below what is billed warns",
+  cut.warnings.some((w) => /1\.01/.test(w) && /22,580\.68/.test(w)),
+  cut.warnings.join(" | "),
+);
+check("it warns rather than blocks - Phil decides", cut.blocking.length === 0);
+
+// Raising it is ordinary. A change order does this every time.
+const raised = diffSov(
+  billedExisting,
+  buildSovRows(
+    parseSovGrid(
+      ["Item Number\tSchedule of Value", "1.01\t $30,000.00 "].join("\n"),
+    ),
+    ["item_number", "scheduled_value"],
+  ),
+  ["item_number", "scheduled_value"],
+);
+eq("raising a scheduled value above billed is silent", raised.warnings, []);
+
+// No billed figure supplied is not the same as nothing billed, but it is all
+// the caller knows - stay quiet rather than invent reassurance.
+const unknown = diffSov(
+  existing,
+  buildSovRows(
+    parseSovGrid(
+      ["Item Number\tSchedule of Value", "1.01\t $10,000.00 "].join("\n"),
+    ),
+    ["item_number", "scheduled_value"],
+  ),
+  ["item_number", "scheduled_value"],
+);
+eq("no billed figure means no warning", unknown.warnings, []);
+
+section("Sort order only moves when the sheet says so");
+
+// Same paste, same existing lines, but now the sheet carries its own order
+// column. That IS an opinion, so it must be honoured.
+const ORDERED_MAP: (SovColumnKey | null)[] = [
+  "item_number",
+  "type",
+  "description",
+  "scheduled_value",
+  "sort_order",
+];
+const ordered = buildSovRows(
+  parseSovGrid(
+    [
+      "Item Number\tType\tDescription\tSchedule of Value\tSort Order",
+      "1.01\tLNTP\tLNTP Execution Engineering\t $22,580.68 \t10",
+      "CO-05\tCO\tAdded basin grading\t $125,000.00 \t250",
+    ].join("\n"),
+  ),
+  ORDERED_MAP,
+);
+check("sheet order is recognised as the sheet's", ordered.sortOrderFromSheet);
+check("stamped order is not", incoming.sortOrderFromSheet === false);
+const orderedDiff = diffSov(existing, ordered, ORDERED_MAP);
+eq(
+  "an explicit sort order does move an existing line",
+  Object.keys(
+    planFromDiff(orderedDiff, ORDERED_MAP).changes.find((c) => c.id === "id-co5")
+      ?.patch ?? {},
+  ).sort(),
+  ["scheduled_value", "sort_order"],
+);
+// The real regression: amounts only, row order nothing like the stored order.
+const amountsOnly = buildSovRows(
+  parseSovGrid(
+    [
+      "Item Number\tSchedule of Value",
+      "CO-05\t $100,000.00 ",
+      "1.01\t $22,580.68 ",
+    ].join("\n"),
+  ),
+  ["item_number", "scheduled_value"],
+);
+eq(
+  "an amounts-only paste in a different row order changes nothing",
+  diffSov(existing, amountsOnly, ["item_number", "scheduled_value"]).changes.length,
+  0,
 );
 
 section("Re-importing the same sheet is a no-op");

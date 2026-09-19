@@ -154,16 +154,22 @@ export default async function ProjectBillingPage({
   const knownTypes = Array.from(
     new Set(rows.map((r) => (r.type ?? "").trim()).filter(Boolean)),
   ).sort();
-  const existingForImport = rows.map((r) => ({
-    id: r.id,
-    item_number: r.item_number,
-    type: r.type,
-    description: r.description,
-    scheduled_value: r.scheduled_value === null ? null : Number(r.scheduled_value),
-    sort_order: r.sort_order,
-    notes: r.notes,
-    change_order_id: r.change_order_id,
-  }));
+  const existingForImport = rows.map((r) => {
+    const p = periodByLine.get(r.id) ?? emptyLineBillingSummary();
+    return {
+      id: r.id,
+      item_number: r.item_number,
+      type: r.type,
+      description: r.description,
+      scheduled_value: r.scheduled_value === null ? null : Number(r.scheduled_value),
+      sort_order: r.sort_order,
+      notes: r.notes,
+      change_order_id: r.change_order_id,
+      // Same previous + current the table's % complete column runs on, so the
+      // import warns on exactly the lines the page would show over 100%.
+      billed_to_date: p.previous + p.current,
+    };
+  });
 
   const footer = rows.reduce(
     (acc, r) => {

@@ -20,7 +20,9 @@ export async function DashboardFinancial({ projectId }: Props) {
       .eq("project_id", projectId),
     supabase
       .from("v_project_billing_summary")
-      .select("total_scheduled, total_billed, future_planned")
+      // total_scheduled is excluded deliberately: the view fans out over
+      // billing_entries and multi-counts it. Summed from the lines below.
+      .select("total_billed, future_planned")
       .eq("project_id", projectId)
       .maybeSingle(),
   ]);
@@ -37,7 +39,11 @@ export async function DashboardFinancial({ projectId }: Props) {
   }
 
   const lines = linesRes.data ?? [];
-  const totalContract = Number(summaryRes.data?.total_scheduled ?? 0);
+  // From the lines this component already loaded, not from the view.
+  const totalContract = lines.reduce(
+    (sum, l) => sum + Number(l.scheduled_value ?? 0),
+    0,
+  );
   const totalBilled = Number(summaryRes.data?.total_billed ?? 0);
   const futurePlanned = Number(summaryRes.data?.future_planned ?? 0);
   const billedPct = totalContract > 0 ? (totalBilled / totalContract) * 100 : 0;
