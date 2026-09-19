@@ -287,6 +287,8 @@ export type EffectiveLine = {
   amendedValue: number;
   /** Handed to contract lines. Zero on a contract line. */
   allocatedAway: number;
+  /** How many contract lines it was handed to, so the row can say so. */
+  allocatedToCount: number;
   /** What percent complete measures against. */
   scope: number;
   /** Billed before the period on screen, after the roll-up. */
@@ -350,6 +352,7 @@ export function effectiveLineProgress(
       contractValue: v,
       amendedValue: 0,
       allocatedAway: 0,
+      allocatedToCount: 0,
       scope: v,
       previous: round2(m.previous),
       current: round2(m.current),
@@ -400,6 +403,7 @@ export function effectiveLineProgress(
     });
 
     source.allocatedAway = round2(source.allocatedAway + amount);
+    source.allocatedToCount += 1;
     source.scope = round2(source.contractValue - source.allocatedAway);
     source.previous = round2(source.previous - movedPrevious);
     source.current = round2(source.current - movedCurrent);

@@ -269,6 +269,7 @@ section("Scope and billing move together");
 
   const co4 = e.get("l-1400")!;
   eq("the CO line keeps no scope of its own", co4.scope, 0);
+  eq("and it can say how many lines it went to", co4.allocatedToCount, 1);
   eq("and no billing of its own", co4.billed, 0);
 
   // The invariant that makes this safe.
@@ -300,6 +301,7 @@ section("Scope and billing move together");
   eq("mobilization takes three quarters of the billing", e.get("l-601")!.billed, 15000);
   eq("fencing takes the other quarter", e.get("l-603")!.billed, 5000);
   eq("and the CO line is left with none", e.get("l-1700")!.billed, 0);
+  eq("split across two lines, and it says two", e.get("l-1700")!.allocatedToCount, 2);
   eq("nor any scope", e.get("l-1700")!.scope, 0);
 }
 
