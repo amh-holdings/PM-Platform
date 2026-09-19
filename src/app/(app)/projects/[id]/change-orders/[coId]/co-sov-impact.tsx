@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/format";
 import type { CoSovImpact } from "@/lib/sov-amendments";
+import type { SuggestionSet } from "@/lib/sov-amendment-suggest";
 import {
+  acceptSuggestedAllocations,
   allocateCoLineToSovLine,
   removeCoLineAllocation,
 } from "../../change-orders-actions";
@@ -28,6 +30,11 @@ type Props = {
   contractLines: ContractLine[];
   /** True until migration 0054 is applied in Supabase. */
   needsMigration: boolean;
+  /**
+   * What the cost buildup says this change order's money is for, keyed by the
+   * CO's own SOV line. Read, never written - a person accepts it.
+   */
+  suggestions: Record<string, SuggestionSet>;
 };
 
 /**
@@ -46,6 +53,7 @@ export function CoSovImpactPanel({
   impact,
   contractLines,
   needsMigration,
+  suggestions,
 }: Props) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -54,6 +62,42 @@ export function CoSovImpactPanel({
   const [amount, setAmount] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Which suggested rows are ticked, keyed "<co line id>:<contract line id>".
+  // Everything the app is confident about starts ticked; a person unticks.
+  const [rejected, setRejected] = useState<Set<string>>(new Set());
+
+  function toggle(key: string) {
+    setRejected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  async function onAcceptSuggestions(amendmentLineId: string, set: SuggestionSet) {
+    setErr(null);
+    const allocations = set.matched
+      .filter((m) => m.baseLineId && !rejected.has(`${amendmentLineId}:${m.baseLineId}`))
+      .map((m) => ({ baseLineId: m.baseLineId as string, amount: m.amount }));
+    if (!allocations.length) {
+      setErr("Nothing ticked to link.");
+      return;
+    }
+    setBusy(true);
+    const res = await acceptSuggestedAllocations({
+      projectId,
+      changeOrderId,
+      amendmentLineId,
+      allocations,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      setErr(res.error);
+      return;
+    }
+    refresh();
+  }
 
   function refresh() {
     startTransition(() => router.refresh());
@@ -202,6 +246,106 @@ export function CoSovImpactPanel({
               ? "All new scope. Nothing allocated to an existing contract line."
               : `${formatCurrency(l.allocated)} allocated to contract lines · ${formatCurrency(l.newScope)} new scope`}
           </p>
+
+          {/* Read from the cost buildup. Shown before anything is saved, and
+              shown even when 0054 is missing, so the matching can be checked
+              now and accepted the moment saving works. */}
+          {(() => {
+            const set = suggestions[l.lineId];
+            if (!set || (!set.matched.length && !set.unmatched.length)) return null;
+            if (l.allocated !== 0) return null;
+            const ticked = set.matched.filter(
+              (m) => m.baseLineId && !rejected.has(`${l.lineId}:${m.baseLineId}`),
+            );
+            const tickedTotal = ticked.reduce((a, m) => a + m.amount, 0);
+            return (
+              <div className="mt-2 rounded-md border border-sky-300 bg-sky-50 p-2 dark:border-sky-900 dark:bg-sky-950/40">
+                <p className="text-[11px] font-medium text-sky-900 dark:text-sky-200">
+                  Read from this change order&apos;s cost buildup
+                </p>
+                <p className="mt-0.5 text-[10px] text-sky-900/80 dark:text-sky-200/80">
+                  {set.matched.length} of {set.matched.length + set.unmatched.length}{" "}
+                  buildup line{set.matched.length + set.unmatched.length === 1 ? "" : "s"}{" "}
+                  point at a contract line. Untick anything wrong, then accept.
+                  {set.scaled &&
+                    " Amounts are scaled from cost up to what the owner is billed."}
+                </p>
+
+                <table className="mt-2 w-full text-[11px]">
+                  <tbody>
+                    {set.matched.map((m) => {
+                      const key = `${l.lineId}:${m.baseLineId}`;
+                      const on = !rejected.has(key);
+                      return (
+                        <tr key={key} className="border-t border-sky-200/60 dark:border-sky-900">
+                          <td className="w-6 py-1">
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              onChange={() => toggle(key)}
+                              aria-label={`Link ${m.baseItemNumber} ${m.baseDescription}`}
+                            />
+                          </td>
+                          <td className="py-1 font-mono">{m.baseItemNumber}</td>
+                          <td className="py-1">
+                            {m.baseDescription}
+                            <span className="block text-[10px] text-muted-foreground">
+                              {m.basis === "item-number"
+                                ? "matched on the item number in the buildup"
+                                : "matched on the description"}
+                            </span>
+                          </td>
+                          <td className="py-1 text-right font-mono tabular-nums">
+                            {formatCurrency(m.amount)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {set.unmatched.map((u) => (
+                      <tr
+                        key={u.from[0]?.id}
+                        className="border-t border-sky-200/60 text-muted-foreground dark:border-sky-900"
+                      >
+                        <td className="w-6 py-1" />
+                        <td className="py-1">-</td>
+                        <td className="py-1">
+                          {u.from[0]?.description}
+                          <span className="block text-[10px]">
+                            no contract line matched - link this one by hand
+                          </span>
+                        </td>
+                        <td className="py-1 text-right font-mono tabular-nums">
+                          {formatCurrency(u.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[10px] text-muted-foreground">
+                    {formatCurrency(tickedTotal)} of {formatCurrency(set.lineValue)}
+                    {Math.abs(set.lineValue - tickedTotal) >= 0.005 &&
+                      ` · ${formatCurrency(set.lineValue - tickedTotal)} stays as new scope`}
+                  </span>
+                  <Button
+                    size="sm"
+                    disabled={busy || needsMigration || ticked.length === 0}
+                    title={
+                      needsMigration
+                        ? "Needs migration 0054_billing_line_amendments.sql applied in Supabase"
+                        : undefined
+                    }
+                    onClick={() => onAcceptSuggestions(l.lineId, set)}
+                  >
+                    {busy
+                      ? "Linking..."
+                      : `Accept ${ticked.length} link${ticked.length === 1 ? "" : "s"}`}
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
 
           {openFor === l.lineId ? (
             <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_140px_auto]">
