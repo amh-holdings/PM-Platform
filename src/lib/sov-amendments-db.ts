@@ -27,8 +27,16 @@ export async function readAmendments(
   if (error) {
     // 42P01 is Postgres' "relation does not exist"; PGRST205 is PostgREST
     // failing to find it in its schema cache, which is what actually comes
-    // back over the wire before the migration is applied.
-    if (error.code === "42P01" || error.code === "PGRST205") {
+    // back over the wire before the migration is applied. The message is
+    // checked too, because the alternative to getting this right is a 500 on
+    // the billing page, and a code we did not anticipate must not cost more
+    // than the feature is worth.
+    if (
+      error.code === "42P01" ||
+      error.code === "PGRST205" ||
+      /billing_line_amendments/.test(error.message ?? "") ||
+      /schema cache|does not exist/i.test(error.message ?? "")
+    ) {
       return { rows: [], missing: true };
     }
     throw new Error(`Reading SOV amendments: ${error.message}`);

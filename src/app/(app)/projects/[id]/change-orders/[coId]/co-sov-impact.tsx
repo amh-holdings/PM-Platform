@@ -122,11 +122,23 @@ export function CoSovImpactPanel({
       </div>
 
       {needsMigration && (
-        <p className="border-b bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
-          Linking a change order to a contract line needs migration
-          0054_billing_line_amendments.sql applied in Supabase. Everything else
-          on this page works as before.
-        </p>
+        <div className="border-b bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+          <p className="font-medium">
+            Linking is switched off until migration 0054 is applied.
+          </p>
+          <p className="mt-1">
+            Run <code>db/migrations/0054_billing_line_amendments.sql</code> in
+            the Supabase SQL editor, then reload this page. That is the only
+            reason the button below is greyed out. Everything else here works
+            as before.
+          </p>
+          <p className="mt-1">
+            Already ran it and still seeing this? PostgREST serves from a
+            cached copy of the schema and has not picked the table up yet. Run{" "}
+            <code>notify pgrst, &apos;reload schema&apos;;</code> on its own, or
+            just run the migration file again - it now ends with that line.
+          </p>
+        </div>
       )}
 
       {impact.kind === "none" && !needsMigration && (
@@ -241,11 +253,20 @@ export function CoSovImpactPanel({
               </p>
             </div>
           ) : (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button
               size="sm"
               variant="outline"
-              className="mt-2"
               disabled={needsMigration || contractLines.length === 0}
+              // A greyed button with no reason on it sends people hunting for
+              // a bug. The two reasons are different problems, so name them.
+              title={
+                needsMigration
+                  ? "Needs migration 0054_billing_line_amendments.sql applied in Supabase"
+                  : contractLines.length === 0
+                    ? "This project has no contract lines to link to - every SOV line already belongs to a change order"
+                    : undefined
+              }
               onClick={() => {
                 setOpenFor(l.lineId);
                 setBaseId("");
@@ -255,6 +276,16 @@ export function CoSovImpactPanel({
             >
               Link to a contract line
             </Button>
+            {needsMigration ? (
+              <span className="text-[10px] text-muted-foreground">
+                waiting on migration 0054
+              </span>
+            ) : contractLines.length === 0 ? (
+              <span className="text-[10px] text-muted-foreground">
+                no contract lines on this project to link to
+              </span>
+            ) : null}
+            </div>
           )}
         </div>
       ))}
