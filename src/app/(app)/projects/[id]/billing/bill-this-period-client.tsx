@@ -275,7 +275,11 @@ export function BillThisPeriodClient({
                           {formatCurrency(r.alreadyBilled)} - {r.sourcesSummary}
                         </div>
                       )}
-                      {r.kind === "forecast" && r.blockedReason && (
+                      {/* Both kinds can be blocked now. A suggestion row
+                          carrying one is a line whose earned value is masked
+                          by pre-app billing - it arrives at $0 for a person to
+                          overwrite, not as a verdict. */}
+                      {r.blockedReason && (
                         <div className="mt-0.5 text-[10px] font-medium text-amber-700">
                           ⚠ {r.blockedReason}
                         </div>
