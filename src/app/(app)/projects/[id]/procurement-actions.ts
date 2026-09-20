@@ -130,6 +130,28 @@ export type MilestoneResult =
   | { ok: true; id: string }
   | { ok: false; error: string };
 
+/**
+ * A payment milestone moves three pages, not one.
+ *
+ * buildProjection reads procurement_payments directly and buckets each one by
+ * paid_at ?? expected_date, so a paid date IS the cash-out month on the
+ * dashboard chart. estimateProcurementProgress reads the same rows to decide
+ * what a procurement SOV line has earned, which drives the billing panel.
+ *
+ * All four milestone actions revalidated the PO page alone, so the two pages
+ * the data actually feeds kept serving a cached render. Meanwhile the SOV
+ * allocation actions - which nothing reads when billing - revalidated the
+ * dashboard on every call. Exactly backwards.
+ */
+function revalidateMilestone(projectId: string, poId: string) {
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidatePath(`/projects/${projectId}/procurement`);
+  // Cash-out month and the cash flow chart.
+  revalidatePath(`/projects/${projectId}`);
+  // What a procurement line has earned, and so what it can bill.
+  revalidatePath(`/projects/${projectId}/billing`);
+}
+
 export async function addMilestone(
   poId: string,
   projectId: string,
@@ -173,7 +195,7 @@ export async function addMilestone(
     .select("id")
     .single();
   if (error) return { ok: false, error: error.message };
-  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidateMilestone(projectId, poId);
   return { ok: true, id: data.id };
 }
 
@@ -200,7 +222,7 @@ export async function updateMilestone(
     .update(update)
     .eq("id", milestoneId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidateMilestone(projectId, poId);
   return { ok: true, id: milestoneId };
 }
 
@@ -231,7 +253,7 @@ export async function markMilestonePaid(
     .update(patch)
     .eq("id", milestoneId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidateMilestone(projectId, poId);
   return { ok: true };
 }
 
@@ -352,7 +374,7 @@ export async function deleteMilestone(
     .delete()
     .eq("id", milestoneId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidateMilestone(projectId, poId);
   return { ok: true };
 }
 
