@@ -4,6 +4,7 @@
 
 import {
   MILESTONE_TRIGGERS,
+  MILESTONE_TRIGGER_GROUPS,
   isRecognisedTrigger,
   milestoneTriggered,
 } from "@/lib/progress";
@@ -62,9 +63,11 @@ section("Every dropdown option does what its label says");
       "the matcher does not know this word",
     );
 
-    const promisesSigned = /signed/.test(t.label);
-    const promisesDelivery = /delivery date/.test(t.label);
-    const promisesNever = /does not earn/.test(t.label);
+    // Driven by the declared group rather than the label, so a label reword
+    // cannot quietly stop the assertion applying.
+    const promisesSigned = t.group === "signed";
+    const promisesDelivery = t.group === "delivered";
+    const promisesNever = t.group === "later";
 
     if (promisesSigned) {
       eq(`"${t.value}" earns once signed`, milestoneTriggered(ms(t.value), SIGNED).fired, true);
@@ -79,8 +82,52 @@ section("Every dropdown option does what its label says");
     }
     check(
       `"${t.value}" label says when it earns`,
-      promisesSigned || promisesDelivery || promisesNever,
+      /earns|does not earn/.test(t.label),
       "a label that does not say when money is earned is the bug this replaced",
+    );
+  }
+}
+
+section("PO Signed - the wording the old form told people to use");
+{
+  // The box this replaced carried the placeholder "PO signed / Delivered".
+  // It suggested the one wording the matcher refused, and PO-022 sat unbilled
+  // on exactly that.
+  for (const v of ["PO Signed", "PO signed", "PO signed 04/11", "Signed"]) {
+    check(`"${v}" is recognised`, isRecognisedTrigger(v));
+    eq(`"${v}" earns once signed`, milestoneTriggered(ms(v), SIGNED).fired, true);
+    eq(`"${v}" does not earn unsigned`, milestoneTriggered(ms(v), UNSIGNED).fired, false);
+  }
+  // Order still matters: the delivery and commissioning branches are checked
+  // first, so a trigger mentioning both does not collapse to signature.
+  eq(
+    "\"Delivery signed off\" is still a delivery",
+    milestoneTriggered(ms("Delivery signed off"), SIGNED).fired,
+    false,
+  );
+  eq(
+    "and fires once delivered",
+    milestoneTriggered(ms("Delivery signed off"), DELIVERED).fired,
+    true,
+  );
+  eq(
+    "\"Commissioning signed\" still waits",
+    milestoneTriggered(ms("Commissioning signed"), DELIVERED).fired,
+    false,
+  );
+}
+
+section("Every group has a heading and every option has a group");
+{
+  const keys = new Set(MILESTONE_TRIGGER_GROUPS.map((g) => g.key));
+  for (const t of MILESTONE_TRIGGERS) {
+    check(`"${t.value}" sits in a group that has a heading`, keys.has(t.group));
+  }
+  for (const g of MILESTONE_TRIGGER_GROUPS) {
+    check(
+      `group "${g.key}" has at least one option`,
+      MILESTONE_TRIGGERS.some((t) => t.group === g.key),
+      "an empty heading renders as a blank line in the picker",
     );
   }
 }

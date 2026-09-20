@@ -289,39 +289,70 @@ export type LinkedPo = {
 export const MILESTONE_TRIGGERS: {
   value: string;
   label: string;
+  /**
+   * Which rule this follows. Options sharing a group behave identically and
+   * differ only in the word stored, so the vendor's own payment terms can be
+   * used verbatim. Zarina, reading the flat list: "Is deposit and down payment
+   * one thing?" - they are, and a flat list of four identical rules is what
+   * made that a question.
+   */
+  group: "signed" | "delivered" | "later";
   /** What the person choosing it needs to know about when money is earned. */
   hint: string;
 }[] = [
   {
+    value: "PO Signed",
+    label: "PO Signed - earns when the PO is signed",
+    group: "signed",
+    hint: "Earned as soon as the PO is signed.",
+  },
+  {
     value: "PO Release",
+    group: "signed",
     label: "PO Release - earns when the PO is signed",
     hint: "Earned as soon as the PO is signed.",
   },
   {
     value: "Deposit",
+    group: "signed",
     label: "Deposit - earns when the PO is signed",
     hint: "Earned as soon as the PO is signed.",
   },
   {
     value: "Down payment",
+    group: "signed",
     label: "Down payment - earns when the PO is signed",
     hint: "Earned as soon as the PO is signed.",
   },
   {
     value: "Mobilization",
+    group: "signed",
     label: "Mobilization - earns when the PO is signed",
     hint: "Earned as soon as the PO is signed.",
   },
   {
     value: "Delivery to site",
+    group: "delivered",
     label: "Delivery to site - earns when the PO has a delivery date",
     hint: "Earned once the PO records an actual delivery date.",
   },
   {
     value: "Commissioning",
+    group: "later",
     label: "Commissioning - does not earn yet",
     hint: "Held back until commissioning is modelled. Record a paid date to bill it.",
   },
+];
+
+
+/** Headings for the trigger picker, in the order they are offered. */
+export const MILESTONE_TRIGGER_GROUPS: {
+  key: "signed" | "delivered" | "later";
+  label: string;
+}[] = [
+  { key: "signed", label: "Paid up front - earns when the PO is signed" },
+  { key: "delivered", label: "Paid on delivery - earns when the PO has a delivery date" },
+  { key: "later", label: "Not earned yet" },
 ];
 
 /**
@@ -335,7 +366,7 @@ export const MILESTONE_TRIGGERS: {
 export function isRecognisedTrigger(trigger: string | null | undefined): boolean {
   const t = (trigger ?? "").toLowerCase();
   if (!t.trim()) return false;
-  return /commission|deliver|po release|deposit|down|mob/.test(t);
+  return /commission|deliver|signed|po release|deposit|down|mob/.test(t);
 }
 
 export function milestoneTriggered(
@@ -355,7 +386,12 @@ export function milestoneTriggered(
       ? { fired: true, why: `delivered ${po.actual_delivery_date}` }
       : { fired: false, why: "awaiting delivery to site" };
   }
-  if (/po release|deposit|down|mob/.test(t)) {
+  // "signed" is here because the form this replaced carried the placeholder
+  // "PO signed / Delivered". It told people to type the one wording the
+  // matcher then refused, and PO-022 sat unbilled on exactly that. Checked
+  // after deliver and commission, so "delivery signed off" still reads as a
+  // delivery.
+  if (/signed|po release|deposit|down|mob/.test(t)) {
     return signed
       ? { fired: true, why: `PO signed ${po.signed_at?.slice(0, 10)}` }
       : { fired: false, why: "PO not signed" };

@@ -13,7 +13,11 @@ import {
   updateMilestone,
 } from "../../procurement-actions";
 import { formatCurrency, formatDate } from "@/lib/format";
-import { MILESTONE_TRIGGERS, isRecognisedTrigger } from "@/lib/progress";
+import {
+  MILESTONE_TRIGGERS,
+  MILESTONE_TRIGGER_GROUPS,
+  isRecognisedTrigger,
+} from "@/lib/progress";
 
 /**
  * The trigger picker.
@@ -22,6 +26,11 @@ import { MILESTONE_TRIGGERS, isRecognisedTrigger } from "@/lib/progress";
  * billed: the matcher reads words, so "Equipment arrival" earned nothing and
  * said nothing. The options now show when each one earns, because that is the
  * part nobody could have guessed.
+ *
+ * Grouped, because four options that all earn on signature read as four
+ * different rules until you notice every label ends the same way. The heading
+ * carries the rule and the options carry only the wording, which is the only
+ * thing that actually differs between them.
  *
  * A value already stored that is not an option is kept and offered rather than
  * silently swapped - "Delivered to site" works fine and rewriting somebody's
@@ -47,10 +56,14 @@ function TriggerSelect({
         className="h-9 w-full rounded-md border bg-background px-2 text-xs"
       >
         <option value="">No trigger - bills only when you enter a paid date</option>
-        {MILESTONE_TRIGGERS.map((t) => (
-          <option key={t.value} value={t.value}>
-            {t.label}
-          </option>
+        {MILESTONE_TRIGGER_GROUPS.map((g) => (
+          <optgroup key={g.key} label={g.label}>
+            {MILESTONE_TRIGGERS.filter((t) => t.group === g.key).map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.value}
+              </option>
+            ))}
+          </optgroup>
         ))}
         {current && !inList && (
           <option value={current}>
