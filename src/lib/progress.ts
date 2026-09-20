@@ -273,6 +273,71 @@ export type LinkedPo = {
  * that should have billed is a conversation, one that bills early is a credit
  * the owner claws back.
  */
+/**
+ * The payment triggers the app can actually act on.
+ *
+ * These were an unlabelled free-text box. milestoneTriggered matches on words
+ * - "delivery", "deposit", "commission" - so "Equipment arrival" and "Shipment
+ * received" mean exactly nothing to it, earn nothing, and give no sign why.
+ * Zarina hit that on PO-022. The vocabulary was real, it was just invisible.
+ *
+ * `value` is what gets stored, in plain words, so an existing sheet and the
+ * dropdown agree and no migration is needed. Each one is asserted against
+ * milestoneTriggered in the tests, so renaming a label without checking it
+ * still fires breaks the build rather than the billing.
+ */
+export const MILESTONE_TRIGGERS: {
+  value: string;
+  label: string;
+  /** What the person choosing it needs to know about when money is earned. */
+  hint: string;
+}[] = [
+  {
+    value: "PO Release",
+    label: "PO Release - earns when the PO is signed",
+    hint: "Earned as soon as the PO is signed.",
+  },
+  {
+    value: "Deposit",
+    label: "Deposit - earns when the PO is signed",
+    hint: "Earned as soon as the PO is signed.",
+  },
+  {
+    value: "Down payment",
+    label: "Down payment - earns when the PO is signed",
+    hint: "Earned as soon as the PO is signed.",
+  },
+  {
+    value: "Mobilization",
+    label: "Mobilization - earns when the PO is signed",
+    hint: "Earned as soon as the PO is signed.",
+  },
+  {
+    value: "Delivery to site",
+    label: "Delivery to site - earns when the PO has a delivery date",
+    hint: "Earned once the PO records an actual delivery date.",
+  },
+  {
+    value: "Commissioning",
+    label: "Commissioning - does not earn yet",
+    hint: "Held back until commissioning is modelled. Record a paid date to bill it.",
+  },
+];
+
+/**
+ * True when a stored trigger is one the app recognises.
+ *
+ * Deliberately asks milestoneTriggered rather than comparing against the list:
+ * a legacy "Delivered to site" is recognised even though it is not a dropdown
+ * option, and marking it unrecognised would send somebody to fix a milestone
+ * that works.
+ */
+export function isRecognisedTrigger(trigger: string | null | undefined): boolean {
+  const t = (trigger ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return /commission|deliver|po release|deposit|down|mob/.test(t);
+}
+
 export function milestoneTriggered(
   m: ProcurementMilestone,
   po: LinkedPo,

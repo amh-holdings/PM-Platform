@@ -32,6 +32,7 @@
     "test:project-financials": "tsx scripts/project-financials/run-tests.ts",
     "test:sov-amendments": "tsx scripts/sov-amendments/run-tests.ts",
     "test:sov-suggest": "tsx scripts/sov-amendments/run-suggest-tests.ts",
+    "test:po-triggers": "tsx scripts/procurement/run-trigger-tests.ts",
     "db:status": "node scripts/db/migrate.mjs",
     "db:migrate": "node scripts/db/migrate.mjs --apply",
     "db:baseline": "node scripts/db/migrate.mjs --baseline-through"
