@@ -301,7 +301,21 @@ export function BillThisPeriodClient({
                             onClick={() => toggleEvidence(r.key)}
                             className="mt-0.5 text-[10px] underline underline-offset-2 text-muted-foreground hover:text-foreground"
                           >
-                            {`${openEvidence.has(r.key) ? "Hide" : "Show"} the ${r.evidence.length} task${r.evidence.length === 1 ? "" : "s"} behind this`}
+                            {/* A procurement line's evidence is PO payment
+                                milestones, not schedule tasks. Calling them
+                                tasks is why nobody looks here when a linked PO
+                                is not billing - the one place that says WHY
+                                sounds like it is about something else. */}
+                            {(() => {
+                              const isProcurement = r.evidence.some(
+                                (e) => e.source === "payment milestone",
+                              );
+                              const noun = isProcurement
+                                ? `payment milestone${r.evidence.length === 1 ? "" : "s"}`
+                                : `task${r.evidence.length === 1 ? "" : "s"}`;
+                              const verb = openEvidence.has(r.key) ? "Hide" : "Show";
+                              return `${verb} the ${r.evidence.length} ${noun} behind this`;
+                            })()}
                           </button>
                           {openEvidence.has(r.key) && (
                             <table className="mt-1 w-full text-[10px]">
