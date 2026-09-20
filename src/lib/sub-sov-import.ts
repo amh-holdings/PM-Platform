@@ -75,6 +75,115 @@ function isTotalRow(description: string): boolean {
   return /^(grand\s+)?(sub)?\s*total\b/i.test(description.trim());
 }
 
+/**
+ * A cell holding a number, as opposed to text that happens to contain a digit.
+ *
+ * Stricter than parseMoney on purpose: "Division 2" must not read as a number
+ * when the question being asked is what a whole column is made of.
+ */
+function numericCell(cell: string): number | null {
+  const t = cell.trim();
+  if (!t || !/\d/.test(t)) return null;
+  if (/[^0-9.,()$%\s-]/.test(t)) return null;
+  return parseMoney(t);
+}
+
+/**
+ * The index of a "% of contract" column, or null.
+ *
+ * A percent-of-total column carries nothing the app needs - every percentage
+ * on the sub billing page is computed from the scheduled values - and it is
+ * the most common reason an SOV imports one column out of step. A sheet laid
+ * out Description / % of contract / Amount, read positionally, files the
+ * description under the item number and the percentage under the description,
+ * and the result looks plausible enough to save.
+ *
+ * Identified by what the column sums to rather than by its heading, because
+ * the sheets that need this are exactly the ones whose headings did not
+ * match. Two guards keep it from eating a money column: the values have to
+ * add up to one whole (1.00 as a fraction, or 100 as percents), and some
+ * other column has to hold numbers an order of magnitude larger. Dollars on
+ * an SOV never satisfy both.
+ */
+function percentOfTotalColumn(cellRows: string[][]): number | null {
+  // Only rows that carry money, and not the total row. A heading row that
+  // failed to match would otherwise make every column look non-numeric, and
+  // the TOTAL row Excel drags along carries its own 100% - left in, the
+  // column sums to two wholes and the test this function applies fails on
+  // exactly the sheets that most need it.
+  const dataRows = cellRows.filter(
+    (r) => r.some((c) => numericCell(c) != null) && !r.some((c) => isTotalRow(c)),
+  );
+  if (dataRows.length < 2) return null;
+  const width = Math.max(...dataRows.map((r) => r.length));
+  if (width < 3) return null;
+
+  const sums: (number | null)[] = [];
+  for (let c = 0; c < width; c++) {
+    const values: number[] = [];
+    let ok = true;
+    for (const r of dataRows) {
+      const raw = (r[c] ?? "").trim();
+      if (!raw) continue;
+      const n = numericCell(raw);
+      if (n == null) {
+        ok = false;
+        break;
+      }
+      values.push(n);
+    }
+    sums.push(ok && values.length >= 2 ? values.reduce((a, b) => a + b, 0) : null);
+  }
+
+  for (let c = 0; c < width; c++) {
+    const sum = sums[c];
+    if (sum == null) continue;
+    const values = dataRows
+      .map((r) => numericCell((r[c] ?? "").trim()))
+      .filter((n): n is number => n != null);
+    if (values.length < 2 || values.some((v) => v <= 0)) continue;
+
+    const asFraction = values.every((v) => v <= 1.0000001) && Math.abs(sum - 1) <= 0.02;
+    const asPercent = values.every((v) => v <= 100.0001) && Math.abs(sum - 100) <= 2;
+    if (!asFraction && !asPercent) continue;
+
+    // Some other column has to be carrying the real money.
+    let moneyCol = -1;
+    let moneyTotal = 0;
+    for (let j = 0; j < width; j++) {
+      const other = sums[j];
+      if (j === c || other == null) continue;
+      if (other > moneyTotal) {
+        moneyTotal = other;
+        moneyCol = j;
+      }
+    }
+    if (moneyCol < 0 || moneyTotal < sum * 10) continue;
+
+    // And the column has to be each line's share OF that money, line by line.
+    // Summing to one whole is not enough on its own: a unit-price SOV can have
+    // a quantity column that happens to add to 100. Proportionality is what
+    // actually makes a column a percent-of-total, and it is checkable.
+    const scale = asFraction ? 1 : 100;
+    let proportional = true;
+    for (const r of dataRows) {
+      const pct = numericCell((r[c] ?? "").trim());
+      const money = numericCell((r[moneyCol] ?? "").trim());
+      if (pct == null || money == null) {
+        proportional = false;
+        break;
+      }
+      if (Math.abs(pct / scale - money / moneyTotal) > 0.005) {
+        proportional = false;
+        break;
+      }
+    }
+    if (!proportional) continue;
+    return c;
+  }
+  return null;
+}
+
 export function parsePastedSovLines(text: string): SovParseResult {
   const rows = text
     .split(/\r?\n/)
@@ -85,7 +194,15 @@ export function parsePastedSovLines(text: string): SovParseResult {
   const skipped: SovParseResult["skipped"] = [];
   if (rows.length === 0) return { lines, skipped, usedHeader: false };
 
-  const headerMap = matchHeader(splitRow(rows[0]));
+  // Split once. The percent column has to come off before the headings are
+  // read, so that a heading row left in step with its data can still match.
+  let cellRows = rows.map(splitRow);
+  const percentCol = percentOfTotalColumn(cellRows);
+  if (percentCol != null) {
+    cellRows = cellRows.map((r) => r.filter((_, i) => i !== percentCol));
+  }
+
+  const headerMap = matchHeader(cellRows[0]);
   const usedHeader = headerMap != null;
   // Positional fallback, matching the order shown in the paste box.
   const positional: Record<string, number> = {
@@ -99,16 +216,19 @@ export function parsePastedSovLines(text: string): SovParseResult {
   // A two-column paste is description + value, not item + description. Reading
   // it positionally would file the whole scope under an item number and leave
   // every line with no description.
-  const widest = Math.max(...rows.map((r) => splitRow(r).length));
+  const widest = Math.max(...cellRows.map((r) => r.length));
   const twoColumn = !usedHeader && widest <= 2;
   const map = headerMap ?? (twoColumn ? { description: 0, scheduledValue: 1 } : positional);
 
-  const dataRows = usedHeader ? rows.slice(1) : rows;
+  const dataCells = usedHeader ? cellRows.slice(1) : cellRows;
+  // Reported verbatim, so a skipped row is findable in the box it came from
+  // even though the cells it was read from may have had a column taken off.
+  const dataText = usedHeader ? rows.slice(1) : rows;
   const seen = new Set<string>();
 
-  dataRows.forEach((row, i) => {
+  dataCells.forEach((cells, i) => {
     const rowNumber = usedHeader ? i + 2 : i + 1;
-    const cells = splitRow(row);
+    const row = dataText[i];
     const at = (field: string): string => {
       const idx = map[field];
       return idx == null ? "" : (cells[idx] ?? "");

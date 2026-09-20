@@ -155,6 +155,126 @@ section("Two-column paste is description + value");
   eq("parenthesised amount is negative", r.lines[0].scheduledValue, -5000);
 }
 
+// ------------------- A percent-of-total column -------------------
+// Lumina Energy Services sent Description / % of contract / Amount. Read
+// positionally that files the description under the item number and the
+// percentage under the description, and the result looks plausible enough to
+// save - which is what happened. These are their real numbers.
+section("Description / % of contract / Amount");
+
+const LUMINA: [string, string, string][] = [
+  ["General Conditions", "0.1622044391", "78,179.80"],
+  ["Trenching, Boring and Backfill", "0.09516516046", "45,868.00"],
+  ["DC Collection System", "0.2515486902", "121,242.22"],
+  ["AC Collection System", "0.182344066", "87,886.76"],
+  ["Medium Voltage System", "0.1705942974", "82,223.57"],
+  ["Communications and SCADA", "0.1151342419", "55,492.76"],
+  ["Commissioning and Closeout", "0.02300910503", "11,090.00"],
+];
+const tsv = (rows: string[][]) => rows.map((r) => r.join("\t")).join("\n");
+
+{
+  const r = parsePastedSovLines(tsv(LUMINA));
+  eq("seven lines", r.lines.length, 7);
+  eq("the description is the scope, not the percentage", r.lines[0].description, "General Conditions");
+  eq("the value is the money", r.lines[0].scheduledValue, 78179.8);
+  eq("no item number is invented from the scope", r.lines[0].itemNumber, null);
+  eq("last line reads through", r.lines[6].description, "Commissioning and Closeout");
+  // The number that proves it: the lines tie to the SOV total on the sheet.
+  eq(
+    "the lines tie to the contract total",
+    Math.round(r.lines.reduce((s, l) => s + l.scheduledValue, 0) * 100) / 100,
+    481983.11,
+  );
+  eq("nothing skipped", r.skipped.length, 0);
+}
+
+// A heading row that matches no alias used to leave the percent column in
+// place. Taking the column off before the headings are read fixes both.
+{
+  const r = parsePastedSovLines(tsv([["Scope of Work", "% of Contract", "Value"], ...LUMINA]));
+  eq("unmatched heading: seven lines", r.lines.length, 7);
+  eq("unmatched heading: description intact", r.lines[0].description, "General Conditions");
+  eq("unmatched heading: value intact", r.lines[0].scheduledValue, 78179.8);
+}
+
+// Percents written as percents, with a heading that does match.
+{
+  const asPct = LUMINA.map(([d, p, v]) => [d, `${(Number(p) * 100).toFixed(2)}%`, v]);
+  const r = parsePastedSovLines(tsv([["Description", "%", "Amount"], ...asPct]));
+  eq("percent form: seven lines", r.lines.length, 7);
+  eq("percent form: description intact", r.lines[0].description, "General Conditions");
+  eq("percent form: value intact", r.lines[0].scheduledValue, 78179.8);
+}
+
+// Excel drags the TOTAL row along, and it carries its own 100%. Left in the
+// sample, the column sums to two wholes and the detection fails on exactly
+// the sheets that most need it.
+{
+  const r = parsePastedSovLines(tsv([...LUMINA, ["TOTAL", "1.00", "481,983.11"]]));
+  eq("with a total row: seven lines", r.lines.length, 7);
+  eq("with a total row: description intact", r.lines[0].description, "General Conditions");
+  eq("with a total row: the total is skipped", r.skipped[0]?.reason, "Looks like a total row");
+}
+
+// An item column in front of it still works.
+{
+  const numbered = LUMINA.map(([d, p, v], i) => [`${i + 1}.00`, d, p, v]);
+  const r = parsePastedSovLines(tsv(numbered));
+  eq("numbered: seven lines", r.lines.length, 7);
+  eq("numbered: item number kept", r.lines[0].itemNumber, "1.00");
+  eq("numbered: description intact", r.lines[0].description, "General Conditions");
+  eq("numbered: value intact", r.lines[0].scheduledValue, 78179.8);
+}
+
+section("What must NOT be taken for a percent column");
+
+// Summing to one whole is not enough. A quantity column can add to 100 by
+// coincidence, and taking it off would lose the quantities. What makes a
+// column a share of the total is that it tracks the money line by line, and
+// 60/100 against 30,000/66,000 does not. Columns are item, description,
+// value, qty, unit, unit cost.
+{
+  const r = parsePastedSovLines(
+    tsv([
+      ["1.01", "Piles", "30,000.00", "60", "EA", "500.00"],
+      ["1.02", "Racking", "36,000.00", "40", "EA", "900.00"],
+    ]),
+  );
+  eq("a quantity column summing to 100 is kept", r.lines.length, 2);
+  eq("value survives", r.lines[0].scheduledValue, 30000);
+  eq("quantity survives", r.lines[0].quantity, 60);
+  eq("unit survives", r.lines[0].unit, "EA");
+  eq("unit cost survives", r.lines[0].unitCost, 500);
+}
+
+// Two money columns where one sums near 100 dollars: no 10x gap, no drop.
+{
+  const r = parsePastedSovLines(
+    tsv([
+      ["1.01", "Small item", "60.00", "70.00"],
+      ["1.02", "Another", "40.00", "50.00"],
+    ]),
+  );
+  eq("a small money column is kept", r.lines.length, 2);
+  eq("the third cell is still read as the value", r.lines[0].scheduledValue, 60);
+}
+
+// Two columns only: nothing to take off, and taking one would leave nothing.
+{
+  const r = parsePastedSovLines(tsv([["Mobilization", "0.5"], ["Fencing", "0.5"]]));
+  eq("a two-column paste is left alone", r.lines.length, 2);
+  eq("and read as description plus value", r.lines[0].description, "Mobilization");
+  eq("with the number as the value", r.lines[0].scheduledValue, 0.5);
+}
+
+// One row is not a pattern.
+{
+  const r = parsePastedSovLines(tsv([["General Conditions", "1.00", "78,179.80"]]));
+  eq("a single row is not enough to call a column", r.lines.length, 1);
+  eq("so it reads positionally", r.lines[0].itemNumber, "General Conditions");
+}
+
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failed} failed`);
 console.log("=".repeat(60));
