@@ -596,6 +596,14 @@ export type BillableRow =
       alreadyBilled: number;
       targetPct: number;
       evidence?: BillingEvidenceItem[];
+      /**
+       * Set when the line has earned value that prior billing is suppressing,
+       * so the row arrives unchecked at $0 with the reason rather than not
+       * arriving at all. The amount is editable: the netting cannot tell
+       * whether the earlier billing covered the scope these POs cover, and a
+       * person can.
+       */
+      blockedReason?: string;
     };
 
 export type HiddenForecast = {
@@ -1034,11 +1042,64 @@ export async function getBillThisPeriodRows(
   // the "nothing to bill" list, even though the suggestion side had nothing to
   // add to it.
   const billableLineIds = new Set(all.map((r) => r.billingLineId));
-  const notBillable = (suggResult.ok ? suggResult.notBillable : []).filter(
+  const explained = (suggResult.ok ? suggResult.notBillable : []).filter(
     (n) => !billableLineIds.has(n.billingLineId),
   );
 
-  return { ok: true, rows: all, hidden, notBillable, periodMonth: period, billedTo };
+  /**
+   * Lines where real earned value is being suppressed by earlier billing.
+   *
+   * Netting earned against billed is only sound when every billed dollar has a
+   * milestone behind it. On 5.05 it does not: $82,619.12 billed against
+   * $42,750.07 of milestones, because AFP 1 through 12 predate this app and the
+   * POs they covered were never entered as payment schedules. So a newly earned
+   * milestone on PO-022 disappears into a $39,869 gap it has nothing to do with.
+   *
+   * Zarina: "It should be adding per PO, not per SOV line. The 5.05 is composed
+   * of multiple POs." She is right, and doing that properly needs billing
+   * history recorded per PO, which this schema does not have.
+   *
+   * Until it does, the app must not decide this silently. These arrive as
+   * ordinary rows - unchecked, at $0, with the reason and an editable amount -
+   * so the person who knows what the earlier AFPs covered can say. A line with
+   * nothing earned at all stays in the read-only list; there is no judgement
+   * call there.
+   */
+  const suppressed = explained.filter((n) => n.earned > 0.005 && n.alreadyBilled > n.earned);
+  const suppressedIds = new Set(suppressed.map((n) => n.billingLineId));
+  const suppressedRows: BillableRow[] = suppressed.map((n) => ({
+    kind: "suggestion" as const,
+    key: `b:${n.billingLineId}:${nextMonthIsoLocal}`,
+    billingLineId: n.billingLineId,
+    itemNumber: n.itemNumber,
+    description: n.description,
+    periodMonth: nextMonthIsoLocal,
+    amount: 0,
+    confidence: "none" as Confidence,
+    sourcesSummary: "payment milestones",
+    reasons: [n.reason],
+    alreadyBilled: n.alreadyBilled,
+    targetPct: 0,
+    evidence: n.evidence,
+    blockedReason: `${formatCurrency(n.earned)} of milestones have fired, but ${formatCurrency(n.alreadyBilled)} is already billed on this line - earlier AFPs on this project predate milestone tracking. If some of that covered scope these POs do not, enter the amount to bill.`,
+  }));
+
+  const rowsWithSuppressed = [...all, ...suppressedRows].sort((a, b) => {
+    if (a.periodMonth !== b.periodMonth) return a.periodMonth.localeCompare(b.periodMonth);
+    if (a.kind !== b.kind) return a.kind === "forecast" ? -1 : 1;
+    return (a.itemNumber || "").localeCompare(b.itemNumber || "", undefined, { numeric: true });
+  });
+
+  const notBillable = explained.filter((n) => !suppressedIds.has(n.billingLineId));
+
+  return {
+    ok: true,
+    rows: rowsWithSuppressed,
+    hidden,
+    notBillable,
+    periodMonth: period,
+    billedTo,
+  };
 }
 
 export async function promoteSuggestionsToPlanned(
