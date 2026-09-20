@@ -143,10 +143,13 @@ export function BillThisPeriodClient({
             Bill {periodLabel(periodMonth)}
           </h3>
           <p className="text-xs text-muted-foreground">
-            What the field evidence supports for{" "}
-            {periodLabel(periodMonth)} - existing forecasts alongside live
-            schedule-driven amounts, measured as of the last day of the month.
-            Rows that the schedule does not support are shown with the reason
+            {/* Said "field evidence" and "schedule-driven" throughout, which
+                is only half the project. A procurement line is measured by PO
+                payment milestones and never touches a field report. */}
+            What the evidence supports for {periodLabel(periodMonth)} - existing
+            forecasts alongside live amounts from field reports, the schedule
+            and PO payment milestones, measured as of the last day of the
+            month. Rows the evidence does not support are shown with the reason
             and arrive unchecked.
           </p>
         </div>
@@ -236,8 +239,18 @@ export function BillThisPeriodClient({
                 const usingRecommendation =
                   r.kind === "suggestion" ||
                   (r.kind === "forecast" && r.recommendedAmount != null);
+                // "Field evidence" is right for a line measured by approved
+                // field reports and schedule progress. A procurement line is
+                // measured by PO payment milestones - there is no field
+                // evidence involved, and calling it that sends the reader
+                // looking for a daily report that does not exist.
+                const fromMilestones = (r.evidence ?? []).some(
+                  (e) => e.source === "payment milestone",
+                );
                 const sourceLabel = usingRecommendation
-                  ? "Field evidence"
+                  ? fromMilestones
+                    ? "Payment milestones"
+                    : "Field evidence"
                   : `Forecast (${r.status})${r.kind === "forecast" && r.afpNumber ? ` ${r.afpNumber}` : ""}`;
                 const sourceColor = usingRecommendation
                   ? CONF_STYLES[
