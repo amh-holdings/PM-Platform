@@ -1081,7 +1081,9 @@ export async function getBillThisPeriodRows(
     alreadyBilled: n.alreadyBilled,
     targetPct: 0,
     evidence: n.evidence,
-    blockedReason: `${formatCurrency(n.earned)} of milestones have fired, but ${formatCurrency(n.alreadyBilled)} is already billed on this line - earlier AFPs on this project predate milestone tracking. If some of that covered scope these POs do not, enter the amount to bill.`,
+    // Two sentences, not four. The detail that earlier AFPs predate milestone
+    // tracking is background; what the reader has to do is type a number.
+    blockedReason: `${formatCurrency(n.earned)} earned, ${formatCurrency(n.alreadyBilled)} already billed. Enter an amount if some of that earlier billing was for other scope.`,
   }));
 
   const rowsWithSuppressed = [...all, ...suppressedRows].sort((a, b) => {

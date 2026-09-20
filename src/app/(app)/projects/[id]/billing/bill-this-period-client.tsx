@@ -143,14 +143,10 @@ export function BillThisPeriodClient({
             Bill {periodLabel(periodMonth)}
           </h3>
           <p className="text-xs text-muted-foreground">
-            {/* Said "field evidence" and "schedule-driven" throughout, which
-                is only half the project. A procurement line is measured by PO
-                payment milestones and never touches a field report. */}
-            What the evidence supports for {periodLabel(periodMonth)} - existing
-            forecasts alongside live amounts from field reports, the schedule
-            and PO payment milestones, measured as of the last day of the
-            month. Rows the evidence does not support are shown with the reason
-            and arrive unchecked.
+            {/* Was three dense lines explaining the machinery. Anything a
+                row needs to say, the row says. */}
+            Tick what to bill, then create the AFP. Anything the evidence does
+            not support arrives unchecked with the reason.
           </p>
         </div>
       </div>
@@ -280,12 +276,19 @@ export function BillThisPeriodClient({
                         {r.itemNumber} {r.description}
                       </div>
                       {r.kind === "suggestion" && (
+                        /* "target 0%, billed $82,619.12 - payment milestones"
+                           repeated the Source column and printed a target of
+                           0% on a row whose whole point is that the target is
+                           disputed. A blocked row says it all in the amber
+                           line below; an ordinary one only needs the number it
+                           is measured against. */
                         <div
                           className="mt-0.5 text-[10px] text-muted-foreground"
                           title={r.reasons.join(" | ")}
                         >
-                          target {(r.targetPct * 100).toFixed(0)}%, billed{" "}
-                          {formatCurrency(r.alreadyBilled)} - {r.sourcesSummary}
+                          {r.blockedReason
+                            ? null
+                            : `${formatCurrency(r.alreadyBilled)} billed so far`}
                         </div>
                       )}
                       {/* Both kinds can be blocked now. A suggestion row
@@ -342,10 +345,21 @@ export function BillThisPeriodClient({
                               return `${verb} the ${r.evidence.length} ${noun} behind this`;
                             })()}
                           </button>
-                          {openEvidence.has(r.key) && (
+                          {openEvidence.has(r.key) &&
+                            (() => {
+                              // Duration, weight and source are how a SCHEDULE
+                              // roll-up is audited. On a milestone they are a
+                              // dash, 0.0% and the same two words on every row -
+                              // three columns of nothing, repeated nine times.
+                              // The EARNED / not earned text already carries
+                              // the state and the reason.
+                              const milestones = r.evidence!.some(
+                                (e) => e.source === "payment milestone",
+                              );
+                              return (
                             <table className="mt-1 w-full text-[10px]">
                               <tbody>
-                                {r.evidence
+                                {r.evidence!
                                   .slice()
                                   .sort((a, b) => b.pct * b.weight - a.pct * a.weight)
                                   .map((e) => (
@@ -355,8 +369,16 @@ export function BillThisPeriodClient({
                                         e.pct === 0 && "text-muted-foreground/60",
                                       )}
                                     >
-                                      <td className="pr-2 font-mono">{e.wbsCode}</td>
+                                      <td className="pr-2 font-mono">
+                                        {/* The job number is the same on every
+                                            row and never the thing being read. */}
+                                        {milestones
+                                          ? e.wbsCode.replace(/^\S*\s+/, "")
+                                          : e.wbsCode}
+                                      </td>
                                       <td className="pr-2">{e.taskName}</td>
+                                      {!milestones && (
+                                        <>
                                       <td className="pr-2 text-right tabular-nums">
                                         {e.pct}%
                                       </td>
@@ -373,11 +395,14 @@ export function BillThisPeriodClient({
                                           ? "field report"
                                           : e.source}
                                       </td>
+                                        </>
+                                      )}
                                     </tr>
                                   ))}
                               </tbody>
                             </table>
-                          )}
+                              );
+                            })()}
                         </>
                       )}
                     </td>
@@ -429,9 +454,13 @@ export function BillThisPeriodClient({
                       onClick={() => setShowUnsupported((v) => !v)}
                       className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
                     >
+                      {/* "not billable" was true when these were dead rows.
+                          A blocked row now carries an editable amount, so the
+                          honest word is "needs a decision" - and it stops this
+                          colliding with the "nothing to bill" list below, which
+                          really is read-only. */}
                       {showUnsupported ? "Hide" : "Show"} {unsupported.length} line
-                      {unsupported.length === 1 ? "" : "s"} not billable this
-                      period
+                      {unsupported.length === 1 ? "" : "s"} needing a decision
                     </button>
                   </td>
                 </tr>
