@@ -168,10 +168,40 @@ function summaryWbsCodes(
   return parents;
 }
 
+/**
+ * A line that IS linked and still produced nothing to bill, with the reason.
+ *
+ * The panel already refuses to drop a forecast row without saying why - see
+ * blockRow, and the 6.03 Fencing case that prompted it. The suggestion side
+ * still dropped silently: `if (suggested <= 0) continue`. So a line that is
+ * linked, has headroom, and simply has not earned anything new appeared
+ * nowhere at all, in any month.
+ *
+ * Zarina spent an afternoon on 5.05 POI Procurement for exactly that reason.
+ * It is not in the "not linked to the schedule" banner, so the one thing the
+ * page did say pointed away from the answer.
+ *
+ * Unlinked lines are NOT included: the amber banner at the top of the page
+ * already names them, and repeating them here would bury the rows that have
+ * no other explanation.
+ */
+export type NotBillableLine = {
+  billingLineId: string;
+  itemNumber: string;
+  description: string;
+  alreadyBilled: number;
+  /** What the evidence supports so far, in dollars. */
+  earned: number;
+  remaining: number;
+  reason: string;
+  /** Same per-task or per-milestone working the billable rows carry. */
+  evidence: BillingEvidenceItem[];
+};
+
 export async function computeBillingSuggestions(
   projectId: string,
   periodMonth?: string,
-): Promise<{ ok: true; suggestions: BillingSuggestion[]; nextMonthIso: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; suggestions: BillingSuggestion[]; notBillable: NotBillableLine[]; nextMonthIso: string } | { ok: false; error: string }> {
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
@@ -266,6 +296,7 @@ export async function computeBillingSuggestions(
   }
 
   const suggestions: BillingSuggestion[] = [];
+  const notBillable: NotBillableLine[] = [];
   for (const line of lines ?? []) {
     const scheduledValue = Number(line.scheduled_value ?? 0);
     const t = totalsById.get(line.id) ?? { billed: 0, remaining: scheduledValue };
@@ -426,7 +457,27 @@ export async function computeBillingSuggestions(
     const target = avgPct * scheduledValue;
     const raw = target - t.billed;
     const suggested = Math.max(0, Math.min(t.remaining, raw));
-    if (suggested <= 0) continue;
+    if (suggested <= 0) {
+      // Say why, rather than vanishing. Unlinked lines are left to the banner
+      // that already names them, and a fully billed line is not a puzzle.
+      const linkedToSomething = linkedCount > 0;
+      if (linkedToSomething && t.remaining > 0.005) {
+        const procurement = isProcurementLine(line);
+        notBillable.push({
+          billingLineId: line.id,
+          itemNumber: line.item_number,
+          description: line.description,
+          alreadyBilled: Math.round(t.billed * 100) / 100,
+          earned: Math.round(target * 100) / 100,
+          remaining: Math.round(t.remaining * 100) / 100,
+          reason: procurement
+            ? `Already billed ${formatCurrency(t.billed)} against ${formatCurrency(target)} the linked POs have earned. Nothing further until another payment milestone fires.`
+            : `Already billed ${formatCurrency(t.billed)} against ${formatCurrency(target)} the schedule supports. Nothing further until more progress is recorded.`,
+          evidence,
+        });
+      }
+      continue;
+    }
     suggestions.push({
       billingLineId: line.id,
       itemNumber: line.item_number,
@@ -449,8 +500,11 @@ export async function computeBillingSuggestions(
   }
 
   suggestions.sort((a, b) => b.suggestedAmount - a.suggestedAmount);
+  notBillable.sort((a, b) =>
+    (a.itemNumber || "").localeCompare(b.itemNumber || "", undefined, { numeric: true }),
+  );
 
-  return { ok: true, suggestions, nextMonthIso };
+  return { ok: true, suggestions, notBillable, nextMonthIso };
 }
 
 // Save the procurement_order links for a billing_line. Used by the inline
@@ -648,6 +702,8 @@ export async function getBillThisPeriodRows(
       ok: true;
       rows: BillableRow[];
       hidden: HiddenForecast[];
+      /** Linked lines that produced nothing this period, with the reason. */
+      notBillable: NotBillableLine[];
       periodMonth: string;
       billedTo: BilledElsewhere | null;
     }
@@ -712,6 +768,7 @@ export async function getBillThisPeriodRows(
       ok: true,
       rows: allForecastRows.map((x) => x.row),
       hidden: [],
+      notBillable: [],
       periodMonth: period,
       billedTo: await loadBilledElsewhere(auth.supabase, projectId, period),
     };
@@ -973,7 +1030,15 @@ export async function getBillThisPeriodRows(
 
   const billedTo = await loadBilledElsewhere(auth.supabase, projectId, period);
 
-  return { ok: true, rows: all, hidden, periodMonth: period, billedTo };
+  // A line that ended up billable through its forecast row does not belong in
+  // the "nothing to bill" list, even though the suggestion side had nothing to
+  // add to it.
+  const billableLineIds = new Set(all.map((r) => r.billingLineId));
+  const notBillable = (suggResult.ok ? suggResult.notBillable : []).filter(
+    (n) => !billableLineIds.has(n.billingLineId),
+  );
+
+  return { ok: true, rows: all, hidden, notBillable, periodMonth: period, billedTo };
 }
 
 export async function promoteSuggestionsToPlanned(

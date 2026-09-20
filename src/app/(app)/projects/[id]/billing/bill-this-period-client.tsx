@@ -10,7 +10,12 @@ import { formatCurrency } from "@/lib/format";
 import { shortMonthLabel } from "@/lib/cashflow";
 
 import { createAfpFromBillThisPeriod } from "../pay-app-actions";
-import type { BillableRow, BilledElsewhere, HiddenForecast } from "../billing-actions";
+import type {
+  BillableRow,
+  BilledElsewhere,
+  HiddenForecast,
+  NotBillableLine,
+} from "../billing-actions";
 import { billedElsewhereMessage } from "@/lib/pay-app-undo";
 import { UndoAfpButton } from "./undo-afp-button";
 import { periodLabel } from "@/lib/billing-period";
@@ -19,6 +24,8 @@ type Props = {
   projectId: string;
   rows: BillableRow[];
   hidden: HiddenForecast[];
+  /** Linked lines with nothing to bill this period, and why. */
+  notBillable: NotBillableLine[];
   variant: "page" | "widget";
   /** YYYY-MM-01 of the month being billed. */
   periodMonth: string;
@@ -37,6 +44,7 @@ export function BillThisPeriodClient({
   projectId,
   rows,
   hidden,
+  notBillable,
   variant,
   periodMonth,
   billedTo,
@@ -414,6 +422,39 @@ export function BillThisPeriodClient({
             </tbody>
           </table>
         </div>
+
+        {variant === "page" && notBillable.length > 0 && (
+          /* The answer to "why is my line not here". A linked line that earned
+             nothing new used to appear nowhere at all - not in the rows, not
+             in the hidden list, and not in the unlinked banner, which is the
+             one place somebody hunting for it would look. */
+          <details className="mb-3 rounded-md border bg-muted/30 p-3 text-xs">
+            <summary className="cursor-pointer font-medium">
+              {notBillable.length} linked line
+              {notBillable.length === 1 ? "" : "s"} with nothing to bill this
+              period, and why
+            </summary>
+            <table className="mt-2 w-full">
+              <tbody>
+                {notBillable.map((n) => (
+                  <tr key={n.billingLineId} className="border-t align-top">
+                    <td className="py-1.5 pr-2 font-mono">{n.itemNumber}</td>
+                    <td className="py-1.5 pr-2">
+                      <div>{n.description}</div>
+                      <div className="mt-0.5 text-[10px] text-muted-foreground">
+                        {n.reason}
+                      </div>
+                    </td>
+                    <td className="py-1.5 text-right tabular-nums text-muted-foreground">
+                      {formatCurrency(n.remaining)}
+                      <span className="block text-[10px]">left on the line</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+        )}
 
         {hidden.length > 0 && (
           <details className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
