@@ -13,6 +13,60 @@ import {
   updateMilestone,
 } from "../../procurement-actions";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { MILESTONE_TRIGGERS, isRecognisedTrigger } from "@/lib/progress";
+
+/**
+ * The trigger picker.
+ *
+ * A free-text box here looked harmless and quietly decided whether a PO ever
+ * billed: the matcher reads words, so "Equipment arrival" earned nothing and
+ * said nothing. The options now show when each one earns, because that is the
+ * part nobody could have guessed.
+ *
+ * A value already stored that is not an option is kept and offered rather than
+ * silently swapped - "Delivered to site" works fine and rewriting somebody's
+ * wording to make a dropdown tidy is not a fix. It is only flagged when the
+ * matcher genuinely does not recognise it.
+ */
+function TriggerSelect({
+  id,
+  defaultValue,
+}: {
+  id: string;
+  defaultValue?: string | null;
+}) {
+  const current = (defaultValue ?? "").trim();
+  const inList = MILESTONE_TRIGGERS.some((t) => t.value === current);
+  const recognised = isRecognisedTrigger(current);
+  return (
+    <>
+      <select
+        id={id}
+        name="trigger_event"
+        defaultValue={current}
+        className="h-9 w-full rounded-md border bg-background px-2 text-xs"
+      >
+        <option value="">No trigger - bills only when you enter a paid date</option>
+        {MILESTONE_TRIGGERS.map((t) => (
+          <option key={t.value} value={t.value}>
+            {t.label}
+          </option>
+        ))}
+        {current && !inList && (
+          <option value={current}>
+            {current}
+            {recognised ? "" : " - not recognised, earns nothing"}
+          </option>
+        )}
+      </select>
+      {current && !recognised && (
+        <p className="mt-0.5 text-[10px] text-amber-700">
+          This wording earns nothing. Pick one of the options above.
+        </p>
+      )}
+    </>
+  );
+}
 
 type Milestone = {
   id: string;
@@ -184,6 +238,14 @@ export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: P
                   </td>
                   <td className="px-2 py-1.5 text-muted-foreground">
                     {m.trigger_event ?? "-"}
+                    {m.trigger_event && !isRecognisedTrigger(m.trigger_event) && (
+                      <span
+                        className="ml-1 text-amber-600"
+                        title="This trigger wording is not recognised, so this milestone earns nothing. Edit it and pick one of the listed triggers."
+                      >
+                        ⚠
+                      </span>
+                    )}
                   </td>
                   <td className="px-2 py-1.5 text-right tabular-nums">
                     {m.pct_of_total != null ? `${m.pct_of_total.toFixed(0)}%` : "-"}
@@ -366,7 +428,7 @@ function AddRow({
           </div>
           <div>
             <Label htmlFor="m-trigger" className="text-[10px]">Trigger</Label>
-            <Input id="m-trigger" name="trigger_event" placeholder="PO signed / Delivered" />
+            <TriggerSelect id="m-trigger" />
           </div>
           <div>
             <Label htmlFor="m-pct" className="text-[10px]">% of PO</Label>
@@ -435,7 +497,7 @@ function EditRow({
           </div>
           <div>
             <Label htmlFor={`mt-${m.id}`} className="text-[10px]">Trigger</Label>
-            <Input id={`mt-${m.id}`} name="trigger_event" defaultValue={m.trigger_event ?? ""} />
+            <TriggerSelect id={`mt-${m.id}`} defaultValue={m.trigger_event} />
           </div>
           <div>
             <Label htmlFor={`mp-${m.id}`} className="text-[10px]">%</Label>
