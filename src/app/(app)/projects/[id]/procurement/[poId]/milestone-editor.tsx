@@ -46,6 +46,19 @@ export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: P
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
+  // Which milestone is having its payment recorded, and what is typed so far.
+  // Most of these POs were paid before this app existed, so the date is an
+  // input with today as a starting point, not an assumption.
+  const [payingId, setPayingId] = useState<string | null>(null);
+  const [paidDate, setPaidDate] = useState("");
+  const [paidAmount, setPaidAmount] = useState("");
+
+  function openPayment(m: Milestone) {
+    setError(null);
+    setPayingId(m.id);
+    setPaidDate(m.paid_at ?? todayIso());
+    setPaidAmount(String(Number(m.paid_amount ?? m.amount ?? 0)));
+  }
 
   async function onAdd(formData: FormData) {
     setBusy(true);
@@ -73,15 +86,46 @@ export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: P
     startTransition(() => router.refresh());
   }
 
-  async function onMarkPaid(mid: string, amount: number) {
-    if (!confirm("Mark this milestone as paid today?")) return;
+  async function onSavePayment(mid: string) {
+    setError(null);
+    const date = paidDate.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setError("Enter the date this was paid.");
+      return;
+    }
+    // A payment cannot have happened tomorrow. The field for money you expect
+    // to pay is Expected date, one column over.
+    if (date > todayIso()) {
+      setError("That date is in the future. Use Expected date for a payment that has not happened yet.");
+      return;
+    }
+    const amt = Number(paidAmount.replace(/[$,\s]/g, ""));
+    if (!Number.isFinite(amt) || amt < 0) {
+      setError("Amount paid must be a positive number.");
+      return;
+    }
     setBusy(true);
-    const res = await markMilestonePaid(mid, poId, projectId, todayIso(), amount);
+    const res = await markMilestonePaid(mid, poId, projectId, date, amt);
     setBusy(false);
     if (!res.ok) {
       setError(res.error);
       return;
     }
+    setPayingId(null);
+    startTransition(() => router.refresh());
+  }
+
+  async function onClearPayment(mid: string) {
+    if (!confirm("Clear the payment on this milestone? It goes back to unpaid.")) return;
+    setError(null);
+    setBusy(true);
+    const res = await markMilestonePaid(mid, poId, projectId, null);
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    setPayingId(null);
     startTransition(() => router.refresh());
   }
 
@@ -151,13 +195,31 @@ export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: P
                     {m.expected_date ? formatDate(m.expected_date) : "-"}
                   </td>
                   <td className="px-2 py-1.5">
-                    {m.paid_at ? (
+                    {payingId === m.id ? (
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Input
+                          type="date"
+                          max={todayIso()}
+                          value={paidDate}
+                          onChange={(e) => setPaidDate(e.target.value)}
+                          className="h-8 w-[9.5rem] text-xs"
+                          aria-label="Date paid"
+                        />
+                        <Input
+                          value={paidAmount}
+                          onChange={(e) => setPaidAmount(e.target.value)}
+                          inputMode="decimal"
+                          className="h-8 w-28 text-right text-xs"
+                          aria-label="Amount paid"
+                        />
+                      </div>
+                    ) : m.paid_at ? (
                       <div>
                         <div className="text-emerald-700">
                           {formatCurrency(Number(m.paid_amount ?? m.amount ?? 0))}
                         </div>
                         <div className="text-[10px] text-muted-foreground">
-                          {formatDate(m.paid_at)}
+                          paid {formatDate(m.paid_at)}
                         </div>
                       </div>
                     ) : (
@@ -166,17 +228,54 @@ export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: P
                   </td>
                   <td className="px-2 py-1.5 text-right">
                     <div className="flex justify-end gap-1">
-                      {!m.paid_at && (
+                      {payingId === m.id ? (
+                        <>
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => onSavePayment(m.id)}
+                          >
+                            {busy ? "Saving..." : "Save"}
+                          </Button>
+                          {m.paid_at && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive hover:text-destructive"
+                              disabled={busy}
+                              onClick={() => onClearPayment(m.id)}
+                            >
+                              Clear
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => {
+                              setPayingId(null);
+                              setError(null);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
                         <Button
                           type="button"
-                          variant="outline"
+                          variant={m.paid_at ? "ghost" : "outline"}
                           size="sm"
                           disabled={busy}
-                          onClick={() =>
-                            onMarkPaid(m.id, Number(m.amount ?? 0))
-                          }
+                          onClick={() => openPayment(m)}
                         >
-                          Mark paid
+                          {/* Already paid stays editable. These POs were paid
+                              on paper long before the app, so the first date
+                              entered is a recollection and recollections get
+                              corrected. */}
+                          {m.paid_at ? "Edit payment" : "Mark paid"}
                         </Button>
                       )}
                       <Button

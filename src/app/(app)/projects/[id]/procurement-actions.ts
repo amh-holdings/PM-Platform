@@ -204,11 +204,19 @@ export async function updateMilestone(
   return { ok: true, id: milestoneId };
 }
 
+/**
+ * Records when a milestone was paid, or clears it.
+ *
+ * `paidAt` null means "this was not paid after all" - these POs were paid on
+ * paper long before the app, so the dates are entered from recollection and
+ * a wrong one needs a way back. Clearing takes the amount with it, otherwise
+ * the row reads as unpaid while still carrying money.
+ */
 export async function markMilestonePaid(
   milestoneId: string,
   poId: string,
   projectId: string,
-  paidAt: string,
+  paidAt: string | null,
   paidAmount?: number | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const auth = await assertAhcUser();
@@ -216,7 +224,8 @@ export async function markMilestonePaid(
   const patch: TablesUpdate<"procurement_payments"> = {
     paid_at: paidAt,
   };
-  if (paidAmount != null) patch.paid_amount = paidAmount;
+  if (paidAt === null) patch.paid_amount = null;
+  else if (paidAmount != null) patch.paid_amount = paidAmount;
   const { error } = await auth.supabase
     .from("procurement_payments")
     .update(patch)
