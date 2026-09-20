@@ -58,7 +58,14 @@ const HEADER_ALIASES: Record<string, string[]> = {
 function matchHeader(cells: string[]): Record<string, number> | null {
   const map: Record<string, number> = {};
   cells.forEach((cell, i) => {
-    const c = cell.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+    // Strip punctuation before matching. A heading is typed by a person:
+    // "Item No." carries a full stop, "Item #" a hash, and an alias list that
+    // matches neither sends the whole sheet down the positional path.
+    const c = cell
+      .toLowerCase()
+      .replace(/[^a-z0-9% ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
     if (!c) return;
     for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
       if (map[field] != null) continue;
@@ -68,6 +75,58 @@ function matchHeader(cells: string[]): Record<string, number> | null {
   // A description column plus a money column is enough to trust the row as a
   // header. Anything less and it is probably just the first data row.
   return map.description != null && map.scheduledValue != null ? map : null;
+}
+
+/**
+ * How far down to look for the heading row.
+ *
+ * An exhibit's title block runs to two or three rows. Ten gives room for a
+ * logo row, a project line, a subcontractor line and a blank, and stops well
+ * before a sheet with no headings at all could match a line by accident.
+ */
+const HEADER_SEARCH_ROWS = 10;
+
+/**
+ * The single cell of a section heading row - "1.00   GENERAL CONDITIONS" -
+ * or null if this row is not one.
+ *
+ * An exhibit groups its lines under headings, and a heading carries no money.
+ * Reported as skipped it reads like four lost lines; recognised, it fills in
+ * the section each line belongs to, which the SOV already has a column for.
+ *
+ * Deliberately narrow, because the cost of being wrong is a real line going
+ * quiet instead of being reported: one cell, no money, and either a leading
+ * section number or a name in capitals. A row that only looks like a line
+ * with its value missing still comes back in `skipped`.
+ */
+function sectionHeadingRow(cells: string[]): string | null {
+  const filled = cells.filter((c) => c.trim().length > 0);
+  if (filled.length !== 1) return null;
+  const text = filled[0].trim();
+  if (text.length < 3 || !/[a-z]/i.test(text)) return null;
+  if (parseMoney(text) != null) return null;
+  if (isTotalRow(text)) return null;
+
+  const numbered = /^(\d+(?:\.\d+)?)\s{2,}(.+)$/.exec(text);
+  const name = numbered ? numbered[2].trim() : text;
+  const letters = name.replace(/[^a-z]/gi, "");
+  const shouty = letters.length > 0 && letters === letters.toUpperCase();
+  if (!numbered && !shouty) return null;
+  return name;
+}
+
+/**
+ * A row from the execution block at the foot of an exhibit - "Signature:
+ * ______", "Print Name: ______".
+ *
+ * These are not lines and reporting four of them as skipped on every import
+ * teaches people to ignore the skipped list, which is the one place a real
+ * lost line would show up.
+ */
+function isSignatureBlockRow(cells: string[]): boolean {
+  const filled = cells.filter((c) => c.trim().length > 0);
+  if (filled.length === 0 || filled.length > 2) return false;
+  return filled.every((c) => /^[A-Za-z][A-Za-z ]*:\s*_*$/.test(c.trim()) || /^_+$/.test(c.trim()));
 }
 
 /** TOTAL, Subtotal, Grand Total - the row Excel drags along with the range. */
@@ -202,7 +261,22 @@ export function parsePastedSovLines(text: string): SovParseResult {
     cellRows = cellRows.map((r) => r.filter((_, i) => i !== percentCol));
   }
 
-  const headerMap = matchHeader(cellRows[0]);
+  // The heading row is not always the first row. A real exhibit opens with its
+  // own title and the project and subcontractor names before the columns
+  // start, and reading only row 0 means the headings are missed and the whole
+  // sheet is read by position instead - which is how a description ends up
+  // filed as an item number.
+  let headerRow = -1;
+  let headerMap: Record<string, number> | null = null;
+  const searchDepth = Math.min(cellRows.length, HEADER_SEARCH_ROWS);
+  for (let i = 0; i < searchDepth; i++) {
+    const m = matchHeader(cellRows[i]);
+    if (m) {
+      headerRow = i;
+      headerMap = m;
+      break;
+    }
+  }
   const usedHeader = headerMap != null;
   // Positional fallback, matching the order shown in the paste box.
   const positional: Record<string, number> = {
@@ -220,19 +294,37 @@ export function parsePastedSovLines(text: string): SovParseResult {
   const twoColumn = !usedHeader && widest <= 2;
   const map = headerMap ?? (twoColumn ? { description: 0, scheduledValue: 1 } : positional);
 
-  const dataCells = usedHeader ? cellRows.slice(1) : cellRows;
+  // Everything above the heading row is the exhibit's title block, not lines.
+  const firstDataRow = usedHeader ? headerRow + 1 : 0;
+  const dataCells = cellRows.slice(firstDataRow);
   // Reported verbatim, so a skipped row is findable in the box it came from
   // even though the cells it was read from may have had a column taken off.
-  const dataText = usedHeader ? rows.slice(1) : rows;
+  const dataText = rows.slice(firstDataRow);
   const seen = new Set<string>();
+  let section: string | null = null;
+  let sawTotal = false;
 
   dataCells.forEach((cells, i) => {
-    const rowNumber = usedHeader ? i + 2 : i + 1;
+    const rowNumber = firstDataRow + i + 1;
     const row = dataText[i];
     const at = (field: string): string => {
       const idx = map[field];
       return idx == null ? "" : (cells[idx] ?? "");
     };
+
+    if (isSignatureBlockRow(cells)) return;
+
+    const heading = sectionHeadingRow(cells);
+    if (heading) {
+      section = heading;
+      return;
+    }
+
+    // Below the grand total an exhibit prints its arithmetic - "Less:
+    // Retainage (10%)", "Net Payable This Application". They carry no money
+    // and are not lines, and reporting them every time teaches people to
+    // ignore the skipped list. A row that has money somewhere is still read.
+    if (sawTotal && !cells.some((c) => /\d/.test(c) && parseMoney(c) != null)) return;
 
     const description = at("description").trim();
     if (!description) {
@@ -247,10 +339,12 @@ export function parsePastedSovLines(text: string): SovParseResult {
     // is rejected for having no readable value - true, but it sends whoever
     // is reviewing the import looking for a problem that is not there.
     if (itemNumber && isTotalRow(itemNumber)) {
+      sawTotal = true;
       skipped.push({ row: rowNumber, text: row, reason: "Looks like a total row" });
       return;
     }
     if (isTotalRow(description) && !itemNumber) {
+      sawTotal = true;
       skipped.push({ row: rowNumber, text: row, reason: "Looks like a total row" });
       return;
     }
@@ -284,7 +378,7 @@ export function parsePastedSovLines(text: string): SovParseResult {
       quantity,
       unit: at("unit").trim() || null,
       unitCost,
-      sectionName: at("sectionName").trim() || null,
+      sectionName: at("sectionName").trim() || section,
     });
   });
 
