@@ -153,7 +153,13 @@ export function BillingAllocations({
             <div
               className={cn(
                 "text-[10px]",
-                drift > 0 ? "text-amber-600" : "text-destructive",
+                // Amber only once a split has been started and does not add
+                // up. A PO nobody has split is the normal case, not a fault.
+                allocations.length === 0
+                  ? "text-muted-foreground"
+                  : drift > 0
+                    ? "text-amber-600"
+                    : "text-destructive",
               )}
             >
               {drift > 0
@@ -275,8 +281,15 @@ export function BillingAllocations({
             {!adding ? (
               <div className="flex items-center justify-between">
                 <p className="text-xs text-muted-foreground">
+                  {/* The old wording said the AFP could not pull stored
+                      materials until this was filled in. Nothing reads these
+                      allocations when billing: the suggestion comes from the
+                      payment milestones above, and the AFP writes
+                      materials_stored: 0 unconditionally. Telling somebody to
+                      do work that changes nothing is worse than saying
+                      nothing, so it now says what this actually is. */}
                   {allocations.length === 0
-                    ? "Not allocated yet. The AFP can't pull stored materials from this PO until you split it across SOV lines."
+                    ? "Not split yet. Optional - billing follows the payment milestones above, and this does not change what the AFP bills. Use it to record which SOV lines this PO's equipment sits under."
                     : ""}
                 </p>
                 <Button
