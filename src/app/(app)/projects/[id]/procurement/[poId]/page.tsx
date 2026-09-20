@@ -119,11 +119,14 @@ export default async function ProcurementDetailPage({
     (s, m) => s + Number(m.paid_amount ?? 0),
     0,
   );
-  const totalPct = milestones.reduce(
-    (s, m) => s + Number(m.pct_of_total ?? 0),
-    0,
-  );
   const poValue = Number(po.total_value ?? 0);
+  // Share of the PO the schedule covers, taken from the AMOUNTS rather than
+  // from pct_of_total. A milestone can carry either, and CAB Solar's carries
+  // one of each: 50% on the deposit, a flat $4,985.24 on delivery. Summing
+  // only the percentages said "50% of PO" next to "total $8,960.49 of
+  // $8,960.49", which reads as half the money being unscheduled when the two
+  // milestones cover all of it.
+  const totalPct = poValue > 0 ? (totalPlanned / poValue) * 100 : 0;
   const drift = poValue > 0 ? totalPlanned - poValue : 0;
 
   return (
