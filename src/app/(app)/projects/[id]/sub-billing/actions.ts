@@ -3,8 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { subBillingClient } from "@/lib/sub-billing-db";
-import { createClient } from "@/lib/supabase/server";
-import { can, toEffectiveRole, type Capability } from "@/lib/roles";
+import { requireCapability } from "@/lib/sub-billing-auth";
 import { runVerificationCore } from "@/lib/sub-billing-run";
 import { approvedToDateByItem, type BillHeader, type BillLine, type SovLine } from "@/lib/sub-billing";
 import { parsePastedSovLines } from "@/lib/sub-sov-import";
@@ -14,25 +13,6 @@ export type ActionResult =
   | { ok: true; id?: string }
   | { ok: false; error: string; fieldErrors?: Record<string, string> };
 
-// Server-side capability gate. The tab/UI hiding is cosmetic; this is the
-// enforcement. Always re-reads the true DB role, never the view-as cookie.
-async function requireCapability(cap: Capability) {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false as const, error: "Not signed in" };
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle();
-  const role = toEffectiveRole(profile?.role);
-  if (!can(role, cap)) {
-    return { ok: false as const, error: "You do not have access to this action" };
-  }
-  return { ok: true as const, userId: user.id, role };
-}
 
 const num = (v: FormDataEntryValue | null): number => {
   if (typeof v !== "string" || !v.trim()) return 0;

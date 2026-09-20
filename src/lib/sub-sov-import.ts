@@ -121,6 +121,15 @@ export function parsePastedSovLines(text: string): SovParseResult {
     }
 
     const itemNumber = at("itemNumber").trim() || null;
+    // "TOTAL" in the item column is a total row wherever the money ended up.
+    // Worth catching separately: when the label sits in the item column the
+    // value often lands in the description column, and without this the row
+    // is rejected for having no readable value - true, but it sends whoever
+    // is reviewing the import looking for a problem that is not there.
+    if (itemNumber && isTotalRow(itemNumber)) {
+      skipped.push({ row: rowNumber, text: row, reason: "Looks like a total row" });
+      return;
+    }
     if (isTotalRow(description) && !itemNumber) {
       skipped.push({ row: rowNumber, text: row, reason: "Looks like a total row" });
       return;

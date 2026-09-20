@@ -35,7 +35,8 @@
     "test:po-triggers": "tsx scripts/procurement/run-trigger-tests.ts",
     "db:status": "node scripts/db/migrate.mjs",
     "db:migrate": "node scripts/db/migrate.mjs --apply",
-    "db:baseline": "node scripts/db/migrate.mjs --baseline-through"
+    "db:baseline": "node scripts/db/migrate.mjs --baseline-through",
+    "test:sub-sov-pdf": "tsx scripts/sub-billing/run-pdf-tests.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
@@ -48,6 +49,7 @@
     "next": "14.2.35",
     "pdf-parse": "^2.4.5",
     "pdf-to-img": "^6.1.0",
+    "pdfjs-dist": "5.4.296",
     "pg": "^8.23.0",
     "react": "^18",
     "react-dom": "^18",
