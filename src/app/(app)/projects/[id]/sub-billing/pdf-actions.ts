@@ -38,6 +38,22 @@ export async function readSovPdf(base64: string): Promise<PdfSovResult> {
   // The legacy build is the one that runs under Node without a worker.
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
+  // Hand pdf.js its worker before it goes looking for one.
+  //
+  // Under Node it runs the worker on the main thread, but it still has to
+  // load the worker module, and it does that with `import(workerSrc)` where
+  // workerSrc defaults to the relative string "./pdf.worker.mjs", marked
+  // webpackIgnore. A build tracer cannot see through a runtime string, so the
+  // worker file never gets deployed and the whole feature fails in production
+  // with a module-not-found while working perfectly on a machine that has the
+  // full node_modules. Importing it here by its real package path is
+  // something the tracer can follow, and setting globalThis.pdfjsWorker is
+  // the documented hook pdf.js checks before falling back to that import.
+  if (!(globalThis as { pdfjsWorker?: unknown }).pdfjsWorker) {
+    const worker = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+    (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker = worker;
+  }
+
   let doc: Awaited<ReturnType<typeof pdfjs.getDocument>["promise"]> | null = null;
   try {
     doc = await pdfjs.getDocument({ data: bytes, verbosity: 0 }).promise;
