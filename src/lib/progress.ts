@@ -535,3 +535,36 @@ export function durationWeightedPct(
     unweightedPct,
   };
 }
+
+/**
+ * The fields to store for a milestone being recorded as already paid.
+ *
+ * Most POs on a job that predates the app were paid before anyone was
+ * entering milestones, and their cost is then in the forecast nowhere at all:
+ * the projection skips a cost code tied to a PO on the assumption the PO's
+ * milestones supply that cost, so with no milestones neither side counts it.
+ *
+ * The projection dates a payment by `paid_at` and falls back to
+ * `expected_date`, and takes `paid_amount` falling back to `amount`. Setting
+ * both states what was paid rather than leaning on those fallbacks.
+ *
+ * It also drops a payment whose amount is not above zero, and does so
+ * silently. For a payment being recorded as already made, that would throw
+ * away the entire point of recording it, so this refuses instead.
+ */
+export function recordedPayment(
+  amount: number | null,
+  paidAt: string | null,
+):
+  | { ok: true; paid_at: string | null; paid_amount: number | null }
+  | { ok: false; error: string } {
+  if (!paidAt) return { ok: true, paid_at: null, paid_amount: null };
+  if (amount == null || !(amount > 0)) {
+    return {
+      ok: false,
+      error:
+        "A payment recorded as already made needs an amount, or a % of the PO to work one out from. Without it it would count as zero.",
+    };
+  }
+  return { ok: true, paid_at: paidAt, paid_amount: amount };
+}

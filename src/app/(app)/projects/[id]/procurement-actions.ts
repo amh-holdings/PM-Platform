@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 
+import { recordedPayment } from "@/lib/progress";
+
 import { createClient } from "@/lib/supabase/server";
 import type { TablesInsert, TablesUpdate } from "@/lib/database.types";
 
@@ -178,6 +180,16 @@ export async function addMilestone(
     computedAmount = total * (pct / 100);
   }
 
+  // Recording a payment that already happened, in one step.
+  //
+  // Most POs on a job that predates the app were paid before anyone was
+  // entering milestones, and their cost is then in the forecast nowhere at
+  // all - the projection skips a cost code tied to a PO, on the assumption
+  // the PO's milestones supply it. Adding a milestone and then marking it
+  // paid is two actions for something that is one fact.
+  const paid = recordedPayment(computedAmount, getDate(formData.get("paid_at")));
+  if (!paid.ok) return paid;
+
   const insert: TablesInsert<"procurement_payments"> = {
     procurement_order_id: poId,
     milestone_name: name,
@@ -185,6 +197,8 @@ export async function addMilestone(
     trigger_event: getStr(formData.get("trigger_event")),
     expected_date: getDate(formData.get("expected_date")),
     amount: computedAmount,
+    paid_at: paid.paid_at,
+    paid_amount: paid.paid_amount,
     sort_order: getNum(formData.get("sort_order")),
     notes: getStr(formData.get("notes")),
   };
