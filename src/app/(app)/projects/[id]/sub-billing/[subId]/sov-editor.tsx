@@ -5,8 +5,11 @@ import { useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 
 import type { SheetSummary } from "@/lib/schedule-workbook";
+import { bestPageIndex } from "@/lib/sov-pdf";
+import { sheetToTsv } from "@/lib/sheet-tsv";
 
 import { createSovLine, importSovLines } from "../actions";
+import { readSovPdf } from "../pdf-actions";
 
 type Props = { projectId: string; subcontractorId: string; hasLines: boolean };
 
@@ -16,21 +19,10 @@ const PLACEHOLDER = `1.01\tMobilization\t45,000.00
 
 const field = "w-full rounded-md border bg-background px-2 py-1.5 text-sm";
 
-/**
- * A sheet, as tab-separated text.
- *
- * Deliberately converts to the SAME string a paste produces rather than adding
- * a second import path. Every rule the server already applies - header
- * detection, column order, updating an item number in place, ignoring total
- * rows, the skipped-row report - keeps applying, and there is no second parser
- * to drift out of step with the first.
- */
-function sheetToTsv(sheet: SheetSummary): string {
-  return sheet.rows
-    .filter((r) => r.some((c) => c.trim().length > 0))
-    .map((r) => r.map((c) => c.replace(/\t/g, " ").trim()).join("\t"))
-    .join("\n");
-}
+/** Base64 adds a third, and the server action takes 6 MB. */
+const PDF_MAX_BYTES = 4 * 1024 * 1024;
+
+const FILE_ACCEPT = ".pdf,.xlsx,.xlsm,.xls,.csv,.tsv,.txt";
 
 export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
   const [mode, setMode] = useState<"none" | "line" | "paste">(hasLines ? "none" : "paste");
@@ -45,6 +37,8 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
   const [sheets, setSheets] = useState<SheetSummary[] | null>(null);
   const [sheetIndex, setSheetIndex] = useState(0);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [isPdfSource, setIsPdfSource] = useState(false);
+  const [replaceExisting, setReplaceExisting] = useState(false);
   const [reading, setReading] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
 
@@ -58,7 +52,42 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
     setSheets(null);
     setSheetIndex(0);
     setFileName(null);
+    setIsPdfSource(false);
     if (fileInput.current) fileInput.current.value = "";
+  }
+
+  /**
+   * A PDF is read on the server, because pdf.js is far too large to ship to
+   * the browser for this. The bytes go up as base64 - a server action takes
+   * JSON, not multipart - which costs a third in size and is why the limit
+   * below is well under the 6 MB the action itself accepts.
+   */
+  async function readPdfFile(file: File): Promise<SheetSummary[] | null> {
+    if (file.size > PDF_MAX_BYTES) {
+      setError(
+        `${file.name} is ${(file.size / 1024 / 1024).toFixed(1)} MB. PDFs up to 4 MB can be read here - ask for the Excel version, or copy the SOV rows and paste them below.`,
+      );
+      return null;
+    }
+    // readAsDataURL rather than hand-rolling base64 off an ArrayBuffer: the
+    // browser does it natively, at any size, with no argument-limit trap.
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(new Error("the file could not be opened"));
+      reader.readAsDataURL(file);
+    });
+    const comma = dataUrl.indexOf(",");
+    if (comma < 0) {
+      setError(`Could not read ${file.name}.`);
+      return null;
+    }
+    const res = await readSovPdf(dataUrl.slice(comma + 1));
+    if (!res.ok) {
+      setError(res.error);
+      return null;
+    }
+    return res.sheets;
   }
 
   async function onFile(file: File | null | undefined) {
@@ -66,23 +95,47 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
     reset();
     setReading(true);
     try {
-      // Dynamic, so the spreadsheet parser stays out of this page's bundle
-      // until somebody actually picks a file.
-      const mod = await import("@/lib/schedule-workbook");
-      const parsed = mod.readWorkbook(await file.arrayBuffer());
+      const isPdf =
+        file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+
+      let parsed: SheetSummary[];
+      if (isPdf) {
+        const fromPdf = await readPdfFile(file);
+        if (!fromPdf) {
+          clearFile();
+          return;
+        }
+        parsed = fromPdf;
+      } else {
+        // Dynamic, so the spreadsheet parser stays out of this page's bundle
+        // until somebody actually picks a file.
+        const mod = await import("@/lib/schedule-workbook");
+        parsed = mod.readWorkbook(await file.arrayBuffer());
+      }
+
       const withRows = parsed.filter((sh) => sh.filledRows > 0);
       if (withRows.length === 0) {
-        setError(`${file.name} has no rows in any sheet.`);
+        setError(
+          isPdf
+            ? `${file.name} has no rows on any page.`
+            : `${file.name} has no rows in any sheet.`,
+        );
         clearFile();
         return;
       }
-      // Land on the fullest sheet. An SOV workbook usually carries a cover
-      // page or a notes tab, and the one with the most rows is the one wanted.
-      const best = withRows.reduce((a, b) => (b.filledRows > a.filledRows ? b : a));
-      const idx = withRows.indexOf(best);
+      // Land on the page or sheet most likely to be the SOV. For a PDF that
+      // means the one with the most priced lines, not the most text - the
+      // front of a subcontract is prose and the SOV is an exhibit behind it.
+      // For a workbook the fullest sheet wins, past the cover and notes tabs.
+      const idx = isPdf
+        ? bestPageIndex(withRows)
+        : withRows.indexOf(
+            withRows.reduce((a, b) => (b.filledRows > a.filledRows ? b : a)),
+          );
       setSheets(withRows);
       setSheetIndex(idx);
       setFileName(file.name);
+      setIsPdfSource(isPdf);
       setText(sheetToTsv(withRows[idx]));
     } catch (e) {
       setError(
@@ -192,6 +245,7 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
               if (!res.ok) setError(res.error);
               else {
                 const parts = [];
+                if (res.removed) parts.push(`${res.removed} line${res.removed === 1 ? "" : "s"} taken off`);
                 if (res.imported) parts.push(`${res.imported} line${res.imported === 1 ? "" : "s"} added`);
                 if (res.updated) parts.push(`${res.updated} updated`);
                 setResult(parts.length > 0 ? `${parts.join(", ")}.` : "Nothing changed.");
@@ -201,6 +255,7 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
                 // after a successful load invites loading them twice.
                 setText("");
                 clearFile();
+                setReplaceExisting(false);
               }
             });
           }}
@@ -210,7 +265,7 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
             <input
               ref={fileInput}
               type="file"
-              accept=".xlsx,.xlsm,.xls,.csv,.tsv,.txt"
+              accept={FILE_ACCEPT}
               className="hidden"
               onChange={(e) => void onFile(e.target.files?.[0])}
             />
@@ -257,7 +312,7 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
               </>
             )}
             <span className="text-xs text-muted-foreground">
-              Excel or CSV, or just paste below.
+              PDF, Excel or CSV, or just paste below.
             </span>
           </div>
 
@@ -267,6 +322,13 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
                 ? "Check the rows before loading - edit anything wrong"
                 : "Paste the SOV range straight out of Excel"}
             </span>
+            {isPdfSource && (
+              <span className="block text-xs text-muted-foreground">
+                A PDF has no columns - these were worked out from where the
+                text sits on the page. Check the values against the PDF before
+                loading, and watch for a description that ran onto two lines.
+              </span>
+            )}
             <textarea
               name="paste"
               rows={8}
@@ -293,6 +355,30 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
               <input name="change_order_ref" placeholder="CO-04" className="rounded-md border bg-background px-2 py-1 text-sm" />
             </label>
           </div>
+          {/* Only offered when there is something to replace. An import that
+              read a sheet wrongly leaves lines whose item numbers are wrong,
+              so a second import has nothing to match on and lands alongside
+              the first rather than over it. */}
+          {hasLines && (
+            <label className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
+              <input
+                type="checkbox"
+                name="replace_existing"
+                checked={replaceExisting}
+                onChange={(e) => setReplaceExisting(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium">Replace what is on the SOV now</span>
+                <span className="block text-xs">
+                  Takes off every line first, so this sheet becomes the whole SOV
+                  rather than being added to it. Evidence mapping goes with them.
+                  A line that has already been billed against is kept but retired,
+                  so past applications still resolve.
+                </span>
+              </span>
+            </label>
+          )}
           {error && <p className="text-xs text-destructive">{error}</p>}
           <Button type="submit" size="sm" disabled={pending}>
             {pending ? "Reading..." : "Load these lines"}
