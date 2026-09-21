@@ -673,7 +673,9 @@ export async function importSovLines(
   projectId: string,
   subcontractorId: string,
   formData: FormData,
-): Promise<ActionResult & { imported?: number; updated?: number; skipped?: string[] }> {
+): Promise<
+  ActionResult & { imported?: number; updated?: number; removed?: number; skipped?: string[] }
+> {
   const auth = await requireCapability("enterSubBill");
   if (!auth.ok) return auth;
   const db = subBillingClient();
@@ -690,6 +692,35 @@ export async function importSovLines(
           ? `No lines could be read. First problem: row ${parsed.skipped[0].row} - ${parsed.skipped[0].reason}`
           : "No lines could be read from that paste",
     };
+  }
+
+  // Clearing the sheet before loading a new one. An import that read a sheet
+  // wrongly leaves lines whose item numbers are wrong, so there is nothing to
+  // match on and a second import lands alongside the first rather than over
+  // it. Taking them out one at a time is seven clicks and a chance to stop
+  // half way, which is worse than either doing it or not.
+  //
+  // A line that has been billed against is deactivated rather than deleted,
+  // exactly as removing one line does - a pay application that references it
+  // has to keep resolving.
+  let removed = 0;
+  if (formData.get("replace_existing") === "on") {
+    const { data: current } = await db
+      .from("sub_sov_lines")
+      .select("id")
+      .eq("subcontractor_id", subcontractorId);
+    for (const row of current ?? []) {
+      const { count } = await db
+        .from("sub_pay_app_lines")
+        .select("id", { count: "exact", head: true })
+        .eq("sub_sov_line_id", row.id);
+      const { error } =
+        (count ?? 0) > 0
+          ? await db.from("sub_sov_lines").update({ active: false }).eq("id", row.id)
+          : await db.from("sub_sov_lines").delete().eq("id", row.id);
+      if (error) return { ok: false, error: error.message };
+      removed += 1;
+    }
   }
 
   const { data: existingRows } = await db
@@ -772,6 +803,7 @@ export async function importSovLines(
     ok: true,
     imported: inserts.length,
     updated,
+    removed,
     skipped: parsed.skipped.map((s) => `Row ${s.row}: ${s.reason}`),
   };
 }

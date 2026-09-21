@@ -38,6 +38,7 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
   const [sheetIndex, setSheetIndex] = useState(0);
   const [fileName, setFileName] = useState<string | null>(null);
   const [isPdfSource, setIsPdfSource] = useState(false);
+  const [replaceExisting, setReplaceExisting] = useState(false);
   const [reading, setReading] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
 
@@ -244,6 +245,7 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
               if (!res.ok) setError(res.error);
               else {
                 const parts = [];
+                if (res.removed) parts.push(`${res.removed} line${res.removed === 1 ? "" : "s"} taken off`);
                 if (res.imported) parts.push(`${res.imported} line${res.imported === 1 ? "" : "s"} added`);
                 if (res.updated) parts.push(`${res.updated} updated`);
                 setResult(parts.length > 0 ? `${parts.join(", ")}.` : "Nothing changed.");
@@ -253,6 +255,7 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
                 // after a successful load invites loading them twice.
                 setText("");
                 clearFile();
+                setReplaceExisting(false);
               }
             });
           }}
@@ -352,6 +355,30 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
               <input name="change_order_ref" placeholder="CO-04" className="rounded-md border bg-background px-2 py-1 text-sm" />
             </label>
           </div>
+          {/* Only offered when there is something to replace. An import that
+              read a sheet wrongly leaves lines whose item numbers are wrong,
+              so a second import has nothing to match on and lands alongside
+              the first rather than over it. */}
+          {hasLines && (
+            <label className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
+              <input
+                type="checkbox"
+                name="replace_existing"
+                checked={replaceExisting}
+                onChange={(e) => setReplaceExisting(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium">Replace what is on the SOV now</span>
+                <span className="block text-xs">
+                  Takes off every line first, so this sheet becomes the whole SOV
+                  rather than being added to it. Evidence mapping goes with them.
+                  A line that has already been billed against is kept but retired,
+                  so past applications still resolve.
+                </span>
+              </span>
+            </label>
+          )}
           {error && <p className="text-xs text-destructive">{error}</p>}
           <Button type="submit" size="sm" disabled={pending}>
             {pending ? "Reading..." : "Load these lines"}
