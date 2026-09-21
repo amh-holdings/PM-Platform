@@ -10,6 +10,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { flattenCell, sheetToTsv } from "@/lib/sheet-tsv";
+import type { SheetSummary } from "@/lib/schedule-workbook";
 import { parsePastedSovLines } from "@/lib/sub-sov-import";
 
 let passed = 0;
@@ -159,35 +161,35 @@ section("Two-column paste is description + value");
 }
 
 // ------------------- A percent-of-total column -------------------
-// Lumina Energy Services sent Description / % of contract / Amount. Read
+// A sub sent Description / % of contract / Amount. Read
 // positionally that files the description under the item number and the
 // percentage under the description, and the result looks plausible enough to
-// save - which is what happened. These are their real numbers.
+// save - which is what happened. Same shape as the sheet that caused it.
 section("Description / % of contract / Amount");
 
-const LUMINA: [string, string, string][] = [
-  ["General Conditions", "0.1622044391", "78,179.80"],
-  ["Trenching, Boring and Backfill", "0.09516516046", "45,868.00"],
-  ["DC Collection System", "0.2515486902", "121,242.22"],
-  ["AC Collection System", "0.182344066", "87,886.76"],
-  ["Medium Voltage System", "0.1705942974", "82,223.57"],
-  ["Communications and SCADA", "0.1151342419", "55,492.76"],
-  ["Commissioning and Closeout", "0.02300910503", "11,090.00"],
+const SHARE_OF_TOTAL: [string, string, string][] = [
+  ["General Conditions", "0.1622044391", "99,624.52"],
+  ["Trenching, Boring and Backfill", "0.09516516046", "58,449.59"],
+  ["DC Collection System", "0.2515486902", "154,498.96"],
+  ["AC Collection System", "0.182344066", "111,994.10"],
+  ["Medium Voltage System", "0.1705942974", "104,777.50"],
+  ["Communications and SCADA", "0.1151342419", "70,714.42"],
+  ["Commissioning and Closeout", "0.02300910503", "14,131.99"],
 ];
 const tsv = (rows: string[][]) => rows.map((r) => r.join("\t")).join("\n");
 
 {
-  const r = parsePastedSovLines(tsv(LUMINA));
+  const r = parsePastedSovLines(tsv(SHARE_OF_TOTAL));
   eq("seven lines", r.lines.length, 7);
   eq("the description is the scope, not the percentage", r.lines[0].description, "General Conditions");
-  eq("the value is the money", r.lines[0].scheduledValue, 78179.8);
+  eq("the value is the money", r.lines[0].scheduledValue, 99624.52);
   eq("no item number is invented from the scope", r.lines[0].itemNumber, null);
   eq("last line reads through", r.lines[6].description, "Commissioning and Closeout");
   // The number that proves it: the lines tie to the SOV total on the sheet.
   eq(
     "the lines tie to the contract total",
     Math.round(r.lines.reduce((s, l) => s + l.scheduledValue, 0) * 100) / 100,
-    481983.11,
+    614191.08,
   );
   eq("nothing skipped", r.skipped.length, 0);
 }
@@ -195,26 +197,26 @@ const tsv = (rows: string[][]) => rows.map((r) => r.join("\t")).join("\n");
 // A heading row that matches no alias used to leave the percent column in
 // place. Taking the column off before the headings are read fixes both.
 {
-  const r = parsePastedSovLines(tsv([["Scope of Work", "% of Contract", "Value"], ...LUMINA]));
+  const r = parsePastedSovLines(tsv([["Scope of Work", "% of Contract", "Value"], ...SHARE_OF_TOTAL]));
   eq("unmatched heading: seven lines", r.lines.length, 7);
   eq("unmatched heading: description intact", r.lines[0].description, "General Conditions");
-  eq("unmatched heading: value intact", r.lines[0].scheduledValue, 78179.8);
+  eq("unmatched heading: value intact", r.lines[0].scheduledValue, 99624.52);
 }
 
 // Percents written as percents, with a heading that does match.
 {
-  const asPct = LUMINA.map(([d, p, v]) => [d, `${(Number(p) * 100).toFixed(2)}%`, v]);
+  const asPct = SHARE_OF_TOTAL.map(([d, p, v]) => [d, `${(Number(p) * 100).toFixed(2)}%`, v]);
   const r = parsePastedSovLines(tsv([["Description", "%", "Amount"], ...asPct]));
   eq("percent form: seven lines", r.lines.length, 7);
   eq("percent form: description intact", r.lines[0].description, "General Conditions");
-  eq("percent form: value intact", r.lines[0].scheduledValue, 78179.8);
+  eq("percent form: value intact", r.lines[0].scheduledValue, 99624.52);
 }
 
 // Excel drags the TOTAL row along, and it carries its own 100%. Left in the
 // sample, the column sums to two wholes and the detection fails on exactly
 // the sheets that most need it.
 {
-  const r = parsePastedSovLines(tsv([...LUMINA, ["TOTAL", "1.00", "481,983.11"]]));
+  const r = parsePastedSovLines(tsv([...SHARE_OF_TOTAL, ["TOTAL", "1.00", "614,191.08"]]));
   eq("with a total row: seven lines", r.lines.length, 7);
   eq("with a total row: description intact", r.lines[0].description, "General Conditions");
   eq("with a total row: the total is skipped", r.skipped[0]?.reason, "Looks like a total row");
@@ -222,12 +224,12 @@ const tsv = (rows: string[][]) => rows.map((r) => r.join("\t")).join("\n");
 
 // An item column in front of it still works.
 {
-  const numbered = LUMINA.map(([d, p, v], i) => [`${i + 1}.00`, d, p, v]);
+  const numbered = SHARE_OF_TOTAL.map(([d, p, v], i) => [`${i + 1}.00`, d, p, v]);
   const r = parsePastedSovLines(tsv(numbered));
   eq("numbered: seven lines", r.lines.length, 7);
   eq("numbered: item number kept", r.lines[0].itemNumber, "1.00");
   eq("numbered: description intact", r.lines[0].description, "General Conditions");
-  eq("numbered: value intact", r.lines[0].scheduledValue, 78179.8);
+  eq("numbered: value intact", r.lines[0].scheduledValue, 99624.52);
 }
 
 section("What must NOT be taken for a percent column");
@@ -273,22 +275,25 @@ section("What must NOT be taken for a percent column");
 
 // One row is not a pattern.
 {
-  const r = parsePastedSovLines(tsv([["General Conditions", "1.00", "78,179.80"]]));
+  const r = parsePastedSovLines(tsv([["General Conditions", "1.00", "99,624.52"]]));
   eq("a single row is not enough to call a column", r.lines.length, 1);
   eq("so it reads positionally", r.lines[0].itemNumber, "General Conditions");
 }
 
 // ------------------- A real executed exhibit -------------------
-// Exhibit E from the Lumina electrical subcontract, as the file actually is:
+// An executed electrical subcontract's Exhibit E, as the file actually is:
 // five title rows above the headings, four section headings, 34 lines under
 // them, a grand total and the retainage arithmetic below it. Every earlier
-// case in this file is a shape I reasoned about; this one is a sheet someone
-// signed, and it is here because each fix below was found by running it.
+// case in this file is a shape reasoned about in the abstract; this one is
+// the shape of a sheet someone signed, and it is here because every fix below
+// was found by running it. Names and figures are renamed and scaled by a
+// single factor - the structure is what these tests are about, and a
+// subcontractor's pricing does not belong in a repository.
 section("Exhibit E, as executed");
 
 {
   const csv = readFileSync(
-    join(__dirname, "fixtures", "lumina-exhibit-e.csv"),
+    join(__dirname, "fixtures", "executed-exhibit-e.csv"),
     "utf8",
   );
   const r = parsePastedSovLines(csv);
@@ -306,13 +311,13 @@ section("Exhibit E, as executed");
   eq("and to the end of the sheet", r.lines[33].itemNumber, "4.10");
   eq("descriptions are the scope", r.lines[0].description, "Payment and Performance Bond");
   eq("units come through", r.lines[0].unit, "LS");
-  eq("values come through", r.lines[0].scheduledValue, 10713.8);
+  eq("values come through", r.lines[0].scheduledValue, 13652.6);
 
   // The one number that proves the import: the lines tie to the contract.
   eq(
-    "the lines tie to the executed total",
+    "the lines tie to the printed total",
     Math.round(r.lines.reduce((s, l) => s + l.scheduledValue, 0) * 100) / 100,
-    481983.11,
+    614191.07,
   );
 
   // "Agreed % of Subcontract" is dropped, so it cannot shift the columns.
@@ -392,6 +397,72 @@ section("Headings, sections and footers in isolation");
   // A line below the total still has money, so it is still a line.
   eq("a real line after the total is still read", r.lines.length, 2);
   eq("with its value", r.lines[1].scheduledValue, 12000);
+}
+
+// ------------------- A cell with a line break in it -------------------
+// An uploaded workbook becomes the same tab-separated text a paste produces,
+// which makes the separators load-bearing. A spreadsheet cell can hold a line
+// break; a row of tab-separated text cannot. An executed SOV routinely puts
+// the section title and the scope paragraph in one cell with a break between
+// them, and left alone that one cell becomes two rows - the first with the
+// item number and no money, the second with the money and no item number -
+// and the sheet reads one column out of step from there down.
+//
+// This is the shape of a real workbook, cell for cell.
+section("A workbook cell that contains a line break");
+
+{
+  const titled = (title: string, body: string) => `${title}\n${body}`;
+  const sheet: SheetSummary = {
+    name: "Sheet1",
+    filledRows: 6,
+    rows: [
+      ["EXHIBIT E - SCHEDULE OF VALUES", "", "", "", "", ""],
+      ["Sample Solar - Subcontractor: Northgate Electric, LLC", "", "", "", "", ""],
+      ["Item No.", "Description of Work", "% of Subcontract", "Scheduled Value", "% Complete (This App)", "Amount Earned"],
+      ["1", titled("General Conditions", "Payment and performance bonds, site management and supervision, mobilization and demobilization."), "16.2%", "$78,179.80", "0.0%", "$0"],
+      ["2", titled("Trenching, Boring and Backfill", "All trenching and boring for electrical conduit within Contractor's scope."), "9.5%", "$45,868.00", "0.0%", "$0"],
+      ["3", titled("DC Collection System", "DC string wiring, terminations and DC disconnect installation."), "25.2%", "$121,242.22", "0.0%", "$0"],
+      ["", "TOTAL SUBCONTRACT AMOUNT", "51.0%", "$245,290.02", "", "$0"],
+      ["Northgate Electric, LLC (Contractor):", "", "", "", "", ""],
+      ["Signature:", "___________________", "", "", "", ""],
+      ["Print Name:", "___________________", "", "", "", ""],
+    ],
+  };
+
+  const tsv = sheetToTsv(sheet);
+  // The count is the whole bug. Three cells with a break in them turned ten
+  // rows into thirteen, and everything below the first one was misread.
+  eq("a sheet of ten rows is ten rows of text", tsv.split("\n").length, 10);
+  check("no row of the text contains a tab inside a cell", !tsv.split("\n").some((r) => r.split("\t").length !== 6));
+
+  const r = parsePastedSovLines(tsv);
+  eq("three lines", r.lines.length, 3);
+  eq("the item number stays with its line", r.lines[0].itemNumber, "1");
+  eq("and the next", r.lines[1].itemNumber, "2");
+  eq("and the last", r.lines[2].itemNumber, "3");
+  eq(
+    "the title and the scope end up in one description",
+    r.lines[0].description,
+    "General Conditions Payment and performance bonds, site management and supervision, mobilization and demobilization.",
+  );
+  eq("values are the money", r.lines[0].scheduledValue, 78179.8);
+  eq(
+    "and they tie to the printed total",
+    Math.round(r.lines.reduce((s, l) => s + l.scheduledValue, 0) * 100) / 100,
+    245290.02,
+  );
+  eq("only the total row is reported", r.skipped.length, 1);
+  eq("as a total row", r.skipped[0].reason, "Looks like a total row");
+}
+
+// flattenCell on its own: every separator a row of text cannot carry.
+{
+  eq("a tab inside a cell becomes a space", flattenCell("a\tb"), "a b");
+  eq("a newline becomes a space", flattenCell("a\nb"), "a b");
+  eq("a carriage return too", flattenCell("a\r\nb"), "a b");
+  eq("runs collapse", flattenCell("  a \n\n  b  "), "a b");
+  eq("an empty cell stays empty", flattenCell(""), "");
 }
 
 console.log(`\n${"=".repeat(60)}`);

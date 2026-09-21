@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 
 import type { SheetSummary } from "@/lib/schedule-workbook";
 import { bestPageIndex } from "@/lib/sov-pdf";
+import { sheetToTsv } from "@/lib/sheet-tsv";
 
 import { createSovLine, importSovLines } from "../actions";
 import { readSovPdf } from "../pdf-actions";
@@ -22,22 +23,6 @@ const field = "w-full rounded-md border bg-background px-2 py-1.5 text-sm";
 const PDF_MAX_BYTES = 4 * 1024 * 1024;
 
 const FILE_ACCEPT = ".pdf,.xlsx,.xlsm,.xls,.csv,.tsv,.txt";
-
-/**
- * A sheet, as tab-separated text.
- *
- * Deliberately converts to the SAME string a paste produces rather than adding
- * a second import path. Every rule the server already applies - header
- * detection, column order, updating an item number in place, ignoring total
- * rows, the skipped-row report - keeps applying, and there is no second parser
- * to drift out of step with the first.
- */
-function sheetToTsv(sheet: SheetSummary): string {
-  return sheet.rows
-    .filter((r) => r.some((c) => c.trim().length > 0))
-    .map((r) => r.map((c) => c.replace(/\t/g, " ").trim()).join("\t"))
-    .join("\n");
-}
 
 export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
   const [mode, setMode] = useState<"none" | "line" | "paste">(hasLines ? "none" : "paste");
