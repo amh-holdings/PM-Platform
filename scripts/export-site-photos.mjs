@@ -4,6 +4,7 @@
  *
  *   node scripts/export-site-photos.mjs --project "Sweet Springs"
  *   node scripts/export-site-photos.mjs --project "Sweet Springs" --from 2026-09-01
+ *   node scripts/export-site-photos.mjs --all
  *   node scripts/export-site-photos.mjs --list
  *   node scripts/export-site-photos.mjs --project "Sweet Springs" --dry-run
  *
@@ -67,6 +68,7 @@ const OPT = {
   from: arg("from"),
   to: arg("to"),
   list: flag("list"),
+  all: flag("all"),
   dryRun: flag("dry-run"),
   force: flag("force"),
   dest: arg("dest", DRIVE_ROOT),
@@ -443,8 +445,7 @@ function pruneOrphans(destRoot, manifest) {
   return pruned;
 }
 
-async function main() {
-  const project = await resolveProject(OPT.project);
+async function runProject(project) {
   const destRoot = join(OPT.dest, slug(project.name));
 
   if (!existsSync(OPT.dest)) {
@@ -622,6 +623,33 @@ async function main() {
   } catch {
     /* scratch already gone */
   }
+}
+
+/**
+ * --all covers every project that actually has photos, so the scheduled pull
+ * keeps working when a second site starts generating them. Without it a new
+ * project is silently missing from the library until somebody notices.
+ */
+async function main() {
+  if (!OPT.all) {
+    return runProject(await resolveProject(OPT.project));
+  }
+  const { data, error } = await sb.from("projects").select("id, name").order("name");
+  if (error) throw new Error(`projects: ${error.message}`);
+  let touched = 0;
+  for (const project of data) {
+    // Scratch projects carry real photo rows but are not real sites, and a
+    // folder of their photos in the social library is pure noise.
+    if (/\btest\b/i.test(project.name)) {
+      console.log(`\nSkipping ${project.name} (test project)`);
+      continue;
+    }
+    const catalog = await buildCatalog(project.id);
+    if (!catalog.length) continue; // nothing photographed yet
+    touched += 1;
+    await runProject(project);
+  }
+  if (!touched) console.log("\nNo project has photos yet.\n");
 }
 
 main().catch((e) => {
