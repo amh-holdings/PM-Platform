@@ -5,9 +5,12 @@
 import {
   coLineDescription,
   compareItemNumbers,
+  costToDate,
   deriveContractValue,
   nextSovItemNumber,
 } from "@/lib/project-financials";
+import { groupWarnings } from "@/lib/projection-warnings";
+import type { ProjectionWarning } from "@/lib/projection";
 
 let passed = 0;
 let failed = 0;
@@ -197,6 +200,112 @@ console.log("\nSOV item ordering\n-----------------");
   );
   eq("whitespace is not a description", coLineDescription("CO-03", "   "), "CO-03");
 }
+
+// ------------------------- Cost to date -------------------------
+// The tile this replaces subtracted the whole budget at completion from cost
+// booked to date and rendered the difference green. On Sweet Springs that read
+// "-$2,772,168.71 under budget" on a job 5% built, which only meant the money
+// had not been spent yet. Two different measurements, subtracted.
+console.log("\nCost to date, against the plan for the same months\n--------------------------------------------------");
+
+const APR = "2026-04-01";
+const MAY = "2026-05-01";
+const JUN = "2026-06-01";
+
+{
+  const r = costToDate(
+    [
+      { period_month: APR, planned_amount: 100, actual_amount: 120 },
+      { period_month: MAY, planned_amount: 200, actual_amount: 190 },
+      // Ahead of the cut-off: planned, not yet due, must not count.
+      { period_month: JUN, planned_amount: 500, actual_amount: 0 },
+    ],
+    MAY,
+  );
+  eq("actual is the elapsed months only", r.actual, 310);
+  eq("planned is the same elapsed months", r.planned, 300);
+  eq("variance compares like with like", r.variance, 10);
+  eq("and a plan was found", r.hasPlan, true);
+}
+
+// The case that mattered: no cost plan entered at all. Treating that as a plan
+// of zero turns every dollar spent into an overrun, which is the same mistake
+// as before pointing the other way. There is no answer, so there is no number.
+{
+  const r = costToDate(
+    [
+      { period_month: APR, planned_amount: 0, actual_amount: 562462.51 },
+      { period_month: MAY, planned_amount: null, actual_amount: 0 },
+    ],
+    MAY,
+  );
+  eq("spend is still reported", r.actual, 562462.51);
+  eq("but no variance is claimed", r.variance, null);
+  eq("and the caller can tell why", r.hasPlan, false);
+}
+
+{
+  const r = costToDate([], MAY);
+  eq("no rows, no spend", r.actual, 0);
+  eq("no rows, no variance", r.variance, null);
+}
+
+// Over plan must read as over plan, so the tile's colour means something.
+{
+  const r = costToDate([{ period_month: APR, planned_amount: 100, actual_amount: 175 }], APR);
+  eq("overspend is positive", r.variance, 75);
+}
+
+// ------------------------- Forecast warnings -------------------------
+console.log("\nGrouping what the forecast could not account for\n------------------------------------------------");
+
+const w = (kind: ProjectionWarning["kind"], ref: string): ProjectionWarning => ({
+  kind,
+  ref,
+  message: `${ref} ${kind}`,
+});
+
+{
+  const groups = groupWarnings([
+    w("billing_line_no_link", "13.00"),
+    w("po_missing_milestones", "P-002"),
+    w("task_no_dates", "1.09"),
+    w("po_missing_milestones", "P-004"),
+    w("po_missing_milestones", "P-005"),
+  ]);
+  // Most damaging first: a PO with no milestones is in the forecast nowhere,
+  // because the cost code tied to it is skipped on the assumption the PO
+  // supplies the cost.
+  eq("POs first", groups[0].kind, "po_missing_milestones");
+  eq("with their count", groups[0].items.length, 3);
+  eq("then undated work", groups[1].kind, "task_no_dates");
+  eq("then unmapped lines", groups[2].kind, "billing_line_no_link");
+  eq("nothing invented", groups.length, 3);
+  eq(
+    "and nothing dropped",
+    groups.reduce((n, g) => n + g.items.length, 0),
+    5,
+  );
+}
+
+{
+  eq("no warnings, no groups", groupWarnings([]).length, 0);
+}
+
+// A kind added to the projection and not to the group list must still show up,
+// because silently dropping one is the exact failure this grouping fixes.
+{
+  const odd = { kind: "brand_new_kind", ref: "X", message: "X something" } as unknown as ProjectionWarning;
+  const groups = groupWarnings([odd, w("po_missing_milestones", "P-002")]);
+  eq("the unknown kind survives", groups.some((g) => g.kind === "other"), true);
+  eq(
+    "and every warning is still present",
+    groups.reduce((n, g) => n + g.items.length, 0),
+    2,
+  );
+}
+
+
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {

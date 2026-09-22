@@ -481,13 +481,14 @@ export function ScheduleWorkspace({
           )}
         </Banner>
       )}
-      {cpm.isolated.length > 0 && (
-        <Banner tone="warn">
-          {cpm.isolated.length} task{cpm.isolated.length === 1 ? " has" : "s have"} no
-          predecessor or successor ({cpm.isolated.join(", ")}). They float free of
-          the schedule logic and do not drive the finish date.
-        </Banner>
-      )}
+      {/* No banner for tasks with no predecessor or successor. The CPM already
+          ignores them: they are kept out of the finish-date calculation and off
+          the critical path, so they change no number on this page. Saying so in
+          a banner every time the schedule loads turns a permanent condition into
+          a permanent alarm. Where it belongs is the table - the row carries an
+          UNLINKED badge, the float column reads "floats", the count sits with
+          the other row counts, and the Unlinked filter pulls them up - and the
+          Health tab's Logic finding, which is where a schedule gets audited. */}
 
       <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-card p-3">
         <div className="flex items-center gap-1 rounded-md border p-1">

@@ -7,6 +7,8 @@ import { firstOfThisMonthIso } from "@/lib/cashflow";
 import { buildProjection } from "@/lib/projection";
 
 import { DashboardCashflowChart, type CashflowDatum } from "./dashboard-cashflow-chart";
+import { groupWarnings } from "@/lib/projection-warnings";
+
 import { DashboardProjection } from "./dashboard-projection";
 
 type Props = { projectId: string; showCosts?: boolean };
@@ -164,11 +166,25 @@ export async function DashboardCashflow({ projectId, showCosts = false }: Props)
             {projection.warnings.length === 1 ? "" : "s"} the forecast could not
             account for
           </summary>
-          <ul className="mt-1.5 space-y-1 text-amber-900">
-            {projection.warnings.slice(0, 10).map((w, i) => (
-              <li key={i}>{w.message}</li>
+          {/* All of them, grouped by cause. Ten of sixty-one with no sign the
+              rest existed was a list nobody could finish. */}
+          <div className="mt-1.5 max-h-96 space-y-3 overflow-y-auto pr-1">
+            {groupWarnings(projection.warnings).map((g) => (
+              <div key={g.kind}>
+                <div className="font-medium text-amber-900">
+                  {g.items.length} {g.title.toLowerCase()}
+                </div>
+                {g.effect && (
+                  <div className="text-[11px] text-amber-800/80">{g.effect}</div>
+                )}
+                <ul className="mt-1 space-y-0.5 text-amber-900">
+                  {g.items.map((w, i) => (
+                    <li key={`${w.ref}-${i}`}>{w.message}</li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
         </details>
       )}
     </section>

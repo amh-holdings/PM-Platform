@@ -7,6 +7,7 @@ import {
   MILESTONE_TRIGGER_GROUPS,
   isRecognisedTrigger,
   milestoneTriggered,
+  recordedPayment,
 } from "@/lib/progress";
 
 let passed = 0;
@@ -158,6 +159,52 @@ section("A paid date beats every trigger");
   const paid = { ...ms("Equipment arrival"), paid_at: "2026-03-14" };
   eq("an unrecognised trigger still earns once paid", milestoneTriggered(paid, UNSIGNED).fired, true);
   eq("and says why", milestoneTriggered(paid, UNSIGNED).why, "already paid");
+}
+
+// ------------- Recording a payment that already happened -------------
+// A PO paid before anyone was entering milestones has its cost in the forecast
+// nowhere at all: the projection skips a cost code tied to a PO on the
+// assumption the PO's milestones supply it, so with no milestones neither side
+// counts it. Recording it used to take two actions, add then mark paid.
+section("A payment recorded as already made");
+
+{
+  const r = recordedPayment(78179.8, "2026-03-14");
+  check("it is accepted", r.ok === true);
+  if (r.ok) {
+    eq("dated when it was paid", r.paid_at, "2026-03-14");
+    eq("and states what was paid", r.paid_amount, 78179.8);
+  }
+}
+
+// The projection drops a payment whose amount is not above zero, silently.
+// For a payment being recorded as already made that throws away the entire
+// point of recording it, so it is refused rather than stored as nothing.
+{
+  const r = recordedPayment(null, "2026-03-14");
+  check("no amount is refused", r.ok === false);
+  if (!r.ok) check("and says why", r.error.includes("count as zero"));
+}
+
+{
+  const r = recordedPayment(0, "2026-03-14");
+  check("zero is refused too", r.ok === false);
+}
+
+// No paid date is the ordinary case: a milestone expected, not yet paid.
+{
+  const r = recordedPayment(null, null);
+  check("an unpaid milestone is fine with no amount", r.ok === true);
+  if (r.ok) {
+    eq("nothing is dated", r.paid_at, null);
+    eq("and nothing is claimed paid", r.paid_amount, null);
+  }
+}
+
+{
+  const r = recordedPayment(45000, null);
+  check("an unpaid milestone with an amount is fine", r.ok === true);
+  if (r.ok) eq("but it is not marked paid", r.paid_amount, null);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

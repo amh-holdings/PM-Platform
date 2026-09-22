@@ -1,7 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
-import { deriveContractValue } from "@/lib/project-financials";
+import {
+  costToDate,
+  deriveContractValue,
+  type CostPeriodRow,
+} from "@/lib/project-financials";
+import { firstOfThisMonthIso } from "@/lib/cashflow";
 import { rollUpCostCodes } from "@/lib/ceo-report-financials";
 
 type Props = {
@@ -62,7 +67,7 @@ export async function DashboardKpis({ projectId, showCosts = true }: Props) {
         .eq("project_id", projectId),
       supabase
         .from("cost_forecasts")
-        .select("actual_amount, cost_codes!inner(project_id)")
+        .select("period_month, planned_amount, actual_amount, cost_codes!inner(project_id)")
         .eq("cost_codes.project_id", projectId),
       // The agreement side of the contract value: approved change orders only.
       supabase
@@ -131,11 +136,14 @@ export async function DashboardKpis({ projectId, showCosts = true }: Props) {
     })),
   );
   const estTotal = rollup.budget;
-  const actTotal = (costForecastsRes.data ?? []).reduce(
-    (sum, c) => sum + Number(c.actual_amount ?? 0),
-    0,
+  // Cost booked so far against the plan for the SAME months. The old tile
+  // subtracted the whole budget at completion from cost to date, which on a
+  // job that is 5% built is a large negative number rendered green: it read
+  // as millions under budget when it only meant the work had not happened.
+  const spend = costToDate(
+    (costForecastsRes.data ?? []) as unknown as CostPeriodRow[],
+    firstOfThisMonthIso(),
   );
-  const variance = actTotal - estTotal;
 
   const kpis: Kpi[] = [
     {
@@ -199,20 +207,37 @@ export async function DashboardKpis({ projectId, showCosts = true }: Props) {
     ...(showCosts
       ? [
           {
-            label: "Cost variance",
+            // With no cost plan for the elapsed months there is nothing to
+            // compare against, so the tile reports spend and says so. Treating
+            // an absent plan as a plan of zero would turn every dollar spent
+            // into an overrun, which is the same mistake in the other
+            // direction.
+            label: spend.variance == null ? "Cost to date" : "Cost variance to date",
             value:
-              variance === 0
-                ? "$0"
-                : `${variance > 0 ? "+" : "-"}${formatCurrency(Math.abs(variance))}`,
+              spend.variance == null
+                ? formatCurrency(spend.actual)
+                : spend.variance === 0
+                  ? "$0"
+                  : `${spend.variance > 0 ? "+" : "-"}${formatCurrency(Math.abs(spend.variance))}`,
             sub:
-              estTotal > 0
-                ? `vs ${formatCurrency(estTotal)} budget${
+              spend.variance == null
+                ? estTotal > 0
+                  ? `${formatCurrency(estTotal)} budget at completion · no monthly cost plan to compare against`
+                  : "No estimates set"
+                : `${formatCurrency(spend.actual)} spent vs ${formatCurrency(spend.planned)} planned${
+                    estTotal > 0 ? ` · ${formatCurrency(estTotal)} budget at completion` : ""
+                  }${
                     rollup.doubleCounted !== 0
                       ? ` · ${formatCurrency(rollup.doubleCounted)} of breakdown folded into its parent`
                       : ""
-                  }`
-                : "No estimates set",
-            tone: (variance > 0 ? "bad" : variance < 0 ? "good" : "default") as Kpi["tone"],
+                  }`,
+            tone: (spend.variance == null
+              ? "default"
+              : spend.variance > 0
+                ? "bad"
+                : spend.variance < 0
+                  ? "good"
+                  : "default") as Kpi["tone"],
           },
         ]
       : []),

@@ -434,7 +434,7 @@ function AddRow({
   return (
     <tr className="border-b bg-emerald-500/5">
       <td colSpan={7} className="p-3">
-        <form action={onSubmit} className="grid gap-2 sm:grid-cols-[1fr_140px_100px_140px_140px_auto]">
+        <form action={onSubmit} className="grid gap-2 sm:grid-cols-[1fr_140px_100px_140px_130px_130px_auto]">
           <div>
             <Label htmlFor="m-name" className="text-[10px]">Milestone name *</Label>
             <Input id="m-name" name="milestone_name" placeholder="Deposit / Delivery / Commissioning" required />
@@ -469,6 +469,13 @@ function AddRow({
             <Label htmlFor="m-expected" className="text-[10px]">Expected date</Label>
             <Input id="m-expected" name="expected_date" type="date" />
           </div>
+          {/* Most POs on a job that predates the app were paid before anyone
+              was entering milestones. Recording that took adding a milestone
+              and then marking it paid - two actions for one fact. */}
+          <div>
+            <Label htmlFor="m-paid" className="text-[10px]">Already paid on</Label>
+            <Input id="m-paid" name="paid_at" type="date" />
+          </div>
           <div className="flex items-end justify-end gap-1">
             <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onCancel}>
               Cancel
@@ -477,9 +484,16 @@ function AddRow({
               Add
             </Button>
           </div>
-          <div className="sm:col-span-6">
+          <div className="sm:col-span-7">
             <Input name="notes" placeholder="Notes (optional)" />
           </div>
+          <p className="text-[10px] text-muted-foreground sm:col-span-7">
+            Filling in <span className="font-medium">Already paid on</span>{" "}
+            records the payment as made, so it lands in the month it left
+            rather than in the forecast ahead. An amount, or a % to work one
+            out from, is required with it - a payment of nothing counts as
+            nothing.
+          </p>
         </form>
       </td>
     </tr>

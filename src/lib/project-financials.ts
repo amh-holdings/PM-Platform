@@ -158,3 +158,65 @@ export function compareItemNumbers(a: string, b: string): number {
   }
   return 0;
 }
+
+// ------------------------- Cost to date -------------------------
+
+export type CostPeriodRow = {
+  period_month: string;
+  planned_amount?: number | string | null;
+  actual_amount?: number | string | null;
+};
+
+export type CostToDate = {
+  /** Actual cost booked in months up to and including `throughMonth`. */
+  actual: number;
+  /** What the cost plan said those same months would cost. */
+  planned: number;
+  /** actual - planned. Positive is over plan. Null when there is no plan. */
+  variance: number | null;
+  /** False when no month up to `throughMonth` carries a planned amount. */
+  hasPlan: boolean;
+};
+
+/**
+ * Cost to date, against the plan for the same period.
+ *
+ * The distinction this exists to enforce: cost booked so far and the budget at
+ * completion are measurements of different things, and subtracting one from
+ * the other does not produce a variance. On a job that is 5% built, "actual
+ * minus whole budget" is a large negative number that renders green and reads
+ * as being millions under budget, when all it says is that the work has not
+ * happened yet. That is the most flattering possible way to be wrong, on the
+ * tile a CEO looks at first.
+ *
+ * So both sides are taken from the same months. Where no cost plan has been
+ * entered for those months there is nothing to compare against, and the answer
+ * is that there is no answer - `variance` is null and the caller must say so
+ * rather than treat a missing plan as a plan of zero, which would turn every
+ * dollar spent into an overrun.
+ */
+export function costToDate(
+  rows: readonly CostPeriodRow[],
+  throughMonth: string,
+): CostToDate {
+  let actual = 0;
+  let planned = 0;
+  let hasPlan = false;
+
+  for (const r of rows) {
+    const month = String(r.period_month ?? "").slice(0, 7);
+    if (!month || month > throughMonth.slice(0, 7)) continue;
+    actual += Number(r.actual_amount ?? 0);
+    const p = Number(r.planned_amount ?? 0);
+    if (p !== 0) hasPlan = true;
+    planned += p;
+  }
+
+  const round = (n: number) => Math.round(n * 100) / 100;
+  return {
+    actual: round(actual),
+    planned: round(planned),
+    variance: hasPlan ? round(actual - planned) : null,
+    hasPlan,
+  };
+}
