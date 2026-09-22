@@ -555,6 +555,54 @@ export function planMove(
   };
 }
 
+// Put every row back in WBS order.
+//
+// What is on screen is sort_order, not the code, and the two drift apart the
+// moment a branch arrives out of band. An import appends its rows after
+// everything already on the project, so a Procurement branch numbered 4 lands
+// underneath a Construction branch numbered 5 and reads as though it comes
+// after it. Nothing is wrong with the data; the schedule is just being shown
+// in the order it was typed in rather than the order it is numbered in.
+//
+// Moving it by hand does not work, and that is not a missing feature: a row
+// only ever swaps with a sibling, and a top-level 4 has no sibling among the
+// children of 5. So the fix has to be the whole sheet at once.
+//
+// This touches sort_order and nothing else. No code changes, no dates, no
+// logic, no renames, so there is nothing for a predecessor to follow and
+// nothing to warn about. Running it twice does nothing the second time.
+export function planSortByWbs(allTasks: EditTask[]): StructurePlan {
+  if (!allTasks.length) return { ...EMPTY_PLAN };
+
+  const byCode = [...allTasks].sort((a, b) => compareWbs(a.wbs_code, b.wbs_code));
+  const current = scheduleOrder(allTasks);
+  if (current.every((t, i) => t.id === byCode[i].id)) return { ...EMPTY_PLAN };
+
+  return {
+    ...EMPTY_PLAN,
+    sortUpdates: byCode.map((t, i) => ({ id: t.id, sort_order: (i + 1) * 10 })),
+  };
+}
+
+// How far the sheet is from WBS order, for telling someone what a sort will
+// do before they run it. The first row that is out of place is the useful one
+// to name: it is the branch that looks misfiled.
+export function outOfWbsOrder<T extends EditTask>(
+  allTasks: T[],
+): { count: number; firstMoved: T | null } {
+  if (!allTasks.length) return { count: 0, firstMoved: null };
+  const byCode = [...allTasks].sort((a, b) => compareWbs(a.wbs_code, b.wbs_code));
+  const current = scheduleOrder(allTasks);
+  let count = 0;
+  let firstMoved: T | null = null;
+  for (let i = 0; i < current.length; i++) {
+    if (current[i].id === byCode[i].id) continue;
+    count += 1;
+    if (!firstMoved) firstMoved = byCode[i];
+  }
+  return { count, firstMoved };
+}
+
 // Drag a row (or a selection) and drop it between two others.
 //
 // Smartsheet's drag does two things at once. Here they are different animals
