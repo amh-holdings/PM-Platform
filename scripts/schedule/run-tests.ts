@@ -2395,6 +2395,51 @@ const importedOutOfOrder: EditTask[] = [
   eq("and reports nothing out of order", outOfWbsOrder([]).count, 0);
 }
 
+section("Dragging a branch above the first row of the sheet");
+
+{
+  // What Zarina did: drag top-level Procurement over Civil Construction, the
+  // first row on the sheet. The parent normally comes from the row you drop
+  // against, and 5.1's parent is 5, so the drop used to offer to rename
+  // Procurement 5.3 and renumber everything under it. Dropping above the top
+  // row means the top of the sheet.
+  const drop = planDrop(importedOutOfOrder, ["4"], "5.1", "before");
+  check("the drop is allowed", drop.ok === true, drop.error ?? "");
+  eq("it does not reparent", drop.reparents, false);
+  eq("so it renames nothing", drop.renames.length, 0);
+  eq("and rewrites no logic", drop.predecessorRewrites.length, 0);
+
+  const byId = new Map(drop.sortUpdates.map((u) => [u.id, u.sort_order]));
+  const after = scheduleOrder(
+    importedOutOfOrder.map((t) => ({ ...t, sort_order: byId.get(t.id) ?? t.sort_order })),
+  ).map((t) => t.wbs_code).join(" ");
+  eq("Procurement lands first, with its branch", after, "4 4.1 5.1 5.1.1 5.2");
+}
+
+{
+  // A deeper row dragged to the top still takes the target's parent. Keeping
+  // its own would put a child above its own parent, which is not a tree.
+  const drop = planDrop(importedOutOfOrder, ["4.1"], "5.1", "before");
+  eq("a child dropped at the top still reparents", drop.reparents, true);
+  check("and renames", drop.renames.length > 0, `${drop.renames.length} renames`);
+}
+
+{
+  // Anywhere other than the top row, the gesture is unchanged: the parent
+  // comes from the row you drop against. This is what makes drag-to-indent
+  // work, so it must not be collateral damage.
+  const drop = planDrop(importedOutOfOrder, ["4"], "5.1.1", "before");
+  eq("dropping inside a branch still reparents", drop.reparents, true);
+  check("and renames", drop.renames.length > 0, `${drop.renames.length} renames`);
+}
+
+{
+  // "After" the first row is genuinely inside the Construction branch, so it
+  // reparents like any other interior drop.
+  const drop = planDrop(importedOutOfOrder, ["4"], "5.1", "after");
+  eq("dropping below the first row is not the top of the sheet", drop.reparents, true);
+}
+
 // ============================================================================
 console.log("\n" + "=".repeat(60));
 console.log(`${passed} passed, ${failed} failed`);

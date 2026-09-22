@@ -646,8 +646,28 @@ export function planDrop(
     }
   }
 
-  const newParent = parentCodeOf(target.wbs_code);
   const moving = blocks.map((b) => b[0]);
+
+  // Dropping above the first row of the sheet means the top of the sheet.
+  //
+  // Everywhere else the parent comes from the row you drop against, and that
+  // is what makes the gesture predictable. At the very top there is no row
+  // above to be a sibling of, and reading "put this above everything" as "make
+  // it a child of whatever the first row's parent happens to be" is not what
+  // the hand did. It is how dragging a top-level Procurement branch over Civil
+  // Construction 5.1 offered to rename it 5.3 and renumber all 47 rows under
+  // it. Worse, that parent need not exist: Sweet Springs carries 5.1 and 5.2
+  // with no 5 at all, so the drop was adopting a code nothing holds.
+  //
+  // Only for a branch that is already top-level, because that is the one case
+  // where the gesture is unambiguous and the result is still a tree. Drag a
+  // deeper row up there and it keeps taking the target's parent, since a child
+  // sitting above its own parent is not a hierarchy.
+  const atTopOfSheet = position === "before" && ordered[0]?.wbs_code === targetWbs;
+  const droppingToTop =
+    atTopOfSheet && moving.every((m) => parentCodeOf(m.wbs_code) === null);
+
+  const newParent = droppingToTop ? null : parentCodeOf(target.wbs_code);
   const reparents = moving.some((m) => parentCodeOf(m.wbs_code) !== newParent);
 
   // --- placement, which is the same either way ---------------------------
