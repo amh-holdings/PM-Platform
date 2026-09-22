@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { recordedPayment } from "@/lib/progress";
 
+import type { ProcurementImportPlan } from "@/lib/procurement-import";
 import { createClient } from "@/lib/supabase/server";
 import type { TablesInsert, TablesUpdate } from "@/lib/database.types";
 
@@ -603,4 +604,251 @@ export async function deletePoBillingAllocation(
   revalidatePath(`/projects/${projectId}/procurement/${procurementOrderId}`);
   revalidatePath(`/projects/${projectId}`);
   return { ok: true };
+}
+
+// ============ BULK IMPORT ============
+
+/**
+ * Apply a procurement import that the user has already seen as a diff.
+ *
+ * The client built the plan from what it read a moment ago, and the client is
+ * not the authority on what procurement currently looks like. Everything is
+ * re-checked here against the project's own rows: a PO the plan means to
+ * change must still exist on this project, a PO the plan means to add must
+ * still not, and every milestone must hang off a PO on this project. A stale
+ * plan is refused rather than half-applied.
+ *
+ * Adds go in first so their milestones have an id to hang off, and a PO that
+ * inserts but whose milestones fail is reported by name rather than left to be
+ * discovered later on the cash projection.
+ */
+export type ProcurementImportResult =
+  | { ok: true; added: number; changed: number; milestonesAdded: number; milestonesChanged: number }
+  | { ok: false; error: string };
+
+export async function applyProcurementImport(
+  projectId: string,
+  plan: ProcurementImportPlan,
+): Promise<ProcurementImportResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const empty =
+    !plan.adds.length &&
+    !plan.changes.length &&
+    !plan.milestoneAdds.length &&
+    !plan.milestoneChanges.length;
+  if (empty) {
+    return { ok: true, added: 0, changed: 0, milestonesAdded: 0, milestonesChanged: 0 };
+  }
+
+  const { data: current, error: currentErr } = await auth.supabase
+    .from("procurement_orders")
+    .select("id, po_number")
+    .eq("project_id", projectId);
+  if (currentErr) return { ok: false, error: currentErr.message };
+
+  const idsHere = new Set((current ?? []).map((o) => o.id));
+  const poNumbersHere = new Set(
+    (current ?? []).map((o) => o.po_number).filter((n): n is string => !!n),
+  );
+
+  for (const c of plan.changes) {
+    if (!idsHere.has(c.id)) {
+      return {
+        ok: false,
+        error:
+          "Procurement changed while this import was open. Close the dialog and read the rows again.",
+      };
+    }
+  }
+  for (const m of plan.milestoneAdds) {
+    if (!idsHere.has(m.procurement_order_id)) {
+      return {
+        ok: false,
+        error:
+          "A payment in this import points at a purchase order that is no longer on the project. Close the dialog and read the rows again.",
+      };
+    }
+  }
+  for (const a of plan.adds) {
+    if (!a.po_number.trim()) return { ok: false, error: "An imported row has no PO number." };
+    if (!a.vendor_name.trim()) {
+      return { ok: false, error: `${a.po_number} is new and has no vendor.` };
+    }
+    if (poNumbersHere.has(a.po_number)) {
+      return {
+        ok: false,
+        error: `${a.po_number} was created by someone else while this import was open. Close the dialog and read the rows again.`,
+      };
+    }
+  }
+
+  // Every milestone being changed has to belong to this project. Without this
+  // an id from another project's PO would update a row nobody here can see.
+  if (plan.milestoneChanges.length) {
+    const { data: owned, error: ownedErr } = await auth.supabase
+      .from("procurement_payments")
+      .select("id, procurement_orders!inner(project_id)")
+      .eq("procurement_orders.project_id", projectId);
+    if (ownedErr) return { ok: false, error: ownedErr.message };
+    const ownedIds = new Set((owned ?? []).map((m) => m.id));
+    for (const c of plan.milestoneChanges) {
+      if (!ownedIds.has(c.id)) {
+        return {
+          ok: false,
+          error:
+            "A payment in this import is no longer on this project. Close the dialog and read the rows again.",
+        };
+      }
+    }
+  }
+
+  // Delivery task links are re-resolved here rather than trusted from the
+  // client, for the same reason setProcurementDeliveryTaskLink resolves them:
+  // the link is only worth having if the date on the PO comes from the task.
+  const wanted = new Set<string>();
+  for (const a of plan.adds) {
+    if (a.linked_delivery_task_wbs_code) wanted.add(a.linked_delivery_task_wbs_code);
+  }
+  for (const c of plan.changes) {
+    const w = c.patch.linked_delivery_task_wbs_code;
+    if (typeof w === "string" && w) wanted.add(w);
+  }
+  const taskEnd = new Map<string, string | null>();
+  if (wanted.size) {
+    const { data: tasks, error: taskErr } = await auth.supabase
+      .from("schedule_tasks")
+      .select("wbs_code, end_date")
+      .eq("project_id", projectId)
+      .in("wbs_code", Array.from(wanted));
+    if (taskErr) return { ok: false, error: taskErr.message };
+    for (const t of tasks ?? []) taskEnd.set(t.wbs_code, t.end_date);
+    const missing = Array.from(wanted).filter((w) => !taskEnd.has(w));
+    if (missing.length) {
+      return {
+        ok: false,
+        error: `No schedule task on this project for ${missing.join(", ")}. Import the schedule branch first.`,
+      };
+    }
+  }
+
+  let added = 0;
+  let milestonesAdded = 0;
+
+  for (const a of plan.adds) {
+    const link = a.linked_delivery_task_wbs_code;
+    const insert: TablesInsert<"procurement_orders"> = {
+      project_id: projectId,
+      po_number: a.po_number,
+      vendor_name: a.vendor_name,
+      description: a.description,
+      total_value: a.total_value,
+      ordered_date: a.ordered_date,
+      expected_delivery_date: link
+        ? (taskEnd.get(link) ?? a.expected_delivery_date)
+        : a.expected_delivery_date,
+      actual_delivery_date: a.actual_delivery_date,
+      status: a.status,
+      payment_terms_summary: a.payment_terms_summary,
+      notes: a.notes,
+      linked_delivery_task_wbs_code: link,
+    };
+    const { data: row, error } = await auth.supabase
+      .from("procurement_orders")
+      .insert(insert)
+      .select("id")
+      .single();
+    if (error || !row) {
+      return {
+        ok: false,
+        error: `Adding ${a.po_number}: ${error?.message ?? "insert failed"}. ${added} purchase order${added === 1 ? "" : "s"} before it were added.`,
+      };
+    }
+    added += 1;
+
+    if (a.milestones.length) {
+      const rows: TablesInsert<"procurement_payments">[] = a.milestones.map((m) => ({
+        procurement_order_id: row.id,
+        milestone_name: m.milestone_name,
+        pct_of_total: m.pct_of_total,
+        trigger_event: m.trigger_event,
+        expected_date: m.expected_date,
+        amount: m.amount,
+        paid_at: m.paid_at,
+        paid_amount: m.paid_amount,
+        sort_order: m.sort_order,
+        notes: m.notes,
+      }));
+      const { error: mErr } = await auth.supabase
+        .from("procurement_payments")
+        .insert(rows);
+      if (mErr) {
+        return {
+          ok: false,
+          error: `${a.po_number} was added but its payments were not: ${mErr.message}`,
+        };
+      }
+      milestonesAdded += rows.length;
+    }
+  }
+
+  let changed = 0;
+  for (const c of plan.changes) {
+    const patch = { ...c.patch };
+    const link = patch.linked_delivery_task_wbs_code;
+    if (typeof link === "string" && link) {
+      const end = taskEnd.get(link);
+      if (end) patch.expected_delivery_date = end;
+    }
+    const { error } = await auth.supabase
+      .from("procurement_orders")
+      .update(patch as TablesUpdate<"procurement_orders">)
+      .eq("id", c.id)
+      .eq("project_id", projectId);
+    if (error) return { ok: false, error: `Updating purchase orders: ${error.message}` };
+    changed += 1;
+  }
+
+  if (plan.milestoneAdds.length) {
+    const rows: TablesInsert<"procurement_payments">[] = plan.milestoneAdds.map((m) => ({
+      procurement_order_id: m.procurement_order_id,
+      milestone_name: m.values.milestone_name,
+      pct_of_total: m.values.pct_of_total,
+      trigger_event: m.values.trigger_event,
+      expected_date: m.values.expected_date,
+      amount: m.values.amount,
+      paid_at: m.values.paid_at,
+      paid_amount: m.values.paid_amount,
+      sort_order: m.values.sort_order,
+      notes: m.values.notes,
+    }));
+    const CHUNK = 200;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const { error } = await auth.supabase
+        .from("procurement_payments")
+        .insert(rows.slice(i, i + CHUNK));
+      if (error) return { ok: false, error: `Adding payments: ${error.message}` };
+      milestonesAdded += Math.min(CHUNK, rows.length - i);
+    }
+  }
+
+  let milestonesChanged = 0;
+  for (const c of plan.milestoneChanges) {
+    const { error } = await auth.supabase
+      .from("procurement_payments")
+      .update(c.patch as TablesUpdate<"procurement_payments">)
+      .eq("id", c.id);
+    if (error) return { ok: false, error: `Updating payments: ${error.message}` };
+    milestonesChanged += 1;
+  }
+
+  // Everything a PO feeds, not just the page it was imported from: the cash
+  // projection dates each payment, and the billing panel reads what a
+  // procurement line has earned.
+  revalidatePath(`/projects/${projectId}/procurement`);
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/billing`);
+
+  return { ok: true, added, changed, milestonesAdded, milestonesChanged };
 }
