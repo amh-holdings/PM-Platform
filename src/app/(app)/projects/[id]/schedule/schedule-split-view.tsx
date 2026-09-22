@@ -448,6 +448,7 @@ export function ScheduleSplitView({
   const [hideInternal, setHideInternal] = useState(false);
   const [reportedOnly, setReportedOnly] = useState(false);
   const [overdueOnly, setOverdueOnly] = useState(false);
+  const [unlinkedOnly, setUnlinkedOnly] = useState(false);
   const [criticalOnly, setCriticalOnly] = useState(false);
   const [slippingOnly, setSlippingOnly] = useState(false);
   const [blockedOnly, setBlockedOnly] = useState(false);
@@ -541,6 +542,7 @@ export function ScheduleSplitView({
       if (slippingOnly && !(c && c.slipDays > 0)) return false;
       if (blockedOnly && !(constraintState.get(t.wbs_code)?.open ?? 0)) return false;
       if (overdueOnly && !(c && c.daysOverdue > 0)) return false;
+      if (unlinkedOnly && !c?.isolated) return false;
       if (query.trim()) {
         const q = query.trim().toLowerCase();
         const hay = `${t.wbs_code} ${t.task_name} ${t.assigned_to ?? ""} ${t.phase ?? ""}`.toLowerCase();
@@ -550,14 +552,15 @@ export function ScheduleSplitView({
     },
     [
       cpm, phaseFilter, statusFilter, hideComplete, hideInternal, reportedOnly,
-      criticalOnly, slippingOnly, blockedOnly, overdueOnly, constraintState, query,
+      criticalOnly, slippingOnly, blockedOnly, overdueOnly, unlinkedOnly,
+      constraintState, query,
     ],
   );
 
   const anyFilter =
     !!phaseFilter || !!statusFilter || hideComplete || hideInternal ||
     reportedOnly || criticalOnly || slippingOnly || blockedOnly || overdueOnly ||
-    !!query.trim();
+    unlinkedOnly || !!query.trim();
 
   // Filtering a tree is not filtering a list. Dropping a summary because its
   // own name does not match would orphan every matching task beneath it, so a
@@ -1354,16 +1357,17 @@ export function ScheduleSplitView({
   }, [allTasks, selected, byId]);
 
   const counts = useMemo(() => {
-    let critical = 0, nearCritical = 0, slipping = 0, blocked = 0, overdue = 0;
+    let critical = 0, nearCritical = 0, slipping = 0, blocked = 0, overdue = 0, unlinked = 0;
     for (const t of tasks) {
       const c = cpm.byWbs.get(t.wbs_code);
       if (c?.critical) critical++;
       if (c?.nearCritical) nearCritical++;
       if (c && c.slipDays > 0) slipping++;
       if (c && c.daysOverdue > 0) overdue++;
+      if (c?.isolated) unlinked++;
       if (constraintState.get(t.wbs_code)?.open) blocked++;
     }
-    return { total: tasks.length, critical, nearCritical, slipping, blocked, overdue };
+    return { total: tasks.length, critical, nearCritical, slipping, blocked, overdue, unlinked };
   }, [tasks, cpm, constraintState]);
 
   // A find that jumps to the first match, expanding whatever hides it.
@@ -1535,6 +1539,9 @@ export function ScheduleSplitView({
           {counts.overdue > 0 && (
             <> &middot; <span className="font-medium text-destructive" title="Deliverables past the date they were committed to">{counts.overdue}</span> overdue</>
           )}
+          {counts.unlinked > 0 && (
+            <> &middot; <span className="font-medium text-amber-700" title="No predecessor and no successor. They are left out of the finish date and the critical path. Tick Unlinked to see only these.">{counts.unlinked}</span> unlinked</>
+          )}
         </span>
       </div>
 
@@ -1560,6 +1567,7 @@ export function ScheduleSplitView({
         <Check label="Slipping" checked={slippingOnly} onChange={setSlippingOnly} />
         <Check label="Blocked" checked={blockedOnly} onChange={setBlockedOnly} />
         <Check label="Overdue" checked={overdueOnly} onChange={setOverdueOnly} />
+        <Check label="Unlinked" checked={unlinkedOnly} onChange={setUnlinkedOnly} />
         <Check label="Field-reported" checked={reportedOnly} onChange={setReportedOnly} />
         <Check label="Hide complete" checked={hideComplete} onChange={setHideComplete} />
         <Check label="Hide internal" checked={hideInternal} onChange={setHideInternal} />
@@ -2090,7 +2098,7 @@ export function ScheduleSplitView({
             {trace.cpm && (
               <span className="text-xs text-muted-foreground">
                 {trace.cpm.isolated
-                  ? "no logic on either side, so its float is measured against nothing"
+                  ? "unlinked - no logic on either side, so it floats free of the finish date and the critical path"
                   : trace.cpm.critical
                     ? "on the critical path - zero float"
                     : `${trace.cpm.totalFloat} working days of float, ${trace.cpm.freeFloat} before it moves a successor`}
@@ -2503,19 +2511,19 @@ function GridRow({
                 <span
                   className={cn(
                     "text-xs tabular-nums",
-                    c.isolated ? "text-muted-foreground"
+                    c.isolated ? "font-medium italic text-amber-700"
                       : c.totalFloat <= 0 ? "font-medium text-destructive"
                       : c.nearCritical ? "text-amber-700"
                       : "text-muted-foreground",
                   )}
                   title={
                     c.isolated
-                      ? "No predecessor and no successor, so its float is measured against nothing."
+                      ? "No predecessor and no successor. Nothing drives this task and nothing waits on it, so it has no float to measure - it is left out of the finish date and the critical path."
                       : `${c.totalFloat} working days of total float - how far this can slip before the project finish moves.\n` +
                         `${c.freeFloat} of free float - how far it can slip before it moves a successor.`
                   }
                 >
-                  {c.isolated ? "-" : `${c.totalFloat}d`}
+                  {c.isolated ? "floats" : `${c.totalFloat}d`}
                 </span>
               );
 
@@ -2616,8 +2624,8 @@ function RowBadges({
       )}
       {c?.isolated && (
         <span
-          className="rounded bg-muted px-1 text-[9px] font-medium text-muted-foreground"
-          title="No predecessor and no successor. Its float is measured against itself, so it is neither critical nor safe - it is simply not connected to the job."
+          className="rounded border border-dashed border-amber-500 bg-amber-50 px-1 text-[9px] font-medium text-amber-900"
+          title="No predecessor and no successor. Nothing drives this task and nothing waits on it, so it floats free: it is left out of the finish date and the critical path, and a slip on it moves nothing. Add logic on Edit to tie it into the job."
         >
           UNLINKED
         </span>
