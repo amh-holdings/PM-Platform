@@ -823,6 +823,17 @@ export function diffProcurement(
   }
   const taskByWbs = new Map(tasks.map((t) => [t.wbs_code, t]));
 
+  // A PO already on the project with no PO number cannot be matched by an
+  // import that keys on PO number, so a sheet covering it would add it a
+  // second time. Nothing here can tell which one it is, so say how many there
+  // are and let the person reading the diff decide.
+  const unnumbered = existing.filter((e) => !e.po_number).length;
+  if (unnumbered > 0 && build.rows.length) {
+    warnings.push(
+      `${unnumbered} purchase order${unnumbered === 1 ? "" : "s"} already on this project ${unnumbered === 1 ? "has" : "have"} no PO number, so ${unnumbered === 1 ? "it is" : "they are"} invisible to this import. If the sheet covers ${unnumbered === 1 ? "it" : "any of them"}, the row will be added as a second purchase order. Give ${unnumbered === 1 ? "it" : "them"} a PO number first.`,
+    );
+  }
+
   const adds: PoImportRow[] = [];
   const changes: PoDiff["changes"] = [];
   const milestoneAdds: PoDiff["milestoneAdds"] = [];

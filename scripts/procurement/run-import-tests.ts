@@ -453,6 +453,25 @@ const cut = diffProcurement(
 eq("lowering a total under what is paid warns", hit(cut.warnings, "already paid"), true);
 eq("and it is still offered as a change", cut.changes.length, 1);
 
+// A PO already on the project with no PO number cannot be matched.
+const unnumberedExisting: ExistingOrder[] = [
+  { ...existing[0], id: "po-x", po_number: null, milestones: [] },
+];
+const unnumbered = diffProcurement(
+  unnumberedExisting,
+  buildPoRows(
+    parsePoGrid(["PO Number\tVendor", "PO-018\tFTC Solar"].join("\n")),
+    ["po_number", "vendor_name"],
+  ),
+  ["po_number", "vendor_name"],
+  tasks,
+);
+eq(
+  "a PO on the project with no PO number is called out as unmatchable",
+  hit(unnumbered.warnings, "invisible to this import"),
+  true,
+);
+
 // ------------------------------- the plan -------------------------------
 section("Plan written from the diff");
 
