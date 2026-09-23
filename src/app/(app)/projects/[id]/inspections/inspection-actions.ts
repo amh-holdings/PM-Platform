@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { randomUUID } from "node:crypto";
 
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { adminClientOrError } from "@/lib/supabase/admin";
 import type { TablesUpdate } from "@/lib/database.types";
 import { makeCalendar } from "@/lib/schedule-calendar";
 import { actualFinishFromReport, actualStartFromReport } from "@/lib/schedule-edit";
@@ -357,8 +357,15 @@ async function proposeProductionOnApproval(
   dprId: string,
 ): Promise<void> {
   try {
-    const admin = createAdminClient();
-    const result = await proposeProductionForReport(admin, { projectId, dprId });
+    const adminRes = adminClientOrError();
+    if (!adminRes.ok) {
+      console.error("[production-proposal]", dprId, adminRes.error);
+      return;
+    }
+    const result = await proposeProductionForReport(adminRes.admin, {
+      projectId,
+      dprId,
+    });
     if (result.error) {
       console.error("[production-proposal]", dprId, result.error);
     }
@@ -769,7 +776,9 @@ export async function submitViaSecureLink(
   if (!input.inspectorName?.trim())
     return { ok: false, error: "Your name is required" };
 
-  const admin = createAdminClient();
+  const adminRes = adminClientOrError();
+  if (!adminRes.ok) return adminRes;
+  const admin = adminRes.admin;
 
   // Validate the token. Scope comes ONLY from the stored link, never the body.
   const { data: link, error: linkErr } = await admin
@@ -842,7 +851,9 @@ export async function createSecureLinkUploadUrl(input: {
   { ok: true; path: string; signedToken: string } | { ok: false; error: string }
 > {
   if (!input.token) return { ok: false, error: "Missing link token" };
-  const admin = createAdminClient();
+  const adminRes = adminClientOrError();
+  if (!adminRes.ok) return adminRes;
+  const admin = adminRes.admin;
   const { data: link } = await admin
     .from("inspection_secure_links")
     .select("id, project_id, active, expires_at")
@@ -867,7 +878,9 @@ export async function acknowledgeViaSecureLink(input: {
   token: string;
   inspectionId: string;
 }): Promise<{ ok: true } | AuthFail> {
-  const admin = createAdminClient();
+  const adminRes = adminClientOrError();
+  if (!adminRes.ok) return adminRes;
+  const admin = adminRes.admin;
   const { data: link } = await admin
     .from("inspection_secure_links")
     .select("id, subcontractor_id, active, expires_at")

@@ -1,4 +1,4 @@
-import { createAdminClient } from "@/lib/supabase/admin";
+import { adminClientOrError } from "@/lib/supabase/admin";
 import { isLinkUsable } from "@/lib/inspection-token";
 import {
   STATUS_STYLE,
@@ -17,7 +17,20 @@ export default async function InspectTokenPage({
 }: {
   params: Params;
 }) {
-  const admin = createAdminClient();
+  // The whole page runs on the service role, so an unconfigured deployment
+  // would throw before the first query and hand a sub with no login nothing but
+  // Next's blank error page. Say what is wrong instead.
+  const adminRes = adminClientOrError();
+  if (!adminRes.ok) {
+    return (
+      <main className="mx-auto max-w-md p-6">
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          {adminRes.error}
+        </div>
+      </main>
+    );
+  }
+  const admin = adminRes.admin;
 
   const { data: link } = await admin
     .from("inspection_secure_links")

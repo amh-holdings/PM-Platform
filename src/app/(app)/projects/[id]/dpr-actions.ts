@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { adminClientOrError } from "@/lib/supabase/admin";
 import { proposeProductionForReport } from "@/lib/production-proposal-run";
 import type { Database, TablesUpdate } from "@/lib/database.types";
 import { makeCalendar } from "@/lib/schedule-calendar";
@@ -170,7 +170,9 @@ export async function submitDpr(input: DprSubmitInput): Promise<DprActionResult>
     // the caller. draft_payload is cleared here - once the report is filed the
     // JSON copy is stale, and the table's CHECK constraint refuses to keep it
     // alongside a non-draft status.
-    const admin = createAdminClient();
+    const adminRes = adminClientOrError();
+    if (!adminRes.ok) return adminRes;
+    const admin = adminRes.admin;
     const { data: promoted, error: promoteErr } = await admin
       .from("dprs")
       .update({ ...reportFields, draft_payload: null, updated_at: now })
@@ -487,11 +489,19 @@ export async function approveDpr(
 
   // Never throws and never rolls the approval back - a tracker fill is laid on
   // top of a decision that already stands. Same contract as the other path.
-  const proposal = await proposeProductionForReport(
-    createAdminClient() as unknown as SupabaseClient<Database>,
-    { projectId, dprId },
-  );
-  if (proposal.error) console.error("[production-proposal]", dprId, proposal.error);
+  // An unconfigured service-role client is part of that: the approval above is
+  // already stamped, so it logs and skips rather than 500ing a decision the CM
+  // has already made.
+  const proposalAdmin = adminClientOrError();
+  if (proposalAdmin.ok) {
+    const proposal = await proposeProductionForReport(
+      proposalAdmin.admin as unknown as SupabaseClient<Database>,
+      { projectId, dprId },
+    );
+    if (proposal.error) console.error("[production-proposal]", dprId, proposal.error);
+  } else {
+    console.error("[production-proposal]", dprId, proposalAdmin.error);
+  }
 
   revalidatePath(`/projects/${projectId}`, "layout");
   revalidatePath(`/projects/${projectId}/dprs`);

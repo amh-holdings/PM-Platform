@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { adminClientOrError, createAdminClient } from "@/lib/supabase/admin";
 import { proposeProductionForReport } from "@/lib/production-proposal-run";
 import type { Json, TablesUpdate } from "@/lib/database.types";
 import {
@@ -366,7 +366,9 @@ export async function resubmitFieldReportPin(input: {
   if (!input.fixNotes?.trim())
     return { ok: false, error: "Describe what you fixed before resubmitting." };
 
-  const admin = createAdminClient();
+  const adminRes = adminClientOrError();
+  if (!adminRes.ok) return adminRes;
+  const admin = adminRes.admin;
   const { data: pin, error: pinErr } = await admin
     .from("inspections")
     .select(
@@ -728,7 +730,9 @@ async function assertOwnedDraft(
   const auth = await getReportProfile();
   if (!auth.ok) return auth;
 
-  const admin = createAdminClient();
+  const adminRes = adminClientOrError();
+  if (!adminRes.ok) return adminRes;
+  const admin = adminRes.admin;
   const { data: row, error } = await admin
     .from("dprs")
     .select("id, project_id, status, subcontractor_id, draft_payload")
@@ -796,7 +800,9 @@ export async function saveFieldReportDraft(
     return { ok: false, error: "You can only save reports for your own company" };
   }
 
-  const admin = createAdminClient();
+  const adminRes = adminClientOrError();
+  if (!adminRes.ok) return adminRes;
+  const admin = adminRes.admin;
   const now = new Date().toISOString();
   // Mirror the headline fields into their real columns as well as the payload,
   // so the reports list and the coverage view can read a draft without parsing
