@@ -69,6 +69,9 @@ import {
   planDrop,
   planMove,
   planOutdent,
+  planSortByWbs,
+  outOfWbsOrder,
+  scheduleOrder,
   orderRenames,
   reconcileDates,
   actualStartFromReport,
@@ -2325,6 +2328,116 @@ section("Dependency arrows");
   eq("a path renders as SVG", toPath([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 20 }]), "M0 0 L10 0 L10 20");
   eq("a degenerate path renders as nothing", toPath([{ x: 1, y: 1 }]), "");
   eq("and its head defaults forward", headDirection([{ x: 1, y: 1 }]), 1);
+}
+
+section("Sorting the sheet back into WBS order");
+
+// Exactly the shape Sweet Springs ended up in after importing the procurement
+// branch: the whole Construction branch first because it was there already,
+// then a top-level 4 appended underneath it by the import. The codes say 4
+// comes first, the sort_order says it comes last, and the sort_order wins.
+const importedOutOfOrder: EditTask[] = [
+  { id: "civil", wbs_code: "5.1", task_name: "Civil Construction", sort_order: 10, predecessors: null, level_code: 2 },
+  { id: "civil-a", wbs_code: "5.1.1", task_name: "Clearing", sort_order: 20, predecessors: null, level_code: 3 },
+  { id: "mech", wbs_code: "5.2", task_name: "Mechanical", sort_order: 30, predecessors: null, level_code: 2 },
+  { id: "proc", wbs_code: "4", task_name: "Procurement", sort_order: 40, predecessors: null, level_code: 1 },
+  { id: "proc-a", wbs_code: "4.1", task_name: "Modules", sort_order: 50, predecessors: null, level_code: 2 },
+];
+
+{
+  const before = scheduleOrder(importedOutOfOrder).map((t) => t.wbs_code).join(" ");
+  eq("the imported branch lands at the bottom", before, "5.1 5.1.1 5.2 4 4.1");
+
+  const off = outOfWbsOrder(importedOutOfOrder);
+  check("the sheet is reported as out of order", off.count > 0, `count ${off.count}`);
+  eq("and the first row out of place is the imported branch", off.firstMoved?.wbs_code, "4");
+
+  const plan = planSortByWbs(importedOutOfOrder);
+  check("the plan is allowed", plan.ok === true);
+  eq("it renames nothing", plan.renames.length, 0);
+  eq("it rewrites no logic", plan.predecessorRewrites.length, 0);
+  eq("it reparents nothing", plan.parentUpdates.length, 0);
+  eq("it changes no levels", plan.levelUpdates.length, 0);
+  eq("it reorders every row", plan.sortUpdates.length, importedOutOfOrder.length);
+
+  // Apply it the way applyStructurePlan does, then read the order back.
+  const byId = new Map(plan.sortUpdates.map((u) => [u.id, u.sort_order]));
+  const after = scheduleOrder(
+    importedOutOfOrder.map((t) => ({ ...t, sort_order: byId.get(t.id) ?? t.sort_order })),
+  ).map((t) => t.wbs_code).join(" ");
+  eq("Procurement ends up above Civil Construction", after, "4 4.1 5.1 5.1.1 5.2");
+}
+
+{
+  // Running it a second time is a no-op, which is what makes the button safe
+  // to press when you are not sure whether you already did.
+  const plan = planSortByWbs(importedOutOfOrder);
+  const byId = new Map(plan.sortUpdates.map((u) => [u.id, u.sort_order]));
+  const sorted = importedOutOfOrder.map((t) => ({ ...t, sort_order: byId.get(t.id) ?? t.sort_order }));
+  eq("nothing left out of order", outOfWbsOrder(sorted).count, 0);
+  eq("and the second sort plans nothing", planSortByWbs(sorted).sortUpdates.length, 0);
+}
+
+{
+  // The move buttons cannot do this job, which is why the sort exists. A
+  // top-level 4 has no sibling among the children of 5.
+  const up = planMove(importedOutOfOrder, ["4"], "up");
+  check("moving the branch up is refused", up.ok === false, up.error ?? "it was allowed");
+  check(
+    "and says there is no sibling to swap with",
+    (up.error ?? "").toLowerCase().includes("no sibling"),
+    up.error ?? "",
+  );
+}
+
+{
+  eq("an empty schedule plans nothing", planSortByWbs([]).sortUpdates.length, 0);
+  eq("and reports nothing out of order", outOfWbsOrder([]).count, 0);
+}
+
+section("Dragging a branch above the first row of the sheet");
+
+{
+  // What Zarina did: drag top-level Procurement over Civil Construction, the
+  // first row on the sheet. The parent normally comes from the row you drop
+  // against, and 5.1's parent is 5, so the drop used to offer to rename
+  // Procurement 5.3 and renumber everything under it. Dropping above the top
+  // row means the top of the sheet.
+  const drop = planDrop(importedOutOfOrder, ["4"], "5.1", "before");
+  check("the drop is allowed", drop.ok === true, drop.error ?? "");
+  eq("it does not reparent", drop.reparents, false);
+  eq("so it renames nothing", drop.renames.length, 0);
+  eq("and rewrites no logic", drop.predecessorRewrites.length, 0);
+
+  const byId = new Map(drop.sortUpdates.map((u) => [u.id, u.sort_order]));
+  const after = scheduleOrder(
+    importedOutOfOrder.map((t) => ({ ...t, sort_order: byId.get(t.id) ?? t.sort_order })),
+  ).map((t) => t.wbs_code).join(" ");
+  eq("Procurement lands first, with its branch", after, "4 4.1 5.1 5.1.1 5.2");
+}
+
+{
+  // A deeper row dragged to the top still takes the target's parent. Keeping
+  // its own would put a child above its own parent, which is not a tree.
+  const drop = planDrop(importedOutOfOrder, ["4.1"], "5.1", "before");
+  eq("a child dropped at the top still reparents", drop.reparents, true);
+  check("and renames", drop.renames.length > 0, `${drop.renames.length} renames`);
+}
+
+{
+  // Anywhere other than the top row, the gesture is unchanged: the parent
+  // comes from the row you drop against. This is what makes drag-to-indent
+  // work, so it must not be collateral damage.
+  const drop = planDrop(importedOutOfOrder, ["4"], "5.1.1", "before");
+  eq("dropping inside a branch still reparents", drop.reparents, true);
+  check("and renames", drop.renames.length > 0, `${drop.renames.length} renames`);
+}
+
+{
+  // "After" the first row is genuinely inside the Construction branch, so it
+  // reparents like any other interior drop.
+  const drop = planDrop(importedOutOfOrder, ["4"], "5.1", "after");
+  eq("dropping below the first row is not the top of the sheet", drop.reparents, true);
 }
 
 // ============================================================================

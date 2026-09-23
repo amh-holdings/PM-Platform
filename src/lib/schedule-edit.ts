@@ -555,6 +555,54 @@ export function planMove(
   };
 }
 
+// Put every row back in WBS order.
+//
+// What is on screen is sort_order, not the code, and the two drift apart the
+// moment a branch arrives out of band. An import appends its rows after
+// everything already on the project, so a Procurement branch numbered 4 lands
+// underneath a Construction branch numbered 5 and reads as though it comes
+// after it. Nothing is wrong with the data; the schedule is just being shown
+// in the order it was typed in rather than the order it is numbered in.
+//
+// Moving it by hand does not work, and that is not a missing feature: a row
+// only ever swaps with a sibling, and a top-level 4 has no sibling among the
+// children of 5. So the fix has to be the whole sheet at once.
+//
+// This touches sort_order and nothing else. No code changes, no dates, no
+// logic, no renames, so there is nothing for a predecessor to follow and
+// nothing to warn about. Running it twice does nothing the second time.
+export function planSortByWbs(allTasks: EditTask[]): StructurePlan {
+  if (!allTasks.length) return { ...EMPTY_PLAN };
+
+  const byCode = [...allTasks].sort((a, b) => compareWbs(a.wbs_code, b.wbs_code));
+  const current = scheduleOrder(allTasks);
+  if (current.every((t, i) => t.id === byCode[i].id)) return { ...EMPTY_PLAN };
+
+  return {
+    ...EMPTY_PLAN,
+    sortUpdates: byCode.map((t, i) => ({ id: t.id, sort_order: (i + 1) * 10 })),
+  };
+}
+
+// How far the sheet is from WBS order, for telling someone what a sort will
+// do before they run it. The first row that is out of place is the useful one
+// to name: it is the branch that looks misfiled.
+export function outOfWbsOrder<T extends EditTask>(
+  allTasks: T[],
+): { count: number; firstMoved: T | null } {
+  if (!allTasks.length) return { count: 0, firstMoved: null };
+  const byCode = [...allTasks].sort((a, b) => compareWbs(a.wbs_code, b.wbs_code));
+  const current = scheduleOrder(allTasks);
+  let count = 0;
+  let firstMoved: T | null = null;
+  for (let i = 0; i < current.length; i++) {
+    if (current[i].id === byCode[i].id) continue;
+    count += 1;
+    if (!firstMoved) firstMoved = byCode[i];
+  }
+  return { count, firstMoved };
+}
+
 // Drag a row (or a selection) and drop it between two others.
 //
 // Smartsheet's drag does two things at once. Here they are different animals
@@ -598,8 +646,28 @@ export function planDrop(
     }
   }
 
-  const newParent = parentCodeOf(target.wbs_code);
   const moving = blocks.map((b) => b[0]);
+
+  // Dropping above the first row of the sheet means the top of the sheet.
+  //
+  // Everywhere else the parent comes from the row you drop against, and that
+  // is what makes the gesture predictable. At the very top there is no row
+  // above to be a sibling of, and reading "put this above everything" as "make
+  // it a child of whatever the first row's parent happens to be" is not what
+  // the hand did. It is how dragging a top-level Procurement branch over Civil
+  // Construction 5.1 offered to rename it 5.3 and renumber all 47 rows under
+  // it. Worse, that parent need not exist: Sweet Springs carries 5.1 and 5.2
+  // with no 5 at all, so the drop was adopting a code nothing holds.
+  //
+  // Only for a branch that is already top-level, because that is the one case
+  // where the gesture is unambiguous and the result is still a tree. Drag a
+  // deeper row up there and it keeps taking the target's parent, since a child
+  // sitting above its own parent is not a hierarchy.
+  const atTopOfSheet = position === "before" && ordered[0]?.wbs_code === targetWbs;
+  const droppingToTop =
+    atTopOfSheet && moving.every((m) => parentCodeOf(m.wbs_code) === null);
+
+  const newParent = droppingToTop ? null : parentCodeOf(target.wbs_code);
   const reparents = moving.some((m) => parentCodeOf(m.wbs_code) !== newParent);
 
   // --- placement, which is the same either way ---------------------------

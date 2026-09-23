@@ -60,6 +60,8 @@ import {
   planIndent,
   planMove,
   planOutdent,
+  planSortByWbs,
+  outOfWbsOrder,
   planUnlink,
   toRowRefs,
   toWbsRefs,
@@ -492,6 +494,9 @@ export function ScheduleSplitView({
   // Numbered off the full schedule, never off the filtered view, so hiding
   // completed work does not renumber every predecessor on screen.
   const rowIndex = useMemo(() => buildRowIndex(allRows), [allRows]);
+  // Measured against the whole project, not the filtered view: a branch can be
+  // out of order while every row on screen looks fine.
+  const wbsOrder = useMemo(() => outOfWbsOrder(allTasks.map(asEdit)), [allTasks]);
 
   // The trace panel and the grid have to agree. Reading "waits on 5.1.1.2" next
   // to a Predecessors column showing "12" is how you end up trusting neither.
@@ -1105,6 +1110,20 @@ export function ScheduleSplitView({
     else runStructure(planMove(all, codes, kind === "up" ? "up" : "down"), "Moved.");
   }
 
+  // Sorting acts on the whole sheet rather than the ticked rows, so it does
+  // not go through structure(). It is still blocked while there are unsaved
+  // edits, because a re-sort and a pending edit would fight the same rows.
+  function sortByWbs() {
+    if (structureBlocked) {
+      setMsg({
+        tone: "warn",
+        text: "Save or discard your edits first - sorting reorders every row and the two would fight.",
+      });
+      return;
+    }
+    runStructure(planSortByWbs(allTasks.map(asEdit)), "Sorted into WBS order.");
+  }
+
   function onDragStart(e: React.DragEvent, t: ScheduleTaskRow) {
     if (structureBlocked) {
       e.preventDefault();
@@ -1622,6 +1641,21 @@ export function ScheduleSplitView({
           calendar={calendar}
           trigger={<Button size="sm" className="h-8">Add task</Button>}
         />
+        {wbsOrder.count > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8"
+            disabled={busy}
+            onClick={sortByWbs}
+            title={`${wbsOrder.count} rows are not in WBS order${wbsOrder.firstMoved ? `, starting with ${wbsOrder.firstMoved.wbs_code} ${wbsOrder.firstMoved.task_name}` : ""}. Sorting changes the order only - no codes, dates or logic.`}
+          >
+            Sort by WBS{" "}
+            <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-900">
+              {wbsOrder.count}
+            </span>
+          </Button>
+        )}
         <span className="mx-1 h-6 w-px bg-border" />
         <span className="text-xs text-muted-foreground">
           {selected.size ? `${selected.size} selected` : "Tick rows to edit in bulk, move or delete them"}

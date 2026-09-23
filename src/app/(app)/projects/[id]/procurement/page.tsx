@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
+import type { ExistingOrder } from "@/lib/procurement-import";
+import { ProcurementImportDialog } from "./procurement-import-dialog";
 
 type Params = { id: string };
 
@@ -21,11 +23,12 @@ export default async function ProjectProcurementPage({ params }: { params: Param
     { data: orders, error },
     { data: payments },
     { data: lineLinks },
+    { data: deliveryTasks },
   ] = await Promise.all([
     supabase
       .from("procurement_orders")
       .select(
-        "id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, signed_at",
+        "id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, signed_at, notes, linked_delivery_task_wbs_code",
       )
       .eq("project_id", params.id)
       .order("ordered_date", { ascending: false, nullsFirst: false })
@@ -33,12 +36,20 @@ export default async function ProjectProcurementPage({ params }: { params: Param
     supabase
       .from("procurement_payments")
       .select(
-        "procurement_order_id, amount, paid_amount, paid_at, expected_date, procurement_orders!inner(project_id)",
+        "id, procurement_order_id, milestone_name, pct_of_total, trigger_event, amount, paid_amount, paid_at, expected_date, sort_order, notes, procurement_orders!inner(project_id)",
       )
       .eq("procurement_orders.project_id", params.id),
     supabase
       .from("billing_lines")
       .select("id, item_number, description, linked_procurement_order_ids")
+      .eq("project_id", params.id),
+    // For the importer: a PO can name the delivery task it hangs off, and the
+    // link only means anything if the task is really on this project's
+    // schedule. Two columns per task, so the page carries the whole WBS
+    // cheaply rather than making the dialog go and ask.
+    supabase
+      .from("schedule_tasks")
+      .select("wbs_code, end_date")
       .eq("project_id", params.id),
   ]);
 
@@ -79,6 +90,42 @@ export default async function ProjectProcurementPage({ params }: { params: Param
   }
 
   const rows = orders ?? [];
+
+  // What the importer matches against. It needs the whole PO, milestones and
+  // all, because a payment is matched on its name inside its own PO.
+  const milestoneRows = new Map<string, ExistingOrder["milestones"]>();
+  for (const m of payments ?? []) {
+    const list = milestoneRows.get(m.procurement_order_id) ?? [];
+    list.push({
+      id: m.id,
+      milestone_name: m.milestone_name,
+      pct_of_total: m.pct_of_total === null ? null : Number(m.pct_of_total),
+      trigger_event: m.trigger_event,
+      expected_date: m.expected_date,
+      amount: m.amount === null ? null : Number(m.amount),
+      paid_at: m.paid_at,
+      paid_amount: m.paid_amount === null ? null : Number(m.paid_amount),
+      sort_order: m.sort_order,
+      notes: m.notes,
+    });
+    milestoneRows.set(m.procurement_order_id, list);
+  }
+  const importOrders: ExistingOrder[] = rows.map((r) => ({
+    id: r.id,
+    po_number: r.po_number,
+    vendor_name: r.vendor_name,
+    description: r.description,
+    total_value: r.total_value === null ? null : Number(r.total_value),
+    ordered_date: r.ordered_date,
+    expected_delivery_date: r.expected_delivery_date,
+    actual_delivery_date: r.actual_delivery_date,
+    status: r.status,
+    payment_terms_summary: r.payment_terms_summary,
+    notes: r.notes,
+    linked_delivery_task_wbs_code: r.linked_delivery_task_wbs_code,
+    milestones: milestoneRows.get(r.id) ?? [],
+  }));
+
   const totalOrders = rows.length;
   const totalValue = rows.reduce((s, r) => s + Number(r.total_value ?? 0), 0);
   const totalPaid = Array.from(milestoneByOrder.values()).reduce(
@@ -95,11 +142,26 @@ export default async function ProjectProcurementPage({ params }: { params: Param
             schedules. Each PO drives its own cash-out timeline.
           </p>
         </div>
-        <Button asChild>
-          <Link href={`/projects/${params.id}/procurement/new`}>
-            Add purchase order
-          </Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <ProcurementImportDialog
+            projectId={params.id}
+            existing={importOrders}
+            tasks={deliveryTasks ?? []}
+            trigger={
+              <Button
+                variant="outline"
+                title="Paste a procurement log from Excel, or drop the workbook in"
+              >
+                Import POs
+              </Button>
+            }
+          />
+          <Button asChild>
+            <Link href={`/projects/${params.id}/procurement/new`}>
+              Add purchase order
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-4">
