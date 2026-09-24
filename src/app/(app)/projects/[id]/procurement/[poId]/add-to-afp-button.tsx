@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
 import { Label } from "@/components/ui/label";
 import { formatCurrency } from "@/lib/format";
 import { describeStagingEffect } from "@/lib/afp-po-staging";
@@ -207,11 +207,10 @@ export function AddToAfpButton({
                   <Label htmlFor="afp-amount" className="text-xs">
                     Amount to bill
                   </Label>
-                  <Input
+                  <MoneyInput
                     id="afp-amount"
                     value={amount}
-                    inputMode="decimal"
-                    onChange={(e) => setAmount(e.target.value)}
+                    onTextChange={setAmount}
                     className="mt-1 font-mono"
                   />
                   <p className="mt-1 text-[11px] text-muted-foreground">

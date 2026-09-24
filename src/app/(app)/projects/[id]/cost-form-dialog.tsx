@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MoneyInput } from "@/components/ui/money-input";
 import { createCostCode, updateCostCode } from "./cost-actions";
 
 export type CostCodeFormValues = {
@@ -133,11 +134,9 @@ export function CostCodeFormDialog({ projectId, initial, trigger }: Props) {
 
                 <div className="space-y-2">
                   <Label htmlFor="estimated_cost">Estimated cost (USD)</Label>
-                  <Input
+                  <MoneyInput
                     id="estimated_cost"
                     name="estimated_cost"
-                    type="text"
-                    inputMode="decimal"
                     defaultValue={values.estimated_cost ?? ""}
                     placeholder="164500"
                     aria-invalid={Boolean(fieldErrors.estimated_cost)}
@@ -149,11 +148,9 @@ export function CostCodeFormDialog({ projectId, initial, trigger }: Props) {
 
                 <div className="space-y-2">
                   <Label htmlFor="actual_cost">Actual cost (USD)</Label>
-                  <Input
+                  <MoneyInput
                     id="actual_cost"
                     name="actual_cost"
-                    type="text"
-                    inputMode="decimal"
                     defaultValue={values.actual_cost ?? "0"}
                     placeholder="0"
                     aria-invalid={Boolean(fieldErrors.actual_cost)}

@@ -5,6 +5,7 @@ import { useFormState, useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MoneyInput } from "@/components/ui/money-input";
 import { cn } from "@/lib/utils";
 import { updateProject, type CreateProjectState } from "../../actions";
 import { PROJECT_STATUS_OPTIONS } from "../../constants";
@@ -101,11 +102,9 @@ export function ProjectEditForm({ project }: { project: ProjectEditValues }) {
 
         <div className="space-y-2">
           <Label htmlFor="contract_value">Contract value (USD)</Label>
-          <Input
+          <MoneyInput
             id="contract_value"
             name="contract_value"
-            type="text"
-            inputMode="decimal"
             defaultValue={project.contract_value ?? ""}
             placeholder="2500000"
             aria-invalid={Boolean(state.fieldErrors?.contract_value)}

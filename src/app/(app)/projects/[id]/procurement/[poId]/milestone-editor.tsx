@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MoneyInput } from "@/components/ui/money-input";
 import {
   addMilestone,
   deleteMilestone,
@@ -292,10 +293,9 @@ export function MilestoneEditor({
                           className="h-8 w-[9.5rem] text-xs"
                           aria-label="Date paid"
                         />
-                        <Input
+                        <MoneyInput
                           value={paidAmount}
-                          onChange={(e) => setPaidAmount(e.target.value)}
-                          inputMode="decimal"
+                          onTextChange={setPaidAmount}
                           className="h-8 w-28 text-right text-xs"
                           aria-label="Amount paid"
                         />
@@ -469,11 +469,9 @@ function AddRow({
           </div>
           <div>
             <Label htmlFor="m-amount" className="text-[10px]">Amount</Label>
-            <Input
+            <MoneyInput
               id="m-amount"
               name="amount"
-              type="number"
-              step="0.01"
               placeholder={computedAmount != null ? computedAmount.toFixed(2) : ""}
             />
           </div>
@@ -550,11 +548,9 @@ function EditRow({
           </div>
           <div>
             <Label htmlFor={`ma-${m.id}`} className="text-[10px]">Amount</Label>
-            <Input
+            <MoneyInput
               id={`ma-${m.id}`}
               name="amount"
-              type="number"
-              step="0.01"
               defaultValue={m.amount ?? ""}
             />
           </div>

@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
 import { formatCurrency } from "@/lib/format";
 import type { CoSovImpact } from "@/lib/sov-amendments";
 import type { SuggestionSet } from "@/lib/sov-amendment-suggest";
@@ -362,11 +362,10 @@ export function CoSovImpactPanel({
                   </option>
                 ))}
               </select>
-              <Input
+              <MoneyInput
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onTextChange={setAmount}
                 placeholder={formatCurrency(l.newScope)}
-                inputMode="decimal"
                 className="text-right"
                 aria-label="Amount to allocate"
               />

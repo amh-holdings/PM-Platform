@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
+import { MoneyInput } from "@/components/ui/money-input";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -168,10 +169,10 @@ export function MappingRow({
                 </label>
                 <label className="block space-y-1">
                   <span className="text-xs font-medium">Scheduled value</span>
-                  <input
+                  <MoneyInput
+                    bare
                     name="scheduled_value"
                     required
-                    inputMode="decimal"
                     defaultValue={line.scheduled_value}
                     className={field}
                   />

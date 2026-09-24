@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import {
@@ -309,11 +310,10 @@ export function CoLineEditor({
                 placeholder="e.g. Equipment storage"
                 aria-label="SOV line description"
               />
-              <Input
+              <MoneyInput
                 value={scheduledValue}
-                onChange={(e) => setScheduledValue(e.target.value)}
+                onTextChange={setScheduledValue}
                 placeholder="$ scheduled value"
-                inputMode="decimal"
                 className="text-right"
               />
               <div className="flex gap-2">

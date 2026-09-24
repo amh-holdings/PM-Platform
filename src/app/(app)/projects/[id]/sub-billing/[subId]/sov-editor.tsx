@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
+import { MoneyInput } from "@/components/ui/money-input";
 
 import type { SheetSummary } from "@/lib/schedule-workbook";
 import { bestPageIndex } from "@/lib/sov-pdf";
@@ -201,7 +202,7 @@ export function SovEditor({ projectId, subcontractorId, hasLines }: Props) {
             </label>
             <label className="block space-y-1">
               <span className="text-xs font-medium">Scheduled value</span>
-              <input name="scheduled_value" required inputMode="decimal" placeholder="45,000.00" className={field} />
+              <MoneyInput name="scheduled_value" required bare placeholder="45,000.00" className={field} />
             </label>
             <label className="block space-y-1">
               <span className="text-xs font-medium">Section</span>
