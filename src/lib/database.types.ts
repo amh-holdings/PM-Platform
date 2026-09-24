@@ -105,7 +105,9 @@ export type Database = {
           amount: number
           billing_entry_id: string
           created_at: string | null
+          created_entry: boolean
           id: string
+          prior_planned_amount: number | null
           procurement_order_id: string
           updated_at: string | null
         }
@@ -113,7 +115,9 @@ export type Database = {
           amount?: number
           billing_entry_id: string
           created_at?: string | null
+          created_entry?: boolean
           id?: string
+          prior_planned_amount?: number | null
           procurement_order_id: string
           updated_at?: string | null
         }
@@ -121,7 +125,9 @@ export type Database = {
           amount?: number
           billing_entry_id?: string
           created_at?: string | null
+          created_entry?: boolean
           id?: string
+          prior_planned_amount?: number | null
           procurement_order_id?: string
           updated_at?: string | null
         }

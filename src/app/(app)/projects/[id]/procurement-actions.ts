@@ -15,6 +15,8 @@ import {
   applyPoContribution,
   contributionTotal,
   overwriteWarning,
+  planUndo,
+  type PoAfpStanding,
   type PoContribution,
 } from "@/lib/afp-po-staging";
 import {
@@ -1222,6 +1224,11 @@ export async function stagePoAmountForAfp(
   };
 
   let entryId = existing?.id ?? null;
+  // What this staging displaces, so undoing it can put the figure back. Only
+  // meaningful for the contribution that arrives first; a later one is undone
+  // by re-summing the ones still there.
+  const createdEntry = !existing;
+  const priorPlanned = existing ? Number(existing.planned_amount ?? 0) : null;
 
   if (!existing) {
     const { data: inserted, error } = await auth.supabase
@@ -1271,17 +1278,31 @@ export async function stagePoAmountForAfp(
   // is what the app did before the ledger existed - worse than the sum, never
   // wrong about this PO.
   if (entryId && prior.ledger) {
-    const { error } = await auth.supabase
-      .from("billing_entry_po_amounts")
-      .upsert(
-        {
+    // Correcting a figure this PO already has must not rewrite what that
+    // contribution originally displaced - the entry's planned_amount now
+    // INCLUDES this PO, so storing it would make undo restore the staged
+    // figure instead of the forecast underneath it.
+    const alreadyMine = prior.contributions.some((c) => c.poId === poId);
+    const row = alreadyMine
+      ? {
           billing_entry_id: entryId,
           procurement_order_id: poId,
           amount: input.amount,
           updated_at: new Date().toISOString(),
-        } as never,
-        { onConflict: "billing_entry_id,procurement_order_id" },
-      );
+        }
+      : {
+          billing_entry_id: entryId,
+          procurement_order_id: poId,
+          amount: input.amount,
+          created_entry: createdEntry,
+          prior_planned_amount: priorPlanned,
+          updated_at: new Date().toISOString(),
+        };
+    const { error } = await auth.supabase
+      .from("billing_entry_po_amounts")
+      .upsert(row as never, {
+        onConflict: "billing_entry_id,procurement_order_id",
+      });
     if (error && !isMissingLedger(error)) {
       return { ok: false, error: error.message };
     }
@@ -1342,4 +1363,206 @@ export async function getDeliveryLinkOptions(
 
   const split = splitDeliveryLinkChoices({ pos: data ?? [], wbsCode });
   return { ok: true, ...split };
+}
+
+// ---------------------------------------------------------------------------
+// Where a PO stands on the pay application, and taking it back off.
+//
+// Zarina: "I already added this to AFP. should say added and I would not be
+// able to add again unless I undo. So once add, there should be an undo
+// button. Please make sure that you are not just adding this to just one page
+// but should function across all POs."
+//
+// Both of these read the ledger rather than the entry's single source column,
+// so a line carrying two POs reports each one's own standing. There is one PO
+// page for every PO, so fixing it here fixes it everywhere.
+// ---------------------------------------------------------------------------
+
+export type PoAfpStandingResult =
+  | { ok: true; standing: PoAfpStanding }
+  | { ok: false; error: string };
+
+export async function getPoAfpStanding(
+  poId: string,
+  projectId: string,
+): Promise<PoAfpStandingResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { data: ledger, error } = await auth.supabase
+    .from("billing_entry_po_amounts")
+    .select("billing_entry_id, amount")
+    .eq("procurement_order_id", poId);
+
+  // No ledger yet (migration 0059). Fall back to the single source column,
+  // which is all a pre-0059 row can tell us and is still enough to stop the
+  // panel offering Add on a PO that is already on the application.
+  const entryAmount = new Map<string, number>();
+  if (error) {
+    if (!isMissingLedger(error)) return { ok: false, error: error.message };
+    const { data: legacy } = await auth.supabase
+      .from("billing_entries")
+      .select("*, billing_lines!inner(project_id)")
+      .eq("billing_lines.project_id", projectId);
+    for (const e of legacy ?? []) {
+      const row = e as { amount_is_manual?: boolean | null; source_procurement_order_id?: string | null };
+      if (row.amount_is_manual !== true) continue;
+      if (row.source_procurement_order_id !== poId) continue;
+      entryAmount.set(e.id as string, Number(e.planned_amount ?? 0));
+    }
+  } else {
+    for (const r of ledger ?? []) {
+      if (!r.billing_entry_id || Number(r.amount ?? 0) <= 0) continue;
+      entryAmount.set(r.billing_entry_id, Number(r.amount));
+    }
+  }
+
+  if (entryAmount.size === 0) return { ok: true, standing: { state: "none" } };
+
+  const { data: entries, error: entriesErr } = await auth.supabase
+    .from("billing_entries")
+    .select("*, billing_lines!inner(project_id, item_number, description)")
+    .in("id", Array.from(entryAmount.keys()))
+    .order("period_month", { ascending: false });
+  if (entriesErr) return { ok: false, error: entriesErr.message };
+
+  const rows = entries ?? [];
+  // A staged figure is the one to report: it is the one that can still be
+  // changed from here. Only when nothing is staged does a billed one matter,
+  // and then only to say the Billing page owns it now.
+  const staged = rows.find((e) => !hasBillingEvidence(e));
+  const target = staged ?? rows[0];
+  if (!target) return { ok: true, standing: { state: "none" } };
+
+  const line = target.billing_lines as unknown as {
+    item_number: string | null;
+    description: string | null;
+  } | null;
+  const lineLabel =
+    [line?.item_number, line?.description].filter(Boolean).join(" ") || "an SOV line";
+  const amount = entryAmount.get(target.id) ?? Number(target.planned_amount ?? 0);
+  const periodMonth = String(target.period_month);
+
+  if (staged) {
+    return { ok: true, standing: { state: "staged", amount, lineLabel, periodMonth } };
+  }
+  return {
+    ok: true,
+    standing: {
+      state: "billed",
+      amount,
+      lineLabel,
+      periodMonth,
+      afpNumber: (target.afp_number as string | null) ?? null,
+    },
+  };
+}
+
+export type UnstageAfpResult =
+  | { ok: true; amount: number; periodMonth: string }
+  | { ok: false; error: string };
+
+/**
+ * Take this PO back off the application.
+ *
+ * Other POs on the line are left exactly as they are and the line re-sums
+ * around the gap. When this was the only one, the entry goes back to what it
+ * carried before the staging displaced it - or is removed, if the staging is
+ * what created it. Nothing imported is destroyed by an undo.
+ */
+export async function unstagePoAmountFromAfp(
+  poId: string,
+  projectId: string,
+): Promise<UnstageAfpResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { data: mine, error: mineErr } = await auth.supabase
+    .from("billing_entry_po_amounts")
+    .select("billing_entry_id, amount, created_entry, prior_planned_amount")
+    .eq("procurement_order_id", poId);
+  if (mineErr) {
+    return {
+      ok: false,
+      error: isMissingLedger(mineErr)
+        ? "Undo needs database migration 0059 and 0060. Until they run, change the amount on the Bill this period panel instead."
+        : mineErr.message,
+    };
+  }
+
+  const entryIds = (mine ?? [])
+    .map((r) => r.billing_entry_id)
+    .filter((id): id is string => !!id);
+  if (entryIds.length === 0) {
+    return { ok: false, error: "This PO is not on an application." };
+  }
+
+  const { data: entries, error: entriesErr } = await auth.supabase
+    .from("billing_entries")
+    .select("*, billing_lines!inner(project_id)")
+    .in("id", entryIds);
+  if (entriesErr) return { ok: false, error: entriesErr.message };
+
+  const target = (entries ?? []).find((e) => !hasBillingEvidence(e));
+  if (!target) {
+    return {
+      ok: false,
+      error:
+        "This PO is already on a submitted application. Undo the application from the Billing page rather than the PO.",
+    };
+  }
+
+  const ledgerRow = (mine ?? []).find((r) => r.billing_entry_id === target.id);
+  const all = await readPoContributions(auth.supabase, target);
+  if (!all.ok) return { ok: false, error: all.error };
+
+  const amount = Number(ledgerRow?.amount ?? 0);
+  const plan = planUndo({
+    contributions: all.contributions,
+    poId,
+    createdEntry: ledgerRow?.created_entry === true,
+    priorPlannedAmount: ledgerRow?.prior_planned_amount ?? null,
+  });
+
+  // The contribution goes first either way. If what follows fails, the line is
+  // short by this PO rather than carrying money nobody can account for.
+  const { error: delErr } = await auth.supabase
+    .from("billing_entry_po_amounts")
+    .delete()
+    .eq("billing_entry_id", target.id)
+    .eq("procurement_order_id", poId);
+  if (delErr) return { ok: false, error: delErr.message };
+
+  if (plan.action === "delete_entry") {
+    const { error } = await auth.supabase
+      .from("billing_entries")
+      .delete()
+      .eq("id", target.id);
+    if (error) return { ok: false, error: error.message };
+  } else {
+    const patch: Record<string, unknown> = { planned_amount: plan.plannedAmount };
+    if (Number(target.actual_amount ?? 0) !== 0) {
+      patch.actual_amount = plan.plannedAmount;
+    }
+    if (plan.action === "restore") {
+      // Back to being whatever it was before anybody typed on it, so the panel
+      // recomputes it from milestones and the schedule the way it used to.
+      patch.amount_is_manual = false;
+      patch.source_procurement_order_id = null;
+    } else {
+      patch.source_procurement_order_id = plan.remaining[plan.remaining.length - 1]?.poId ?? null;
+    }
+    const { error } = await auth.supabase
+      .from("billing_entries")
+      .update(patch as unknown as TablesUpdate<"billing_entries">)
+      .eq("id", target.id);
+    if (error) {
+      return { ok: false, error: missingManualAmountMessage(error) ?? error.message };
+    }
+  }
+
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, amount, periodMonth: String(target.period_month) };
 }
