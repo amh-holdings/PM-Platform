@@ -29,9 +29,9 @@ export default async function NewProcurementPage({ params }: { params: Params })
         <p className="text-xs text-muted-foreground">
           Capture vendor, PO number, total value, and delivery timing. Link
           a contract document if you&apos;ve uploaded it to the project.
-          Line items and the milestone payment schedule live on the detail
-          page after saving. Leave the total blank if you are entering line
-          items - the subtotal, tax and freight build it for you.
+          Add the line items below and they save with the PO. Leave the total
+          blank and the subtotal, tax and freight build it for you. The
+          milestone payment schedule lives on the detail page after saving.
         </p>
       </div>
 

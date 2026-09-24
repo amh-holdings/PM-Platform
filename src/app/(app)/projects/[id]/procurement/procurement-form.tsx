@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MoneyInput } from "@/components/ui/money-input";
+import { PoDraftLines } from "./po-draft-lines";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { createProcurementOrder, updateProcurementOrder } from "../procurement-actions";
@@ -303,6 +304,15 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
               </div>
             </div>
           </div>
+          {/* Line items sit above the payment terms, because the terms are
+              terms ON this scope. Creating only: once the PO exists the live
+              editor on the detail page owns them, and two tables writing the
+              same rows is how they drift apart. */}
+          {mode === "create" && (
+            <div className="sm:col-span-2">
+              <PoDraftLines />
+            </div>
+          )}
           <div className="sm:col-span-2">
             <Label htmlFor="payment_terms_summary">Payment terms (free-text summary)</Label>
             <Input
