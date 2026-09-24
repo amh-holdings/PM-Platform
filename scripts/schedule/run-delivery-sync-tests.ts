@@ -12,9 +12,13 @@
 
 import {
   describeAfpFollowUp,
+  describeDeliveryLinkCount,
   describeDeliverySync,
   deliveryDateForTask,
+  deliveryLinkLabel,
+  deliveryLinkNote,
   planDeliverySync,
+  splitDeliveryLinkChoices,
 } from "../../src/lib/schedule-po-delivery";
 
 let passed = 0;
@@ -281,6 +285,113 @@ same(
   describeAfpFollowUp({ delivered: [], stagedPoIds: [], periodMonth: "2026-09-01" }),
   null,
 );
+
+
+// ---------------------------------------------------------------------------
+// What the picker offers. Zarina: "I dont see all POs here."
+// ---------------------------------------------------------------------------
+
+const POS = [
+  { id: "a", po_number: "P-001", vendor_name: "Maddox", status: "active" },
+  { id: "b", po_number: "P-002", vendor_name: "FTC Solar", status: "cancelled" },
+  {
+    id: "c",
+    po_number: "PO-017",
+    vendor_name: "GroundWork",
+    status: "delivered",
+    linked_delivery_task_wbs_code: "4.4.5.2",
+    actual_delivery_date: "2026-09-20",
+  },
+  {
+    id: "d",
+    po_number: "PO-019",
+    vendor_name: "Grid Power",
+    status: "active",
+    linked_delivery_task_wbs_code: "4.4.9.2",
+  },
+  { id: "e", po_number: null, vendor_name: "CAB Solar", status: "on hold" },
+];
+
+check(
+  "a cancelled PO is offered, not dropped",
+  splitDeliveryLinkChoices({ pos: POS, wbsCode: "4.4.5.2" }).available.some(
+    (o) => o.id === "b",
+  ),
+);
+
+check(
+  "the cancelled one carries its state so the picker can say it",
+  splitDeliveryLinkChoices({ pos: POS, wbsCode: "4.4.5.2" }).available.find(
+    (o) => o.id === "b",
+  )?.note === "cancelled",
+);
+
+same(
+  "active, complete and delivered get no annotation",
+  [
+    deliveryLinkNote("active"),
+    deliveryLinkNote("complete"),
+    deliveryLinkNote("delivered"),
+    deliveryLinkNote(null),
+    deliveryLinkNote("  "),
+  ],
+  [null, null, null, null, null],
+);
+
+same(
+  "an unrecognised state is passed through rather than swallowed",
+  deliveryLinkNote("On Hold"),
+  "on hold",
+);
+
+same(
+  "every PO on the project is accounted for",
+  splitDeliveryLinkChoices({ pos: POS, wbsCode: "4.4.5.2" }).total,
+  POS.length,
+);
+
+check(
+  "the PO already on this task sits in linked, not the dropdown",
+  (() => {
+    const s = splitDeliveryLinkChoices({ pos: POS, wbsCode: "4.4.5.2" });
+    return (
+      s.linked.length === 1 &&
+      s.linked[0].id === "c" &&
+      !s.available.some((o) => o.id === "c")
+    );
+  })(),
+);
+
+check(
+  "a PO on a different task stays offered, carrying the code it points at",
+  (() => {
+    const o = splitDeliveryLinkChoices({ pos: POS, wbsCode: "4.4.5.2" }).available.find(
+      (x) => x.id === "d",
+    );
+    return o?.linkedWbs === "4.4.9.2";
+  })(),
+);
+
+same(
+  "a PO with no number falls back to the vendor",
+  deliveryLinkLabel({ id: "e", po_number: null, vendor_name: "CAB Solar" }),
+  "CAB Solar",
+);
+
+same(
+  "a PO with neither still gets a label",
+  deliveryLinkLabel({ id: "z" }),
+  "PO",
+);
+
+check(
+  "the count line names the number so it can be checked against Procurement",
+  describeDeliveryLinkCount(13).startsWith("13 purchase orders on this project"),
+);
+
+check("one PO reads as one", describeDeliveryLinkCount(1).startsWith("1 purchase order on"));
+
+check("no POs says so plainly", describeDeliveryLinkCount(0).includes("No purchase orders"));
 
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);

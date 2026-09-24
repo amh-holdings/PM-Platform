@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 
+import { describeDeliveryLinkCount } from "@/lib/schedule-po-delivery";
+
 import {
   getDeliveryLinkOptions,
   setProcurementDeliveryTaskLink,
@@ -39,6 +41,7 @@ export function PoDeliveryLink({
   const [error, setError] = useState<string | null>(null);
   const [linked, setLinked] = useState<DeliveryLinkOption[]>([]);
   const [available, setAvailable] = useState<DeliveryLinkOption[]>([]);
+  const [total, setTotal] = useState(0);
   const [pick, setPick] = useState("");
 
   async function load() {
@@ -51,6 +54,7 @@ export function PoDeliveryLink({
     setError(null);
     setLinked(res.linked);
     setAvailable(res.available);
+    setTotal(res.total);
   }
 
   useEffect(() => {
@@ -103,6 +107,9 @@ export function PoDeliveryLink({
             >
               <span>
                 <span className="font-medium">{po.label}</span>
+                {po.note && (
+                  <span className="ml-2 text-amber-700">{po.note}</span>
+                )}
                 {po.actualDelivery && (
                   <span className="ml-2 text-emerald-700">
                     delivered {po.actualDelivery}
@@ -142,6 +149,7 @@ export function PoDeliveryLink({
             {available.map((po) => (
               <option key={po.id} value={po.id}>
                 {po.label}
+                {po.note ? ` (${po.note})` : ""}
                 {po.linkedWbs ? ` (now on ${po.linkedWbs})` : ""}
               </option>
             ))}
@@ -156,6 +164,12 @@ export function PoDeliveryLink({
             {busy ? "Linking..." : "Link"}
           </Button>
         </div>
+      )}
+
+      {!loading && (
+        <p className="text-[11px] text-muted-foreground">
+          {describeDeliveryLinkCount(total)}
+        </p>
       )}
 
       {error && <p className="text-[11px] text-red-600">{error}</p>}

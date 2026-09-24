@@ -11,6 +11,10 @@ import {
 import { recordedPayment } from "@/lib/progress";
 
 import type { ProcurementImportPlan } from "@/lib/procurement-import";
+import {
+  splitDeliveryLinkChoices,
+  type DeliveryLinkChoice,
+} from "@/lib/schedule-po-delivery";
 import { createClient } from "@/lib/supabase/server";
 import type { TablesInsert, TablesUpdate } from "@/lib/database.types";
 
@@ -1140,25 +1144,25 @@ export async function stagePoAmountForAfp(
 // Zarina: "You can put the option to link here. That's the window when you
 // click open button in the schedule."
 
-export type DeliveryLinkOption = {
-  id: string;
-  label: string;
-  /** Set when this PO already points at some task, so the picker can say so. */
-  linkedWbs: string | null;
-  actualDelivery: string | null;
-};
+export type DeliveryLinkOption = DeliveryLinkChoice;
 
 export type DeliveryLinkOptions =
-  | { ok: true; linked: DeliveryLinkOption[]; available: DeliveryLinkOption[] }
+  | {
+      ok: true;
+      linked: DeliveryLinkOption[];
+      available: DeliveryLinkOption[];
+      /** Every PO on the project, so the picker can be checked against Procurement. */
+      total: number;
+    }
   | { ok: false; error: string };
 
 /**
  * The POs already delivered by this task, and the ones that could be.
  *
- * Cancelled POs are left out - nothing is arriving from them. A PO linked to a
- * DIFFERENT task still appears as available, carrying the code it currently
- * points at, because moving a link is a legitimate correction and hiding the
- * option would just mean doing it from the other page instead.
+ * Every purchase order on the project comes back. This used to drop anything
+ * cancelled, which is how Zarina ended up looking at a short list with nothing
+ * on screen to explain it ("I dont see all POs here"). The picker labels state
+ * now instead of filtering on it.
  */
 export async function getDeliveryLinkOptions(
   projectId: string,
@@ -1174,18 +1178,6 @@ export async function getDeliveryLinkOptions(
     .order("po_number", { ascending: true, nullsFirst: false });
   if (error) return { ok: false, error: error.message };
 
-  const linked: DeliveryLinkOption[] = [];
-  const available: DeliveryLinkOption[] = [];
-  for (const po of data ?? []) {
-    if (po.status === "cancelled") continue;
-    const option: DeliveryLinkOption = {
-      id: po.id,
-      label: [po.po_number, po.vendor_name].filter(Boolean).join(" - ") || "PO",
-      linkedWbs: po.linked_delivery_task_wbs_code,
-      actualDelivery: po.actual_delivery_date,
-    };
-    if (po.linked_delivery_task_wbs_code === wbsCode) linked.push(option);
-    else available.push(option);
-  }
-  return { ok: true, linked, available };
+  const split = splitDeliveryLinkChoices({ pos: data ?? [], wbsCode });
+  return { ok: true, ...split };
 }
