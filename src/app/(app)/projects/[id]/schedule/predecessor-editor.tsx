@@ -6,9 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import type { RowIndex } from "@/lib/schedule-edit";
 import {
+  SUMMARY_REL_TYPES,
   findCycleWith,
+  leafCodesUnder,
   parsePredecessors,
   serializeLinks,
+  summaryCodesOf,
   type Link,
   type RelType,
 } from "@/lib/schedule-cpm";
@@ -80,14 +83,32 @@ export function PredecessorEditor({
     [allTasks],
   );
 
-  // Summary rows have no dates of their own, so linking to one does nothing.
-  // Only leaves are offered, minus this task and anything already chosen.
+  // Which codes are branches rather than work.
+  //
+  // Summary rows used to be left out entirely, on the reasoning that they have
+  // no dates of their own. The consequence was that a row disappeared from
+  // this picker the moment somebody added a child under it, which is what
+  // "we can't add predecessors that are just recently added" was.
+  //
+  // A branch is now offered and means "everything under it". The engine
+  // expands it to the leaves underneath, so finish-to-start against 4.4.7 is
+  // after every task in 4.4.7 has finished.
+  const summaries = useMemo(() => summaryCodesOf(allTasks), [allTasks]);
+
+  const leafCountUnder = (wbs: string) => leafCodesUnder(wbs, allTasks).length;
+
+  // A branch containing this task cannot precede it - the task would be
+  // waiting on itself. Excluded here rather than left to the loop check, which
+  // would report it as a circular dependency through a list of siblings.
+  const isAncestorOfCurrent = (wbs: string) =>
+    !!currentWbs && currentWbs.startsWith(wbs + ".");
+
   const options = useMemo(() => {
-    const isLeaf = (w: string) =>
-      !allTasks.some((o) => o.wbs_code !== w && o.wbs_code.startsWith(w + "."));
     return allTasks
-      .filter((t) => t.wbs_code !== currentWbs && isLeaf(t.wbs_code))
+      .filter((t) => t.wbs_code !== currentWbs && !isAncestorOfCurrent(t.wbs_code))
       .sort((a, b) => sortWbs(a.wbs_code, b.wbs_code));
+    // isAncestorOfCurrent closes over currentWbs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allTasks, currentWbs]);
 
   const chosen = useMemo(() => new Set(links.map((l) => l.pred)), [links]);
@@ -123,7 +144,19 @@ export function PredecessorEditor({
   const serialized = serializeLinks(links.filter((l) => l.pred)) ?? "";
 
   function update(i: number, patch: Partial<Link>) {
-    setLinks((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+    setLinks((prev) =>
+      prev.map((l, idx) => {
+        if (idx !== i) return l;
+        const next = { ...l, ...patch };
+        // Switching to a branch while holding SS or SF would leave a
+        // relationship the engine will not expand. Fall back to the one that
+        // means what picking a branch means.
+        if (summaries.has(next.pred) && !SUMMARY_REL_TYPES.includes(next.type)) {
+          next.type = "FS";
+        }
+        return next;
+      }),
+    );
   }
 
   // Starts empty. It used to pre-select whatever leaf happened to be first,
@@ -134,6 +167,15 @@ export function PredecessorEditor({
   }
 
   const blanks = links.filter((l) => !l.pred).length;
+
+  // Branch predecessors, named, so what the link actually means is on screen
+  // rather than something you have to know.
+  const branchLinks = links
+    .filter((l) => l.pred && summaries.has(l.pred))
+    .map((l) => ({
+      label: `${label(l.pred)} ${nameByWbs.get(l.pred) ?? l.pred}`.trim(),
+      count: leafCountUnder(l.pred),
+    }));
 
   return (
     <div className="space-y-3 sm:col-span-2">
@@ -163,6 +205,9 @@ export function PredecessorEditor({
                 )}
                 onChange={(wbs) => update(i, { pred: wbs })}
                 rowOf={(wbs) => rowIndex?.byWbs.get(wbs) ?? null}
+                branchSizeOf={(wbs) =>
+                  summaries.has(wbs) ? leafCountUnder(wbs) : 0
+                }
                 invalid={!!l.pred && !nameByWbs.has(l.pred)}
               />
 
@@ -172,9 +217,18 @@ export function PredecessorEditor({
                 className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                 title={REL_HINT[l.type]}
               >
-                {(Object.keys(REL_LABEL) as RelType[]).map((r) => (
-                  <option key={r} value={r}>{REL_LABEL[r]}</option>
-                ))}
+                {/* Against a branch, start-to-start and start-to-finish mean
+                    its EARLIEST start, and the engine expands a branch by
+                    taking the latest of its tasks. Offering them would
+                    schedule the opposite of what was asked, so they are not
+                    offered. */}
+                {(Object.keys(REL_LABEL) as RelType[])
+                  .filter(
+                    (r) => !summaries.has(l.pred) || SUMMARY_REL_TYPES.includes(r),
+                  )
+                  .map((r) => (
+                    <option key={r} value={r}>{REL_LABEL[r]}</option>
+                  ))}
               </select>
 
               <div className="flex items-center gap-1">
@@ -199,6 +253,17 @@ export function PredecessorEditor({
             </div>
           ))}
         </div>
+      )}
+
+      {branchLinks.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {branchLinks
+            .map(
+              (b) =>
+                `${b.label} is a branch, so this waits for all ${b.count} task${b.count === 1 ? "" : "s"} under it.`,
+            )
+            .join(" ")}
+        </p>
       )}
 
       {blanks > 0 && (
@@ -277,6 +342,15 @@ export function hasLinkErrors(
   // loop, and useless for working out what to do about it.
   if (links.some((l) => l.pred === currentWbs)) {
     return `${currentWbs} is listed as its own predecessor. A task cannot wait on itself.`;
+  }
+  // A branch that contains this task is the same mistake one level up. Caught
+  // here so it reads as what it is rather than as a loop through whichever
+  // sibling the sort happened to reach first.
+  const ownBranch = links.find(
+    (l) => l.pred && currentWbs.startsWith(l.pred + "."),
+  );
+  if (ownBranch) {
+    return `${ownBranch.pred} is the branch ${currentWbs} sits in, so it cannot come before it. Link to the tasks in another branch instead.`;
   }
   const missing = links.filter((l) => !known.has(l.pred)).map((l) => l.pred);
   if (missing.length) return `Unknown task: ${missing.join(", ")}`;

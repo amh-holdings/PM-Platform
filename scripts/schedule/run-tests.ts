@@ -38,8 +38,12 @@ import {
 } from "../../src/lib/schedule-status-tone";
 import {
   computeCpm,
+  expandSummaryLinks,
+  findCycleWith,
+  leafCodesUnder,
   parsePredecessors,
   serializeLinks,
+  summaryCodesOf,
   type CpmInput,
 } from "@/lib/schedule-cpm";
 import { assessSchedule } from "@/lib/schedule-health";
@@ -2112,7 +2116,24 @@ section("Editing - row numbers as a way of writing, not storing");
   check("a self-reference is caught", !!err, String(err));
   check("and named as one", (err ?? "").includes("its own predecessor"), String(err));
   check("not as a loop", !(err ?? "").toLowerCase().includes("circular"), String(err));
-  eq("a real link is still fine", hasLinkErrors(tasks, "2.1.1", "2.1"), null);
+  // 2.1 is 2.1.1's own branch, so depending on it is depending on yourself.
+  // This used to pass silently because summary links did nothing at all.
+  const ancestor = hasLinkErrors(tasks, "2.1.1", "2.1");
+  check("depending on your own branch is refused", !!ancestor, String(ancestor));
+  check(
+    "and said in those words, not as a loop through its siblings",
+    (ancestor ?? "").includes("branch"),
+    String(ancestor),
+  );
+  eq(
+    "an unrelated link is still fine",
+    hasLinkErrors(
+      [...tasks, { wbs_code: "3", task_name: "Permits", predecessors: null }],
+      "2.1.1",
+      "3",
+    ),
+    null,
+  );
 }
 
 section("Editing - linking without typing");
@@ -2863,6 +2884,130 @@ section("Dragging a branch above the first row of the sheet");
   // reparents like any other interior drop.
   const drop = planDrop(importedOutOfOrder, ["4"], "5.1", "after");
   eq("dropping below the first row is not the top of the sheet", drop.reparents, true);
+}
+
+// ============================================================================
+// Linking to a whole branch
+//
+// Zarina: "In the schedule, we can't add predecessors that are just recently
+// added. So not all lines are shown. Should show parent line suggestion as
+// well so they represent once all child task are done it will trigger a line."
+// ============================================================================
+{
+  const BRANCH = [
+    { wbs_code: "1", task_name: "Mobilize", predecessors: null, duration_days: 2, start_date: "2026-09-01" },
+    { wbs_code: "4", task_name: "Construction", predecessors: null },
+    { wbs_code: "4.4", task_name: "Electrical", predecessors: null },
+    { wbs_code: "4.4.1", task_name: "Conduit", predecessors: null, duration_days: 5, start_date: "2026-09-01" },
+    { wbs_code: "4.4.2", task_name: "Pull wire", predecessors: null, duration_days: 10, start_date: "2026-09-01" },
+    { wbs_code: "5", task_name: "Energize", predecessors: "4.4", duration_days: 1 },
+  ];
+
+  same(
+    "a branch is recognised by having work under it",
+    Array.from(summaryCodesOf(BRANCH)).sort(),
+    ["4", "4.4"],
+  );
+
+  same(
+    "and its leaves are what it stands for",
+    leafCodesUnder("4.4", BRANCH),
+    ["4.4.1", "4.4.2"],
+  );
+
+  same(
+    "a branch two levels up reaches the same leaves",
+    leafCodesUnder("4", BRANCH),
+    ["4.4.1", "4.4.2"],
+  );
+
+  same(
+    "finish-to-start on a branch becomes one link per task under it",
+    expandSummaryLinks([{ pred: "4.4", type: "FS", lag: 0 }], BRANCH),
+    [
+      { pred: "4.4.1", type: "FS", lag: 0 },
+      { pred: "4.4.2", type: "FS", lag: 0 },
+    ],
+  );
+
+  same(
+    "the lag rides along to every one of them",
+    expandSummaryLinks([{ pred: "4.4", type: "FS", lag: 3 }], BRANCH),
+    [
+      { pred: "4.4.1", type: "FS", lag: 3 },
+      { pred: "4.4.2", type: "FS", lag: 3 },
+    ],
+  );
+
+  same(
+    "finish-to-finish expands the same way - both take the latest",
+    expandSummaryLinks([{ pred: "4.4", type: "FF", lag: 0 }], BRANCH),
+    [
+      { pred: "4.4.1", type: "FF", lag: 0 },
+      { pred: "4.4.2", type: "FF", lag: 0 },
+    ],
+  );
+
+  same(
+    "start-to-start is left alone - fanning it out would mean the opposite",
+    expandSummaryLinks([{ pred: "4.4", type: "SS", lag: 0 }], BRANCH),
+    [{ pred: "4.4", type: "SS", lag: 0 }],
+  );
+
+  same(
+    "a link to real work is untouched",
+    expandSummaryLinks([{ pred: "4.4.1", type: "FS", lag: 2 }], BRANCH),
+    [{ pred: "4.4.1", type: "FS", lag: 2 }],
+  );
+
+  same(
+    "the same task reached directly and through its branch keeps the longer lag",
+    expandSummaryLinks(
+      [
+        { pred: "4.4.1", type: "FS", lag: 5 },
+        { pred: "4.4", type: "FS", lag: 0 },
+      ],
+      BRANCH,
+    ),
+    [
+      { pred: "4.4.1", type: "FS", lag: 5 },
+      { pred: "4.4.2", type: "FS", lag: 0 },
+    ],
+  );
+
+  same(
+    "an empty branch drops the link rather than inventing one",
+    expandSummaryLinks([{ pred: "9", type: "FS", lag: 0 }], [
+      ...BRANCH,
+      { wbs_code: "9", task_name: "Empty", predecessors: null },
+    ]),
+    [{ pred: "9", type: "FS", lag: 0 }],
+  );
+
+  // The point of all of it: 5 waits for the LAST task in 4.4, not the first.
+  const cpm = computeCpm(BRANCH as CpmInput[], { calendar: 5, dataDate: "2026-09-01" });
+  const wire = cpm.byWbs.get("4.4.2");
+  const energize = cpm.byWbs.get("5");
+  check(
+    "a task behind a branch starts after every task in it has finished",
+    !!energize && !!wire && energize.es > wire.ef,
+    `energize ES ${energize?.es}, wire EF ${wire?.ef}`,
+  );
+  check(
+    "and after the longer of the two, not the shorter",
+    !!energize && energize.es > (cpm.byWbs.get("4.4.1")?.ef ?? ""),
+    `energize ES ${energize?.es}, conduit EF ${cpm.byWbs.get("4.4.1")?.ef}`,
+  );
+  check(
+    "and the branch itself is still not scheduled - it is not work",
+    !cpm.byWbs.has("4.4"),
+  );
+
+  // A branch that contains the task would be the task waiting on itself.
+  check(
+    "depending on your own branch is caught as a loop",
+    !!findCycleWith(BRANCH, "4.4.2", [{ pred: "4.4", type: "FS", lag: 0 }]),
+  );
 }
 
 // ============================================================================
