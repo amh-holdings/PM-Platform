@@ -1104,6 +1104,14 @@ export async function stagePoAmountForAfp(
     if (Number(existing.actual_amount ?? 0) !== 0) {
       patch.actual_amount = input.amount;
     }
+    // The Bill this period panel lists forecast, suggested and reviewed only.
+    // An entry carrying anything else - null on a row older than migration
+    // 0009, or a status some import wrote - would take the amount and then not
+    // appear, which reads exactly like the save having failed. There is no
+    // billing evidence on it (checked above), so forecast is the truth.
+    if (!["forecast", "suggested", "reviewed"].includes(existing.status ?? "")) {
+      patch.status = "forecast";
+    }
     const { error } = await auth.supabase
       .from("billing_entries")
       .update(patch as unknown as TablesUpdate<"billing_entries">)
