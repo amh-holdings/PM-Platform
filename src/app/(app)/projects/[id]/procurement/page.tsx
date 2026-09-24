@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { nextDueDate } from "@/lib/po-payment-forecast";
 import type { ExistingOrder } from "@/lib/procurement-import";
 import { ProcurementImportDialog } from "./procurement-import-dialog";
 
@@ -71,23 +72,38 @@ export default async function ProjectProcurementPage({ params }: { params: Param
     );
   }
 
+  const rows = orders ?? [];
+
+  // Next due is read off the same forecast the cash flow uses, not off
+  // expected_date. A payment that fires on delivery follows the delivery task
+  // the PO is linked to, and this column saying one date while the dashboard
+  // draws another is how the two stop agreeing.
+  const taskByWbs = new Map((deliveryTasks ?? []).map((t) => [t.wbs_code, t]));
+  const paymentsByOrder = new Map<string, typeof payments>();
+  for (const m of payments ?? []) {
+    const list = paymentsByOrder.get(m.procurement_order_id) ?? [];
+    list.push(m);
+    paymentsByOrder.set(m.procurement_order_id, list);
+  }
+
   const milestoneByOrder = new Map<
     string,
     { totalPlanned: number; totalPaid: number; nextDue: string | null }
   >();
-  for (const m of payments ?? []) {
-    const id = m.procurement_order_id;
-    if (!milestoneByOrder.has(id))
-      milestoneByOrder.set(id, { totalPlanned: 0, totalPaid: 0, nextDue: null });
-    const cur = milestoneByOrder.get(id)!;
-    cur.totalPlanned += Number(m.amount ?? 0);
-    cur.totalPaid += Number(m.paid_amount ?? 0);
-    if (!m.paid_at && m.expected_date) {
-      if (!cur.nextDue || m.expected_date < cur.nextDue) cur.nextDue = m.expected_date;
-    }
+  for (const order of rows) {
+    const mine = paymentsByOrder.get(order.id) ?? [];
+    if (mine.length === 0) continue;
+    const linkedWbs = order.linked_delivery_task_wbs_code;
+    milestoneByOrder.set(order.id, {
+      totalPlanned: mine.reduce((s, m) => s + Number(m.amount ?? 0), 0),
+      totalPaid: mine.reduce((s, m) => s + Number(m.paid_amount ?? 0), 0),
+      nextDue: nextDueDate({
+        po: order,
+        milestones: mine,
+        deliveryTask: linkedWbs ? (taskByWbs.get(linkedWbs) ?? null) : null,
+      }),
+    });
   }
-
-  const rows = orders ?? [];
 
   // What the importer matches against. It needs the whole PO, milestones and
   // all, because a payment is matched on its name inside its own PO.

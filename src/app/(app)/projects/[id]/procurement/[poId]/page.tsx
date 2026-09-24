@@ -6,6 +6,10 @@ import { cn } from "@/lib/utils";
 import { defaultAfpAmountForPo } from "@/lib/billing-progress";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
+import {
+  describeMilestoneDate,
+  forecastMilestoneDate,
+} from "@/lib/po-payment-forecast";
 
 import { AfpStanding } from "./afp-standing";
 import { PoLineEditor } from "./po-line-editor";
@@ -103,6 +107,21 @@ export default async function ProcurementDetailPage({
     }));
   }
 
+  // The linked delivery task, read directly rather than picked out of the
+  // options above: that list is filtered on the task name containing
+  // "delivery", and a PO can be linked to a task called something else.
+  let linkedTask: { wbs_code: string; task_name: string | null; end_date: string | null } | null =
+    null;
+  if (po.linked_delivery_task_wbs_code) {
+    const { data } = await supabase
+      .from("schedule_tasks")
+      .select("wbs_code, task_name, end_date")
+      .eq("project_id", params.id)
+      .eq("wbs_code", po.linked_delivery_task_wbs_code)
+      .maybeSingle();
+    linkedTask = data ?? null;
+  }
+
   let linkedDoc: { file_name: string } | null = null;
   if (po.document_id) {
     const { data } = await supabase
@@ -152,6 +171,15 @@ export default async function ProcurementDetailPage({
     paid_amount: m.paid_amount == null ? null : Number(m.paid_amount),
     sort_order: m.sort_order,
     notes: m.notes,
+    // What date the cash forecast actually uses for this row, and why. A
+    // delivery payment follows the linked schedule task, so the typed
+    // Expected date is not always the one the curve is drawn on. Saying so
+    // here is cheaper than somebody finding the difference on the dashboard
+    // and having to work back to this page.
+    forecast: describeMilestoneDate(
+      forecastMilestoneDate({ milestone: m, po, deliveryTask: linkedTask }),
+      linkedTask?.task_name ?? null,
+    ),
   });
 
   const totalPct = poValue > 0 ? (totalPlanned / poValue) * 100 : 0;

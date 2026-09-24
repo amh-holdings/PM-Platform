@@ -13,6 +13,7 @@ import {
   markMilestonePaid,
   updateMilestone,
 } from "../../procurement-actions";
+import { cn } from "@/lib/utils";
 import { formatCurrency, formatDate } from "@/lib/format";
 import {
   MILESTONE_TRIGGERS,
@@ -93,6 +94,12 @@ type Milestone = {
   paid_amount: number | null;
   sort_order: number | null;
   notes: string | null;
+  /**
+   * One line saying what date the cash forecast uses for this row and where
+   * it came from, or null when the Expected column already says it. Computed
+   * on the server by describeMilestoneDate.
+   */
+  forecast?: string | null;
 };
 
 type Props = {
@@ -280,7 +287,19 @@ export function MilestoneEditor({
                     {formatCurrency(Number(m.amount ?? 0))}
                   </td>
                   <td className="px-2 py-1.5 text-muted-foreground">
-                    {m.expected_date ? formatDate(m.expected_date) : "-"}
+                    <div>{m.expected_date ? formatDate(m.expected_date) : "-"}</div>
+                    {m.forecast && (
+                      <div
+                        className={cn(
+                          "text-[10px]",
+                          m.forecast.startsWith("No date")
+                            ? "text-amber-700"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        {m.forecast}
+                      </div>
+                    )}
                   </td>
                   <td className="px-2 py-1.5">
                     {payingId === m.id ? (

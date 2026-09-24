@@ -8,8 +8,11 @@
 //      otherwise period_month + projects.owner_payment_terms_days.
 //   3. Sub cash-out date = period_month + subcontractor.payment_terms_days.
 //      Sub retainage is held; net of retainage = gross * (1 - pct/100).
-//   4. Vendor cash-out comes from procurement_payments.expected_date - we do
-//      NOT also count cost_forecasts on vendor-linked codes (would double).
+//   4. Vendor cash-out comes from procurement_payments - we do NOT also count
+//      cost_forecasts on vendor-linked codes (would double). The date is not
+//      expected_date alone: a milestone that fires on delivery follows the
+//      delivery task its PO is linked to, so vendor cash moves when the
+//      schedule moves. Rules in po-payment-forecast.ts.
 
 export function effectiveAmount(
   actual: number | null | undefined,
