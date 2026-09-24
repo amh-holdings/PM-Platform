@@ -32,6 +32,7 @@ import {
   type LinkTask,
 } from "./predecessor-editor";
 import { TASK_TYPES, TASK_TYPE_HELP, TASK_TYPE_LABELS } from "@/lib/schedule-task-type";
+import { PoDeliveryLink } from "./po-delivery-link";
 
 export type TaskFormValues = {
   id: string;
@@ -384,6 +385,14 @@ export function TaskEditDialog({
                     </select>
                     <p className="text-[11px] text-muted-foreground">{TASK_TYPE_HELP}</p>
                   </div>
+                )}
+
+                {/* Sits under Type because the PO link is what makes
+                    Procurement mean anything on the billing side. Only on an
+                    existing task: a row being created has no WBS code for a PO
+                    to point at yet. */}
+                {!creating && (
+                  <PoDeliveryLink projectId={projectId} wbsCode={values.wbs_code} />
                 )}
 
                 {phase1Available && (

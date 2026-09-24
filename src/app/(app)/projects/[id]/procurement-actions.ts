@@ -1118,3 +1118,66 @@ export async function stagePoAmountForAfp(
   revalidatePath(`/projects/${projectId}`);
   return { ok: true, periodMonth, amount: input.amount };
 }
+
+// ---------------------------------------------------------------------------
+// Linking from the schedule side
+// ---------------------------------------------------------------------------
+//
+// setProcurementDeliveryTaskLink above is reached from the PO page, which is
+// the wrong end of the journey for somebody working through a schedule. They
+// are looking at 4.4.5.2 Delivery, they know GroundWorks delivers it, and
+// leaving the schedule to go and find that PO is the step that means the link
+// never gets made - which is why completing a delivery row moved nothing.
+//
+// Zarina: "You can put the option to link here. That's the window when you
+// click open button in the schedule."
+
+export type DeliveryLinkOption = {
+  id: string;
+  label: string;
+  /** Set when this PO already points at some task, so the picker can say so. */
+  linkedWbs: string | null;
+  actualDelivery: string | null;
+};
+
+export type DeliveryLinkOptions =
+  | { ok: true; linked: DeliveryLinkOption[]; available: DeliveryLinkOption[] }
+  | { ok: false; error: string };
+
+/**
+ * The POs already delivered by this task, and the ones that could be.
+ *
+ * Cancelled POs are left out - nothing is arriving from them. A PO linked to a
+ * DIFFERENT task still appears as available, carrying the code it currently
+ * points at, because moving a link is a legitimate correction and hiding the
+ * option would just mean doing it from the other page instead.
+ */
+export async function getDeliveryLinkOptions(
+  projectId: string,
+  wbsCode: string,
+): Promise<DeliveryLinkOptions> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { data, error } = await auth.supabase
+    .from("procurement_orders")
+    .select("id, po_number, vendor_name, status, linked_delivery_task_wbs_code, actual_delivery_date")
+    .eq("project_id", projectId)
+    .order("po_number", { ascending: true, nullsFirst: false });
+  if (error) return { ok: false, error: error.message };
+
+  const linked: DeliveryLinkOption[] = [];
+  const available: DeliveryLinkOption[] = [];
+  for (const po of data ?? []) {
+    if (po.status === "cancelled") continue;
+    const option: DeliveryLinkOption = {
+      id: po.id,
+      label: [po.po_number, po.vendor_name].filter(Boolean).join(" - ") || "PO",
+      linkedWbs: po.linked_delivery_task_wbs_code,
+      actualDelivery: po.actual_delivery_date,
+    };
+    if (po.linked_delivery_task_wbs_code === wbsCode) linked.push(option);
+    else available.push(option);
+  }
+  return { ok: true, linked, available };
+}
