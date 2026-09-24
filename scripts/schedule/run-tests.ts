@@ -84,6 +84,7 @@ import {
   ancestorTrail,
   describeAncestorTrail,
   describeDraftReplaced,
+  describeSavedCells,
   pendingDraftFields,
   withoutTaskDraft,
   parseGrid,
@@ -2990,6 +2991,72 @@ section("Dragging a branch above the first row of the sheet");
     "a save that replaced nothing says nothing",
     describeDraftReplaced([], "4.4.2.2 Delivery", LABEL),
     null,
+  );
+}
+
+
+{
+  // Zarina, after saving: "Still the same even if I already save the row."
+  // The banner said "1 task saved" and nothing else, so a save that wrote the
+  // value she was trying to get rid of looked identical to one that wrote the
+  // value she wanted.
+  const TASKS: Record<string, { wbs_code: string; task_name: string }> = {
+    t1: { wbs_code: "4.4.2.2", task_name: "Delivery" },
+    t2: { wbs_code: "4.4.2.1", task_name: "Lead Time" },
+    t3: { wbs_code: "4.3.1.2", task_name: "Delivery" },
+    t4: { wbs_code: "4.3.2.1", task_name: "Lead Time" },
+  };
+  const at = (id: string) => TASKS[id];
+  const lbl = (f: string) =>
+    ({ start_date: "Start", end_date: "Finish", duration_days: "Duration", status: "Status" })[f] ?? f;
+  const val = (_f: string, v: unknown) => (v === null || v === "" ? "cleared" : String(v));
+
+  eq(
+    "the banner reads back what it wrote",
+    describeSavedCells(
+      [{ id: "t1", start_date: "2026-11-18", end_date: "2026-11-18" }],
+      at, lbl, val,
+    ),
+    "4.4.2.2 Delivery: Start 2026-11-18, Finish 2026-11-18.",
+  );
+
+  eq(
+    "a cleared cell says cleared rather than showing nothing",
+    describeSavedCells([{ id: "t1", end_date: null }], at, lbl, val),
+    "4.4.2.2 Delivery: Finish cleared.",
+  );
+
+  eq(
+    "two rows both get named",
+    describeSavedCells(
+      [{ id: "t1", status: "Complete" }, { id: "t2", duration_days: 29 }],
+      at, lbl, val,
+    ),
+    "4.4.2.2 Delivery: Status Complete. 4.4.2.1 Lead Time: Duration 29.",
+  );
+
+  check(
+    "a long save is summarised rather than filling the banner",
+    (() => {
+      const line = describeSavedCells(
+        Object.keys(TASKS).map((id) => ({ id, status: "Complete" })),
+        at, lbl, val, 3,
+      ) ?? "";
+      return line.includes("And 1 more") && line.includes("4.4.2.2 Delivery");
+    })(),
+  );
+
+  eq(
+    "a patch carrying only an id has nothing to report",
+    describeSavedCells([{ id: "t1" }], at, lbl, val),
+    null,
+  );
+  eq("and neither does an empty save", describeSavedCells([], at, lbl, val), null);
+
+  eq(
+    "a row that has gone is still named as a row, not skipped",
+    describeSavedCells([{ id: "gone", start_date: "2026-10-05" }], at, lbl, val),
+    "A task: Start 2026-10-05.",
   );
 }
 

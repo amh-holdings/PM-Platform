@@ -55,6 +55,7 @@ import {
   planDrop,
   buildRowIndex,
   describeDraftReplaced,
+  describeSavedCells,
   pendingDraftFields,
   withoutTaskDraft,
   nearbyPredecessors,
@@ -971,9 +972,26 @@ export function ScheduleSplitView({
       // The delivery note is what says whether completing a procurement row
       // actually reached the AFP, which is the whole point of doing it here
       // rather than twice. It leads, because it is the part that moves money.
+      //
+      // Then the figures. "1 task saved" on its own made a save that wrote the
+      // value somebody was trying to get RID of look identical to one that
+      // wrote the value they wanted. Neither surface recalculates a date on
+      // save, so whichever saved last is what is stored, and the only way to
+      // tell which that was is to read it back.
       text: [
         res.deliveryNote,
         `${res.count} task${res.count === 1 ? "" : "s"} saved. Float and the projection have been recalculated. The baseline is untouched, so the variance is still visible.`,
+        describeSavedCells(
+          patches,
+          (id) => byId.get(id) as unknown as Record<string, unknown> | undefined,
+          (f) => COLUMN_LABEL[f] ?? f,
+          (f, v) =>
+            v === null || v === undefined || v === ""
+              ? "cleared"
+              : f === "start_date" || f === "end_date"
+                ? fmtDate(String(v))
+                : String(v),
+        ),
       ]
         .filter(Boolean)
         .join(" "),

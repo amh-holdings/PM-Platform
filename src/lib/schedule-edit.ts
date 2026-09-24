@@ -2284,3 +2284,41 @@ export function describeDraftReplaced(
     `Edit task replaced them.`
   );
 }
+
+/**
+ * What a save actually wrote, named cell by cell.
+ *
+ * Zarina, after saving the row: "Still the same even if I already save the
+ * row." The banner said "1 task saved" and nothing else, so a save that wrote
+ * the value she was trying to get rid of looked identical to one that wrote
+ * the value she wanted. Neither the grid nor the dialog recalculates a date on
+ * save - whichever surface saved last is what is stored - and with the banner
+ * silent about the figures there was no way to tell which that was.
+ *
+ * Now it reads them back. A save that put Nov 18 in the Start box says so.
+ */
+export function describeSavedCells<T extends Record<string, unknown>>(
+  patches: readonly (Record<string, unknown> & { id: string })[],
+  taskById: (id: string) => T | undefined,
+  labelOf: (field: string) => string,
+  formatValue: (field: string, value: unknown) => string,
+  maxRows = 3,
+): string | null {
+  const parts: string[] = [];
+  for (const patch of patches) {
+    const cells = Object.entries(patch).filter(([k]) => k !== "id");
+    if (cells.length === 0) continue;
+    const task = taskById(patch.id);
+    const name = task
+      ? `${task.wbs_code ?? ""} ${task.task_name ?? ""}`.trim() || "A task"
+      : "A task";
+    const written = cells
+      .map(([field, value]) => `${labelOf(field)} ${formatValue(field, value)}`)
+      .join(", ");
+    parts.push(`${name}: ${written}`);
+  }
+  if (parts.length === 0) return null;
+  if (parts.length <= maxRows) return `${parts.join(". ")}.`;
+  const shown = parts.slice(0, maxRows).join(". ");
+  return `${shown}. And ${parts.length - maxRows} more.`;
+}
