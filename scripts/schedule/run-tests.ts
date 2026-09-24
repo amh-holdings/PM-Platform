@@ -26,6 +26,7 @@ import {
   progressCanBeSetByHand,
   progressFromStatus,
 } from "../../src/lib/schedule-task-type";
+import { rowTone, statusRowTone } from "../../src/lib/schedule-status-tone";
 import {
   computeCpm,
   parsePredecessors,
@@ -994,6 +995,80 @@ section("Status Complete is what marks a delivery done");
   same(
     "a different status spelling does not",
     progressFromStatus({ ...proc, status: "Completed", currentPct: null }),
+    null,
+  );
+}
+
+// ============================================================================
+section("Row colour: status as well as the critical path");
+// ============================================================================
+
+{
+  // Row colour used to come only from the critical path, so a procurement row
+  // on 62 days of float was never tinted at all. Zarina: "Right now highlights
+  // only applies to civil constructions."
+  eq("Complete tints green", statusRowTone("Complete"), "bg-emerald-50/70");
+  eq("so does Approved", statusRowTone("Approved"), "bg-emerald-50/70");
+  eq("Rejected is red", statusRowTone("Rejected"), "bg-destructive/5");
+  eq("Awaiting is amber - blocked on somebody else", statusRowTone("Awaiting"), "bg-amber-50/50");
+
+  // The point of the scarcity: tinting the states most of a live schedule sits
+  // in would leave nothing plain to contrast against.
+  eq("In Progress stays plain", statusRowTone("In Progress"), null);
+  eq("Not Started stays plain", statusRowTone("Not Started"), null);
+  eq("no status at all stays plain", statusRowTone(null), null);
+  eq("and so does a status nobody mapped", statusRowTone("On Hold"), null);
+  eq("padding does not defeat it", statusRowTone(" Complete "), "bg-emerald-50/70");
+}
+
+{
+  const plain = { critical: false, nearCritical: false };
+
+  eq(
+    "a procurement row on float finally shows its status",
+    rowTone({ status: "Complete", ...plain }),
+    "bg-emerald-50/70",
+  );
+
+  eq(
+    "a finished task is not a risk, so green beats the critical red",
+    rowTone({ status: "Complete", critical: true, nearCritical: false }),
+    "bg-emerald-50/70",
+  );
+
+  eq(
+    "but a BLOCKED task on the critical path keeps the red - that is the worst row on the sheet",
+    rowTone({ status: "Awaiting", critical: true, nearCritical: false }),
+    "bg-destructive/5",
+  );
+
+  eq(
+    "and keeps its amber when it is only near critical",
+    rowTone({ status: "Awaiting", critical: false, nearCritical: true }),
+    "bg-amber-50/40",
+  );
+
+  eq(
+    "Awaiting off the critical path shows its own amber",
+    rowTone({ status: "Awaiting", ...plain }),
+    "bg-amber-50/50",
+  );
+
+  eq(
+    "critical still wins over the plain states, which is the old behaviour intact",
+    rowTone({ status: "In Progress", critical: true, nearCritical: false }),
+    "bg-destructive/5",
+  );
+
+  eq(
+    "near critical too",
+    rowTone({ status: "Not Started", critical: false, nearCritical: true }),
+    "bg-amber-50/40",
+  );
+
+  eq(
+    "and a plain row on float is still plain",
+    rowTone({ status: "In Progress", ...plain }),
     null,
   );
 }
