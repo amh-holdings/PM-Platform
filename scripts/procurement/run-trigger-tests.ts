@@ -5,8 +5,10 @@
 import {
   MILESTONE_TRIGGERS,
   MILESTONE_TRIGGER_GROUPS,
+  estimateProcurementProgress,
   isRecognisedTrigger,
   milestoneTriggered,
+  ownerBillingMilestones,
   recordedPayment,
 } from "@/lib/progress";
 
@@ -205,6 +207,99 @@ section("A payment recorded as already made");
   const r = recordedPayment(45000, null);
   check("an unpaid milestone with an amount is fine", r.ok === true);
   if (r.ok) eq("but it is not marked paid", r.paid_amount, null);
+}
+
+
+// ---------------------------------------------------------------------------
+// Two schedules on one PO: what we pay the vendor, what we bill the owner
+// ---------------------------------------------------------------------------
+//
+// PO-022 is the case that forced the split. The vendor gets 50% on deposit and
+// 50% on delivery. The owner is billed 50% of the PO total the day the PO is
+// issued, whatever the vendor terms say. Both live on the same PO.
+
+const PO_022 = {
+  po_number: "PO-022",
+  vendor_name: "Matthews Power",
+  total_value: 8960.49,
+  status: "active",
+  signed_at: "2026-08-25",
+  actual_delivery_date: null,
+};
+
+const vendorTerms = [
+  { milestone_name: "Deposit", trigger_event: "Deposit", pct_of_total: 50, amount: 3975.25, side: "vendor" },
+  { milestone_name: "Delivery", trigger_event: "Delivery to site", amount: 4985.24, side: "vendor" },
+];
+
+const ownerTerms = [
+  { milestone_name: "Owner - 50% on PO", trigger_event: "PO signed", pct_of_total: 50, amount: 4480.25, side: "owner" },
+  { milestone_name: "Owner - balance on delivery", trigger_event: "Delivery to site", pct_of_total: 50, amount: 4480.24, side: "owner" },
+];
+
+{
+  const r = ownerBillingMilestones([...vendorTerms, ...ownerTerms]);
+  eq("owner rows win outright when they exist", r.milestones.length, 2);
+  eq("and it is not a fallback", r.usingVendorTerms, false);
+  check("no vendor row leaks in", r.milestones.every((m) => m.side === "owner"));
+}
+
+{
+  const r = ownerBillingMilestones(vendorTerms);
+  eq("vendor terms stand in when no owner rows exist", r.milestones.length, 2);
+  eq("and it says so", r.usingVendorTerms, true);
+}
+
+{
+  // Rows predating 0055 carry no side at all. They are vendor rows.
+  const r = ownerBillingMilestones([
+    { milestone_name: "Deposit", trigger_event: "Deposit", amount: 100 },
+  ]);
+  eq("a row with no side is a vendor row", r.usingVendorTerms, true);
+  eq("and it still stands in", r.milestones.length, 1);
+}
+
+{
+  eq("no milestones at all is still a vendor fallback of nothing",
+     ownerBillingMilestones([]).milestones.length, 0);
+}
+
+{
+  // The number Zarina asked for: $4,480.25 on the AFP the day the PO is
+  // signed, while the vendor has only been paid its $3,975.25 deposit.
+  const withOwner = estimateProcurementProgress(
+    { scheduled_value: 100000 },
+    [{ ...PO_022, milestones: [...vendorTerms, ...ownerTerms] }],
+  );
+  eq("the owner is billed half the PO on signing", withOwner.earnedValue, 4480.25);
+
+  const vendorOnly = estimateProcurementProgress(
+    { scheduled_value: 100000 },
+    [{ ...PO_022, milestones: vendorTerms }],
+  );
+  eq("without owner terms it falls back to the vendor deposit",
+     vendorOnly.earnedValue, 3975.25);
+  check(
+    "and the fallback is stated in the working",
+    vendorOnly.detail.some((d) => /no owner billing terms/i.test(d)),
+    vendorOnly.detail.join(" | "),
+  );
+}
+
+{
+  // Delivery has not happened, so the owner's second half is not earned yet
+  // even though its trigger is recognised.
+  const r = estimateProcurementProgress(
+    { scheduled_value: 100000 },
+    [{ ...PO_022, milestones: ownerTerms }],
+  );
+  eq("the balance waits for delivery", r.earnedValue, 4480.25);
+
+  const delivered = estimateProcurementProgress(
+    { scheduled_value: 100000 },
+    [{ ...PO_022, actual_delivery_date: "2026-11-20", milestones: ownerTerms }],
+  );
+  eq("and lands once it is delivered", delivered.earnedValue, 8960.49);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

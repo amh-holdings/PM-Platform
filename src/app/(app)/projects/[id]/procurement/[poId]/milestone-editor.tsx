@@ -99,6 +99,12 @@ type Props = {
   poId: string;
   poTotalValue: number;
   milestones: Milestone[];
+  /**
+   * Which schedule this editor is editing: what we pay the vendor, or what we
+   * bill the owner. Migration 0055. Defaults to vendor, which is what every
+   * milestone was before the two split.
+   */
+  side?: "vendor" | "owner";
 };
 
 function todayIso() {
@@ -106,7 +112,13 @@ function todayIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: Props) {
+export function MilestoneEditor({
+  projectId,
+  poId,
+  poTotalValue,
+  milestones,
+  side = "vendor",
+}: Props) {
   const router = useRouter();
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -130,6 +142,9 @@ export function MilestoneEditor({ projectId, poId, poTotalValue, milestones }: P
   async function onAdd(formData: FormData) {
     setBusy(true);
     setError(null);
+    // The form posts the fields; which schedule they land on is the editor's
+    // to say, not something a person should have to pick on every row.
+    formData.set("side", side);
     const res = await addMilestone(poId, projectId, formData);
     setBusy(false);
     if (!res.ok) {

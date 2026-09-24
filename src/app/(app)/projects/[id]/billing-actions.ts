@@ -240,7 +240,11 @@ export async function computeBillingSuggestions(
   // See estimateProcurementProgress: a signed PO is a commitment, not value.
   const { data: milestones } = await auth.supabase
     .from("procurement_payments")
-    .select("procurement_order_id, milestone_name, amount, pct_of_total, trigger_event, paid_at")
+    // Selected with * rather than by name: `side` (migration 0055) decides
+    // whether a row is what we bill the owner or what we pay the vendor, and a
+    // named select on a column the database does not have yet errors the whole
+    // request. A missing side reads as vendor, which is what every row was.
+    .select("*")
     .in("procurement_order_id", (pos ?? []).map((p) => p.id));
   const msByPo = new Map<string, Array<Record<string, unknown>>>();
   for (const m of milestones ?? []) {
@@ -803,7 +807,11 @@ export async function getBillThisPeriodRows(
     .eq("project_id", projectId);
   const { data: msInfo } = await auth.supabase
     .from("procurement_payments")
-    .select("procurement_order_id, milestone_name, amount, pct_of_total, trigger_event, paid_at")
+    // Selected with * rather than by name: `side` (migration 0055) decides
+    // whether a row is what we bill the owner or what we pay the vendor, and a
+    // named select on a column the database does not have yet errors the whole
+    // request. A missing side reads as vendor, which is what every row was.
+    .select("*")
     .in("procurement_order_id", (posInfo ?? []).map((p) => p.id));
   const msByPoId = new Map<string, ProcurementMilestone[]>();
   for (const m of msInfo ?? []) {
