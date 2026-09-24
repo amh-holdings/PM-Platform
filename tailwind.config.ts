@@ -6,6 +6,13 @@ const config: Config = {
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
+    // src/lib holds presentational helpers now - schedule-status-tone returns
+    // the row tint, and more will follow as logic moves out of the views to be
+    // tested. Tailwind only generates CSS for class names it FINDS, so a class
+    // that lives only here was silently dead: bg-emerald-50/70 compiled,
+    // passed its tests, shipped, and coloured nothing, because no scanned file
+    // contained the string. Nothing warns about this. The glob is the fix.
+    "./src/lib/**/*.{js,ts,jsx,tsx,mdx}",
   ],
   theme: {
     container: {
