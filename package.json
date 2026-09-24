@@ -45,7 +45,8 @@
     "test:money-input": "tsx scripts/ui/run-money-input-tests.ts",
     "test:money-inputs-used": "tsx scripts/ui/check-money-inputs.ts",
     "test:po-lines": "tsx scripts/procurement/run-po-line-tests.ts",
-    "test:po-payment-forecast": "tsx scripts/procurement/run-po-payment-forecast-tests.ts"
+    "test:po-payment-forecast": "tsx scripts/procurement/run-po-payment-forecast-tests.ts",
+    "test:owner-cash-date": "tsx scripts/billing/run-owner-cash-date-tests.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",

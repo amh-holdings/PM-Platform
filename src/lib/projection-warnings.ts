@@ -18,7 +18,7 @@
  * appears in neither place.
  */
 
-import type { ProjectionWarning } from "@/lib/projection";
+import type { ProjectionNote, ProjectionWarning } from "@/lib/projection";
 
 export type WarningGroup = {
   kind: ProjectionWarning["kind"] | "other";
@@ -56,6 +56,12 @@ const GROUPS: {
     effect: "No mapping means no month, so the line sits out of the forecast.",
   },
   {
+    kind: "pipeline_co_no_cost",
+    title: "Change orders in the forecast with no cost",
+    effect:
+      "The revenue is in, the cost is not, so margin at completion is high by whatever the work costs. A cost on the change order or on its cost code closes it.",
+  },
+  {
     kind: "pipeline_change_order",
     title: "Change orders assumed billed, not yet approved",
     effect:
@@ -91,4 +97,59 @@ export function groupWarnings(
     });
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* Notes                                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Notes are the other half: calls the forecast MADE, rather than gaps it
+ * could not fill. They are grouped the same way and rendered apart from the
+ * warnings, because a number explaining itself and a number missing are not
+ * the same news and must not be counted together.
+ */
+export type NoteGroup = {
+  kind: ProjectionNote["kind"] | "other";
+  title: string;
+  items: ProjectionNote[];
+};
+
+const NOTE_GROUPS: { kind: ProjectionNote["kind"]; title: string }[] = [
+  {
+    kind: "owner_cash_from_payment",
+    title: "Paid on a different date than the terms give",
+  },
+  {
+    kind: "po_payment_from_schedule",
+    title: "Vendor payments dated from the schedule",
+  },
+  {
+    kind: "pipeline_co_cost",
+    title: "Costs booked for change orders not approved yet",
+  },
+];
+
+export function groupNotes(notes: readonly ProjectionNote[]): NoteGroup[] {
+  const out: NoteGroup[] = [];
+  const seen = new Set<string>();
+
+  for (const g of NOTE_GROUPS) {
+    const items = notes.filter((n) => n.kind === g.kind);
+    if (items.length === 0) continue;
+    items.forEach((n) => seen.add(n.ref + "\u0000" + n.message));
+    out.push({ kind: g.kind, title: g.title, items });
+  }
+
+  // Same rule as the warnings: a kind added to the projection and not to this
+  // list still appears. Dropping it silently is the failure both exist to fix.
+  const rest = notes.filter((n) => !seen.has(n.ref + "\u0000" + n.message));
+  if (rest.length > 0) out.push({ kind: "other", title: "Other", items: rest });
+  return out;
+}
+
+/** The summary line on the notes panel. */
+export function describeNoteCount(n: number): string {
+  if (n === 1) return "1 number the forecast worked out for itself";
+  return `${n} numbers the forecast worked out for itself`;
 }

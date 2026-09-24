@@ -25,8 +25,16 @@ import {
 } from "@/lib/cashflow";
 import {
   describePipelineCo,
+  describePipelineCoCost,
+  describeUncostedPipelineCo,
+  normalizeCoNumber,
+  planPipelineCoCost,
   planPipelineCoRevenue,
 } from "@/lib/change-order-projection";
+import {
+  describeOwnerCashMove,
+  ownerCashMonth,
+} from "@/lib/billing-cash-date";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import {
   describeScheduleMove,
@@ -87,7 +95,8 @@ export type ProjectionWarning = {
     | "task_no_dates"
     | "underbilled"
     | "overbilled"
-    | "pipeline_change_order";
+    | "pipeline_change_order"
+    | "pipeline_co_no_cost";
   ref: string;
   message: string;
 };
@@ -102,7 +111,10 @@ export type ProjectionWarning = {
  * explanation is how people stop trusting the curve.
  */
 export type ProjectionNote = {
-  kind: "po_payment_from_schedule";
+  kind:
+    | "po_payment_from_schedule"
+    | "owner_cash_from_payment"
+    | "pipeline_co_cost";
   ref: string;
   message: string;
 };
@@ -138,7 +150,7 @@ export async function buildProjection(
 
   const [
     projectRes, entriesRes, forecastsRes, paymentsRes, posRes, linesRes, tasksRes,
-    subSovRes, subBilledRes, changeOrdersRes,
+    subSovRes, subBilledRes, changeOrdersRes, payAppsRes, costCodesRes,
   ] =
     await Promise.all([
       supabase
@@ -149,7 +161,7 @@ export async function buildProjection(
       supabase
         .from("billing_entries")
         .select(
-          "billing_line_id, period_month, cash_in_month, planned_amount, actual_amount, retainage_amount, status, billing_lines!inner(project_id)",
+          "billing_line_id, period_month, cash_in_month, paid_at, pay_application_id, planned_amount, actual_amount, retainage_amount, status, billing_lines!inner(project_id)",
         )
         .eq("billing_lines.project_id", projectId),
       supabase
@@ -203,7 +215,19 @@ export async function buildProjection(
       // here - see planPipelineCoRevenue.
       supabase
         .from("change_orders")
-        .select("co_number, description, co_value, status")
+        .select("co_number, description, co_value, cost_amount, status")
+        .eq("project_id", projectId),
+      // What an AFP was actually paid, for entries that carry one. The terms
+      // say when the owner is expected to pay; paid_at says when they did.
+      supabase
+        .from("pay_applications")
+        .select("id, app_number, paid_at")
+        .eq("project_id", projectId),
+      // CO-numbered cost codes. Where change order costs were entered before
+      // the buildup existed, and still the fallback the CEO report uses.
+      supabase
+        .from("cost_codes")
+        .select("code, is_change_order, estimated_cost")
         .eq("project_id", projectId),
     ]);
 
@@ -312,13 +336,34 @@ export async function buildProjection(
   };
 
   // ---- BILLING -> Revenue (accrual) + Cash In (cash basis) ----
+  //
+  // The cash month is no longer the terms date for every entry. An AFP that
+  // has been paid lands on the day it was paid - see billing-cash-date for
+  // the order of precedence. Net 30 says when the owner is expected to pay;
+  // once they have, the date is the date.
+  const payAppById = new Map((payAppsRes.data ?? []).map((a) => [a.id, a]));
+  const ownerMoves = new Map<string, { label: string; at: ReturnType<typeof ownerCashMonth> }>();
+
   for (const e of entriesRes.data ?? []) {
     const gross = effectiveAmount(e.actual_amount, e.planned_amount);
     if (gross <= 0) continue;
     const accrualMonth = e.period_month;
-    const cashMonth =
-      e.cash_in_month ??
-      (ownerTermsDays > 0 ? shiftByDaysToMonth(e.period_month, ownerTermsDays) : e.period_month);
+
+    const payApp = e.pay_application_id ? payAppById.get(e.pay_application_id) : null;
+    const at = ownerCashMonth({
+      periodMonth: e.period_month,
+      cashInMonth: e.cash_in_month,
+      entryPaidAt: e.paid_at,
+      payAppPaidAt: payApp?.paid_at ?? null,
+      ownerTermsDays,
+    });
+    const cashMonth = at.month;
+    if (at.supersedes) {
+      // One line per AFP, not per SOV line. Sixty entries on one pay
+      // application would be sixty identical notes saying the same thing.
+      const label = payApp?.app_number ? `AFP ${payApp.app_number}` : `${e.period_month.slice(0, 7)} billing`;
+      if (!ownerMoves.has(label)) ownerMoves.set(label, { label, at });
+    }
     const retainage = Number(e.retainage_amount ?? 0);
 
     const accrualBucket = get(accrualMonth);
@@ -337,6 +382,14 @@ export async function buildProjection(
 
     const cashBucket = get(cashMonth);
     cashBucket.cashIn += Math.max(0, gross - retainage);
+  }
+
+  for (const move of Array.from(ownerMoves.values())) {
+    notes.push({
+      kind: "owner_cash_from_payment",
+      ref: move.label,
+      message: describeOwnerCashMove(move),
+    });
   }
 
   // ---- SCHEDULE-DRIVEN FORECAST ----
@@ -455,6 +508,55 @@ export async function buildProjection(
         kind: "pipeline_change_order",
         ref: entry.coNumber,
         message: describePipelineCo(entry, coPlan.month),
+      });
+    }
+
+    // And what it costs to do the work. Booking the revenue alone made every
+    // pipeline CO pure margin, so Margin at completion read high by exactly
+    // the cost. Same month as the revenue: that revenue already rests on an
+    // assumption about when the CO gets billed, and spreading the cost on a
+    // second assumption on top would be precision the number has not earned.
+    const coCostByNumber = new Map<string, number>();
+    for (const c of costCodesRes.data ?? []) {
+      if (!c.is_change_order || c.estimated_cost == null) continue;
+      coCostByNumber.set(normalizeCoNumber(c.code), Number(c.estimated_cost));
+    }
+    const coStoredCost = new Map<string, number>();
+    for (const c of changeOrdersRes.data ?? []) {
+      const stored = (c as { cost_amount?: number | null }).cost_amount;
+      if (stored == null) continue;
+      coStoredCost.set(normalizeCoNumber(c.co_number ?? ""), Number(stored));
+    }
+
+    const costPlan = planPipelineCoCost({
+      cos: changeOrdersRes.data ?? [],
+      costByCoNumber: coCostByNumber,
+      costAmountByCoNumber: coStoredCost,
+      month: coPlan.month,
+    });
+
+    if (costPlan.totalCost > 0) {
+      const costBucket = get(costPlan.month);
+      costBucket.subCostIncurred += costPlan.totalCost;
+      costBucket.subCashOut += costPlan.totalCost;
+      costBucket.cashOutForecast += costPlan.totalCost;
+      costBucket.confidenceSignals.push("low");
+      for (const entry of costPlan.entries) {
+        notes.push({
+          kind: "pipeline_co_cost",
+          ref: entry.coNumber,
+          message: describePipelineCoCost(entry, costPlan.month),
+        });
+      }
+    }
+
+    // Revenue in the curve with no cost behind it. A guessed cost would be
+    // worse than a named hole, so it is named.
+    for (const entry of costPlan.uncosted) {
+      warnings.push({
+        kind: "pipeline_co_no_cost",
+        ref: entry.coNumber,
+        message: describeUncostedPipelineCo(entry),
       });
     }
   }

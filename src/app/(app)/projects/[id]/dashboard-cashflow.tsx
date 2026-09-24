@@ -4,11 +4,14 @@ import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import { firstOfThisMonthIso } from "@/lib/cashflow";
-import { describeScheduleMoveCount } from "@/lib/po-payment-forecast";
 import { buildProjection } from "@/lib/projection";
 
 import { DashboardCashflowChart, type CashflowDatum } from "./dashboard-cashflow-chart";
-import { groupWarnings } from "@/lib/projection-warnings";
+import {
+  describeNoteCount,
+  groupNotes,
+  groupWarnings,
+} from "@/lib/projection-warnings";
 
 import { DashboardProjection } from "./dashboard-projection";
 
@@ -169,19 +172,22 @@ export async function DashboardCashflow({ projectId, showCosts = false }: Props)
       {projection.notes.length > 0 && (
         <details className="rounded-md border bg-muted/20 p-2 text-xs">
           <summary className="cursor-pointer font-medium">
-            {describeScheduleMoveCount(projection.notes.length)}
+            {describeNoteCount(projection.notes.length)}
           </summary>
-          <div className="mt-1 text-[11px] text-muted-foreground">
-            A payment that fires on delivery follows the delivery task the PO
-            is linked to, so the date on the PO is superseded when the schedule
-            says something different. Anything already paid keeps its paid
-            date.
-          </div>
-          <ul className="mt-1.5 max-h-60 space-y-0.5 overflow-y-auto pr-1">
-            {projection.notes.map((n, i) => (
-              <li key={`${n.ref}-${i}`}>{n.message}</li>
+          <div className="mt-1.5 max-h-72 space-y-3 overflow-y-auto pr-1">
+            {groupNotes(projection.notes).map((g) => (
+              <div key={g.kind}>
+                <div className="font-medium">
+                  {g.items.length} {g.title.toLowerCase()}
+                </div>
+                <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                  {g.items.map((n, i) => (
+                    <li key={`${n.ref}-${i}`}>{n.message}</li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
         </details>
       )}
 

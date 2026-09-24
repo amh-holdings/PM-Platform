@@ -131,3 +131,108 @@ export function describePipelineCo(
   const label = entry.status === "submitted" ? "submitted" : `${entry.status.replace("_", " ")}`;
   return `${entry.coNumber} (${label}) is assumed billed in ${month.slice(0, 7)} - $${Math.round(entry.gross).toLocaleString()} is in the forecast on that assumption, not on an approval`;
 }
+
+/* ------------------------------------------------------------------ */
+/* The cost side                                                       */
+/* ------------------------------------------------------------------ */
+
+// Revenue without cost is not a forecast, it is a wish.
+//
+// planPipelineCoRevenue books what the owner is billed for an unapproved
+// change order. Nothing booked what it costs to do, so every CO in the
+// pipeline landed in the curve as pure margin and "Margin at completion" read
+// high by exactly the cost of the work.
+//
+// The cost is taken the same way the CEO report takes it, so the two cannot
+// disagree: change_orders.cost_amount first, which the CO editor keeps in
+// step with the buildup lines, then the estimate on the CO-numbered cost code,
+// which is where costs were entered before the buildup existed.
+//
+// A CO with neither is not given a made-up cost. It is reported, because a
+// guessed cost is worse than a named hole.
+//
+// It is booked in the month the revenue is, and the cash goes out that month
+// too. The revenue is already resting on an assumption about when the CO is
+// billed; spreading the cost on a second assumption on top of the first would
+// be precision the number has not earned.
+
+/** "CO-01" / "CO 1" / "co-1" all key the same. */
+export function normalizeCoNumber(raw: string): string {
+  const m = raw.match(/(\d+)/);
+  return m ? `CO-${String(Number(m[1])).padStart(2, "0")}` : raw.trim().toUpperCase();
+}
+
+export type PipelineCoCostPlan = {
+  /** Same month as the revenue. */
+  month: string;
+  entries: { coNumber: string; cost: number; source: "cost_amount" | "cost_code" }[];
+  /** COs in the forecast at full value with no cost behind them. */
+  uncosted: { coNumber: string; gross: number }[];
+  totalCost: number;
+};
+
+export function planPipelineCoCost(input: {
+  cos: readonly PipelineCo[];
+  /** Estimated cost by normalized CO number, off the CO-numbered cost codes. */
+  costByCoNumber: ReadonlyMap<string, number>;
+  /** The month planPipelineCoRevenue put the revenue in. */
+  month: string;
+  /** change_orders.cost_amount by normalized CO number. */
+  costAmountByCoNumber?: ReadonlyMap<string, number>;
+}): PipelineCoCostPlan {
+  const entries: PipelineCoCostPlan["entries"] = [];
+  const uncosted: PipelineCoCostPlan["uncosted"] = [];
+
+  for (const co of input.cos) {
+    if (!isPipelineCo(co.status)) continue;
+    const gross = Number(co.co_value ?? 0);
+    if (!Number.isFinite(gross) || gross === 0) continue;
+
+    const label = co.co_number?.trim() || "CO";
+    const key = normalizeCoNumber(label);
+    const stored = input.costAmountByCoNumber?.get(key);
+    const fromCode = input.costByCoNumber.get(key);
+
+    // A zero cost_amount is "nobody filled this in", not "this is free".
+    // Treating it as a real zero is how a CO books as 100% margin in silence.
+    if (stored != null && Number(stored) !== 0) {
+      entries.push({ coNumber: label, cost: round2(Number(stored)), source: "cost_amount" });
+      continue;
+    }
+    if (fromCode != null && Number(fromCode) !== 0) {
+      entries.push({ coNumber: label, cost: round2(Number(fromCode)), source: "cost_code" });
+      continue;
+    }
+    uncosted.push({ coNumber: label, gross: round2(gross) });
+  }
+
+  return {
+    month: input.month,
+    entries,
+    uncosted,
+    totalCost: round2(entries.reduce((s, e) => s + e.cost, 0)),
+  };
+}
+
+/** One line per CO whose cost is in the forecast. */
+export function describePipelineCoCost(
+  entry: PipelineCoCostPlan["entries"][number],
+  month: string,
+): string {
+  const from =
+    entry.source === "cost_amount"
+      ? "the change order's own cost"
+      : "the estimate on its cost code";
+  return `${entry.coNumber} costs $${Math.round(entry.cost).toLocaleString()} in ${month.slice(0, 7)}, from ${from}`;
+}
+
+/** One line per CO carrying revenue with nothing behind it. */
+export function describeUncostedPipelineCo(
+  entry: PipelineCoCostPlan["uncosted"][number],
+): string {
+  return `${entry.coNumber} is in the forecast at $${Math.round(entry.gross).toLocaleString()} of revenue with no cost recorded - margin at completion is high by whatever it costs to do`;
+}
+
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
