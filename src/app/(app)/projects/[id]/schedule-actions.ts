@@ -6,6 +6,12 @@ import { createClient } from "@/lib/supabase/server";
 import type { TablesUpdate } from "@/lib/database.types";
 import { parsePredecessors, serializeLinks } from "@/lib/schedule-cpm";
 import { orderRenames } from "@/lib/schedule-edit";
+import { todayIso } from "@/lib/schedule-calendar";
+import {
+  describeDeliverySync,
+  planDeliverySync,
+  type DeliveryTaskLike,
+} from "@/lib/schedule-po-delivery";
 import { captureScheduleSnapshot } from "@/lib/schedule-sync-server";
 import {
   TASK_TYPES,
@@ -49,7 +55,7 @@ function taskTypeConstraintMessage(
 }
 
 export type ScheduleTaskResult =
-  | { ok: true }
+  | { ok: true; deliveryNote?: string | null }
   | { ok: false; error: string; fieldErrors?: Record<string, string> };
 
 function getStr(value: FormDataEntryValue | null): string | null {
@@ -113,21 +119,19 @@ export async function updateScheduleTask(
   // Same rule as the grid: on a deliverable or a procurement row the status
   // decides the percent, because there is no field report to take one from.
   // See progressFromStatus.
-  {
-    const { data: prior } = await auth.supabase
-      .from("schedule_tasks")
-      .select("*")
-      .eq("id", taskId)
-      .maybeSingle();
-    const derived = progressFromStatus({
-      taskType:
-        (update.task_type as string | null | undefined) ??
-        ((prior as { task_type?: string | null } | null)?.task_type ?? null),
-      status: update.status ?? null,
-      currentPct: (prior as { pct_complete?: number | null } | null)?.pct_complete ?? null,
-    });
-    if (derived) Object.assign(update, derived);
-  }
+  const { data: prior } = await auth.supabase
+    .from("schedule_tasks")
+    .select("*")
+    .eq("id", taskId)
+    .maybeSingle();
+  const derived = progressFromStatus({
+    taskType:
+      (update.task_type as string | null | undefined) ??
+      ((prior as { task_type?: string | null } | null)?.task_type ?? null),
+    status: update.status ?? null,
+    currentPct: (prior as { pct_complete?: number | null } | null)?.pct_complete ?? null,
+  });
+  if (derived) Object.assign(update, derived);
 
   const { error } = await auth.supabase
     .from("schedule_tasks")
@@ -137,9 +141,22 @@ export async function updateScheduleTask(
     return { ok: false, error: taskTypeConstraintMessage(error) ?? error.message };
   }
 
+  // Same as the grid: a delivery closed out here reaches the PO, and the AFP.
+  const priorRow = prior as Record<string, unknown> | null;
+  const deliveryNote =
+    derived?.pct_complete === 100 && priorRow?.wbs_code
+      ? await recordDeliveriesOnPos(auth.supabase, projectId, [
+          {
+            wbs_code: String(priorRow.wbs_code),
+            task_name: (priorRow.task_name as string | null) ?? null,
+            end_date: update.end_date ?? ((priorRow.end_date as string | null) ?? null),
+          },
+        ])
+      : null;
+
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
-  return { ok: true };
+  return { ok: true, deliveryNote };
 }
 
 // The data date is the "as of" line for every schedule calculation. Setting it
@@ -682,7 +699,7 @@ export async function bulkUpdateScheduleTasks(
   projectId: string,
   patches: TaskPatch[],
 ): Promise<
-  | { ok: true; count: number; inverse: TaskPatch[] }
+  | { ok: true; count: number; inverse: TaskPatch[]; deliveryNote?: string | null }
   | { ok: false; error: string }
 > {
   const auth = await assertAhcUser();
@@ -716,6 +733,9 @@ export async function bulkUpdateScheduleTasks(
   }
 
   let count = 0;
+  // Rows this save takes to 100%. Their linked POs get the delivery date once
+  // the schedule writes are done.
+  const completed: DeliveryTaskLike[] = [];
   for (const p of patches) {
     const update = cleanPatch(p);
     // Status and progress are one fact on a deliverable or a procurement row,
@@ -736,6 +756,17 @@ export async function bulkUpdateScheduleTasks(
         currentPct: prior?.pct_complete as number | null,
       });
       if (derived) Object.assign(update, derived);
+      if (derived?.pct_complete === 100 && prior) {
+        completed.push({
+          wbs_code: String(prior.wbs_code ?? ""),
+          task_name: (prior.task_name as string | null) ?? null,
+          // The finish may be moving in this same save, so the patch wins.
+          end_date:
+            ("end_date" in p
+              ? (p.end_date as string | null)
+              : (prior.end_date as string | null)) ?? null,
+        });
+      }
     }
     if (!Object.keys(update).length) continue;
     const { error } = await auth.supabase
@@ -753,9 +784,15 @@ export async function bulkUpdateScheduleTasks(
     count++;
   }
 
+  const deliveryNote = await recordDeliveriesOnPos(
+    auth.supabase,
+    projectId,
+    completed.filter((c) => c.wbs_code),
+  );
+
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
-  return { ok: true, count, inverse };
+  return { ok: true, count, inverse, deliveryNote };
 }
 
 // Apply an indent, outdent or row move. Renames run in a dependency-safe order
@@ -967,6 +1004,51 @@ export async function applyScheduleImport(
 // So this is the one door to pct_complete from the browser, and it checks the
 // task's own type on the server before it opens. Construction and unclassified
 // rows are refused here whatever the page sends.
+
+/**
+ * Record the delivery on whatever PO points at these tasks.
+ *
+ * Both write paths call this after they have saved, so completing a delivery
+ * row in the grid and completing it in the dialog reach the AFP the same way.
+ * A failure here never fails the save: the schedule edit is real and correct
+ * on its own, and the note says the PO did not get stamped rather than
+ * pretending the whole thing was rejected.
+ */
+async function recordDeliveriesOnPos(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  projectId: string,
+  completed: DeliveryTaskLike[],
+): Promise<string | null> {
+  if (!completed.length) return null;
+
+  const { data: pos, error } = await supabase
+    .from("procurement_orders")
+    .select("id, po_number, vendor_name, linked_delivery_task_wbs_code, actual_delivery_date")
+    .eq("project_id", projectId);
+  if (error) return `Could not check the linked purchase orders: ${error.message}`;
+
+  const plan = planDeliverySync({
+    completed,
+    pos: pos ?? [],
+    todayIso: todayIso(),
+  });
+
+  for (const u of plan.updates) {
+    const { error: writeError } = await supabase
+      .from("procurement_orders")
+      .update({ actual_delivery_date: u.date })
+      .eq("id", u.poId);
+    if (writeError) {
+      return `Saved, but ${u.label} could not be marked delivered: ${writeError.message}`;
+    }
+  }
+  if (plan.updates.length) {
+    revalidatePath(`/projects/${projectId}/procurement`);
+    revalidatePath(`/projects/${projectId}/billing`);
+  }
+  return describeDeliverySync(plan);
+}
 
 export type SetProgressResult =
   | { ok: true; pct: number | null }
