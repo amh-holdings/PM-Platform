@@ -155,15 +155,27 @@ export function PoLineEditor({
       )}
 
       <div className="overflow-x-auto">
-        <table className="w-full text-xs">
+        <table className="w-full min-w-[56rem] table-fixed text-xs">
+          <colgroup>
+            {/* Fixed widths, so a header sits over its own box. Without
+                them the browser sizes each column to its content and a
+                narrow input drifts away from the label above it. */}
+            <col className="w-[6%]" />
+            <col className="w-[10%]" />
+            <col className="w-[30%]" />
+            <col className="w-[9%]" />
+            <col className="w-[15%]" />
+            <col className="w-[17%]" />
+            <col className="w-[13%]" />
+          </colgroup>
           <thead className="border-b bg-muted/40 text-muted-foreground">
             <tr>
-              <th className="px-2 py-2 text-left font-medium">Line</th>
-              <th className="px-2 py-2 text-right font-medium">Quantity</th>
-              <th className="px-2 py-2 text-left font-medium">Description</th>
-              <th className="px-2 py-2 text-left font-medium">Units</th>
-              <th className="px-2 py-2 text-right font-medium">Unit price</th>
-              <th className="px-2 py-2 text-right font-medium">Extended price</th>
+              <th className="px-5 py-2 text-left font-medium">Line</th>
+              <th className="px-5 py-2 text-right font-medium">Quantity</th>
+              <th className="px-5 py-2 text-left font-medium">Description</th>
+              <th className="px-5 py-2 text-left font-medium">Units</th>
+              <th className="px-5 py-2 text-right font-medium">Unit price</th>
+              <th className="px-5 py-2 text-right font-medium">Extended price</th>
               <th className="px-2 py-2" />
             </tr>
           </thead>
@@ -202,7 +214,7 @@ export function PoLineEditor({
                   value={draft.lineNo}
                   onChange={(e) => setDraft({ ...draft, lineNo: e.target.value })}
                   inputMode="numeric"
-                  className="h-8 w-14 text-xs"
+                  className="h-8 w-full text-xs"
                   aria-label="Line number"
                 />
               </td>
@@ -211,7 +223,7 @@ export function PoLineEditor({
                   value={draft.quantity}
                   onChange={(e) => setDraft({ ...draft, quantity: e.target.value })}
                   inputMode="decimal"
-                  className="h-8 w-20 text-right text-xs"
+                  className="h-8 w-full text-right text-xs"
                   aria-label="Quantity"
                 />
               </td>
@@ -222,7 +234,7 @@ export function PoLineEditor({
                     setDraft({ ...draft, description: e.target.value })
                   }
                   placeholder="Domestic Beam W6x25 cut @ (3.3m)"
-                  className="h-8 min-w-[16rem] text-xs"
+                  className="h-8 w-full text-xs"
                   aria-label="Description"
                 />
               </td>
@@ -231,7 +243,7 @@ export function PoLineEditor({
                   value={draft.units}
                   onChange={(e) => setDraft({ ...draft, units: e.target.value })}
                   placeholder="EA"
-                  className="h-8 w-16 text-xs"
+                  className="h-8 w-full text-xs"
                   aria-label="Units"
                 />
               </td>
@@ -239,7 +251,7 @@ export function PoLineEditor({
                 <MoneyInput
                   value={draft.unitPrice}
                   onValueChange={(v) => setDraft({ ...draft, unitPrice: v })}
-                  className="h-8 w-28 text-right text-xs"
+                  className="h-8 w-full text-right text-xs"
                   aria-label="Unit price"
                 />
               </td>
@@ -247,13 +259,13 @@ export function PoLineEditor({
                 <MoneyInput
                   value={draft.extendedPrice}
                   onValueChange={(v) => setDraft({ ...draft, extendedPrice: v })}
-                  className="h-8 w-32 text-right text-xs"
+                  className="h-8 w-full text-right text-xs"
                   aria-label="Extended price"
                 />
                 {suggested != null && draft.extendedPrice == null && (
                   <button
                     type="button"
-                    className="mt-1 block w-full text-right text-[10px] text-emerald-700 hover:underline"
+                    className="mt-1 block w-full pr-3 text-right text-[10px] text-emerald-700 hover:underline"
                     onClick={() => setDraft({ ...draft, extendedPrice: suggested })}
                   >
                     use {formatCurrency(suggested)}
@@ -271,20 +283,20 @@ export function PoLineEditor({
           <tfoot className="border-t">
             <tr>
               <td colSpan={4} />
-              <td className="px-2 py-1.5 text-right text-muted-foreground">
+              <td className="px-5 py-1.5 text-right text-muted-foreground">
                 Subtotal
               </td>
-              <td className="px-2 py-1.5 text-right font-mono">
+              <td className="px-5 py-1.5 text-right font-mono">
                 {formatCurrency(totals.subtotal)}
               </td>
               <td />
             </tr>
             <tr>
               <td colSpan={4} />
-              <td className="px-2 py-1.5 text-right text-muted-foreground">
+              <td className="px-5 py-1.5 text-right text-muted-foreground">
                 Sales tax
               </td>
-              <td className="px-2 py-1.5 text-right">
+              <td className="px-2 py-1.5">
                 <MoneyInput
                   value={tax}
                   onValueChange={setTax}
@@ -296,7 +308,7 @@ export function PoLineEditor({
                       }),
                     )
                   }
-                  className="ml-auto h-8 w-32 text-right text-xs"
+                  className="h-8 w-full text-right text-xs"
                   aria-label="Sales tax"
                 />
               </td>
@@ -304,10 +316,10 @@ export function PoLineEditor({
             </tr>
             <tr>
               <td colSpan={4} />
-              <td className="px-2 py-1.5 text-right text-muted-foreground">
+              <td className="px-5 py-1.5 text-right text-muted-foreground">
                 Freight
               </td>
-              <td className="px-2 py-1.5 text-right">
+              <td className="px-2 py-1.5">
                 <MoneyInput
                   value={frt}
                   onValueChange={setFrt}
@@ -319,7 +331,7 @@ export function PoLineEditor({
                       }),
                     )
                   }
-                  className="ml-auto h-8 w-32 text-right text-xs"
+                  className="h-8 w-full text-right text-xs"
                   aria-label="Freight"
                 />
               </td>
@@ -327,8 +339,8 @@ export function PoLineEditor({
             </tr>
             <tr className="border-t">
               <td colSpan={4} />
-              <td className="px-2 py-2 text-right font-medium">Total</td>
-              <td className="px-2 py-2 text-right font-mono font-semibold">
+              <td className="px-5 py-2 text-right font-medium">Total</td>
+              <td className="px-5 py-2 text-right font-mono font-semibold">
                 {formatCurrency(totals.total)}
               </td>
               <td />
@@ -413,18 +425,18 @@ function LineRow({
   if (!editing) {
     return (
       <tr className="border-b last:border-0">
-        <td className="px-2 py-1.5 font-mono text-muted-foreground">
+        <td className="px-5 py-1.5 font-mono text-muted-foreground">
           {line.lineNo ?? "-"}
         </td>
-        <td className="px-2 py-1.5 text-right font-mono">
+        <td className="px-5 py-1.5 text-right font-mono">
           {line.quantity ?? "-"}
         </td>
-        <td className="px-2 py-1.5">{line.description ?? "-"}</td>
-        <td className="px-2 py-1.5 text-muted-foreground">{line.units ?? "-"}</td>
-        <td className="px-2 py-1.5 text-right font-mono">
+        <td className="px-5 py-1.5 truncate">{line.description ?? "-"}</td>
+        <td className="px-5 py-1.5 text-muted-foreground">{line.units ?? "-"}</td>
+        <td className="px-5 py-1.5 text-right font-mono">
           {line.unitPrice == null ? "-" : formatCurrency(line.unitPrice)}
         </td>
-        <td className="px-2 py-1.5 text-right font-mono">
+        <td className="px-5 py-1.5 text-right font-mono">
           {line.extendedPrice == null ? "-" : formatCurrency(line.extendedPrice)}
         </td>
         <td className="whitespace-nowrap px-2 py-1.5 text-right">
@@ -455,7 +467,7 @@ function LineRow({
           value={lineNo}
           onChange={(e) => setLineNo(e.target.value)}
           inputMode="numeric"
-          className="h-8 w-14 text-xs"
+          className="h-8 w-full text-xs"
           aria-label="Line number"
         />
       </td>
@@ -464,7 +476,7 @@ function LineRow({
           value={quantity}
           onChange={(e) => setQuantity(e.target.value)}
           inputMode="decimal"
-          className="h-8 w-20 text-right text-xs"
+          className="h-8 w-full text-right text-xs"
           aria-label="Quantity"
         />
       </td>
@@ -472,7 +484,7 @@ function LineRow({
         <Input
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          className="h-8 min-w-[16rem] text-xs"
+          className="h-8 w-full text-xs"
           aria-label="Description"
         />
       </td>
@@ -480,7 +492,7 @@ function LineRow({
         <Input
           value={units}
           onChange={(e) => setUnits(e.target.value)}
-          className="h-8 w-16 text-xs"
+          className="h-8 w-full text-xs"
           aria-label="Units"
         />
       </td>
@@ -488,7 +500,7 @@ function LineRow({
         <MoneyInput
           value={unitPrice}
           onValueChange={setUnitPrice}
-          className="h-8 w-28 text-right text-xs"
+          className="h-8 w-full text-right text-xs"
           aria-label="Unit price"
         />
       </td>
@@ -496,7 +508,7 @@ function LineRow({
         <MoneyInput
           value={extendedPrice}
           onValueChange={setExtendedPrice}
-          className="h-8 w-32 text-right text-xs"
+          className="h-8 w-full text-right text-xs"
           aria-label="Extended price"
         />
       </td>
