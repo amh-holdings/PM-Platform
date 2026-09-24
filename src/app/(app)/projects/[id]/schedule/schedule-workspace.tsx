@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { computeCpm } from "@/lib/schedule-cpm";
+import { computeCpm, namedConstraintViolation } from "@/lib/schedule-cpm";
 import {
   makeCalendar,
   todayIso,
@@ -475,7 +475,15 @@ export function ScheduleWorkspace({
         <Banner tone="bad">
           {cpm.constraintViolations.length} date constraint
           {cpm.constraintViolations.length === 1 ? "" : "s"} the logic cannot
-          meet. {cpm.constraintViolations[0].message}
+          meet.{" "}
+          {/* The row, not just the dates. The engine has always carried the
+              WBS code beside the message and this printed only the message,
+              so the banner named two dates and no task. */}
+          {namedConstraintViolation(
+            cpm.constraintViolations[0],
+            tasks.find((t) => t.wbs_code === cpm.constraintViolations[0].wbs)
+              ?.task_name,
+          )}
           {cpm.constraintViolations.length > 1 && (
             <> See the Health tab for the rest.</>
           )}
@@ -628,6 +636,7 @@ export function ScheduleWorkspace({
           health={health}
           onApplyDuration={applySisterDuration}
           cpm={cpm}
+          nameOf={(wbs) => tasks.find((t) => t.wbs_code === wbs)?.task_name}
           projectName={projectName}
           projectId={projectId}
           updates={updates}

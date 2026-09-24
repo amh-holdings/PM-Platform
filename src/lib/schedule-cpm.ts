@@ -1009,3 +1009,23 @@ export function computeCpm(
     outOfSequence,
   };
 }
+
+/**
+ * A constraint conflict with the row it is about.
+ *
+ * Zarina, looking at the red banner: "What the red box points to?" Fair
+ * question. It read "1 date constraint the logic cannot meet. Finish no later
+ * than 2026-09-21, but the earliest it can finish is 2026-10-05." - two dates,
+ * no task. The engine has always carried the WBS code beside the message and
+ * the banner printed only the message, so the one thing needed to act on it
+ * was the one thing left out.
+ */
+export function namedConstraintViolation(
+  violation: { wbs: string; message: string },
+  taskName?: string | null,
+): string {
+  const label = taskName?.trim()
+    ? `${violation.wbs} ${taskName.trim()}`
+    : violation.wbs;
+  return `${label}: ${violation.message}`;
+}

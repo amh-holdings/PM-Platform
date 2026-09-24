@@ -31,6 +31,8 @@ type Props = {
   health: HealthResult;
   onApplyDuration?: ApplySuggestion;
   cpm: CpmOutput;
+  /** WBS code to task name, so a finding can name the row it is about. */
+  nameOf?: (wbs: string) => string | null | undefined;
   projectName: string;
   projectId: string;
   updates: ScheduleUpdateRow[];
@@ -61,6 +63,7 @@ export function ScheduleHealthView({
   health,
   onApplyDuration,
   cpm,
+  nameOf,
   projectName,
   projectId,
   updates,
@@ -177,7 +180,14 @@ export function ScheduleHealthView({
             {cpm.constraintViolations.map((v) => (
               <li key={v.wbs} className="flex gap-2 text-xs">
                 <span className="shrink-0 font-mono text-muted-foreground">{v.wbs}</span>
-                <span>{v.message}</span>
+                <span>
+                  {/* The name as well as the code. A code alone means
+                      scrolling the grid to find out what it is. */}
+                  {nameOf?.(v.wbs) && (
+                    <span className="font-medium">{nameOf(v.wbs)} </span>
+                  )}
+                  {v.message}
+                </span>
               </li>
             ))}
           </ul>

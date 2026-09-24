@@ -44,6 +44,7 @@ import {
   computeCpm,
   expandSummaryLinks,
   findCycleWith,
+  namedConstraintViolation,
   leafCodesUnder,
   parsePredecessors,
   serializeLinks,
@@ -3269,6 +3270,30 @@ section("Dragging a branch above the first row of the sheet");
     describeHiddenRows({ shown: 95, total: 92, filterCount: 0 }),
     null,
   );
+}
+
+{
+  // Zarina, on the red banner: "What the red box points to?" It read "Finish
+  // no later than 2026-09-21, but the earliest it can finish is 2026-10-05" -
+  // two dates and no task. The engine has always carried the WBS beside the
+  // message; the banner printed only the message.
+  const V = {
+    wbs: "5.1.1.11",
+    message: "Finish no later than 2026-09-21, but the earliest it can finish is 2026-10-05.",
+  };
+
+  eq(
+    "the row is named ahead of the dates",
+    namedConstraintViolation(V, "County Inspection"),
+    "5.1.1.11 County Inspection: Finish no later than 2026-09-21, but the earliest it can finish is 2026-10-05.",
+  );
+  eq(
+    "with no name the code still leads",
+    namedConstraintViolation(V, null),
+    "5.1.1.11: Finish no later than 2026-09-21, but the earliest it can finish is 2026-10-05.",
+  );
+  eq("a blank name is no name", namedConstraintViolation(V, "   "), `5.1.1.11: ${V.message}`);
+  eq("and an absent one behaves the same", namedConstraintViolation(V), `5.1.1.11: ${V.message}`);
 }
 
 // ============================================================================
