@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import type { CalendarLike } from "@/lib/schedule-calendar";
 import {
+  ancestorTrail,
+  describeAncestorTrail,
   reconcileDates,
   type DateField,
   type DateTriple,
@@ -136,6 +138,12 @@ export function TaskEditDialog({
   // exclude it from its own options and check for cycles. When creating, that
   // identity is whatever is currently typed in the WBS box.
   const [wbs, setWbs] = useState(values.wbs_code);
+  // The branch above this row, named. While creating it follows the WBS box as
+  // it is typed, which is the only feedback that a code like 4.4.7.9 is going
+  // to land where its author thinks it will.
+  const trail = describeAncestorTrail(
+    ancestorTrail(creating ? wbs : values.wbs_code, allTasks),
+  );
   // Start, finish and duration are one fact in three boxes, so they are
   // controlled together rather than left uncontrolled like the rest of the
   // form. Type a duration and the finish moves; type a finish and the duration
@@ -232,10 +240,18 @@ export function TaskEditDialog({
         >
           <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
             <div className="flex items-start justify-between gap-4">
-              <div>
+              <div className="min-w-0">
                 <h3 className="text-lg font-semibold">
                   {creating ? "Add task" : "Edit task"}
                 </h3>
+                {/* Which branch this row sits in. "Delivery" repeats down four
+                    branches, so the code on its own does not tell you whether
+                    you opened the right one. */}
+                {trail && (
+                  <p className="truncate text-xs text-muted-foreground" title={trail}>
+                    {trail}
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground font-mono">
                   {creating ? "New row" : values.wbs_code}
                 </p>

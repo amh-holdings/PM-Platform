@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
 import type { RowIndex } from "@/lib/schedule-edit";
 import {
   findCycleWith,
@@ -13,6 +12,7 @@ import {
   type Link,
   type RelType,
 } from "@/lib/schedule-cpm";
+import { TaskCombobox } from "./task-combobox";
 
 export type LinkTask = {
   wbs_code: string;
@@ -126,13 +126,14 @@ export function PredecessorEditor({
     setLinks((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   }
 
+  // Starts empty. It used to pre-select whatever leaf happened to be first,
+  // which saved a real link to an unrelated task any time somebody added a row
+  // and then got distracted. Now the box is blank and waiting to be typed in.
   function add() {
-    const next = options.find((o) => !chosen.has(o.wbs_code));
-    setLinks((prev) => [
-      ...prev,
-      { pred: next?.wbs_code ?? "", type: "FS", lag: 0 },
-    ]);
+    setLinks((prev) => [...prev, { pred: "", type: "FS", lag: 0 }]);
   }
+
+  const blanks = links.filter((l) => !l.pred).length;
 
   return (
     <div className="space-y-3 sm:col-span-2">
@@ -155,27 +156,15 @@ export function PredecessorEditor({
         <div className="space-y-2">
           {links.map((l, i) => (
             <div key={i} className="flex flex-wrap items-center gap-2">
-              <select
+              <TaskCombobox
                 value={l.pred}
-                onChange={(e) => update(i, { pred: e.target.value })}
-                className={cn(
-                  "h-9 min-w-0 flex-1 rounded-md border bg-background px-2 text-sm",
-                  l.pred && !nameByWbs.has(l.pred)
-                    ? "border-destructive text-destructive"
-                    : "border-input",
+                options={options.filter(
+                  (o) => o.wbs_code === l.pred || !chosen.has(o.wbs_code),
                 )}
-              >
-                {l.pred && !nameByWbs.has(l.pred) && (
-                  <option value={l.pred}>{l.pred} (not found)</option>
-                )}
-                {options
-                  .filter((o) => o.wbs_code === l.pred || !chosen.has(o.wbs_code))
-                  .map((o) => (
-                    <option key={o.wbs_code} value={o.wbs_code}>
-                      {label(o.wbs_code)} - {o.task_name}
-                    </option>
-                  ))}
-              </select>
+                onChange={(wbs) => update(i, { pred: wbs })}
+                rowOf={(wbs) => rowIndex?.byWbs.get(wbs) ?? null}
+                invalid={!!l.pred && !nameByWbs.has(l.pred)}
+              />
 
               <select
                 value={l.type}
@@ -210,6 +199,14 @@ export function PredecessorEditor({
             </div>
           ))}
         </div>
+      )}
+
+      {blanks > 0 && (
+        <p className="text-xs text-amber-700">
+          {blanks === 1 ? "One row has" : `${blanks} rows have`} no task picked
+          yet. Start typing a row number, a WBS code or part of the task name.
+          Blank rows are not saved.
+        </p>
       )}
 
       {missing.length > 0 && (

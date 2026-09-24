@@ -2167,3 +2167,56 @@ export function spanOf(rows: ImportRow[]): { start: string | null; end: string |
   }
   return { start, end };
 }
+
+// ---------------------------------------------------------------------------
+// Where a task sits, said in words.
+//
+// Zarina: "can you put the task name parent title when opening a task." The
+// dialog header read "Edit task / 4.4.7.2" over a task called "Delivery".
+// There are a dozen rows called Delivery on this project and the code alone
+// does not say which branch you are in, so the only way to be sure you opened
+// the right one was to close the dialog and look at the grid again.
+// ---------------------------------------------------------------------------
+
+export type TrailTask = { wbs_code: string; task_name: string };
+
+/**
+ * The branch above a task, outermost first.
+ *
+ * Walks the WBS code up rather than following a parent column, because the
+ * code IS the hierarchy here - 4.4.7.2 sits under 4.4.7 by virtue of its
+ * number. A level with no row of its own is skipped rather than guessed at: an
+ * imported sheet can jump from 4.4 to 4.4.7.2 with nothing in between, and
+ * inventing a "4.4.7" that does not exist would be worse than a shorter trail.
+ */
+export function ancestorTrail<T extends TrailTask>(
+  code: string,
+  tasks: readonly T[],
+): TrailTask[] {
+  const byCode = new Map(tasks.map((t) => [t.wbs_code, t]));
+  const trail: TrailTask[] = [];
+  let at = parentCodeOf(code);
+  while (at) {
+    const hit = byCode.get(at);
+    if (hit) trail.unshift({ wbs_code: hit.wbs_code, task_name: hit.task_name });
+    at = parentCodeOf(at);
+  }
+  return trail;
+}
+
+/**
+ * The trail as one line, or null when the task is top level.
+ *
+ * The immediate parent is the one that answers "which Delivery is this", so on
+ * a deep code the front of the trail is dropped rather than wrapping the
+ * header onto three lines.
+ */
+export function describeAncestorTrail(
+  trail: readonly TrailTask[],
+  maxLevels = 3,
+): string | null {
+  if (trail.length === 0) return null;
+  const shown = trail.slice(-maxLevels);
+  const line = shown.map((t) => `${t.wbs_code} ${t.task_name}`).join(" / ");
+  return trail.length > shown.length ? `... / ${line}` : line;
+}

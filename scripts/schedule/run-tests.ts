@@ -22,6 +22,10 @@ import {
   workingDaysBetween,
 } from "@/lib/schedule-calendar";
 import {
+  searchTasks,
+  taskDisplayLabel,
+} from "../../src/lib/schedule-task-search";
+import {
   completionNeedsAType,
   finishIsACommitment,
   progressCanBeSetByHand,
@@ -73,6 +77,8 @@ import {
   guessColumns,
   nextChildCode,
   nextTopLevelCode,
+  ancestorTrail,
+  describeAncestorTrail,
   parseGrid,
   parseLooseDate,
   parseLooseDuration,
@@ -2857,6 +2863,118 @@ section("Dragging a branch above the first row of the sheet");
   // reparents like any other interior drop.
   const drop = planDrop(importedOutOfOrder, ["4"], "5.1", "after");
   eq("dropping below the first row is not the top of the sheet", drop.reparents, true);
+}
+
+// ============================================================================
+// Opening a task: which branch am I in, and finding one by typing
+// ============================================================================
+{
+  const TREE = [
+    { wbs_code: "4", task_name: "Construction" },
+    { wbs_code: "4.4", task_name: "Electrical" },
+    { wbs_code: "4.4.7", task_name: "Power Factors" },
+    { wbs_code: "4.4.7.2", task_name: "Delivery" },
+    { wbs_code: "4.4.5.2", task_name: "Delivery" },
+    { wbs_code: "1", task_name: "Mobilization" },
+  ];
+
+  same(
+    "the trail above a task runs outermost first",
+    ancestorTrail("4.4.7.2", TREE).map((t) => t.wbs_code),
+    ["4", "4.4", "4.4.7"],
+  );
+
+  same(
+    "a level with no row of its own is skipped, never invented",
+    ancestorTrail("4.4.5.2", TREE).map((t) => t.wbs_code),
+    ["4", "4.4"],
+  );
+
+  same("a top level task has no trail", ancestorTrail("1", TREE), []);
+  eq("and describes as nothing", describeAncestorTrail(ancestorTrail("1", TREE)), null);
+
+  eq(
+    "the trail names the branch, so two Deliveries are told apart",
+    describeAncestorTrail(ancestorTrail("4.4.7.2", TREE)),
+    "4 Construction / 4.4 Electrical / 4.4.7 Power Factors",
+  );
+
+  eq(
+    "a deep code keeps the near end and elides the far one",
+    describeAncestorTrail(
+      [
+        { wbs_code: "1", task_name: "A" },
+        { wbs_code: "1.1", task_name: "B" },
+        { wbs_code: "1.1.1", task_name: "C" },
+        { wbs_code: "1.1.1.1", task_name: "D" },
+      ],
+      3,
+    ),
+    "... / 1.1 B / 1.1.1 C / 1.1.1.1 D",
+  );
+
+  // --- typing at the predecessor picker ---
+  const LEAVES = [
+    { wbs_code: "1.1", task_name: "Mobilize" },
+    { wbs_code: "4.4.5.2", task_name: "Delivery" },
+    { wbs_code: "4.4.7.2", task_name: "Delivery" },
+    { wbs_code: "14.4.7", task_name: "Punch list" },
+  ];
+  const ROWS: Record<string, number> = {
+    "1.1": 3,
+    "4.4.5.2": 78,
+    "4.4.7.2": 80,
+    "14.4.7": 214,
+  };
+  const rowOf = (w: string) => ROWS[w] ?? null;
+
+  same(
+    "an empty query lists everything in the order given",
+    searchTasks(LEAVES, "", { rowOf }).matches.map((t) => t.wbs_code),
+    ["1.1", "4.4.5.2", "4.4.7.2", "14.4.7"],
+  );
+
+  eq(
+    "typing a row number puts that row first",
+    searchTasks(LEAVES, "214", { rowOf }).matches[0]?.wbs_code,
+    "14.4.7",
+  );
+
+  eq(
+    "a code prefix beats the same digits found mid-code",
+    searchTasks(LEAVES, "4.4.7", { rowOf }).matches[0]?.wbs_code,
+    "4.4.7.2",
+  );
+
+  check(
+    "but the mid-code match is still offered",
+    searchTasks(LEAVES, "4.4.7", { rowOf }).matches.some((t) => t.wbs_code === "14.4.7"),
+  );
+
+  same(
+    "words can be typed in any order",
+    searchTasks(LEAVES, "deliv 4.4.5", { rowOf }).matches.map((t) => t.wbs_code),
+    ["4.4.5.2"],
+  );
+
+  eq("the name matches case-insensitively", searchTasks(LEAVES, "PUNCH", { rowOf }).matches.length, 1);
+  eq("nothing matching is an empty list, not everything", searchTasks(LEAVES, "zzz", { rowOf }).matches.length, 0);
+
+  const capped = searchTasks(LEAVES, "", { rowOf, limit: 2 });
+  eq("a long list is capped", capped.matches.length, 2);
+  eq("and says how many it cut rather than hiding them", capped.hidden, 2);
+
+  eq(
+    "the box reads row number and name for a task that exists",
+    taskDisplayLabel("4.4.7.2", { name: "Delivery", row: 80 }),
+    "80 - Delivery",
+  );
+  eq(
+    "and says so plainly for one that does not",
+    taskDisplayLabel("214", { name: null, row: null }),
+    "214 (not found)",
+  );
+  eq("nothing picked reads as empty", taskDisplayLabel("", { name: null, row: null }), "");
 }
 
 // ============================================================================
