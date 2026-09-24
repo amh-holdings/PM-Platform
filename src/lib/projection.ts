@@ -35,6 +35,11 @@ import {
   describeOwnerCashMove,
   ownerCashMonth,
 } from "@/lib/billing-cash-date";
+import {
+  describeSovDateGap,
+  describeSovDateSource,
+  resolveSovMonth,
+} from "@/lib/sov-forecast-date";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import {
   describeScheduleMove,
@@ -96,7 +101,8 @@ export type ProjectionWarning = {
     | "underbilled"
     | "overbilled"
     | "pipeline_change_order"
-    | "pipeline_co_no_cost";
+    | "pipeline_co_no_cost"
+    | "sub_sov_no_date";
   ref: string;
   message: string;
 };
@@ -114,7 +120,8 @@ export type ProjectionNote = {
   kind:
     | "po_payment_from_schedule"
     | "owner_cash_from_payment"
-    | "pipeline_co_cost";
+    | "pipeline_co_cost"
+    | "sov_date_from_mapping";
   ref: string;
   message: string;
 };
@@ -151,6 +158,7 @@ export async function buildProjection(
   const [
     projectRes, entriesRes, forecastsRes, paymentsRes, posRes, linesRes, tasksRes,
     subSovRes, subBilledRes, changeOrdersRes, payAppsRes, costCodesRes,
+    commodityLinksRes, dprsRes,
   ] =
     await Promise.all([
       supabase
@@ -198,12 +206,12 @@ export async function buildProjection(
         .eq("project_id", projectId),
       supabase
         .from("schedule_tasks")
-        .select("wbs_code, task_name, status, start_date, end_date, pct_complete")
+        .select("id, wbs_code, task_name, status, start_date, end_date, pct_complete")
         .eq("project_id", projectId),
       supabase
         .from("sub_sov_lines")
         .select(
-          "id, item_number, description, scheduled_value, linked_task_wbs_codes, milestone_task_wbs_code, active, subcontractors!inner(company_name, payment_terms_days, retainage_pct)",
+          "id, item_number, description, scheduled_value, linked_task_wbs_codes, milestone_task_wbs_code, linked_commodity_ids, verification_method, subcontractor_id, active, subcontractors!inner(company_name, payment_terms_days, retainage_pct)",
         )
         .eq("project_id", projectId),
       supabase
@@ -229,6 +237,19 @@ export async function buildProjection(
         .from("cost_codes")
         .select("code, is_change_order, estimated_cost")
         .eq("project_id", projectId),
+      // A commodity-mapped SOV line reaches the schedule through its
+      // commodities. schedule_task_id, not wbs_code, so it needs the task ids.
+      supabase
+        .from("commodity_task_links")
+        .select("commodity_id, schedule_task_id, commodities!inner(project_id)")
+        .eq("commodities.project_id", projectId),
+      // Earliest field report per subcontractor - the platform's record of the
+      // day a crew hit site, which is what a mobilization line is earned on.
+      supabase
+        .from("dprs")
+        .select("subcontractor_id, report_date")
+        .eq("project_id", projectId)
+        .order("report_date", { ascending: true }),
     ]);
 
   const warnings: ProjectionWarning[] = [];
@@ -573,9 +594,43 @@ export async function buildProjection(
     );
   }
 
+  // A sub SOV line reaches the schedule three ways, and only the first was
+  // being followed. "All mapped" on the sub billing page counts the EVIDENCE
+  // mapping; the forecast needs a date. A commodity-mapped line reaches one
+  // through commodity_task_links, and a mobilization line through the first
+  // field report. See sov-forecast-date for the order.
+  const wbsByTaskId = new Map(
+    (tasksRes.data ?? []).map((t) => [(t as { id: string }).id, t.wbs_code]),
+  );
+  const wbsByCommodityId = new Map<string, string[]>();
+  for (const l of commodityLinksRes.data ?? []) {
+    const wbs = wbsByTaskId.get((l as { schedule_task_id: string }).schedule_task_id);
+    if (!wbs) continue;
+    const id = (l as { commodity_id: string }).commodity_id;
+    const list = wbsByCommodityId.get(id) ?? [];
+    list.push(wbs);
+    wbsByCommodityId.set(id, list);
+  }
+  // Ordered ascending by report_date, so the first one seen for a sub is the
+  // day they hit site.
+  const onSiteBySub = new Map<string, string>();
+  for (const d of dprsRes.data ?? []) {
+    const sub = (d as { subcontractor_id: string | null }).subcontractor_id;
+    const date = (d as { report_date: string | null }).report_date;
+    if (!sub || !date || onSiteBySub.has(sub)) continue;
+    onSiteBySub.set(sub, date);
+  }
+  const finishOf = (code: string) => {
+    const at = milestoneMonthOf([code]);
+    return at ? { wbs: at.via, month: at.month } : null;
+  };
+
   for (const line of (subSovRes.data ?? []) as unknown as {
-    id: string; item_number: string; scheduled_value: number | null;
+    id: string; item_number: string; description: string | null;
+    scheduled_value: number | null;
     linked_task_wbs_codes: string[] | null; milestone_task_wbs_code: string | null;
+    linked_commodity_ids: string[] | null; verification_method: string | null;
+    subcontractor_id: string | null;
     active: boolean | null;
     subcontractors: {
       company_name: string; payment_terms_days: number | null; retainage_pct: number | null;
@@ -585,15 +640,46 @@ export async function buildProjection(
     const remaining = Number(line.scheduled_value ?? 0) - (subBilledByLine.get(line.id) ?? 0);
     if (remaining <= 0.005) continue;
 
-    const at = milestoneMonthOf(line.linked_task_wbs_codes, line.milestone_task_wbs_code);
-    if (!at) {
+    const subName = line.subcontractors?.company_name ?? "A subcontractor";
+    const mapping = {
+      itemNumber: line.item_number,
+      description: line.description,
+      verificationMethod: line.verification_method,
+      linkedTaskWbsCodes: line.linked_task_wbs_codes,
+      milestoneTaskWbsCode: line.milestone_task_wbs_code,
+      linkedCommodityIds: line.linked_commodity_ids,
+    };
+    const resolved = resolveSovMonth({
+      line: mapping,
+      finishOf,
+      wbsByCommodityId,
+      onSiteDate: line.subcontractor_id
+        ? (onSiteBySub.get(line.subcontractor_id) ?? null)
+        : null,
+    });
+
+    if (!resolved.month) {
+      // Named by the mapping the line DOES have. "No dated task" was the same
+      // sentence for every cause, and on a commodity-mapped line it sent
+      // somebody looking for work that was already done.
       warnings.push({
-        kind: "task_no_dates",
-        ref: `${line.subcontractors?.company_name ?? "sub"} ${line.item_number}`,
-        message: `${line.subcontractors?.company_name ?? "A subcontractor"} line ${line.item_number} has no dated task - $${Math.round(remaining).toLocaleString()} of cost is missing from the forecast`,
+        kind: "sub_sov_no_date",
+        ref: `${subName} ${line.item_number}`,
+        message: describeSovDateGap({ subName, line: mapping, at: resolved, remaining }),
       });
       continue;
     }
+
+    const note = describeSovDateSource({ subName, line: mapping, at: resolved });
+    if (note) {
+      notes.push({
+        kind: "sov_date_from_mapping",
+        ref: `${subName} ${line.item_number}`,
+        message: note,
+      });
+    }
+
+    const at = { month: resolved.month, via: resolved.via ?? "" };
 
     const subDays = Number(line.subcontractors?.payment_terms_days ?? 0);
     const retPct = Number(line.subcontractors?.retainage_pct ?? 0) / 100;

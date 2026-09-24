@@ -294,7 +294,16 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
           <span className="text-xs text-muted-foreground">
             {sovLines.length} lines
             {showDollars ? ` \u00b7 ${formatCurrency(sovTotal)}` : ""}
-            {sovLines.length > 0 && (unmapped > 0 ? ` \u00b7 ${unmapped} unmapped` : " \u00b7 all mapped")}
+            {/* "all mapped" meant "every line has an evidence source", and it
+                was read as "the cash flow has these". Two different columns
+                wear the word mapping: verification_method proves the percent,
+                linked_task_wbs_codes gives it a date. Lumina's seven lines
+                were mapped for evidence, read all mapped here, and sat outside
+                the forecast. The label now says which one it means. */}
+            {sovLines.length > 0 &&
+              (unmapped > 0
+                ? ` \u00b7 ${unmapped} with no evidence source`
+                : " \u00b7 all have an evidence source")}
           </span>
         </div>
 
