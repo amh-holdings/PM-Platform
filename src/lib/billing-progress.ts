@@ -196,3 +196,38 @@ export function forecastAmountPatch(
     ? { planned_amount: amount, actual_amount: amount }
     : { planned_amount: amount };
 }
+
+// ---------------------------------------------------------------------------
+// A linked line with nothing to bill: read-only, or a decision to make?
+// ---------------------------------------------------------------------------
+
+export type UnbillableLine = {
+  /** What the evidence supports so far, in dollars. */
+  earned: number;
+  alreadyBilled: number;
+  /** Measured by PO payment milestones rather than by schedule progress. */
+  procurement: boolean;
+  /** Total of the POs linked to the line, when it is a procurement one. */
+  linkedPoTotal: number | null;
+};
+
+/**
+ * Whether a line with nothing to bill belongs in the panel as a row somebody
+ * can tick and price, rather than in the read-only list of explanations.
+ *
+ * Two cases qualify, and both are the app saying "I cannot work this out"
+ * rather than "the answer is nothing".
+ *
+ * Earned value masked by earlier billing, where the earlier AFPs covered scope
+ * this app has no record of. And a procurement line the app cannot value at
+ * all, because earned value on one comes from PO payment milestones and a PO
+ * whose terms were never entered reads as zero earned. The equipment is on
+ * order either way; only the paperwork is missing.
+ *
+ * A schedule-driven line at 0% is not either of these. There the zero is a
+ * measurement, and it stays read-only.
+ */
+export function needsADecision(n: UnbillableLine): boolean {
+  if (n.earned > 0.005) return n.alreadyBilled > n.earned;
+  return n.procurement;
+}

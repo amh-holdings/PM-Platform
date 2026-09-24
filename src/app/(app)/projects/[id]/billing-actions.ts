@@ -15,6 +15,7 @@ import {
   type ProgressEstimate,
   resolveMilestoneTask,
 } from "@/lib/progress";
+import { needsADecision } from "@/lib/billing-progress";
 import { progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import { canUndoPayApplication } from "@/lib/pay-app-undo";
@@ -196,6 +197,10 @@ export type NotBillableLine = {
   reason: string;
   /** Same per-task or per-milestone working the billable rows carry. */
   evidence: BillingEvidenceItem[];
+  /** Measured by PO payment milestones rather than by schedule progress. */
+  procurement: boolean;
+  /** Total value of the POs linked to the line, when it is a procurement one. */
+  linkedPoTotal: number | null;
 };
 
 export async function computeBillingSuggestions(
@@ -309,6 +314,10 @@ export async function computeBillingSuggestions(
     let procurementDetail: string[] = [];
     let resolvedDetail: string[] = [];
     let linkedCount = 0;
+    // Carried out of the procurement branch because the "nothing to bill"
+    // path needs it: a line the app cannot value is one where the PO total is
+    // the only number on the page worth anything to the person deciding.
+    let linkedPoTotal: number | null = null;
 
     // Procurement-scope lines: progress comes from PO state, NOT schedule date math.
     if (isProcurementLine(line)) {
@@ -326,6 +335,9 @@ export async function computeBillingSuggestions(
       evidenceCodes = [line.item_number];
       procurementDetail = (procEst as { detail?: string[] }).detail ?? [];
       linkedCount = linkedPos.length;
+      linkedPoTotal = linkedPos
+        .filter((p) => p.status !== "cancelled")
+        .reduce((s, p) => s + Number(p.total_value ?? 0), 0);
     } else {
       // Non-procurement lines: schedule-task-driven, leaf tasks only.
       const links = line.linked_task_wbs_codes ?? [];
@@ -474,6 +486,8 @@ export async function computeBillingSuggestions(
             ? `Already billed ${formatCurrency(t.billed)} against ${formatCurrency(target)} the linked POs have earned. Nothing further until another payment milestone fires.`
             : `Already billed ${formatCurrency(t.billed)} against ${formatCurrency(target)} the schedule supports. Nothing further until more progress is recorded.`,
           evidence,
+          procurement,
+          linkedPoTotal: procurement ? linkedPoTotal : null,
         });
       }
       continue;
@@ -1061,11 +1075,25 @@ export async function getBillThisPeriodRows(
    *
    * Until it does, the app must not decide this silently. These arrive as
    * ordinary rows - unchecked, at $0, with the reason and an editable amount -
-   * so the person who knows what the earlier AFPs covered can say. A line with
-   * nothing earned at all stays in the read-only list; there is no judgement
-   * call there.
+   * so the person who knows what the earlier AFPs covered can say.
+   *
+   * A PROCUREMENT line the app cannot value gets the same treatment, and this
+   * is the correction. The rule used to be that a line with nothing earned
+   * stayed read-only because "there is no judgement call there". On a
+   * procurement line there is. Earned value comes from PO payment milestones,
+   * so a PO whose terms were never entered reads as $0 earned - and $0 earned
+   * from missing terms is not the same fact as $0 earned from nothing having
+   * happened. The equipment is on order either way.
+   *
+   * Zarina, on POI equipment due at 50% of the PO: "I'm unable to edit it. No
+   * tick box to it." There was not one. The line sat in a read-only list with
+   * its reason and no way to act on it, which is the app refusing to let the
+   * person who knows the terms say so.
+   *
+   * A schedule-driven line at 0% keeps the read-only treatment. There the zero
+   * is a measurement, not a gap in the record.
    */
-  const suppressed = explained.filter((n) => n.earned > 0.005 && n.alreadyBilled > n.earned);
+  const suppressed = explained.filter(needsADecision);
   const suppressedIds = new Set(suppressed.map((n) => n.billingLineId));
   const suppressedRows: BillableRow[] = suppressed.map((n) => ({
     kind: "suggestion" as const,
@@ -1083,7 +1111,19 @@ export async function getBillThisPeriodRows(
     evidence: n.evidence,
     // Two sentences, not four. The detail that earlier AFPs predate milestone
     // tracking is background; what the reader has to do is type a number.
-    blockedReason: `${formatCurrency(n.earned)} earned, ${formatCurrency(n.alreadyBilled)} already billed. Enter an amount if some of that earlier billing was for other scope.`,
+    //
+    // The unvalued procurement line gets a different one, because its problem
+    // is different and so is the number that solves it: the PO total is what
+    // the amount is a share of, so it says the total rather than leaving the
+    // arithmetic on another page.
+    blockedReason:
+      n.earned <= 0.005 && n.procurement
+        ? `No payment terms recorded on the linked PO${
+            n.linkedPoTotal != null && n.linkedPoTotal > 0
+              ? `s, totalling ${formatCurrency(n.linkedPoTotal)}`
+              : "s"
+          }, so nothing can be computed as earned. Enter the amount due this period, or add the payment milestones to the PO and it will bill itself from then on.`
+        : `${formatCurrency(n.earned)} earned, ${formatCurrency(n.alreadyBilled)} already billed. Enter an amount if some of that earlier billing was for other scope.`,
   }));
 
   const rowsWithSuppressed = [...all, ...suppressedRows].sort((a, b) => {

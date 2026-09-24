@@ -7,6 +7,7 @@
 
 import {
   forecastAmountPatch,
+  needsADecision,
   pairForecastAmounts,
 } from "../../src/lib/billing-progress";
 
@@ -125,6 +126,59 @@ eq(
   "nulls read as zero rather than throwing",
   forecastAmountPatch({ planned_amount: null, actual_amount: null }, 250),
   { planned_amount: 250 },
+);
+
+section("Read-only explanation, or a row you can price?");
+
+const schedule = { procurement: false, linkedPoTotal: null };
+const po = { procurement: true, linkedPoTotal: 400000 };
+
+eq(
+  "a schedule line at 0% stays read-only - the zero is a measurement",
+  needsADecision({ ...schedule, earned: 0, alreadyBilled: 0 }),
+  false,
+);
+
+eq(
+  "a procurement line the app cannot value becomes a row you can price",
+  needsADecision({ ...po, earned: 0, alreadyBilled: 0 }),
+  true,
+);
+
+eq(
+  "so does one with prior billing against it",
+  needsADecision({ ...po, earned: 0, alreadyBilled: 82619.12 }),
+  true,
+);
+
+eq(
+  "earned value masked by earlier billing still qualifies",
+  needsADecision({ ...po, earned: 42750.07, alreadyBilled: 82619.12 }),
+  true,
+);
+
+eq(
+  "a fully measured procurement line with nothing new does not",
+  needsADecision({ ...po, earned: 42750.07, alreadyBilled: 10000 }),
+  false,
+);
+
+eq(
+  "and neither does a schedule line whose earned value is simply spent",
+  needsADecision({ ...schedule, earned: 50000, alreadyBilled: 50000 }),
+  false,
+);
+
+eq(
+  "a schedule line masked by earlier billing is the original case, still true",
+  needsADecision({ ...schedule, earned: 1000, alreadyBilled: 5000 }),
+  true,
+);
+
+eq(
+  "half a cent of earned value is not earned value",
+  needsADecision({ ...schedule, earned: 0.004, alreadyBilled: 0 }),
+  false,
 );
 
 console.log(`\n${"=".repeat(60)}`);
