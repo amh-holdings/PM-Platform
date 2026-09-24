@@ -12,10 +12,17 @@ import { recordedPayment } from "@/lib/progress";
 
 import type { ProcurementImportPlan } from "@/lib/procurement-import";
 import {
+  applyPoContribution,
+  contributionTotal,
+  overwriteWarning,
+  type PoContribution,
+} from "@/lib/afp-po-staging";
+import {
   splitDeliveryLinkChoices,
   type DeliveryLinkChoice,
 } from "@/lib/schedule-po-delivery";
 import { createClient } from "@/lib/supabase/server";
+import { formatCurrency } from "@/lib/format";
 import type { TablesInsert, TablesUpdate } from "@/lib/database.types";
 
 async function assertAhcUser() {
@@ -885,6 +892,13 @@ export type AfpTargetLine = {
   alreadyBilled: number;
   /** Sitting on this line for the open period, not yet on an AFP. */
   stagedThisPeriod: number;
+  /**
+   * How much of that is THIS purchase order's. Saving replaces this figure and
+   * leaves the rest, so the difference between replacing and adding is on
+   * screen before the number is typed rather than discovered afterwards.
+   * Null until migration 0059 runs, where the line can only name one PO.
+   */
+  stagedByThisPo: number | null;
   /** This PO's share of the line, where a billing allocation says so. */
   allocated: number | null;
 };
@@ -964,15 +978,35 @@ export async function getPoAfpContext(
     }
   }
   const stagedByLine = new Map<string, number>();
+  const entryIdByLine = new Map<string, string>();
   for (const e of staged ?? []) {
     if (hasBillingEvidence(e)) continue;
     const id = e.billing_line_id as string | null;
     if (!id) continue;
+    entryIdByLine.set(id, e.id as string);
     const amount =
       Number(e.actual_amount ?? 0) > 0
         ? Number(e.actual_amount)
         : Number(e.planned_amount ?? 0);
     stagedByLine.set(id, (stagedByLine.get(id) ?? 0) + amount);
+  }
+
+  // What THIS PO already puts on each line this period. Migration 0059; while
+  // it is missing every line reports null and the dialog says so rather than
+  // claiming a zero it cannot know.
+  const { data: myAmounts, error: myAmountsErr } = await auth.supabase
+    .from("billing_entry_po_amounts")
+    .select("billing_entry_id, amount")
+    .eq("procurement_order_id", poId)
+    .in("billing_entry_id", Array.from(entryIdByLine.values()));
+  const ledgerReadable = !myAmountsErr;
+  const myByEntry = new Map<string, number>();
+  for (const r of myAmounts ?? []) {
+    if (!r.billing_entry_id) continue;
+    myByEntry.set(
+      r.billing_entry_id,
+      (myByEntry.get(r.billing_entry_id) ?? 0) + Number(r.amount ?? 0),
+    );
   }
   const allocByLine = new Map<string, number>();
   for (const a of allocations ?? []) {
@@ -1011,6 +1045,9 @@ export async function getPoAfpContext(
       scheduledValue: Number(l.scheduled_value ?? 0),
       alreadyBilled: billedByLine.get(l.id) ?? 0,
       stagedThisPeriod: stagedByLine.get(l.id) ?? 0,
+      stagedByThisPo: ledgerReadable
+        ? myByEntry.get(entryIdByLine.get(l.id) ?? "") ?? 0
+        : null,
       allocated: allocByLine.get(l.id) ?? null,
     })),
   };
@@ -1050,6 +1087,57 @@ export type StageAfpResult =
  * than adding to it. The dialog shows what is already staged so the combined
  * number can be typed deliberately.
  */
+/** Migration 0059 has not run, so the per-PO ledger is not there yet. */
+function isMissingLedger(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  // 42P01 undefined_table, PGRST205 unknown relation in the schema cache.
+  if (error.code === "42P01" || error.code === "PGRST205") return true;
+  return /billing_entry_po_amounts/i.test(error.message ?? "");
+}
+
+type ContributionRead =
+  | { ok: true; contributions: PoContribution[]; ledger: boolean }
+  | { ok: false; error: string };
+
+/**
+ * What each PO already puts on this entry.
+ *
+ * Falls back to the single source column when migration 0059 has not run, so
+ * a line staged from one PO still reads correctly and the caller can tell the
+ * difference - `ledger: false` means a second PO cannot be added yet.
+ */
+async function readPoContributions(
+  supabase: ReturnType<typeof createClient>,
+  entry: { id: string; planned_amount?: number | null },
+): Promise<ContributionRead> {
+  const { data, error } = await supabase
+    .from("billing_entry_po_amounts")
+    .select("procurement_order_id, amount")
+    .eq("billing_entry_id", entry.id);
+
+  if (error) {
+    if (!isMissingLedger(error)) return { ok: false, error: error.message };
+    const row = entry as { amount_is_manual?: boolean | null; source_procurement_order_id?: string | null };
+    const legacy: PoContribution[] =
+      row.amount_is_manual === true && row.source_procurement_order_id
+        ? [{ poId: row.source_procurement_order_id, amount: Number(entry.planned_amount ?? 0) }]
+        : [];
+    return { ok: true, contributions: legacy, ledger: false };
+  }
+
+  return {
+    ok: true,
+    ledger: true,
+    contributions: (data ?? [])
+      .filter((r: { procurement_order_id: string | null; amount: number | null }) =>
+        r.procurement_order_id && Number(r.amount ?? 0) > 0)
+      .map((r: { procurement_order_id: string | null; amount: number | null }) => ({
+        poId: r.procurement_order_id as string,
+        amount: Number(r.amount ?? 0),
+      })),
+  };
+}
+
 export async function stagePoAmountForAfp(
   poId: string,
   projectId: string,
@@ -1082,31 +1170,84 @@ export async function stagePoAmountForAfp(
     };
   }
 
+  // What each PO already puts on this line this period.
+  const prior = existing
+    ? await readPoContributions(auth.supabase, existing)
+    : { ok: true as const, contributions: [] as PoContribution[], ledger: true };
+  if (!prior.ok) return { ok: false, error: prior.error };
+
+  // Without the ledger an entry can only name one source PO, so a second one
+  // would silently replace the first - the exact bug this is fixing. Refuse
+  // and say why rather than take the money off the line.
+  if (!prior.ledger) {
+    const otherPoId =
+      (existing as { source_procurement_order_id?: string | null } | null)
+        ?.source_procurement_order_id ?? null;
+    const legacyPoLabel = new Map<string, string>();
+    if (otherPoId) {
+      const { data: otherPo } = await auth.supabase
+        .from("procurement_orders")
+        .select("id, po_number, vendor_name")
+        .eq("id", otherPoId)
+        .maybeSingle();
+      if (otherPo) {
+        legacyPoLabel.set(
+          otherPo.id,
+          otherPo.po_number ?? otherPo.vendor_name ?? "another purchase order",
+        );
+      }
+    }
+    const blocked = overwriteWarning({
+      existingPoId: otherPoId,
+      existingAmount:
+        (existing as { amount_is_manual?: boolean | null } | null)?.amount_is_manual === true
+          ? Number(existing?.planned_amount ?? 0)
+          : 0,
+      incomingPoId: poId,
+      labelOf: (id) => legacyPoLabel.get(id) ?? "another purchase order",
+      formatAmount: formatCurrency,
+    });
+    if (blocked) return { ok: false, error: blocked };
+  }
+
+  const next = applyPoContribution(prior.contributions, poId, input.amount);
+  const total = contributionTotal(next);
+
   const manual = {
     amount_is_manual: true,
+    // Kept for the rows and readers that predate the ledger. With several POs
+    // on one line it names the one most recently entered, which is the best a
+    // single column can do and is why the ledger exists.
     source_procurement_order_id: poId,
   };
 
+  let entryId = existing?.id ?? null;
+
   if (!existing) {
-    const { error } = await auth.supabase.from("billing_entries").insert({
-      billing_line_id: input.billingLineId,
-      period_month: periodMonth,
-      planned_amount: input.amount,
-      status: "forecast",
-      ...manual,
-    } as unknown as TablesInsert<"billing_entries">);
+    const { data: inserted, error } = await auth.supabase
+      .from("billing_entries")
+      .insert({
+        billing_line_id: input.billingLineId,
+        period_month: periodMonth,
+        planned_amount: total,
+        status: "forecast",
+        ...manual,
+      } as unknown as TablesInsert<"billing_entries">)
+      .select("id")
+      .maybeSingle();
     if (error) {
       return { ok: false, error: missingManualAmountMessage(error) ?? error.message };
     }
+    entryId = inserted?.id ?? null;
   } else {
     // actual_amount wins over planned_amount wherever an entry is read, so an
     // entry carrying one has to have both rewritten or it bills the old figure.
     const patch: Record<string, unknown> = {
-      planned_amount: input.amount,
+      planned_amount: total,
       ...manual,
     };
     if (Number(existing.actual_amount ?? 0) !== 0) {
-      patch.actual_amount = input.amount;
+      patch.actual_amount = total;
     }
     // The Bill this period panel lists forecast, suggested and reviewed only.
     // An entry carrying anything else - null on a row older than migration
@@ -1125,10 +1266,31 @@ export async function stagePoAmountForAfp(
     }
   }
 
+  // The ledger is written after the entry, because it hangs off the entry's
+  // id. A failure here leaves the entry carrying this PO's figure alone, which
+  // is what the app did before the ledger existed - worse than the sum, never
+  // wrong about this PO.
+  if (entryId && prior.ledger) {
+    const { error } = await auth.supabase
+      .from("billing_entry_po_amounts")
+      .upsert(
+        {
+          billing_entry_id: entryId,
+          procurement_order_id: poId,
+          amount: input.amount,
+          updated_at: new Date().toISOString(),
+        } as never,
+        { onConflict: "billing_entry_id,procurement_order_id" },
+      );
+    if (error && !isMissingLedger(error)) {
+      return { ok: false, error: error.message };
+    }
+  }
+
   revalidatePath(`/projects/${projectId}/procurement/${poId}`);
   revalidatePath(`/projects/${projectId}/billing`);
   revalidatePath(`/projects/${projectId}`);
-  return { ok: true, periodMonth, amount: input.amount };
+  return { ok: true, periodMonth, amount: total };
 }
 
 // ---------------------------------------------------------------------------

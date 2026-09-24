@@ -100,6 +100,48 @@ export type Database = {
           },
         ]
       }
+      billing_entry_po_amounts: {
+        Row: {
+          amount: number
+          billing_entry_id: string
+          created_at: string | null
+          id: string
+          procurement_order_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          amount?: number
+          billing_entry_id: string
+          created_at?: string | null
+          id?: string
+          procurement_order_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          amount?: number
+          billing_entry_id?: string
+          created_at?: string | null
+          id?: string
+          procurement_order_id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_entry_po_amounts_billing_entry_id_fkey"
+            columns: ["billing_entry_id"]
+            isOneToOne: false
+            referencedRelation: "billing_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_entry_po_amounts_procurement_order_id_fkey"
+            columns: ["procurement_order_id"]
+            isOneToOne: false
+            referencedRelation: "procurement_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       billing_lines: {
         Row: {
           change_order_id: string | null

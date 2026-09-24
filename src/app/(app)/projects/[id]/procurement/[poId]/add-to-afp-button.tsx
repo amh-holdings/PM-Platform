@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatCurrency } from "@/lib/format";
+import { describeStagingEffect } from "@/lib/afp-po-staging";
 
 import {
   getPoAfpContext,
@@ -49,6 +50,7 @@ export function AddToAfpButton({
   const [lines, setLines] = useState<AfpTargetLine[]>([]);
   const [lineId, setLineId] = useState("");
   const [amount, setAmount] = useState("");
+  const [poNumber, setPoNumber] = useState<string | null>(null);
 
   async function openDialog() {
     setOpen(true);
@@ -62,6 +64,7 @@ export function AddToAfpButton({
       return;
     }
     setPeriodMonth(res.periodMonth);
+    setPoNumber(res.poNumber);
     setLines(res.lines);
     setLineId(res.defaultBillingLineId ?? "");
     setAmount(res.suggestedAmount > 0 ? res.suggestedAmount.toFixed(2) : "");
@@ -69,6 +72,17 @@ export function AddToAfpButton({
 
   const selected = lines.find((l) => l.id === lineId) ?? null;
   const typed = Number(amount.replace(/[$,\s]/g, ""));
+  // Replacing this PO's own figure, or adding alongside another PO's. The
+  // difference decides what the line totals, so it is said before the save.
+  const stagingEffect = selected
+    ? describeStagingEffect({
+        stagedThisPeriod: selected.stagedThisPeriod,
+        stagedByThisPo: selected.stagedByThisPo,
+        incomingAmount: Number.isFinite(typed) ? typed : 0,
+        poLabel: poNumber ?? "This PO",
+        formatAmount: formatCurrency,
+      })
+    : null;
 
   async function save() {
     setSaving(true);
@@ -176,11 +190,15 @@ export function AddToAfpButton({
                       value={formatCurrency(selected.stagedThisPeriod)}
                       warn={selected.stagedThisPeriod > 0}
                     />
-                    {selected.stagedThisPeriod > 0 && (
-                      <p className="mt-2 text-amber-700">
-                        A line carries one figure per period. What you save here
-                        replaces the staged amount rather than adding to it.
-                      </p>
+                    {selected.stagedByThisPo != null &&
+                      selected.stagedByThisPo > 0 && (
+                        <Row
+                          label={`Of that, from ${poNumber ?? "this PO"}`}
+                          value={formatCurrency(selected.stagedByThisPo)}
+                        />
+                      )}
+                    {stagingEffect && (
+                      <p className="mt-2 text-amber-700">{stagingEffect}</p>
                     )}
                   </div>
                 )}
