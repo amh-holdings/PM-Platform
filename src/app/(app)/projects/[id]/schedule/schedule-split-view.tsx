@@ -91,6 +91,7 @@ import {
   bulkUpdateScheduleTasks,
   deleteScheduleTasks,
   describeTaskDeletion,
+  setTaskProgressByHand,
   type TaskPatch,
 } from "../schedule-actions";
 import {
@@ -110,7 +111,12 @@ import {
 import { TaskEditDialog } from "./task-edit-dialog";
 import { hasLinkErrors } from "./predecessor-editor";
 import type { ScheduleTaskRow } from "./schedule-types";
-import { TASK_TYPES, TASK_TYPE_HELP, TASK_TYPE_LABELS } from "@/lib/schedule-task-type";
+import {
+  TASK_TYPES,
+  TASK_TYPE_HELP,
+  TASK_TYPE_LABELS,
+  progressCanBeSetByHand,
+} from "@/lib/schedule-task-type";
 
 // Fields the grid edits in place. Anything not here is either derived (float,
 // projected dates), owned by another workflow (progress comes from approved
@@ -2493,7 +2499,16 @@ function GridRow({
               );
 
             case "progress":
-              return <ProgressCell progress={p} />;
+              return (
+                <ProgressCell
+                  progress={p}
+                  taskId={t.id}
+                  projectId={projectId}
+                  savedType={t.task_type ?? null}
+                  draftType={valueOf(t, "task_type") || null}
+                  isSummary={isSummary}
+                />
+              );
 
             case "dur":
               return (
@@ -2699,7 +2714,112 @@ function RowBadges({
   );
 }
 
-function ProgressCell({ progress }: { progress: Progress }) {
+/**
+ * Progress, and on the two kinds of task no field report will ever cover, a
+ * box to type it in.
+ *
+ * Construction keeps reading "No report" until one is approved, which is the
+ * rule the whole schedule is built on. A permit or a transformer has no report
+ * to wait for, so the row would sit on "No report" forever - Sweet Springs has
+ * 30-odd procurement rows doing exactly that, equipment already on site.
+ */
+function ProgressCell({
+  progress,
+  taskId,
+  projectId,
+  savedType,
+  draftType,
+  isSummary,
+}: {
+  progress: Progress;
+  taskId: string;
+  projectId: string;
+  savedType: string | null;
+  draftType: string | null;
+  isSummary: boolean;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [, startProgressTransition] = useTransition();
+
+  // The SAVED type decides, because the server checks the saved row. A type
+  // picked in the grid and not yet saved gets a hint instead of a box that
+  // would be refused.
+  const editable = !isSummary && progressCanBeSetByHand(savedType);
+  const pendingType =
+    !isSummary && !editable && progressCanBeSetByHand(draftType);
+
+  async function save(pct: number | null) {
+    setBusy(true);
+    setErr(null);
+    const res = await setTaskProgressByHand(taskId, projectId, pct);
+    setBusy(false);
+    if (!res.ok) {
+      setErr(res.error);
+      return;
+    }
+    startProgressTransition(() => router.refresh());
+  }
+
+  if (editable) {
+    const current = progress.kind === "none" ? null : Math.round(progress.pct);
+    // Committed on blur or Enter rather than on every keystroke, or typing
+    // "100" would write 1, then 10, then 100 - three round trips and two wrong
+    // numbers briefly on the forecast.
+    const commit = (raw: string) => {
+      const trimmed = raw.trim();
+      const next = trimmed === "" ? null : Number(trimmed);
+      if (next !== null && !Number.isFinite(next)) return;
+      if (next === current) return;
+      void save(next);
+    };
+    return (
+      <span className="flex items-center gap-1" title={err ?? "Typed in - there is no field report for this kind of task"}>
+        <input
+          key={current ?? "blank"}
+          type="number"
+          min={0}
+          max={100}
+          defaultValue={current ?? ""}
+          disabled={busy}
+          placeholder="-"
+          onBlur={(e) => commit(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          className={cn(
+            "h-6 w-11 rounded border bg-background px-1 text-right text-[11px]",
+            err && "border-destructive",
+          )}
+        />
+        <span className="text-[10px] text-muted-foreground">%</span>
+        {current !== 100 && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void save(100)}
+            className="rounded border px-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+            title="Delivered, issued or otherwise finished"
+          >
+            Done
+          </button>
+        )}
+      </span>
+    );
+  }
+
+  if (pendingType) {
+    return (
+      <span className="text-[11px] text-amber-700" title="Save the row and the percent box appears here">
+        Save row first
+      </span>
+    );
+  }
+
   if (progress.kind === "none") {
     return <span className="text-[11px] text-muted-foreground">No report</span>;
   }

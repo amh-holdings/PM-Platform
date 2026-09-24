@@ -7,7 +7,11 @@ import type { TablesUpdate } from "@/lib/database.types";
 import { parsePredecessors, serializeLinks } from "@/lib/schedule-cpm";
 import { orderRenames } from "@/lib/schedule-edit";
 import { captureScheduleSnapshot } from "@/lib/schedule-sync-server";
-import { TASK_TYPES, type TaskType } from "@/lib/schedule-task-type";
+import {
+  TASK_TYPES,
+  progressCanBeSetByHand,
+  type TaskType,
+} from "@/lib/schedule-task-type";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -25,6 +29,22 @@ async function assertAhcUser() {
     return { ok: false as const, error: "Restricted to AHC team members" };
   }
   return { ok: true as const, supabase };
+}
+
+/**
+ * Procurement needs the widened check constraint migration 0057 brings. Until
+ * it runs, saving that type fails on "new row violates check constraint
+ * schedule_tasks_task_type_chk", which names a database object nobody outside
+ * this file has heard of.
+ */
+function taskTypeConstraintMessage(
+  error: { code?: string; message?: string } | null,
+): string | null {
+  if (!error) return null;
+  const hit =
+    error.code === "23514" || /schedule_tasks_task_type_chk/i.test(error.message ?? "");
+  if (!hit || !/task_type_chk/i.test(error.message ?? "")) return null;
+  return "The Procurement type needs database migration 0057 (schedule task type procurement). Construction and Deliverable keep working without it.";
 }
 
 export type ScheduleTaskResult =
@@ -93,7 +113,9 @@ export async function updateScheduleTask(
     .from("schedule_tasks")
     .update(update)
     .eq("id", taskId);
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    return { ok: false, error: taskTypeConstraintMessage(error) ?? error.message };
+  }
 
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
@@ -683,9 +705,10 @@ export async function bulkUpdateScheduleTasks(
       .eq("id", p.id)
       .eq("project_id", projectId);
     if (error) {
+      const message = taskTypeConstraintMessage(error) ?? error.message;
       return {
         ok: false,
-        error: `${error.message} (stopped after ${count} of ${patches.length} - the rest were not written)`,
+        error: `${message} (stopped after ${count} of ${patches.length} - the rest were not written)`,
       };
     }
     count++;
@@ -886,4 +909,76 @@ export async function applyScheduleImport(
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
   return { ok: true, added: plan.adds.length, changed, deleted };
+}
+
+// ============================================================================
+// Progress on a task no field report will ever cover
+// ============================================================================
+//
+// Percent complete belongs to approved daily reports and BULK_EDITABLE keeps
+// the grid away from it. That rule exists for construction, where a typed
+// number is a number nobody can defend in a pay application.
+//
+// It was never about the other two kinds. A permit is issued or it is not. A
+// transformer is on site or it is not. There is no report that could ever set
+// a percent on either, so refusing the edit protects nothing and leaves the
+// row on "No report" permanently - which is exactly what Sweet Springs
+// procurement has been doing.
+//
+// So this is the one door to pct_complete from the browser, and it checks the
+// task's own type on the server before it opens. Construction and unclassified
+// rows are refused here whatever the page sends.
+
+export type SetProgressResult =
+  | { ok: true; pct: number | null }
+  | { ok: false; error: string };
+
+export async function setTaskProgressByHand(
+  taskId: string,
+  projectId: string,
+  /** 0 to 100, or null to clear it back to no report. */
+  pct: number | null,
+): Promise<SetProgressResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  if (pct != null && (!Number.isFinite(pct) || pct < 0 || pct > 100)) {
+    return { ok: false, error: "Percent must be between 0 and 100" };
+  }
+
+  // Read the type from the database rather than trusting what the page sent.
+  const { data: task, error: readErr } = await auth.supabase
+    .from("schedule_tasks")
+    .select("*")
+    .eq("id", taskId)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+  if (!task) return { ok: false, error: "Task not found" };
+
+  const taskType = (task as { task_type?: string | null }).task_type ?? null;
+  if (!progressCanBeSetByHand(taskType)) {
+    return {
+      ok: false,
+      error:
+        taskType === "construction"
+          ? "Construction progress comes from approved field reports, not typed in here."
+          : "Set this task's Type to Deliverable or Procurement first, then its progress can be set here.",
+    };
+  }
+
+  const rounded = pct == null ? null : Math.round(pct * 10) / 10;
+  const { error } = await auth.supabase
+    .from("schedule_tasks")
+    .update({
+      pct_complete: rounded,
+      // Says where the number came from, so the tooltip and any later audit
+      // can tell a typed figure from an approved report.
+      status_source: rounded == null ? null : "manual",
+    } as TablesUpdate<"schedule_tasks">)
+    .eq("id", taskId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/schedule`);
+  return { ok: true, pct: rounded };
 }

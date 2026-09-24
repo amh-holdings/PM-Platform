@@ -21,6 +21,7 @@ import {
   todayIso,
   workingDaysBetween,
 } from "@/lib/schedule-calendar";
+import { finishIsACommitment, progressCanBeSetByHand } from "../../src/lib/schedule-task-type";
 import {
   computeCpm,
   parsePredecessors,
@@ -829,6 +830,77 @@ section("Deliverables - received, not measured");
   const applied = live.map((t) => { const u = plan.find((x) => x.wbs === t.wbs_code); return u ? { ...t, start_date: u.start, end_date: u.end } : t; });
   eq("and the sync settles in one pass", planScheduleSync(applied, { dataDate: "2026-09-17" }).length, 0);
   eq("a day later the commitment is still there", planScheduleSync(applied, { dataDate: "2026-09-18" }).find((u) => u.wbs === "1"), undefined);
+}
+
+// ============================================================================
+section("Procurement - equipment on order");
+// ============================================================================
+
+{
+  // Sweet Springs 4.4.3 Maddox 1500kVA: a lead time running down and a truck
+  // arriving. No daily report will ever cover it, so it forecasts the way a
+  // deliverable does rather than assuming the whole lead time is still to run.
+  const lead = (extra: Partial<CpmInput> = {}) =>
+    task({
+      wbs_code: "1", start_date: "2026-06-26", end_date: "2026-11-04",
+      duration_days: 95, status: "In Progress", task_type: "procurement", ...extra,
+    });
+
+  const ahead = computeCpm([lead()], { dataDate: "2026-09-24" });
+  eq("procurement holds its committed delivery date", ahead.byWbs.get("1")!.projectedEnd, "2026-11-04");
+  eq("and says so", ahead.byWbs.get("1")!.forecastBasis, "committed");
+  eq("and is not late while the date is ahead", ahead.byWbs.get("1")!.daysOverdue, 0);
+
+  const late = computeCpm([lead({ end_date: "2026-09-18" })], { dataDate: "2026-09-24" });
+  eq("once the delivery date passes it is overdue", late.byWbs.get("1")!.projectedEnd, "2026-09-24");
+  eq("with the overdue basis", late.byWbs.get("1")!.forecastBasis, "overdue");
+
+  // The same overdue row typed as construction is the behaviour Zarina was
+  // seeing: no report means no percent, so the forecast assumes all 95 days
+  // are still ahead and pushes delivery deep into next year on equipment that
+  // is already on site. That gap only opens once the date has passed - while
+  // it is still ahead both kinds simply hold the plan.
+  const asWork = computeCpm(
+    [lead({ end_date: "2026-09-18", task_type: "construction" })],
+    { dataDate: "2026-09-24" },
+  );
+  check(
+    "as construction an overdue lead time re-plans the whole 95 days",
+    asWork.byWbs.get("1")!.projectedEnd > "2027-01-01",
+    asWork.byWbs.get("1")!.projectedEnd,
+  );
+  eq(
+    "as procurement the same row is simply overdue today",
+    late.byWbs.get("1")!.projectedEnd,
+    "2026-09-24",
+  );
+
+  // A delivery drives what follows it, like any other predecessor.
+  const chain = computeCpm(
+    [
+      lead({ end_date: "2026-09-18" }),
+      task({ wbs_code: "2", duration_days: 5, predecessors: "1", task_type: "construction", start_date: "2026-09-21", end_date: "2026-09-25" }),
+    ],
+    { dataDate: "2026-09-24" },
+  );
+  eq("install waits for the late delivery", chain.byWbs.get("2")!.projectedStart, "2026-09-25");
+}
+
+// ============================================================================
+section("Which tasks accept a typed percent");
+// ============================================================================
+
+{
+  eq("procurement does", progressCanBeSetByHand("procurement"), true);
+  eq("a deliverable does", progressCanBeSetByHand("deliverable"), true);
+  eq("construction never does - that is the field report rule", progressCanBeSetByHand("construction"), false);
+  eq("an unclassified row does not, classify it first", progressCanBeSetByHand(null), false);
+  eq("and neither does a value nobody recognises", progressCanBeSetByHand("equipment"), false);
+
+  eq("procurement's finish is a commitment", finishIsACommitment("procurement"), true);
+  eq("so is a deliverable's", finishIsACommitment("deliverable"), true);
+  eq("construction's is not", finishIsACommitment("construction"), false);
+  eq("nor is an unclassified row's", finishIsACommitment(null), false);
 }
 
 // ============================================================================

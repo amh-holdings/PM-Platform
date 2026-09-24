@@ -40,6 +40,7 @@ import {
   type CalendarLike,
   type Calendar,
 } from "@/lib/schedule-calendar";
+import { finishIsACommitment } from "@/lib/schedule-task-type";
 
 export type RelType = "FS" | "SS" | "FF" | "SF";
 
@@ -305,8 +306,11 @@ function hasStarted(t: CpmInput): boolean {
 // date and moves a day at a time, because the package could arrive tomorrow.
 // Logic still governs: a predecessor landing later pushes it like anything
 // else, and a task waiting on a chain takes its dates from the chain.
+// Procurement behaves the same way and joined it in 0057: a transformer with
+// a twenty-week lead time is a committed date, not twenty weeks of measurable
+// work on site.
 function isDeliverable(t: CpmInput): boolean {
-  return t.task_type === "deliverable";
+  return finishIsACommitment(t.task_type);
 }
 
 // Remaining duration for work already under way, used only to forecast a task
