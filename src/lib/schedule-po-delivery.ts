@@ -137,3 +137,38 @@ export function describeDeliverySync(plan: DeliverySyncPlan): string | null {
   }
   return parts.length ? parts.join(" ") : null;
 }
+
+/**
+ * The nudge after a delivery lands: this PO is on site, is it on the AFP?
+ *
+ * Stamping the delivery date makes the milestone fire, which moves the
+ * suggestion on a procurement SOV line. It does nothing at all for a PO billed
+ * by a typed figure through Add to AFP, and nothing for one whose SOV line is
+ * not procurement-shaped. In both of those the equipment arrives, the schedule
+ * goes green, and the money is still waiting on somebody to remember.
+ *
+ * Zarina: "I want it to be triggered in the Schedule as well if completed, we
+ * will know to add that to AFP."
+ *
+ * So a PO that just went delivered and has nothing staged on the open
+ * application gets named. A PO that already has an amount staged is left
+ * alone, because the reminder would be noise and noise is how a message like
+ * this stops being read.
+ */
+export function describeAfpFollowUp(input: {
+  delivered: readonly { poId: string; label: string }[];
+  /** PO ids that already have an amount staged on the open application. */
+  stagedPoIds: readonly string[];
+  /** YYYY-MM-01 of the application being assembled. */
+  periodMonth: string;
+}): string | null {
+  const staged = new Set(input.stagedPoIds);
+  const waiting = input.delivered.filter((d) => !staged.has(d.poId));
+  if (waiting.length === 0) return null;
+
+  const names = waiting.map((w) => w.label).join(", ");
+  const period = input.periodMonth.slice(0, 7);
+  return waiting.length === 1
+    ? `${names} is delivered with nothing on the ${period} application - open it and use Add to AFP if it should be billed this period.`
+    : `${names} are delivered with nothing on the ${period} application - open each and use Add to AFP if they should be billed this period.`;
+}

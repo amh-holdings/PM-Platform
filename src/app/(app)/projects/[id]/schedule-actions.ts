@@ -8,10 +8,12 @@ import { parsePredecessors, serializeLinks } from "@/lib/schedule-cpm";
 import { orderRenames } from "@/lib/schedule-edit";
 import { todayIso } from "@/lib/schedule-calendar";
 import {
+  describeAfpFollowUp,
   describeDeliverySync,
   planDeliverySync,
   type DeliveryTaskLike,
 } from "@/lib/schedule-po-delivery";
+import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import { captureScheduleSnapshot } from "@/lib/schedule-sync-server";
 import {
   TASK_TYPES,
@@ -1047,7 +1049,32 @@ async function recordDeliveriesOnPos(
     revalidatePath(`/projects/${projectId}/procurement`);
     revalidatePath(`/projects/${projectId}/billing`);
   }
-  return describeDeliverySync(plan);
+
+  // Delivered is not the same as billed. Stamping the date fires the milestone
+  // on a procurement SOV line and does nothing at all for a PO billed by a
+  // typed figure, so the equipment can be on site, the row green, and the
+  // money still waiting on somebody to remember. Name the ones that are.
+  let followUp: string | null = null;
+  if (plan.updates.length) {
+    const periodMonth = await resolveBillingPeriod(supabase, projectId);
+    // Selected with * because source_procurement_order_id arrives in migration
+    // 0056 and naming a missing column would error the whole request.
+    const { data: staged } = await supabase
+      .from("billing_entries")
+      .select("*, billing_lines!inner(project_id)")
+      .eq("billing_lines.project_id", projectId)
+      .eq("period_month", periodMonth);
+    const stagedPoIds = (staged ?? [])
+      .map((e: Record<string, unknown>) => e.source_procurement_order_id as string | null)
+      .filter((id: string | null): id is string => !!id);
+    followUp = describeAfpFollowUp({
+      delivered: plan.updates.map((u) => ({ poId: u.poId, label: u.label })),
+      stagedPoIds,
+      periodMonth,
+    });
+  }
+
+  return [describeDeliverySync(plan), followUp].filter(Boolean).join(" ") || null;
 }
 
 export type SetProgressResult =

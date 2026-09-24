@@ -312,3 +312,24 @@ export function pickAfpTargetLine(opts: {
   const linked = opts.linkedLineIds.filter(Boolean);
   return linked.length === 1 ? linked[0] : null;
 }
+
+/**
+ * A figure somebody typed against a purchase order, or null when there is none.
+ *
+ * This is the gate in front of every estimator on the Bill this period panel.
+ * It used to sit inside the procurement branch only, so Add to AFP worked on a
+ * procurement SOV line and was thrown away on every other kind: the row got
+ * blocked at $0 with a reason about field reports and the typed number was
+ * nowhere on the page.
+ *
+ * A percent is an estimate and the app is right to argue with it. A dollar
+ * amount entered against a PO is not an estimate, and nothing here knows
+ * better than the person who opened that PO.
+ *
+ * Zero is not a typed figure, it is an empty box. Negative is refused rather
+ * than credited.
+ */
+export function typedAmount(manualAmount: number | null | undefined): number | null {
+  const n = Number(manualAmount ?? 0);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}

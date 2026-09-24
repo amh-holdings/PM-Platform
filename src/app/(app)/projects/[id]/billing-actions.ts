@@ -18,6 +18,7 @@ import {
 import {
   needsADecision,
   resolveProcurementAmount,
+  typedAmount,
 } from "@/lib/billing-progress";
 import { progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
@@ -918,6 +919,24 @@ export async function getBillThisPeriodRows(
   for (const x of allForecastRows) {
     const lineMeta = lineById.get(x.row.billingLineId);
 
+    // A TYPED AMOUNT WINS, WHATEVER KIND OF LINE IT IS.
+    //
+    // This used to live inside the procurement branch only, which meant Add to
+    // AFP worked on a procurement SOV line and was silently discarded on every
+    // other kind. Zarina: "I just added an AFP amount from PO-17. But it is
+    // not reflecting." Her line went down the schedule path, its tasks read 0%,
+    // and the row was blocked at $0 carrying a reason about field reports -
+    // with the figure she had typed nowhere on the page.
+    //
+    // A percent is an estimate and the app is right to argue with it. A dollar
+    // amount somebody entered against a purchase order is not an estimate, and
+    // no estimator here knows better than the person who opened the PO.
+    const typed = typedAmount(x.manualAmount);
+    if (typed != null) {
+      forecastRows.push({ ...x.row, amount: typed });
+      continue;
+    }
+
     // PROCUREMENT LINES: signal is SIGNED PO link (drafts don't count).
     // Billable amount = signed PO total (capped at scheduled_value).
     //
@@ -953,6 +972,9 @@ export async function getBillThisPeriodRows(
         linked,
       );
       const alreadyBilled = billedByLine.get(x.row.billingLineId) ?? 0;
+      // manualAmount is null here by construction - a typed figure returned
+      // above. Passed anyway so the one function still describes the whole
+      // rule, and so a future caller cannot reintroduce the split.
       const resolved = resolveProcurementAmount({
         manualAmount: x.manualAmount,
         earnedValue: est.earnedValue,

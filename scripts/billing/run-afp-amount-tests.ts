@@ -12,6 +12,7 @@ import {
   pairForecastAmounts,
   pickAfpTargetLine,
   resolveProcurementAmount,
+  typedAmount,
 } from "../../src/lib/billing-progress";
 
 let passed = 0;
@@ -294,6 +295,18 @@ eq(
   resolveProcurementAmount({ manualAmount: 4480.25, earnedValue: 3975.25, alreadyBilled: 0 }),
   { kind: "manual", amount: 4480.25 },
 );
+
+section("A typed amount wins on ANY kind of line");
+
+// This gate used to live inside the procurement branch only, so Add to AFP
+// worked on a procurement SOV line and was discarded on every other kind.
+// Zarina: "I just added an AFP amount from PO-17. But it is not reflecting."
+eq("a typed figure comes through", typedAmount(42750.07), 42750.07);
+eq("zero is an empty box, not a figure", typedAmount(0), null);
+eq("negative is refused rather than credited", typedAmount(-500), null);
+eq("nothing typed is nothing", typedAmount(null), null);
+eq("and neither is undefined", typedAmount(undefined), null);
+eq("a broken number does not become an amount", typedAmount(Number.NaN), null);
 
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);

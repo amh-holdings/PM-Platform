@@ -11,6 +11,7 @@
  */
 
 import {
+  describeAfpFollowUp,
   describeDeliverySync,
   deliveryDateForTask,
   planDeliverySync,
@@ -213,6 +214,71 @@ check(
 same(
   "nothing to report says nothing rather than padding the message",
   describeDeliverySync({ updates: [], alreadyRecorded: [], unlinked: [] }),
+  null,
+);
+
+section("Delivered is not billed: the AFP nudge");
+
+const DELIVERED = [
+  { poId: "po-1", label: "PO-017" },
+  { poId: "po-2", label: "PO-019" },
+];
+
+check(
+  "a delivered PO with nothing staged is named",
+  (describeAfpFollowUp({
+    delivered: [DELIVERED[0]],
+    stagedPoIds: [],
+    periodMonth: "2026-09-01",
+  }) ?? "").includes("PO-017"),
+);
+
+check(
+  "and the period is named with it",
+  (describeAfpFollowUp({
+    delivered: [DELIVERED[0]],
+    stagedPoIds: [],
+    periodMonth: "2026-09-01",
+  }) ?? "").includes("2026-09"),
+);
+
+same(
+  "a PO that already has an amount staged is left alone - the nudge would be noise",
+  describeAfpFollowUp({
+    delivered: [DELIVERED[0]],
+    stagedPoIds: ["po-1"],
+    periodMonth: "2026-09-01",
+  }),
+  null,
+);
+
+check(
+  "with two waiting, both are named and the wording is plural",
+  (() => {
+    const line = describeAfpFollowUp({
+      delivered: DELIVERED,
+      stagedPoIds: [],
+      periodMonth: "2026-09-01",
+    }) ?? "";
+    return line.includes("PO-017") && line.includes("PO-019") && line.includes("are delivered");
+  })(),
+);
+
+check(
+  "one staged and one not names only the one that needs doing",
+  (() => {
+    const line = describeAfpFollowUp({
+      delivered: DELIVERED,
+      stagedPoIds: ["po-1"],
+      periodMonth: "2026-09-01",
+    }) ?? "";
+    return line.includes("PO-019") && !line.includes("PO-017");
+  })(),
+);
+
+same(
+  "nothing delivered is nothing to nudge about",
+  describeAfpFollowUp({ delivered: [], stagedPoIds: [], periodMonth: "2026-09-01" }),
   null,
 );
 
