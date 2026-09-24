@@ -159,12 +159,20 @@ export function BillThisPeriodClient({
           .filter((r) => selected.has(r.key))
           .map((r) =>
             r.kind === "forecast" ? (
-              <input
-                key={r.key}
-                type="hidden"
-                name="forecastEntryIds"
-                value={r.entryId}
-              />
+              /* The amount box next to a forecast row used to go nowhere. The
+                 row posted its entry id and nothing else, so the server billed
+                 whatever the entry already held and the number that had just
+                 been typed was thrown away without a word. A blocked row
+                 arrives at $0 precisely so somebody can overwrite it, which
+                 only worked on suggestion rows. */
+              <div key={r.key} className="contents">
+                <input type="hidden" name="forecastEntryIds" value={r.entryId} />
+                <input
+                  type="hidden"
+                  name="forecastAmounts"
+                  value={amounts[r.key] ?? r.amount}
+                />
+              </div>
             ) : (
               <div key={r.key} className="contents">
                 <input

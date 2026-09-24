@@ -145,3 +145,54 @@ export function remainingToFinish(
     Math.round((scheduledValue - summary.previous - summary.current) * 100) / 100;
   return rounded === 0 ? 0 : rounded;
 }
+
+// ---------------------------------------------------------------------------
+// Editing an amount on the way onto an AFP
+// ---------------------------------------------------------------------------
+//
+// The Bill this period panel puts an editable box next to every row, including
+// the blocked ones, which arrive at $0 on purpose so a person can overwrite
+// them. That box only ever worked on suggestion rows: a forecast row posted
+// its entry id alone, so the typed figure was dropped and the entry billed
+// whatever it already held. These two are the parts worth pinning down.
+
+/**
+ * Line up posted entry ids with their posted amounts, then drop the blanks.
+ *
+ * Order matters and the filter has to come second. Dropping an empty id first
+ * and zipping afterwards shifts every later amount onto the wrong entry, which
+ * is the kind of mistake that bills the right total against the wrong lines
+ * and reconciles perfectly on the summary page.
+ */
+export function pairForecastAmounts(
+  ids: string[],
+  amounts: number[],
+): { id: string; amount: number }[] {
+  return ids
+    .map((id, i) => ({ id: id.trim(), amount: amounts[i] }))
+    .filter((p) => p.id.length > 0);
+}
+
+/**
+ * The patch that makes an edited amount actually bill, or null when the row
+ * already reads that way and nothing needs writing.
+ *
+ * A pay application takes actual_amount when it is set and planned_amount
+ * otherwise, so the edit has to land on whichever of the two will be read.
+ * Writing planned_amount alone looks like it worked and still bills the old
+ * figure on any entry that carries an actual.
+ */
+export function forecastAmountPatch(
+  entry: { planned_amount?: number | null; actual_amount?: number | null },
+  amount: number,
+): { planned_amount: number; actual_amount?: number } | null {
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  const actual = Number(entry.actual_amount ?? 0);
+  const current = actual !== 0 ? actual : Number(entry.planned_amount ?? 0);
+  // Half a cent, so a float that comes back as 1234.5600000000002 is not
+  // treated as an edit and rewritten on every AFP.
+  if (Math.abs(current - amount) < 0.005) return null;
+  return actual !== 0
+    ? { planned_amount: amount, actual_amount: amount }
+    : { planned_amount: amount };
+}
