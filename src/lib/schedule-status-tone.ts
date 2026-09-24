@@ -72,3 +72,34 @@ export function rowTone(input: {
   if (input.nearCritical) return "bg-amber-50/40";
   return fromStatus;
 }
+
+/**
+ * The fill colour for the progress bar in the schedule grid.
+ *
+ * It used to say only where the number came from: grey for a summary rolled up
+ * from its leaves, green for an approved field report, amber for a figure
+ * somebody typed. That is a real distinction and it matters on a pay
+ * application, which is why it is kept below.
+ *
+ * What it never said was whether the work was finished. GroundWorks sitting at
+ * 100% drew a full grey bar, because it is a summary, and read as inert.
+ * Zarina: "the progress bar is grey when it is completed."
+ *
+ * So completion comes first and provenance second. At 100% the bar is green
+ * whatever produced it, because done is the thing worth seeing across a sheet
+ * of 47 rows. Below 100% the old colours stand, and how the number was
+ * arrived at is still in the tooltip either way.
+ *
+ * The threshold is 99.5 rather than 100 so the colour agrees with the label:
+ * a duration-weighted roll-up landing on 99.6 already prints "100%", and a bar
+ * that says done beside a number that says done is the point.
+ */
+export function progressBarTone(input: {
+  pct: number;
+  rolled: boolean;
+  source?: string | null;
+}): string {
+  if (Number.isFinite(input.pct) && input.pct >= 99.5) return "bg-emerald-500";
+  if (input.rolled) return "bg-muted-foreground/50";
+  return input.source === "dpr" ? "bg-emerald-500" : "bg-amber-500";
+}

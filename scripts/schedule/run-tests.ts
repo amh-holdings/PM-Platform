@@ -26,7 +26,11 @@ import {
   progressCanBeSetByHand,
   progressFromStatus,
 } from "../../src/lib/schedule-task-type";
-import { rowTone, statusRowTone } from "../../src/lib/schedule-status-tone";
+import {
+  progressBarTone,
+  rowTone,
+  statusRowTone,
+} from "../../src/lib/schedule-status-tone";
 import {
   computeCpm,
   parsePredecessors,
@@ -1070,6 +1074,85 @@ section("Row colour: status as well as the critical path");
     "and a plain row on float is still plain",
     rowTone({ status: "In Progress", ...plain }),
     null,
+  );
+}
+
+// ============================================================================
+section("Progress bar colour: done first, provenance second");
+// ============================================================================
+
+{
+  // The bar said only where the number came from, never whether the work was
+  // finished. GroundWorks at 100% drew a full GREY bar because it is a summary
+  // row. Zarina: "the progress bar is grey when it is completed."
+  eq(
+    "a finished summary is green, not grey",
+    progressBarTone({ pct: 100, rolled: true }),
+    "bg-emerald-500",
+  );
+
+  eq(
+    "a finished row somebody typed is green, not amber",
+    progressBarTone({ pct: 100, rolled: false, source: "manual" }),
+    "bg-emerald-500",
+  );
+
+  eq(
+    "a finished field-reported row was already green and stays green",
+    progressBarTone({ pct: 100, rolled: false, source: "dpr" }),
+    "bg-emerald-500",
+  );
+
+  // The threshold exists so the bar and the number agree: a duration-weighted
+  // roll-up landing here already prints "100%".
+  eq(
+    "99.6 prints as 100% so it reads as done too",
+    progressBarTone({ pct: 99.6, rolled: true }),
+    "bg-emerald-500",
+  );
+
+  eq(
+    "99.4 prints as 99% and keeps the in-progress colour",
+    progressBarTone({ pct: 99.4, rolled: true }),
+    "bg-muted-foreground/50",
+  );
+
+  // Below 100 the provenance colours stand, because how a percent was arrived
+  // at is what matters on a pay application.
+  eq(
+    "a summary part way is grey - derived, not measured",
+    progressBarTone({ pct: 40, rolled: true }),
+    "bg-muted-foreground/50",
+  );
+
+  eq(
+    "a field report part way is green",
+    progressBarTone({ pct: 40, rolled: false, source: "dpr" }),
+    "bg-emerald-500",
+  );
+
+  eq(
+    "a typed figure part way is amber - somebody's judgement, not a report",
+    progressBarTone({ pct: 40, rolled: false, source: "manual" }),
+    "bg-amber-500",
+  );
+
+  eq(
+    "an unknown source reads as typed rather than as reported",
+    progressBarTone({ pct: 40, rolled: false, source: null }),
+    "bg-amber-500",
+  );
+
+  eq(
+    "zero is not done",
+    progressBarTone({ pct: 0, rolled: false, source: "dpr" }),
+    "bg-emerald-500",
+  );
+
+  eq(
+    "and a broken number does not read as done",
+    progressBarTone({ pct: Number.NaN, rolled: true }),
+    "bg-muted-foreground/50",
   );
 }
 
