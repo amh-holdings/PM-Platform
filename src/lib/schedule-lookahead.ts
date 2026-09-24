@@ -23,6 +23,15 @@ const DAY_MS = 86_400_000;
 export type LookaheadTask = {
   wbs: string;
   name: string;
+  /**
+   * The branch this sits under, named.
+   *
+   * Zarina: "Can you add the Parent's name as well as there are the same lead
+   * times but different parent rows." A look-ahead week is twelve cards all
+   * reading "Lead Time", told apart only by a WBS code in 10px grey. The
+   * parent is what says which piece of equipment it is.
+   */
+  parent: string | null;
   assignedTo: string | null;
   start: string;
   end: string;
@@ -63,6 +72,28 @@ function weekLabel(start: string, end: string): string {
   return `${f(start)} - ${f(end)}`;
 }
 
+/**
+ * The nearest ancestor that exists, named.
+ *
+ * Walks the WBS up rather than following a parent column, because the code IS
+ * the hierarchy. A level with no row of its own is skipped rather than
+ * invented - an imported sheet can jump from 4.4 to 4.4.4.1 with nothing
+ * between - so this answers "which branch" rather than "which code".
+ */
+export function parentLabel(
+  wbs: string,
+  nameByWbs: ReadonlyMap<string, string>,
+): string | null {
+  let at = wbs;
+  for (;;) {
+    const dot = at.lastIndexOf(".");
+    if (dot === -1) return null;
+    at = at.slice(0, dot);
+    const name = nameByWbs.get(at);
+    if (name) return `${at} ${name}`;
+  }
+}
+
 export function buildLookahead(
   tasks: {
     wbs_code: string;
@@ -79,6 +110,8 @@ export function buildLookahead(
     calendar?: CalendarLike;
   } = {},
 ): LookaheadWeek[] {
+  // One lookup for every card in every week.
+  const nameByWbs = new Map(tasks.map((t) => [t.wbs_code, t.task_name]));
   const weeks = opts.weeks ?? 3;
   const dataDate = opts.dataDate ?? cpm.dataDate ?? todayIso();
   const calendar = opts.calendar ?? 5;
@@ -110,6 +143,7 @@ export function buildLookahead(
       inWeek.push({
         wbs: t.wbs_code,
         name: t.task_name,
+        parent: parentLabel(t.wbs_code, nameByWbs),
         assignedTo: t.assigned_to,
         start: c.projectedStart,
         end: c.projectedEnd,
@@ -159,8 +193,11 @@ export function lookaheadToText(
         if (t.finishing) bits.push("complete this week");
         if (t.critical) bits.push("critical");
         if (t.pctComplete != null) bits.push(`at ${t.pctComplete}%`);
+        // The parent goes in the pasted text too. This is what gets read out
+        // in the Monday meeting, where six identical "Lead Time" lines are
+        // worse than on screen: there is no code column to squint at.
         lines.push(
-          `  ${t.wbs}  ${t.name}${bits.length ? ` (${bits.join(", ")})` : ""}`,
+          `  ${t.wbs}  ${t.parent ? `${t.parent} / ` : ""}${t.name}${bits.length ? ` (${bits.join(", ")})` : ""}`,
         );
       }
     }
