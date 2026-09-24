@@ -367,8 +367,9 @@ const sweetSprings: ExhibitHProject = {
 }
 
 {
-  // Line 2 counts APPROVED COs only. A submitted CO is not "previously
-  // authorized" and must not move the contract price.
+  // Line 2 counts a submitted CO too, and says how much of itself is not yet
+  // authorized. Without this the pair of forms does not reconcile: CO-02's
+  // line 5 would not be CO-03's line 3.
   const h = deriveExhibitH(
     sweetSprings,
     {
@@ -384,10 +385,54 @@ const sweetSprings: ExhibitHProject = {
       { id: "2", coNumber: "CO-02", coValue: 50000, status: "submitted" },
     ],
   );
-  eq("only the approved CO counts in line 2", h.netPreviousChangeOrders, 368675.48);
-  eq("the submitted CO is not listed", h.previousChangeOrderNumbers.join(","), "CO-01");
-  eq("line 3 adds the approved prior CO", h.contractPricePriorToThisCo, 2876175.48);
-  eq("line 5 stacks this CO on top", h.newContractPrice, 2976175.48);
+  eq("line 2 counts the submitted CO as well", h.netPreviousChangeOrders, 418675.48);
+  eq("both are listed on line 2", h.previousChangeOrderNumbers.join(","), "CO-01,CO-02");
+  eq("the approved half is reported", h.authorizedPreviousChangeOrders, 368675.48);
+  eq("the approved numbers are named", h.authorizedChangeOrderNumbers.join(","), "CO-01");
+  eq("the pending half is reported", h.pendingPreviousChangeOrders, 50000);
+  eq("the pending numbers are named", h.pendingChangeOrderNumbers.join(","), "CO-02");
+  eq("line 3 adds both prior COs", h.contractPricePriorToThisCo, 2926175.48);
+  eq("line 5 stacks this CO on top", h.newContractPrice, 3026175.48);
+}
+
+{
+  // The case Zarina hit: two change orders written at the same time, both
+  // still drafts. The later one must see the earlier one, or the contract
+  // price sits still while the package is being built.
+  const priors = [
+    { id: "1", coNumber: "CO-01", coValue: 368675.48, status: "approved" },
+    { id: "2", coNumber: "CO-07", coValue: 40000, status: "draft" },
+  ];
+  const co7 = deriveExhibitH(
+    sweetSprings,
+    { coNumber: "CO-07", dateOfChangeOrder: null, billable: 40000, mechCompletionDeltaDays: null, pisCompletionDeltaDays: null, substCompletionDeltaDays: null },
+    [priors[0], { id: "3", coNumber: "CO-08", coValue: 25000, status: "draft" }],
+  );
+  const co8 = deriveExhibitH(
+    sweetSprings,
+    { coNumber: "CO-08", dateOfChangeOrder: null, billable: 25000, mechCompletionDeltaDays: null, pisCompletionDeltaDays: null, substCompletionDeltaDays: null },
+    priors,
+  );
+  eq("a draft ahead of this one counts on line 2", co8.pendingPreviousChangeOrders, 40000);
+  eq("the two drafted forms reconcile", co7.newContractPrice, co8.contractPricePriorToThisCo);
+  eq("a higher-numbered draft is still ignored", co7.pendingPreviousChangeOrders, 0);
+}
+
+{
+  // Dead change orders never reach the contract price, whatever their number.
+  const h = deriveExhibitH(
+    sweetSprings,
+    { coNumber: "CO-05", dateOfChangeOrder: null, billable: 0, mechCompletionDeltaDays: null, pisCompletionDeltaDays: null, substCompletionDeltaDays: null },
+    [
+      { id: "1", coNumber: "CO-01", coValue: 100000, status: "approved" },
+      { id: "2", coNumber: "CO-02", coValue: 999999, status: "rejected" },
+      { id: "3", coNumber: "CO-03", coValue: 888888, status: "void" },
+      { id: "4", coNumber: "CO-04", coValue: 20000, status: "internal_review" },
+    ],
+  );
+  eq("rejected and void are left out of line 2", h.netPreviousChangeOrders, 120000);
+  eq("and out of the list", h.previousChangeOrderNumbers.join(","), "CO-01,CO-04");
+  eq("internal review counts as pending", h.pendingPreviousChangeOrders, 20000);
 }
 
 {
@@ -486,7 +531,9 @@ section("Exhibit H - line 2 counts only what came BEFORE");
 }
 
 {
-  // A CO still in review is not authorized, whatever its number.
+  // A CO still in review counts toward line 2, but only if its number is
+  // lower. The number decides what belongs on this form; the status only
+  // decides which half of line 2 it lands in.
   const h = deriveExhibitH(
     {
       name: "P", client: null, contractorLegalName: null, agreementDate: null,
@@ -502,9 +549,11 @@ section("Exhibit H - line 2 counts only what came BEFORE");
       { id: "4", coNumber: "CO-04", coValue: 500, status: "approved" },
     ],
   );
-  eq("an earlier unapproved CO is not counted", h.netPreviousChangeOrders, 100);
+  eq("an earlier unapproved CO is counted", h.netPreviousChangeOrders, 1099);
+  eq("but only its approved part reads as authorized", h.authorizedPreviousChangeOrders, 100);
+  eq("the rest is named as pending", h.pendingChangeOrderNumbers.join(","), "CO-02");
   check(
-    "and a later approved one is not either",
+    "a later approved CO is still not counted",
     !h.previousChangeOrderNumbers.includes("CO-04"),
     h.previousChangeOrderNumbers.join(","),
   );

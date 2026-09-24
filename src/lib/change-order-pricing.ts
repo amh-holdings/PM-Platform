@@ -245,9 +245,19 @@ export type ExhibitH = {
   originalContractPrice: number | null;
   /** True when line 1 fell back to the current contract value. */
   originalContractPriceIsFallback: boolean;
-  /** Line 2 amount and the CO numbers that make it up. */
+  /** Line 2 amount and the CO numbers that make it up, authorized and pending. */
   netPreviousChangeOrders: number;
   previousChangeOrderNumbers: string[];
+  /** The part of line 2 the owner has already authorized. */
+  authorizedPreviousChangeOrders: number;
+  authorizedChangeOrderNumbers: string[];
+  /**
+   * The part of line 2 that is still in flight: lower-numbered change orders
+   * that are drafted, in review or submitted but not yet approved. Zero on the
+   * common single-CO job; non-zero whenever a package goes out together.
+   */
+  pendingPreviousChangeOrders: number;
+  pendingChangeOrderNumbers: string[];
   /** Line 3 = line 1 + line 2. */
   contractPricePriorToThisCo: number | null;
   /** Line 4. Sign carries the increase / decrease. */
@@ -302,9 +312,9 @@ function adjust(currentDate: string | null, deltaDays: number | null): Completio
  * render the form - Phil fills out the owner's document by hand and copies
  * these values across.
  *
- * Line 2 counts only APPROVED change orders, which is the form's
- * "previously authorized" wording. A CO still in review is not authorized and
- * must not move the contract price.
+ * Line 2 counts every lower-numbered change order still in play, approved or
+ * not, and reports the authorized and pending halves separately so the panel
+ * can say which is which.
  */
 export function deriveExhibitH(
   project: ExhibitHProject,
@@ -326,14 +336,37 @@ export function deriveExhibitH(
   // CO's line 3, so the set of forms telescopes from the original contract
   // price to the current one.
   //
-  // Still approved-only. A CO in review has not been authorized and must not
-  // move the contract price.
-  const approved = priorCos
-    .filter((p) => p.status === "approved")
+  // Not approved-only, and that is the whole point of the telescoping above.
+  //
+  // Two change orders that go to the owner in the same package are both
+  // unapproved while they are being written. Counting approved COs only meant
+  // the second one's line 3 skipped the first one entirely, so the pair did
+  // not reconcile against each other: CO-07's line 5 was not CO-08's line 3,
+  // and the contract price stopped moving the moment you started drafting.
+  //
+  // So a lower-numbered CO counts unless it is dead. Rejected and void are
+  // dead - the owner said no, or we withdrew it - and a dead CO never reaches
+  // the contract price. Everything else is on its way there.
+  //
+  // The two halves are reported separately rather than blended away. The
+  // owner's form calls line 2 "previously authorized", so whoever copies the
+  // number across has to be able to see how much of it the owner has actually
+  // authorized and which numbers are still riding on this package.
+  const live = priorCos
+    .filter((p) => p.status !== "rejected" && p.status !== "void")
     .filter((p) => compareCoNumbers(p.coNumber, co.coNumber) < 0)
     .sort((a, b) => compareCoNumbers(a.coNumber, b.coNumber));
 
-  const netPreviousChangeOrders = round2(approved.reduce((s, p) => s + p.coValue, 0));
+  const authorized = live.filter((p) => p.status === "approved");
+  const pending = live.filter((p) => p.status !== "approved");
+
+  const authorizedPreviousChangeOrders = round2(
+    authorized.reduce((s, p) => s + p.coValue, 0),
+  );
+  const pendingPreviousChangeOrders = round2(pending.reduce((s, p) => s + p.coValue, 0));
+  const netPreviousChangeOrders = round2(
+    authorizedPreviousChangeOrders + pendingPreviousChangeOrders,
+  );
 
   const originalContractPriceIsFallback =
     project.originalContractValue == null && project.contractValue != null;
@@ -377,7 +410,11 @@ export function deriveExhibitH(
     originalContractPrice,
     originalContractPriceIsFallback,
     netPreviousChangeOrders,
-    previousChangeOrderNumbers: approved.map((p) => p.coNumber),
+    previousChangeOrderNumbers: live.map((p) => p.coNumber),
+    authorizedPreviousChangeOrders,
+    authorizedChangeOrderNumbers: authorized.map((p) => p.coNumber),
+    pendingPreviousChangeOrders,
+    pendingChangeOrderNumbers: pending.map((p) => p.coNumber),
     contractPricePriorToThisCo,
     thisChangeOrderAmount,
     direction:

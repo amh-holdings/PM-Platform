@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { friendlyAppNumberError, nextAppNumber } from "@/lib/afp-number";
 import { canUndoPayApplication } from "@/lib/pay-app-undo";
+import { forecastAmountPatch, pairForecastAmounts } from "@/lib/billing-progress";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -481,10 +482,12 @@ export async function createAfpFromBillThisPeriod(
   const appNumberInput = String(formData.get("appNumber") ?? "").trim();
   // Parallel arrays - forecast entry IDs and suggestion details. The order
   // within each array is preserved by FormData.getAll().
-  const forecastEntryIds = formData
+  const forecastEntryIdsRaw = formData
     .getAll("forecastEntryIds")
-    .map((v) => String(v))
-    .filter((v) => v.length > 0);
+    .map((v) => String(v));
+  const forecastAmountsRaw = formData.getAll("forecastAmounts").map((v) => Number(v));
+  const forecastPairs = pairForecastAmounts(forecastEntryIdsRaw, forecastAmountsRaw);
+  const forecastEntryIds = forecastPairs.map((p) => p.id);
   const suggLineIds = formData
     .getAll("suggestionLineIds")
     .map((v) => String(v))
@@ -506,9 +509,30 @@ export async function createAfpFromBillThisPeriod(
   ) {
     throw new Error("Suggestion arrays out of sync");
   }
+  if (forecastAmountsRaw.length > 0 && forecastAmountsRaw.length !== forecastEntryIdsRaw.length) {
+    throw new Error("Forecast arrays out of sync");
+  }
 
   const auth = await assertAhcUser();
   if (!auth.ok) throw new Error(auth.error);
+
+  // 0. Write back any forecast amount the person changed in the panel. Rows
+  //    that were left alone produce no patch and are not touched.
+  for (const { id, amount } of forecastPairs) {
+    const { data: entry } = await auth.supabase
+      .from("billing_entries")
+      .select("id, planned_amount, actual_amount")
+      .eq("id", id)
+      .maybeSingle();
+    if (!entry) continue;
+    const patch = forecastAmountPatch(entry, amount);
+    if (!patch) continue;
+    const { error: amtErr } = await auth.supabase
+      .from("billing_entries")
+      .update(patch)
+      .eq("id", id);
+    if (amtErr) throw new Error(amtErr.message);
+  }
 
   // 1. Create billing_entries rows for the suggestions (so we can wrap them
   //    just like any other forecast entry).

@@ -109,13 +109,21 @@ export function ExhibitHPanel({
       ? `Net change by previously authorized Change Orders (# ${h.previousChangeOrderNumbers.join(", ")})`
       : "Net change by previously authorized Change Orders (none yet)";
 
+  // Line 2 carries change orders the owner has not approved yet whenever a
+  // package goes out together. The number is right - it is what the contract
+  // price becomes once this package lands - but the form's wording says
+  // "previously authorized", so the split is spelled out rather than left for
+  // whoever is copying the figure to discover later.
+  const hasPending = h.pendingChangeOrderNumbers.length > 0;
+
   return (
     <section className="rounded-lg border bg-card shadow-sm">
       <div className="border-b p-4">
         <h3 className="text-sm font-semibold">Exhibit H - Form of Change Order</h3>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          The numbers and dates for the owner&apos;s form, computed from the contract and the
-          approved change orders. Copy each into the form.
+          The numbers and dates for the owner&apos;s form, computed from the contract and
+          every change order ahead of this one that is still in play. Copy each into the
+          form.
         </p>
       </div>
 
@@ -181,6 +189,37 @@ export function ExhibitHPanel({
           copied={copied}
           mono
         />
+        {hasPending && (
+          <div className="bg-amber-50/60 px-4 py-2 text-[11px] text-amber-900">
+            <div className="flex items-baseline gap-3">
+              <span className="min-w-0 flex-1">
+                Of which the owner has approved
+                {h.authorizedChangeOrderNumbers.length > 0
+                  ? ` (# ${h.authorizedChangeOrderNumbers.join(", ")})`
+                  : " (none yet)"}
+              </span>
+              <span className="shrink-0 tabular-nums">
+                {money(h.authorizedPreviousChangeOrders)}
+              </span>
+              <span className="w-12 shrink-0" />
+            </div>
+            <div className="flex items-baseline gap-3">
+              <span className="min-w-0 flex-1">
+                Still awaiting approval (# {h.pendingChangeOrderNumbers.join(", ")})
+              </span>
+              <span className="shrink-0 font-semibold tabular-nums">
+                {money(h.pendingPreviousChangeOrders)}
+              </span>
+              <span className="w-12 shrink-0" />
+            </div>
+            <p className="mt-1.5">
+              Line 2 includes change orders the owner has not approved yet, so the contract
+              price below is what it becomes once this package is executed. That keeps this
+              form tying out against the one before it. If this change order will be signed
+              on its own, use the approved figure instead.
+            </p>
+          </div>
+        )}
         <Row
           label="3. The Contract Price prior to this Change Order was"
           value={money(h.contractPricePriorToThisCo)}

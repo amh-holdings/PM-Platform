@@ -145,3 +145,89 @@ export function remainingToFinish(
     Math.round((scheduledValue - summary.previous - summary.current) * 100) / 100;
   return rounded === 0 ? 0 : rounded;
 }
+
+// ---------------------------------------------------------------------------
+// Editing an amount on the way onto an AFP
+// ---------------------------------------------------------------------------
+//
+// The Bill this period panel puts an editable box next to every row, including
+// the blocked ones, which arrive at $0 on purpose so a person can overwrite
+// them. That box only ever worked on suggestion rows: a forecast row posted
+// its entry id alone, so the typed figure was dropped and the entry billed
+// whatever it already held. These two are the parts worth pinning down.
+
+/**
+ * Line up posted entry ids with their posted amounts, then drop the blanks.
+ *
+ * Order matters and the filter has to come second. Dropping an empty id first
+ * and zipping afterwards shifts every later amount onto the wrong entry, which
+ * is the kind of mistake that bills the right total against the wrong lines
+ * and reconciles perfectly on the summary page.
+ */
+export function pairForecastAmounts(
+  ids: string[],
+  amounts: number[],
+): { id: string; amount: number }[] {
+  return ids
+    .map((id, i) => ({ id: id.trim(), amount: amounts[i] }))
+    .filter((p) => p.id.length > 0);
+}
+
+/**
+ * The patch that makes an edited amount actually bill, or null when the row
+ * already reads that way and nothing needs writing.
+ *
+ * A pay application takes actual_amount when it is set and planned_amount
+ * otherwise, so the edit has to land on whichever of the two will be read.
+ * Writing planned_amount alone looks like it worked and still bills the old
+ * figure on any entry that carries an actual.
+ */
+export function forecastAmountPatch(
+  entry: { planned_amount?: number | null; actual_amount?: number | null },
+  amount: number,
+): { planned_amount: number; actual_amount?: number } | null {
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  const actual = Number(entry.actual_amount ?? 0);
+  const current = actual !== 0 ? actual : Number(entry.planned_amount ?? 0);
+  // Half a cent, so a float that comes back as 1234.5600000000002 is not
+  // treated as an edit and rewritten on every AFP.
+  if (Math.abs(current - amount) < 0.005) return null;
+  return actual !== 0
+    ? { planned_amount: amount, actual_amount: amount }
+    : { planned_amount: amount };
+}
+
+// ---------------------------------------------------------------------------
+// A linked line with nothing to bill: read-only, or a decision to make?
+// ---------------------------------------------------------------------------
+
+export type UnbillableLine = {
+  /** What the evidence supports so far, in dollars. */
+  earned: number;
+  alreadyBilled: number;
+  /** Measured by PO payment milestones rather than by schedule progress. */
+  procurement: boolean;
+  /** Total of the POs linked to the line, when it is a procurement one. */
+  linkedPoTotal: number | null;
+};
+
+/**
+ * Whether a line with nothing to bill belongs in the panel as a row somebody
+ * can tick and price, rather than in the read-only list of explanations.
+ *
+ * Two cases qualify, and both are the app saying "I cannot work this out"
+ * rather than "the answer is nothing".
+ *
+ * Earned value masked by earlier billing, where the earlier AFPs covered scope
+ * this app has no record of. And a procurement line the app cannot value at
+ * all, because earned value on one comes from PO payment milestones and a PO
+ * whose terms were never entered reads as zero earned. The equipment is on
+ * order either way; only the paperwork is missing.
+ *
+ * A schedule-driven line at 0% is not either of these. There the zero is a
+ * measurement, and it stays read-only.
+ */
+export function needsADecision(n: UnbillableLine): boolean {
+  if (n.earned > 0.005) return n.alreadyBilled > n.earned;
+  return n.procurement;
+}
