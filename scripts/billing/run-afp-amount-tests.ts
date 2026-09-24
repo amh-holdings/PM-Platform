@@ -6,9 +6,12 @@
  */
 
 import {
+  defaultAfpAmountForPo,
   forecastAmountPatch,
   needsADecision,
   pairForecastAmounts,
+  pickAfpTargetLine,
+  resolveProcurementAmount,
 } from "../../src/lib/billing-progress";
 
 let passed = 0;
@@ -179,6 +182,117 @@ eq(
   "half a cent of earned value is not earned value",
   needsADecision({ ...schedule, earned: 0.004, alreadyBilled: 0 }),
   false,
+);
+
+section("Add to AFP: the amount the dialog opens on");
+
+eq("half the PO, to the cent", defaultAfpAmountForPo(8960.49), 4480.25);
+eq("an odd total rounds up rather than losing a cent", defaultAfpAmountForPo(0.01), 0.01);
+eq("a PO with no value offers nothing", defaultAfpAmountForPo(0), 0);
+eq("and neither does a negative one", defaultAfpAmountForPo(-100), 0);
+eq("or a missing one", defaultAfpAmountForPo(Number.NaN), 0);
+
+section("Add to AFP: which SOV line it lands on");
+
+eq(
+  "one allocation decides it",
+  pickAfpTargetLine({ allocations: [{ billingLineId: "a", amount: 5000 }], linkedLineIds: [] }),
+  "a",
+);
+
+eq(
+  "several allocations open on the largest share",
+  pickAfpTargetLine({
+    allocations: [
+      { billingLineId: "a", amount: 5000 },
+      { billingLineId: "b", amount: 12000 },
+    ],
+    linkedLineIds: ["c"],
+  }),
+  "b",
+);
+
+eq(
+  "an allocation beats the older amount-less link",
+  pickAfpTargetLine({
+    allocations: [{ billingLineId: "a", amount: 1 }],
+    linkedLineIds: ["z"],
+  }),
+  "a",
+);
+
+eq(
+  "one linked line decides it when nothing is allocated",
+  pickAfpTargetLine({ allocations: [], linkedLineIds: ["z"] }),
+  "z",
+);
+
+eq(
+  "two linked lines is ambiguous, so the dialog asks",
+  pickAfpTargetLine({ allocations: [], linkedLineIds: ["y", "z"] }),
+  null,
+);
+
+eq(
+  "nothing linked at all is also a question",
+  pickAfpTargetLine({ allocations: [], linkedLineIds: [] }),
+  null,
+);
+
+section("A typed amount versus the milestone estimate");
+
+eq(
+  "the typed figure wins outright",
+  resolveProcurementAmount({ manualAmount: 4480.25, earnedValue: 3975.25, alreadyBilled: 0 }),
+  { kind: "manual", amount: 4480.25 },
+);
+
+eq(
+  "and is NOT netted against prior billing - the person typing did that",
+  resolveProcurementAmount({ manualAmount: 4480.25, earnedValue: 0, alreadyBilled: 82619.12 }),
+  { kind: "manual", amount: 4480.25 },
+);
+
+eq(
+  "a line nobody staged still bills its triggered milestones",
+  resolveProcurementAmount({ manualAmount: null, earnedValue: 3975.25, alreadyBilled: 0 }),
+  { kind: "earned", amount: 3975.25 },
+);
+
+eq(
+  "prior billing still nets off the estimate",
+  resolveProcurementAmount({ manualAmount: null, earnedValue: 10000, alreadyBilled: 4000 }),
+  { kind: "earned", amount: 6000 },
+);
+
+eq(
+  "earned but fully billed is blocked, and says which",
+  resolveProcurementAmount({ manualAmount: null, earnedValue: 10000, alreadyBilled: 10000 }),
+  { kind: "blocked", reason: "already_billed" },
+);
+
+eq(
+  "nothing earned is a different block",
+  resolveProcurementAmount({ manualAmount: null, earnedValue: 0, alreadyBilled: 0 }),
+  { kind: "blocked", reason: "nothing_earned" },
+);
+
+eq(
+  "a manual zero is not a typed amount, it is an empty box",
+  resolveProcurementAmount({ manualAmount: 0, earnedValue: 3975.25, alreadyBilled: 0 }),
+  { kind: "earned", amount: 3975.25 },
+);
+
+eq(
+  "a negative manual amount is refused rather than credited",
+  resolveProcurementAmount({ manualAmount: -500, earnedValue: 0, alreadyBilled: 0 }),
+  { kind: "blocked", reason: "nothing_earned" },
+);
+
+eq(
+  "PO-022 end to end: $4,480.25 staged beats the $3,975.25 deposit",
+  resolveProcurementAmount({ manualAmount: 4480.25, earnedValue: 3975.25, alreadyBilled: 0 }),
+  { kind: "manual", amount: 4480.25 },
 );
 
 console.log(`\n${"=".repeat(60)}`);

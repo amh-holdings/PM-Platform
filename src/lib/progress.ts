@@ -252,42 +252,13 @@ export type ProcurementMilestone = {
   trigger_event?: string | null;
   paid_at?: string | null;
   /**
-   * Which agreement this row belongs to. See migration 0055.
-   *
-   * "vendor" is what we pay the supplier and drives cash out. "owner" is what
-   * we bill the owner through the AFP. They are two agreements with two
-   * different parties and routinely disagree: PO-022 pays the vendor 50% on
-   * deposit and 50% on delivery, while the owner is billed 50% of the PO total
-   * the day the PO is issued.
-   *
-   * Absent reads as vendor, which is what every row was before 0055 ran.
+   * Which agreement this row belongs to, for the short period 0055 carried
+   * two. Nothing writes it any more - a PO holds the vendor's terms and what
+   * the owner is billed is typed onto the AFP directly by Add to AFP - and it
+   * is read here only so a row left over from that period still counts.
    */
   side?: string | null;
 };
-
-/** True for a row that is what we bill the owner, not what we pay the vendor. */
-export function isOwnerSide(m: ProcurementMilestone): boolean {
-  return m.side === "owner";
-}
-
-/**
- * The milestones that say what the owner can be billed for a PO, and whether
- * they are the real thing.
- *
- * Owner rows win outright when any exist. When none do, the vendor terms stand
- * in, because that is how every PO on the project worked before owner rows
- * existed and silently earning nothing would take 22 live POs off the AFP
- * overnight. The fallback flag is returned rather than hidden so the page can
- * say which schedule the number came from.
- */
-export function ownerBillingMilestones(ms: ProcurementMilestone[]): {
-  milestones: ProcurementMilestone[];
-  usingVendorTerms: boolean;
-} {
-  const owner = ms.filter(isOwnerSide);
-  if (owner.length > 0) return { milestones: owner, usingVendorTerms: false };
-  return { milestones: ms.filter((m) => !isOwnerSide(m)), usingVendorTerms: true };
-}
 
 export type LinkedPo = {
   po_number?: string | null;
@@ -478,20 +449,11 @@ export function estimateProcurementProgress(
 
   for (const po of live) {
     const label = po.po_number ?? po.vendor_name ?? "PO";
-    // What the OWNER can be billed, which is not the same schedule as what we
-    // pay the vendor. See ownerBillingMilestones.
-    const { milestones: ms, usingVendorTerms } = ownerBillingMilestones(
-      po.milestones ?? [],
-    );
+    const ms = po.milestones ?? [];
     if (ms.length === 0) {
       missingTerms++;
       detail.push(`${label}: no payment milestones recorded - contributes $0`);
       continue;
-    }
-    if (usingVendorTerms) {
-      detail.push(
-        `${label}: no owner billing terms set, so the vendor payment terms are standing in. Set what the owner is billed on the PO if they differ.`,
-      );
     }
     for (const m of ms) {
       const amount =
