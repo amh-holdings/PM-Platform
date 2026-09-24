@@ -595,6 +595,16 @@ export type BillableRow =
       // Set when the signals do not support billing this line. The row is
       // still rendered (unchecked, with the reason shown) rather than hidden.
       blockedReason?: string;
+      /**
+       * What a percent typed on this row is a percent OF, and what to call it.
+       *
+       * The PO total on a procurement line, the scheduled value otherwise,
+       * because those are the two numbers anybody says "bill 50%" about. Absent
+       * when neither is known, and the percent box then does not appear rather
+       * than quietly computing against zero.
+       */
+      basisAmount?: number;
+      basisLabel?: string;
     }
   | {
       kind: "suggestion";
@@ -618,15 +628,10 @@ export type BillableRow =
        * person can.
        */
       blockedReason?: string;
+      /** See the forecast variant. */
+      basisAmount?: number;
+      basisLabel?: string;
     };
-
-export type HiddenForecast = {
-  itemNumber: string;
-  description: string;
-  periodMonth: string;
-  amount: number;
-  reason: string;
-};
 
 // Which AFP, if any, swallowed this period. Looks at the entries rather than at
 // pay_applications.period_start, because what matters to the reader is "the
@@ -723,7 +728,6 @@ export async function getBillThisPeriodRows(
   | {
       ok: true;
       rows: BillableRow[];
-      hidden: HiddenForecast[];
       /** Linked lines that produced nothing this period, with the reason. */
       notBillable: NotBillableLine[];
       periodMonth: string;
@@ -789,7 +793,6 @@ export async function getBillThisPeriodRows(
     return {
       ok: true,
       rows: allForecastRows.map((x) => x.row),
-      hidden: [],
       notBillable: [],
       periodMonth: period,
       billedTo: await loadBilledElsewhere(auth.supabase, projectId, period),
@@ -889,23 +892,22 @@ export async function getBillThisPeriodRows(
   // (Fencing/SWPPP) from the August panel because its only link, 5.1.1.6, sat
   // at 0% - while the approved 8/12 field report said the silt fence was
   // finished. A line the PM may legitimately need to bill must never vanish
-  // without saying why. `hidden` is still populated so existing callers keep
-  // working, but it is now a duplicate view of the blocked rows, not a set of
-  // rows that disappeared.
+  // without saying why. It arrives as a row carrying its reason.
   const forecastRows: BillableRow[] = [];
-  const hidden: HiddenForecast[] = [];
-
+  // A blocked row used to be listed twice: here, tickable with its reason, and
+  // again in a read-only "forecast hidden" box below the table.
+  //
+  // The second copy predates blocked rows being tickable at all, and it had
+  // become the harmful one. It rendered expanded, with the item number, the
+  // amount and the reason, directly under a collapsed grey link reading "Show
+  // 1 line needing a decision" that named nothing. So the copy you could act on
+  // was the one you could not see, and the copy you could see said, in an amber
+  // box, that the line was hidden. Zarina spent three rounds on 5.05 POI
+  // Procurement looking straight at it and reporting there was no tick box.
+  //
+  // One row per line now. It carries its own reason.
   const blockRow = (row: BillableRow, reason: string) => {
     forecastRows.push({ ...row, blockedReason: reason } as BillableRow);
-    if (row.kind === "forecast") {
-      hidden.push({
-        itemNumber: row.itemNumber,
-        description: row.description,
-        periodMonth: row.periodMonth,
-        amount: row.amount,
-        reason,
-      });
-    }
   };
   for (const x of allForecastRows) {
     const lineMeta = lineById.get(x.row.billingLineId);
@@ -1134,10 +1136,34 @@ export async function getBillThisPeriodRows(
 
   const notBillable = explained.filter((n) => !suppressedIds.has(n.billingLineId));
 
+  // What "bill 50%" means on each row, worked out once here rather than in the
+  // browser, because only this side knows which POs a line is linked to.
+  //
+  // On a procurement line it is the linked POs' total, because that is the
+  // number the terms are written against: half of the PO, not half of the SOV
+  // line the PO sits inside. Everywhere else it is the scheduled value, which
+  // is what a percent complete on a G703 has always meant. Neither known
+  // leaves the percent box off the row entirely.
+  const withBasis: BillableRow[] = rowsWithSuppressed.map((r) => {
+    const line = lineById.get(r.billingLineId);
+    if (!line) return r;
+    const scheduledValue = Number(line.scheduled_value ?? 0);
+    if (isProcurementLine(line)) {
+      const poTotal = (line.linked_procurement_order_ids ?? [])
+        .map((id) => poStateById.get(id))
+        .filter((p): p is LinkedPo => !!p && p.status !== "cancelled")
+        .reduce((sum, p) => sum + Number(p.total_value ?? 0), 0);
+      if (poTotal > 0) return { ...r, basisAmount: poTotal, basisLabel: "PO total" };
+    }
+    if (scheduledValue > 0) {
+      return { ...r, basisAmount: scheduledValue, basisLabel: "scheduled value" };
+    }
+    return r;
+  });
+
   return {
     ok: true,
-    rows: rowsWithSuppressed,
-    hidden,
+    rows: withBasis,
     notBillable,
     periodMonth: period,
     billedTo,

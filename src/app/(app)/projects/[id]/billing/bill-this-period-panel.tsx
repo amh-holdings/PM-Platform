@@ -27,7 +27,6 @@ export async function BillThisPeriodPanel({
     <BillThisPeriodClient
       projectId={projectId}
       rows={result.rows}
-      hidden={result.hidden}
       notBillable={result.notBillable}
       variant={variant}
       periodMonth={result.periodMonth}
