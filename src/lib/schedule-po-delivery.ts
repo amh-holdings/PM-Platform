@@ -172,3 +172,100 @@ export function describeAfpFollowUp(input: {
     ? `${names} is delivered with nothing on the ${period} application - open it and use Add to AFP if it should be billed this period.`
     : `${names} are delivered with nothing on the ${period} application - open each and use Add to AFP if they should be billed this period.`;
 }
+
+// ---------------------------------------------------------------------------
+// Which POs the picker offers.
+//
+// Zarina, looking at the picker inside Edit task: "I dont see all POs here."
+// Thirteen were listed. The picker was applying a filter the Procurement tab
+// does not: a PO whose status reads cancelled was dropped on the floor, with
+// nothing on screen to say so. The reasoning was that nothing is arriving from
+// a cancelled PO, which is true and is still not the picker's call to make
+// silently - a PO cancelled by mistake, or cancelled and reinstated, simply
+// disappeared, and the only way to find that out was to read this file.
+//
+// So the picker now lists every purchase order on the project and says what
+// state each one is in. It also says how many there are, because the useful
+// check is against the Procurement tab, and a count that matches ends the
+// question in a second.
+// ---------------------------------------------------------------------------
+
+export type DeliveryLinkPoRow = DeliveryLinkPo & {
+  status?: string | null;
+};
+
+export type DeliveryLinkChoice = {
+  id: string;
+  label: string;
+  /** Set when this PO already points at some task, so the picker can say so. */
+  linkedWbs: string | null;
+  actualDelivery: string | null;
+  /** Only set when the state is worth saying out loud. */
+  note: string | null;
+};
+
+export function deliveryLinkLabel(po: DeliveryLinkPoRow): string {
+  return [po.po_number, po.vendor_name].filter(Boolean).join(" - ") || "PO";
+}
+
+/**
+ * The part of a PO's state a picker should say out loud.
+ *
+ * Active, complete and delivered are the ordinary run of things and get no
+ * annotation - marking every row would just be noise. Cancelled is the one
+ * that changes whether linking makes sense, so it is named. Anything else is
+ * passed through verbatim rather than swallowed, because status is free text
+ * on this table and an unrecognised value is information, not a bug.
+ */
+export function deliveryLinkNote(status: string | null | undefined): string | null {
+  const s = (status ?? "").trim().toLowerCase();
+  if (!s) return null;
+  if (s === "active" || s === "complete" || s === "delivered") return null;
+  return s;
+}
+
+export type DeliveryLinkChoices = {
+  /** Already pointing at this task. */
+  linked: DeliveryLinkChoice[];
+  /** Everything else on the project, whatever state it is in. */
+  available: DeliveryLinkChoice[];
+  /** Every PO on the project, so the picker can be checked against Procurement. */
+  total: number;
+};
+
+/**
+ * Split the project's purchase orders into "delivers this task" and "could".
+ *
+ * Nothing is dropped. A PO linked to a DIFFERENT task still appears as
+ * available, carrying the code it currently points at, because moving a link
+ * is a legitimate correction and hiding the option would just mean doing it
+ * from the other page instead. A cancelled one appears too, labelled.
+ */
+export function splitDeliveryLinkChoices(input: {
+  pos: readonly DeliveryLinkPoRow[];
+  wbsCode: string;
+}): DeliveryLinkChoices {
+  const linked: DeliveryLinkChoice[] = [];
+  const available: DeliveryLinkChoice[] = [];
+
+  for (const po of input.pos) {
+    const choice: DeliveryLinkChoice = {
+      id: po.id,
+      label: deliveryLinkLabel(po),
+      linkedWbs: po.linked_delivery_task_wbs_code ?? null,
+      actualDelivery: po.actual_delivery_date ?? null,
+      note: deliveryLinkNote(po.status),
+    };
+    if (choice.linkedWbs === input.wbsCode) linked.push(choice);
+    else available.push(choice);
+  }
+
+  return { linked, available, total: linked.length + available.length };
+}
+
+/** The line that makes the picker checkable against the Procurement tab. */
+export function describeDeliveryLinkCount(total: number): string {
+  if (total === 0) return "No purchase orders on this project yet.";
+  const count = total === 1 ? "1 purchase order" : `${total} purchase orders`;
+  return `${count} on this project, all listed. A different count on Procurement means the rest are on another project.`;
+}
