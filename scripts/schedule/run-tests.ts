@@ -36,6 +36,7 @@ import {
   rowTone,
   statusRowTone,
 } from "../../src/lib/schedule-status-tone";
+import { parentLabel } from "@/lib/schedule-lookahead";
 import {
   datesTheForecastWillReplace,
   describeForecastOverwrite,
@@ -3294,6 +3295,43 @@ section("Dragging a branch above the first row of the sheet");
   );
   eq("a blank name is no name", namedConstraintViolation(V, "   "), `5.1.1.11: ${V.message}`);
   eq("and an absent one behaves the same", namedConstraintViolation(V), `5.1.1.11: ${V.message}`);
+}
+
+{
+  // Zarina, on the look-ahead: "Can you add the Parent's name as well as there
+  // are the same lead times but different parent rows." A week is a dozen
+  // cards all reading "Lead Time", told apart only by a code in 10px grey.
+  const NAMES = new Map([
+    ["4", "Procurement"],
+    ["4.4", "Electrical Equipment"],
+    ["4.4.4", "Transformer"],
+    ["4.4.4.1", "Lead Time"],
+    ["4.4.6.1", "Lead Time"],
+    ["5.1.3.1", "Full Site Clearing"],
+  ]);
+
+  eq(
+    "the immediate parent is what names the card",
+    parentLabel("4.4.4.1", NAMES),
+    "4.4.4 Transformer",
+  );
+
+  // 4.4.6 has no row of its own, so the answer walks up to one that does
+  // rather than inventing a code that is not in the schedule.
+  eq(
+    "a missing level is skipped, not invented",
+    parentLabel("4.4.6.1", NAMES),
+    "4.4 Electrical Equipment",
+  );
+
+  eq("a top level code has no parent", parentLabel("4", NAMES), null);
+  eq("and neither does an unknown branch", parentLabel("9.9.9", NAMES), null);
+
+  // The whole point: two cards reading "Lead Time" now say different things.
+  check(
+    "two identical names get different parents",
+    parentLabel("4.4.4.1", NAMES) !== parentLabel("4.4.6.1", NAMES),
+  );
 }
 
 // ============================================================================

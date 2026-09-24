@@ -134,6 +134,15 @@ export function ScheduleLookaheadView({
                         </span>
                       )}
                     </div>
+                    {/* Which branch this sits under. A look-ahead week is a
+                        dozen cards all reading "Lead Time", told apart only by
+                        a code in 10px grey; the parent is what says which
+                        piece of equipment it is. */}
+                    {t.parent && (
+                      <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={t.parent}>
+                        {t.parent}
+                      </div>
+                    )}
                     <div className="mt-0.5 text-sm font-medium leading-tight">{t.name}</div>
                     <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
                       {t.assignedTo && <span>{t.assignedTo}</span>}
