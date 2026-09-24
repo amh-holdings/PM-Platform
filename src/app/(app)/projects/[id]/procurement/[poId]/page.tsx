@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { defaultAfpAmountForPo } from "@/lib/billing-progress";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 
@@ -174,6 +175,7 @@ export default async function ProcurementDetailPage({
               poId={po.id}
               projectId={params.id}
               poTotalValue={Number(po.total_value ?? 0)}
+              variant="outline"
             />
             <Button asChild variant="outline" size="sm">
               <Link href={`/projects/${params.id}/procurement/${po.id}/edit`}>
@@ -277,6 +279,38 @@ export default async function ProcurementDetailPage({
           poTotalValue={poValue}
           milestones={milestones.map(asEditorRow)}
         />
+      </section>
+
+      {/* The button is also in the header, where somebody who knows it exists
+          will look for it. Nobody found it there: this page runs several
+          screens and the header scrolls away long before the money does.
+          Zarina, on the header-only version: "I do not see any buttons."
+
+          So it is here too, in the flow, directly under what we pay the vendor
+          and directly above what the owner is billed against. Two entry points
+          to one dialog. */}
+      <section className="rounded-lg border-2 border-emerald-300 bg-emerald-50/60 p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-emerald-900">
+              Bill the owner for this PO
+            </h3>
+            <p className="mt-1 max-w-xl text-xs text-emerald-900/80">
+              The vendor terms above are what we pay. This is what goes on the
+              pay application, and it does not have to match. Opens on{" "}
+              <span className="font-mono font-medium">
+                {formatCurrency(defaultAfpAmountForPo(poValue))}
+              </span>
+              , half the PO, and you can change it.
+            </p>
+          </div>
+          <AddToAfpButton
+            poId={po.id}
+            projectId={params.id}
+            poTotalValue={poValue}
+            size="default"
+          />
+        </div>
       </section>
 
       <BillingAllocations
