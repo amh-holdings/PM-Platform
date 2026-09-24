@@ -117,7 +117,11 @@ import {
   TASK_TYPE_LABELS,
   progressCanBeSetByHand,
 } from "@/lib/schedule-task-type";
-import { STATUS_TONE, rowTone } from "@/lib/schedule-status-tone";
+import {
+  STATUS_TONE,
+  progressBarTone,
+  rowTone,
+} from "@/lib/schedule-status-tone";
 
 // Fields the grid edits in place. Anything not here is either derived (float,
 // projected dates), owned by another workflow (progress comes from approved
@@ -2838,7 +2842,7 @@ function ProgressCell({
         <div
           className={cn(
             "h-full rounded-full",
-            rolled ? "bg-muted-foreground/50" : progress.source === "dpr" ? "bg-emerald-500" : "bg-amber-500",
+            progressBarTone({ pct, rolled, source: progress.kind === "reported" ? progress.source : null }),
           )}
           style={{ width: `${pct}%` }}
         />
