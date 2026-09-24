@@ -595,16 +595,6 @@ export type BillableRow =
       // Set when the signals do not support billing this line. The row is
       // still rendered (unchecked, with the reason shown) rather than hidden.
       blockedReason?: string;
-      /**
-       * What a percent typed on this row is a percent OF, and what to call it.
-       *
-       * The PO total on a procurement line, the scheduled value otherwise,
-       * because those are the two numbers anybody says "bill 50%" about. Absent
-       * when neither is known, and the percent box then does not appear rather
-       * than quietly computing against zero.
-       */
-      basisAmount?: number;
-      basisLabel?: string;
     }
   | {
       kind: "suggestion";
@@ -628,9 +618,6 @@ export type BillableRow =
        * person can.
        */
       blockedReason?: string;
-      /** See the forecast variant. */
-      basisAmount?: number;
-      basisLabel?: string;
     };
 
 // Which AFP, if any, swallowed this period. Looks at the entries rather than at
@@ -1136,34 +1123,9 @@ export async function getBillThisPeriodRows(
 
   const notBillable = explained.filter((n) => !suppressedIds.has(n.billingLineId));
 
-  // What "bill 50%" means on each row, worked out once here rather than in the
-  // browser, because only this side knows which POs a line is linked to.
-  //
-  // On a procurement line it is the linked POs' total, because that is the
-  // number the terms are written against: half of the PO, not half of the SOV
-  // line the PO sits inside. Everywhere else it is the scheduled value, which
-  // is what a percent complete on a G703 has always meant. Neither known
-  // leaves the percent box off the row entirely.
-  const withBasis: BillableRow[] = rowsWithSuppressed.map((r) => {
-    const line = lineById.get(r.billingLineId);
-    if (!line) return r;
-    const scheduledValue = Number(line.scheduled_value ?? 0);
-    if (isProcurementLine(line)) {
-      const poTotal = (line.linked_procurement_order_ids ?? [])
-        .map((id) => poStateById.get(id))
-        .filter((p): p is LinkedPo => !!p && p.status !== "cancelled")
-        .reduce((sum, p) => sum + Number(p.total_value ?? 0), 0);
-      if (poTotal > 0) return { ...r, basisAmount: poTotal, basisLabel: "PO total" };
-    }
-    if (scheduledValue > 0) {
-      return { ...r, basisAmount: scheduledValue, basisLabel: "scheduled value" };
-    }
-    return r;
-  });
-
   return {
     ok: true,
-    rows: withBasis,
+    rows: rowsWithSuppressed,
     notBillable,
     periodMonth: period,
     billedTo,

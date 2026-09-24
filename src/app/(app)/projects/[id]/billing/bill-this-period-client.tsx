@@ -18,7 +18,6 @@ import type {
 import { billedElsewhereMessage } from "@/lib/pay-app-undo";
 import { UndoAfpButton } from "./undo-afp-button";
 import { periodLabel } from "@/lib/billing-period";
-import { amountFromPercent } from "@/lib/billing-progress";
 
 type Props = {
   projectId: string;
@@ -69,29 +68,6 @@ export function BillThisPeriodClient({
       ]),
     ),
   );
-  // What is typed in the percent box, as text, keyed by row.
-  //
-  // Derived state would be tidier and unusable: computing the percent back out
-  // of the amount makes "5" become "5.00" the instant it is typed, and "0."
-  // collapse to "0". The box holds what was typed; the amount it produced is
-  // the thing that matters and lives in `amounts`.
-  const [pctText, setPctText] = useState<Record<string, string>>({});
-
-  function setPercent(r: BillableRow, text: string) {
-    setPctText((prev) => ({ ...prev, [r.key]: text }));
-    const money = amountFromPercent(r.basisAmount, text);
-    if (money === null) return;
-    setAmounts((prev) => ({ ...prev, [r.key]: money }));
-  }
-
-  // Typing in the money box wins: the percent that produced an older figure is
-  // no longer true of it, and leaving it on screen would state a share of the
-  // PO that is not what is about to be billed.
-  function setAmount(key: string, value: number) {
-    setAmounts((prev) => ({ ...prev, [key]: value }));
-    setPctText((prev) => (key in prev ? { ...prev, [key]: "" } : prev));
-  }
-
   // A row proposing nothing is not a projection for this period. It is a note
   // about why a line cannot bill yet, and it belongs behind a disclosure -
   // nine SOV lines with one real number and eight zeroes reads as "everything
@@ -252,7 +228,6 @@ export function BillThisPeriodClient({
                 <th className="py-1.5 pr-2 text-left font-medium">Item</th>
                 <th className="py-1.5 pr-2 text-left font-medium">Period</th>
                 <th className="py-1.5 pr-2 text-left font-medium">Source</th>
-                <th className="py-1.5 pr-2 text-right font-medium">%</th>
                 <th className="py-1.5 pr-2 text-right font-medium">Amount</th>
               </tr>
             </thead>
@@ -442,41 +417,17 @@ export function BillThisPeriodClient({
                     <td className={cn("py-1.5 pr-2 font-medium", sourceColor)}>
                       {sourceLabel}
                     </td>
-                    {/* Bill a share rather than working the money out
-                        elsewhere. POI equipment falls due at half the PO, and
-                        the arithmetic was being done on a calculator and typed
-                        back in. Type 50 and the amount follows.
-
-                        The basis is whatever the percent is honestly a percent
-                        OF: the linked POs' total on a procurement line, the
-                        scheduled value otherwise. It is in the title so nobody
-                        has to guess which. A row with neither has no percent
-                        box rather than one computing against zero. */}
-                    <td className="py-1.5 pr-2 text-right">
-                      {r.basisAmount ? (
-                        <div className="flex items-center justify-end gap-1">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            placeholder="-"
-                            value={pctText[r.key] ?? ""}
-                            onChange={(e) => setPercent(r, e.target.value)}
-                            title={`Percent of the ${r.basisLabel}, ${formatCurrency(r.basisAmount)}`}
-                            className="h-7 w-16 text-right text-xs"
-                          />
-                          <span className="text-[10px] text-muted-foreground">%</span>
-                        </div>
-                      ) : (
-                        <span className="text-[10px] text-muted-foreground">-</span>
-                      )}
-                    </td>
                     <td className="py-1.5 pr-2 text-right">
                       <Input
                         type="number"
                         step="0.01"
                         value={amounts[r.key] ?? r.amount}
-                        onChange={(e) => setAmount(r.key, Number(e.target.value || 0))}
+                        onChange={(e) =>
+                          setAmounts((prev) => ({
+                            ...prev,
+                            [r.key]: Number(e.target.value || 0),
+                          }))
+                        }
                         className="ml-auto h-7 w-28 text-right text-xs"
                       />
                     </td>
@@ -485,7 +436,7 @@ export function BillThisPeriodClient({
               })}
               {visibleRows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-4 text-center text-muted-foreground">
+                  <td colSpan={5} className="py-4 text-center text-muted-foreground">
                     {billedTo
                       ? billedElsewhereMessage({
                           periodLabel: periodLabel(periodMonth),
@@ -502,7 +453,7 @@ export function BillThisPeriodClient({
               )}
               {unsupported.length > 0 && (
                 <tr>
-                  <td colSpan={6} className="py-1.5">
+                  <td colSpan={5} className="py-1.5">
                     <button
                       type="button"
                       onClick={() => setShowUnsupported((v) => !v)}

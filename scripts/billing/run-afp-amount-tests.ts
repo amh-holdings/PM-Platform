@@ -6,7 +6,6 @@
  */
 
 import {
-  amountFromPercent,
   forecastAmountPatch,
   needsADecision,
   pairForecastAmounts,
@@ -181,25 +180,6 @@ eq(
   needsADecision({ ...schedule, earned: 0.004, alreadyBilled: 0 }),
   false,
 );
-
-section("Billing a percent of the PO");
-
-eq("half a PO", amountFromPercent(400000, "50"), 200000);
-eq("the whole PO", amountFromPercent(400000, "100"), 400000);
-eq("a third, in whole cents", amountFromPercent(100000, "33.333"), 33333);
-eq("rounds the half cent up, not away", amountFromPercent(82619.13, "50"), 41309.57);
-eq("a deliberate zero is a real answer", amountFromPercent(400000, "0"), 0);
-eq("over 100% is allowed - the basis is not always the ceiling", amountFromPercent(1000, "150"), 1500);
-
-eq("an empty box is mid-edit, not zero", amountFromPercent(400000, ""), null);
-eq("whitespace is the same", amountFromPercent(400000, "   "), null);
-eq("a half-typed decimal waits", amountFromPercent(400000, "."), null);
-eq("letters are not a percent", amountFromPercent(400000, "abc"), null);
-eq("negative is refused rather than credited", amountFromPercent(400000, "-10"), null);
-
-eq("no basis, no percent", amountFromPercent(null, "50"), null);
-eq("nor an undefined one", amountFromPercent(undefined, "50"), null);
-eq("a zero basis would compute zero for every percent, so it does not", amountFromPercent(0, "50"), null);
 
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);

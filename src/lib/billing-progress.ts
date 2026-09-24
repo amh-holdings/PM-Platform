@@ -231,26 +231,3 @@ export function needsADecision(n: UnbillableLine): boolean {
   if (n.earned > 0.005) return n.alreadyBilled > n.earned;
   return n.procurement;
 }
-
-/**
- * The money a percent typed on a billing row comes to, or null when the box
- * holds nothing usable yet.
- *
- * `basis * pct / 100` written as `round(basis * pct) / 100` so the result is
- * already in whole cents: 50% of $82,619.13 is $41,309.565 exactly, and an
- * amount box is not a place to put two thirds of a cent.
- *
- * Empty text returns null rather than zero, because a cleared box is somebody
- * mid-edit, not somebody billing nothing. Typing a real 0 is different and
- * comes back as 0.
- */
-export function amountFromPercent(
-  basis: number | null | undefined,
-  text: string,
-): number | null {
-  if (!basis || !Number.isFinite(basis) || basis <= 0) return null;
-  if (!text.trim()) return null;
-  const pct = Number(text);
-  if (!Number.isFinite(pct) || pct < 0) return null;
-  return Math.round(basis * pct) / 100;
-}
