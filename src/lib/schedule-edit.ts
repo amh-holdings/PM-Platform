@@ -2220,3 +2220,67 @@ export function describeAncestorTrail(
   const line = shown.map((t) => `${t.wbs_code} ${t.task_name}`).join(" / ");
   return trail.length > shown.length ? `... / ${line}` : line;
 }
+
+// ---------------------------------------------------------------------------
+// An unsaved grid edit, and a save that goes round it.
+//
+// Zarina: "I made changes to dates through open task in schedule but the
+// schedules not showing the update."
+//
+// The grid reads `draft[id][field] ?? task[field]`, so an unsaved cell always
+// wins over what is in the database. That is right while you are typing in the
+// grid, and wrong the moment the same row is saved from the Edit task dialog:
+// the dialog writes to the database, the page refreshes, and the cell keeps
+// showing a figure the dialog has just superseded. There is no way to tell
+// from the row which of the two you are looking at.
+//
+// A dialog save now clears that row's draft, and says which cells it replaced
+// rather than dropping them quietly.
+// ---------------------------------------------------------------------------
+
+/** Cells held unsaved for this row that disagree with what is stored. */
+export function pendingDraftFields<T extends Record<string, unknown>>(
+  draft: TaskDraft,
+  taskId: string,
+  task: T | undefined,
+): string[] {
+  const held = draft[taskId];
+  if (!held || !task) return [];
+  return Object.entries(held)
+    .filter(([field, value]) => {
+      if (value === undefined) return false;
+      const stored = task[field];
+      const asText = stored === null || stored === undefined ? "" : String(stored);
+      return String(value) !== asText;
+    })
+    .map(([field]) => field);
+}
+
+/** The draft with this row removed. Every other row is untouched. */
+export function withoutTaskDraft(draft: TaskDraft, taskId: string): TaskDraft {
+  if (!(taskId in draft)) return draft;
+  const next: TaskDraft = {};
+  for (const [id, cells] of Object.entries(draft)) {
+    if (id !== taskId) next[id] = cells;
+  }
+  return next;
+}
+
+/**
+ * What to say when a dialog save replaces unsaved cells.
+ *
+ * Null when there was nothing pending, which is the ordinary case: a save that
+ * replaced nothing needs no announcement.
+ */
+export function describeDraftReplaced(
+  fields: readonly string[],
+  rowLabel: string,
+  labelOf: (field: string) => string,
+): string | null {
+  if (fields.length === 0) return null;
+  const names = fields.map(labelOf).join(", ");
+  return (
+    `${rowLabel} had unsaved grid edits to ${names}. What you just saved in ` +
+    `Edit task replaced them.`
+  );
+}

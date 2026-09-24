@@ -54,6 +54,9 @@ import {
   parentCodeOf,
   planDrop,
   buildRowIndex,
+  describeDraftReplaced,
+  pendingDraftFields,
+  withoutTaskDraft,
   nearbyPredecessors,
   rowRefsAreSafe,
   planChainLink,
@@ -510,6 +513,33 @@ export function ScheduleSplitView({
 
   const summaries = useMemo(() => new Set(summaryCodes(allRows)), [allRows]);
   const progress = useMemo(() => buildProgress(tasks), [tasks]);
+
+  /**
+   * The Edit task dialog just saved this row.
+   *
+   * The grid prefers an unsaved cell over what is stored, which is right while
+   * you are typing and wrong the moment the same row is written from the
+   * dialog: the database moves, the page refreshes, and the cell keeps showing
+   * a figure the dialog superseded. Zarina: "I made changes to dates through
+   * open task in schedule but the schedules not showing the update."
+   *
+   * So the row's draft goes, and anything it was actually holding is named.
+   * Dropping it silently would be the same bug wearing the other hat.
+   */
+  const onDialogSaved = useCallback(
+    (taskId: string) => {
+      const task = byId.get(taskId);
+      const pending = pendingDraftFields(draft, taskId, task as unknown as Record<string, unknown>);
+      setDraft((prev) => withoutTaskDraft(prev, taskId));
+      const note = describeDraftReplaced(
+        pending,
+        task ? `${task.wbs_code} ${task.task_name}` : "That row",
+        (f) => COLUMN_LABEL[f] ?? f,
+      );
+      if (note) setMsg({ tone: "warn", text: note });
+    },
+    [byId, draft, setDraft],
+  );
 
   const valueOf = useCallback(
     (t: ScheduleTaskRow, f: Field) => draft[t.id]?.[f] ?? raw(t, f),
@@ -2045,6 +2075,7 @@ export function ScheduleSplitView({
                     allTasks={allTasks}
                     phase1Available={phase1Available}
                     typeAvailable={typeAvailable}
+                    onDialogSaved={onDialogSaved}
                   />
                 ))
               )}
@@ -2274,6 +2305,8 @@ export function ScheduleSplitView({
 // ============================================================================
 
 type GridRowProps = {
+  /** The Edit task dialog saved this row, so its unsaved cells are stale. */
+  onDialogSaved: (taskId: string) => void;
   t: ScheduleTaskRow;
   r: number;
   columns: Column[];
@@ -2315,6 +2348,7 @@ function GridRow({
   statusOptions, calendar, constraint, dragging, dropAt,
   onDragStart, onDragEnd, onDragOver, onDrop,
   projectId, phaseOptions, allTasks, phase1Available, typeAvailable, rowIndex, predAsRows,
+  onDialogSaved,
 }: GridRowProps) {
   const indent = Math.max(0, (t.level_code ?? 1) - 1) * 10;
   const rowDirty = columns.some((col) => {
@@ -2631,12 +2665,28 @@ function GridRow({
           typeAvailable={typeAvailable}
           calendar={calendar}
           rowIndex={rowIndex}
+          onDone={() => onDialogSaved(t.id)}
           trigger={<Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]">Open</Button>}
         />
       </div>
     </div>
   );
 }
+
+/** Field names as the column headers read, for messages about cells. */
+const COLUMN_LABEL: Record<string, string> = {
+  task_name: "Task",
+  status: "Status",
+  task_type: "Type",
+  assigned_to: "Assigned",
+  phase: "Phase",
+  duration_days: "Duration",
+  start_date: "Start",
+  end_date: "Finish",
+  predecessors: "Predecessors",
+  pct_complete: "% complete",
+  wbs_code: "Code",
+};
 
 const FIELD_OF: Partial<Record<ColumnKey, Field>> = {
   task: "task_name",

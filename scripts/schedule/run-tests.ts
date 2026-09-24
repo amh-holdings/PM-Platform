@@ -83,6 +83,9 @@ import {
   nextTopLevelCode,
   ancestorTrail,
   describeAncestorTrail,
+  describeDraftReplaced,
+  pendingDraftFields,
+  withoutTaskDraft,
   parseGrid,
   parseLooseDate,
   parseLooseDuration,
@@ -2884,6 +2887,110 @@ section("Dragging a branch above the first row of the sheet");
   // reparents like any other interior drop.
   const drop = planDrop(importedOutOfOrder, ["4"], "5.1", "after");
   eq("dropping below the first row is not the top of the sheet", drop.reparents, true);
+}
+
+// ============================================================================
+// An unsaved grid edit against a save that went round it
+//
+// Zarina: "I made changes to dates through open task in schedule but the
+// schedules not showing the update." The grid reads draft[id][field] before
+// the stored value, so a cell held unsaved beat what the Edit task dialog had
+// just written, with nothing on the row to say which you were looking at.
+// ============================================================================
+{
+  const TASK = {
+    id: "t1",
+    wbs_code: "4.4.2.2",
+    task_name: "Delivery",
+    start_date: "2026-10-05",
+    end_date: "2026-10-05",
+    duration_days: 1,
+  };
+  const LABEL = (f: string) =>
+    ({ start_date: "Start", end_date: "Finish", duration_days: "Duration" })[f] ?? f;
+
+  same(
+    "a draft cell that disagrees with the database is pending",
+    pendingDraftFields({ t1: { start_date: "2026-11-18" } }, "t1", TASK),
+    ["start_date"],
+  );
+
+  same(
+    "a draft cell that agrees is not",
+    pendingDraftFields({ t1: { start_date: "2026-10-05" } }, "t1", TASK),
+    [],
+  );
+
+  // Reconciling a date triple writes all three cells; two usually come back
+  // identical, and naming those would be noise.
+  same(
+    "only the cells that really differ are named",
+    pendingDraftFields(
+      { t1: { start_date: "2026-11-18", end_date: "2026-10-05", duration_days: "1" } },
+      "t1",
+      TASK,
+    ),
+    ["start_date"],
+  );
+
+  same(
+    "a number held as text still compares",
+    pendingDraftFields({ t1: { duration_days: "5" } }, "t1", TASK),
+    ["duration_days"],
+  );
+
+  same("no draft for the row is nothing pending", pendingDraftFields({}, "t1", TASK), []);
+  same(
+    "a draft on another row is not this row's",
+    pendingDraftFields({ other: { start_date: "2026-01-01" } }, "t1", TASK),
+    [],
+  );
+  same(
+    "a row that is gone has nothing to compare against",
+    pendingDraftFields({ t1: { start_date: "x" } }, "t1", undefined),
+    [],
+  );
+
+  // --- clearing ---
+  same(
+    "clearing takes this row out",
+    withoutTaskDraft({ t1: { start_date: "x" }, t2: { status: "Complete" } }, "t1"),
+    { t2: { status: "Complete" } },
+  );
+  check(
+    "and leaves every other row exactly as it was",
+    (() => {
+      const before = { t2: { status: "Complete" } };
+      const after = withoutTaskDraft({ t1: { start_date: "x" }, ...before }, "t1");
+      return after.t2 === before.t2;
+    })(),
+  );
+  check(
+    "a draft with nothing for that row is returned untouched",
+    (() => {
+      const before = { t2: { status: "Complete" } };
+      return withoutTaskDraft(before, "t1") === before;
+    })(),
+  );
+
+  // --- what it says ---
+  check(
+    "the note names the row and the cells it replaced",
+    (() => {
+      const note = describeDraftReplaced(["start_date", "end_date"], "4.4.2.2 Delivery", LABEL) ?? "";
+      return (
+        note.includes("4.4.2.2 Delivery") &&
+        note.includes("Start") &&
+        note.includes("Finish") &&
+        note.includes("replaced")
+      );
+    })(),
+  );
+  eq(
+    "a save that replaced nothing says nothing",
+    describeDraftReplaced([], "4.4.2.2 Delivery", LABEL),
+    null,
+  );
 }
 
 // ============================================================================
