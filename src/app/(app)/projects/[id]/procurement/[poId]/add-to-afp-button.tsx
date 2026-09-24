@@ -27,10 +27,15 @@ export function AddToAfpButton({
   poId,
   projectId,
   poTotalValue,
+  size = "sm",
+  variant,
 }: {
   poId: string;
   projectId: string;
   poTotalValue: number;
+  /** The header copy is small; the one in the page body is not. */
+  size?: "sm" | "default";
+  variant?: "outline";
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -86,7 +91,7 @@ export function AddToAfpButton({
 
   return (
     <>
-      <Button size="sm" onClick={openDialog}>
+      <Button size={size} variant={variant} onClick={openDialog}>
         Add to AFP
       </Button>
 

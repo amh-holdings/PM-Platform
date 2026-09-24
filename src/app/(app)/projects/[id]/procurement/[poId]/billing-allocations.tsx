@@ -281,15 +281,13 @@ export function BillingAllocations({
             {!adding ? (
               <div className="flex items-center justify-between">
                 <p className="text-xs text-muted-foreground">
-                  {/* The old wording said the AFP could not pull stored
-                      materials until this was filled in. Nothing reads these
-                      allocations when billing: the suggestion comes from the
-                      payment milestones above, and the AFP writes
-                      materials_stored: 0 unconditionally. Telling somebody to
-                      do work that changes nothing is worse than saying
-                      nothing, so it now says what this actually is. */}
+                  {/* This used to say the split changed nothing about
+                      billing, which was true then and is not now: Add to AFP
+                      opens on the line with the largest allocation. Leaving
+                      the old wording up would tell somebody to skip the one
+                      step that saves them picking a line by hand. */}
                   {allocations.length === 0
-                    ? "Not split yet. Optional - billing follows the payment milestones above, and this does not change what the AFP bills. Use it to record which SOV lines this PO's equipment sits under."
+                    ? "Not split yet. Optional, but Add to AFP opens on the line with the largest share, so splitting it here means not picking one by hand each period."
                     : ""}
                 </p>
                 <Button
