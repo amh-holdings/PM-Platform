@@ -40,6 +40,12 @@ const GROUPS: {
       "Their cost is in the forecast nowhere at all - a cost code tied to a PO is skipped on the assumption the PO supplies it.",
   },
   {
+    kind: "po_payment_no_date",
+    title: "Vendor payments with no date to sit on",
+    effect:
+      "The milestone exists and carries an amount, but nothing says when it is paid - no expected date and no delivery task linked to the PO.",
+  },
+  {
     kind: "task_no_dates",
     title: "Linked to work with no planned finish date",
     effect: "Mapped, but there is no date to place the money on.",

@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import { firstOfThisMonthIso } from "@/lib/cashflow";
+import { describeScheduleMoveCount } from "@/lib/po-payment-forecast";
 import { buildProjection } from "@/lib/projection";
 
 import { DashboardCashflowChart, type CashflowDatum } from "./dashboard-cashflow-chart";
@@ -156,6 +157,31 @@ export async function DashboardCashflow({ projectId, showCosts = false }: Props)
           <div className="mt-2">
             <DashboardProjection projectId={projectId} embedded />
           </div>
+        </details>
+      )}
+
+      {/* Things the forecast DID account for and had to make a call on.
+          Separate from the amber panel below, which is headed "could not
+          account for" - a vendor payment following the schedule is the
+          forecast working, not failing. It is still said out loud, because a
+          date that moves on its own with no explanation is how people stop
+          trusting the curve. */}
+      {projection.notes.length > 0 && (
+        <details className="rounded-md border bg-muted/20 p-2 text-xs">
+          <summary className="cursor-pointer font-medium">
+            {describeScheduleMoveCount(projection.notes.length)}
+          </summary>
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            A payment that fires on delivery follows the delivery task the PO
+            is linked to, so the date on the PO is superseded when the schedule
+            says something different. Anything already paid keeps its paid
+            date.
+          </div>
+          <ul className="mt-1.5 max-h-60 space-y-0.5 overflow-y-auto pr-1">
+            {projection.notes.map((n, i) => (
+              <li key={`${n.ref}-${i}`}>{n.message}</li>
+            ))}
+          </ul>
         </details>
       )}
 

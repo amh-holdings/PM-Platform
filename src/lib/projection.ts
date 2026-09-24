@@ -29,6 +29,10 @@ import {
 } from "@/lib/change-order-projection";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import {
+  describeScheduleMove,
+  forecastMilestoneDate,
+} from "@/lib/po-payment-forecast";
+import {
   aggregateConfidence,
   estimateTaskProgress,
   isSummaryOf,
@@ -78,6 +82,7 @@ export type ProjectionRow = {
 export type ProjectionWarning = {
   kind:
     | "po_missing_milestones"
+    | "po_payment_no_date"
     | "billing_line_no_link"
     | "task_no_dates"
     | "underbilled"
@@ -87,9 +92,25 @@ export type ProjectionWarning = {
   message: string;
 };
 
+/**
+ * Something the forecast DID account for, and had to make a call on.
+ *
+ * Kept apart from warnings because the warnings panel is headed "things the
+ * forecast could not account for" and a vendor payment that moved because the
+ * schedule moved is the opposite of that. It is the forecast working. It
+ * still gets said out loud, because a number that moves on its own with no
+ * explanation is how people stop trusting the curve.
+ */
+export type ProjectionNote = {
+  kind: "po_payment_from_schedule";
+  ref: string;
+  message: string;
+};
+
 export type ProjectionResult = {
   rows: ProjectionRow[];
   warnings: ProjectionWarning[];
+  notes: ProjectionNote[];
   totals: {
     revenue: number;
     cost: number;
@@ -155,7 +176,9 @@ export async function buildProjection(
         .eq("procurement_orders.project_id", projectId),
       supabase
         .from("procurement_orders")
-        .select("id, po_number, vendor_name, status")
+        .select(
+          "id, po_number, vendor_name, status, linked_delivery_task_wbs_code, actual_delivery_date, payment_terms_summary",
+        )
         .eq("project_id", projectId),
       supabase
         .from("billing_lines")
@@ -185,6 +208,7 @@ export async function buildProjection(
     ]);
 
   const warnings: ProjectionWarning[] = [];
+  const notes: ProjectionNote[] = [];
 
   // Vendor rows only, for the reason given at the query above. Applied once
   // here so both places that walk the payments see the same set.
@@ -515,12 +539,56 @@ export async function buildProjection(
   }
 
   // ---- VENDOR PAYMENTS -> Cost (accrual, at milestone) + Cash Out ----
+  //
+  // The date is not read straight off expected_date any more. A payment that
+  // fires on delivery follows the delivery task the PO is linked to, so
+  // moving that task moves the vendor cash the same way it already moves sub
+  // cash - see po-payment-forecast for the three rules. A deposit, a
+  // commissioning payment and anything already paid are untouched.
+  const poById = new Map((posRes.data ?? []).map((o) => [o.id, o]));
+  const taskByWbs = new Map((tasksRes.data ?? []).map((t) => [t.wbs_code, t]));
+
   for (const p of vendorPayments) {
-    const date = p.paid_at ?? p.expected_date;
-    if (!date) continue;
     const amount = Number(p.paid_amount ?? p.amount ?? 0);
     if (amount <= 0) continue;
-    const month = monthIsoFromDate(date);
+
+    const order = poById.get(p.procurement_order_id) ?? null;
+    const linkedWbs = order?.linked_delivery_task_wbs_code ?? null;
+    const deliveryTask = linkedWbs ? (taskByWbs.get(linkedWbs) ?? null) : null;
+    const at = forecastMilestoneDate({
+      milestone: p,
+      po: order ?? {},
+      deliveryTask,
+    });
+
+    const poLabel = order?.po_number ?? order?.vendor_name ?? "A purchase order";
+    const milestoneName = p.milestone_name ?? "payment";
+
+    if (!at.date) {
+      // Dropping this silently is money the curve is short by, on a row that
+      // exists and has an amount on it. The old code did exactly that.
+      warnings.push({
+        kind: "po_payment_no_date",
+        ref: poLabel,
+        message: `${poLabel} ${milestoneName} has no date and no delivery task linked - $${Math.round(amount).toLocaleString()} is missing from the forecast`,
+      });
+      continue;
+    }
+
+    if (at.supersedes) {
+      notes.push({
+        kind: "po_payment_from_schedule",
+        ref: poLabel,
+        message: describeScheduleMove({
+          poLabel,
+          milestoneName,
+          at,
+          taskName: deliveryTask?.task_name ?? null,
+        }),
+      });
+    }
+
+    const month = monthIsoFromDate(at.date);
 
     const bucket = get(month);
     bucket.vendorCostIncurred += amount;
@@ -636,6 +704,7 @@ export async function buildProjection(
   return {
     rows,
     warnings,
+    notes,
     totals: { revenue, cost, margin, cashIn, cashOut, cashNet },
   };
 }
