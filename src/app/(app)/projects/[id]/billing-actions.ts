@@ -24,6 +24,10 @@ import { progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import { canUndoPayApplication } from "@/lib/pay-app-undo";
 import { formatCurrency } from "@/lib/format";
+import {
+  describeContributions,
+  type PoContribution,
+} from "@/lib/afp-po-staging";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -603,6 +607,19 @@ export type BillableRow =
       // Set when the signals do not support billing this line. The row is
       // still rendered (unchecked, with the reason shown) rather than hidden.
       blockedReason?: string;
+      /**
+       * Somebody typed this figure on a PO's Add to AFP dialog. It is not a
+       * milestone reading and not the imported cash-flow forecast, and saying
+       * either sends the reader to the wrong place to change it.
+       */
+      typedFromPo?: boolean;
+      /**
+       * The purchase orders behind that figure. "PO-017 $47,965.00 + PO-022
+       * $4,480.25" against a summed amount, so the sum can be checked without
+       * opening two PO pages. Null until migration 0059 runs - the amount
+       * still bills, it just cannot name what it is made of.
+       */
+      manualBreakdown?: string | null;
     }
   | {
       kind: "suggestion";
@@ -831,6 +848,21 @@ export async function getBillThisPeriodRows(
     list.push(m as ProcurementMilestone);
     msByPoId.set(m.procurement_order_id, list);
   }
+  // The per-PO breakdown behind a typed amount. Migration 0059; absent, the
+  // amount still bills, it just cannot name the POs it came from.
+  const { data: poAmounts } = await auth.supabase
+    .from("billing_entry_po_amounts")
+    .select("billing_entry_id, procurement_order_id, amount")
+    .in("billing_entry_id", (entries ?? []).map((e) => e.id));
+  const contributionsByEntry = new Map<string, PoContribution[]>();
+  for (const r of poAmounts ?? []) {
+    if (!r.billing_entry_id || !r.procurement_order_id) continue;
+    if (Number(r.amount ?? 0) <= 0) continue;
+    const list = contributionsByEntry.get(r.billing_entry_id) ?? [];
+    list.push({ poId: r.procurement_order_id, amount: Number(r.amount) });
+    contributionsByEntry.set(r.billing_entry_id, list);
+  }
+
   const { data: lineTotals } = await auth.supabase
     .from("v_billing_line_totals")
     .select("billing_line_id, total_billed")
@@ -879,7 +911,9 @@ export async function getBillThisPeriodRows(
   // work. See summaryWbsCodes().
   const summaryCodes = summaryWbsCodes(taskInfo ?? []);
   const poStateById = new Map<string, LinkedPo>();
+  const poLabelById = new Map<string, string>();
   for (const p of posInfo ?? []) {
+    poLabelById.set(p.id, p.po_number ?? p.vendor_name ?? "a PO");
     poStateById.set(p.id, {
       po_number: p.po_number,
       vendor_name: p.vendor_name,
@@ -933,7 +967,19 @@ export async function getBillThisPeriodRows(
     // no estimator here knows better than the person who opened the PO.
     const typed = typedAmount(x.manualAmount);
     if (typed != null) {
-      forecastRows.push({ ...x.row, amount: typed });
+      forecastRows.push({
+        ...x.row,
+        amount: typed,
+        typedFromPo: true,
+        // Several POs can bill one SOV line in one period - that is what a
+        // procurement line IS. Naming them is the difference between a figure
+        // you can check and one you have to take on trust.
+        manualBreakdown: describeContributions(
+          contributionsByEntry.get(x.e.id) ?? [],
+          (id) => poLabelById.get(id) ?? "a PO",
+          formatCurrency,
+        ),
+      } as BillableRow);
       continue;
     }
 

@@ -248,12 +248,20 @@ export function BillThisPeriodClient({
                 const fromMilestones = (r.evidence ?? []).some(
                   (e) => e.source === "payment milestone",
                 );
-                const sourceLabel = usingRecommendation
-                  ? fromMilestones
-                    ? "Payment milestones"
-                    : "Field evidence"
-                  : `Forecast (${r.status})${r.kind === "forecast" && r.afpNumber ? ` ${r.afpNumber}` : ""}`;
-                const sourceColor = usingRecommendation
+                // A figure somebody typed on a PO's Add to AFP dialog is not a
+                // milestone reading and not a forecast. Calling it either sends
+                // the reader to the wrong place to change it.
+                const typedFromPo = r.kind === "forecast" && r.typedFromPo === true;
+                const sourceLabel = typedFromPo
+                  ? "Typed from POs"
+                  : usingRecommendation
+                    ? fromMilestones
+                      ? "Payment milestones"
+                      : "Field evidence"
+                    : `Forecast (${r.status})${r.kind === "forecast" && r.afpNumber ? ` ${r.afpNumber}` : ""}`;
+                const sourceColor = typedFromPo
+                  ? "text-emerald-700"
+                  : usingRecommendation
                   ? CONF_STYLES[
                       r.kind === "suggestion"
                         ? r.confidence
@@ -294,6 +302,14 @@ export function BillThisPeriodClient({
                           {r.blockedReason
                             ? null
                             : `${formatCurrency(r.alreadyBilled)} billed so far`}
+                        </div>
+                      )}
+                      {/* What the typed figure is made of. Several POs can
+                          bill one SOV line in one period, and the sum on its
+                          own cannot be checked against anything. */}
+                      {r.kind === "forecast" && r.manualBreakdown && (
+                        <div className="mt-0.5 text-[10px] text-emerald-700">
+                          {r.manualBreakdown}
                         </div>
                       )}
                       {/* Both kinds can be blocked now. A suggestion row
