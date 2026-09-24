@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { describeTypedVsEvidence } from "@/lib/afp-po-staging";
 import { formatCurrency } from "@/lib/format";
 import { shortMonthLabel } from "@/lib/cashflow";
 
@@ -312,6 +313,23 @@ export function BillThisPeriodClient({
                           {r.manualBreakdown}
                         </div>
                       )}
+                      {/* What the evidence makes of a typed figure. Said, not
+                          acted on: a typed amount is a decision, not an
+                          estimate for the app to correct. */}
+                      {r.kind === "forecast" &&
+                        r.typedFromPo &&
+                        (() => {
+                          const note = describeTypedVsEvidence({
+                            typedAmount: r.amount,
+                            evidenceAmount: r.scheduleSuggestedAmount,
+                            formatAmount: formatCurrency,
+                          });
+                          return note ? (
+                            <div className="mt-0.5 text-[10px] text-muted-foreground">
+                              {note}
+                            </div>
+                          ) : null;
+                        })()}
                       {/* Both kinds can be blocked now. A suggestion row
                           carrying one is a line whose earned value is masked
                           by pre-app billing - it arrives at $0 for a person to

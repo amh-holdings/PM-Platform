@@ -265,3 +265,34 @@ export function planUndo(input: {
     plannedAmount: round2(Number(input.priorPlannedAmount ?? 0)),
   };
 }
+
+/**
+ * A typed figure next to what the evidence independently supports.
+ *
+ * Zarina, after staging both POs: "2 POs successfully added but still no
+ * reflection to the total here." The breakdown line was right and the amount
+ * box was not. A forecast row gets enriched with a schedule or milestone
+ * recommendation, and the panel prefers the recommendation over the row's own
+ * amount - correct for a figure imported from a cash-flow spreadsheet months
+ * ago, and wrong for one somebody typed against a purchase order this morning.
+ *
+ * So a typed row no longer carries a recommendation to be overridden by. What
+ * the milestones make of it is still worth saying, because the gap is real
+ * information, and it says it instead of acting on it.
+ *
+ * Null when the two agree closely enough that the sentence would be noise.
+ */
+export function describeTypedVsEvidence(input: {
+  typedAmount: number;
+  evidenceAmount: number | null | undefined;
+  formatAmount: (n: number) => string;
+}): string | null {
+  const typed = Number(input.typedAmount);
+  const evidence = Number(input.evidenceAmount ?? Number.NaN);
+  if (!Number.isFinite(typed) || !Number.isFinite(evidence)) return null;
+  if (Math.abs(typed - evidence) < 0.01) return null;
+  return (
+    `Payment milestones and schedule support ${input.formatAmount(evidence)} ` +
+    `this period. Your typed figure stands.`
+  );
+}
