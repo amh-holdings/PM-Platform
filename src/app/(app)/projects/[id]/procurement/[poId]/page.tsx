@@ -8,7 +8,8 @@ import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 
 import { AfpStanding } from "./afp-standing";
-import { getPoAfpStanding } from "../../procurement-actions";
+import { PoLineEditor } from "./po-line-editor";
+import { getPoAfpStanding, getPoLines } from "../../procurement-actions";
 import type { PoAfpStanding } from "@/lib/afp-po-staging";
 import { BillingAllocations } from "./billing-allocations";
 import { DeliveryTaskLink, type DeliveryTaskOption } from "./delivery-task-link";
@@ -128,6 +129,7 @@ export default async function ProcurementDetailPage({
   // Whether this PO is already on a pay application. Read here rather than
   // inside the button, so the page never renders Add over money that is
   // already staged and then correct itself a moment later.
+  const linesRes = await getPoLines(po.id);
   const standingRes = await getPoAfpStanding(po.id, params.id);
   const afpStanding: PoAfpStanding = standingRes.ok
     ? standingRes.standing
@@ -250,6 +252,19 @@ export default async function ProcurementDetailPage({
           </Link>
         </section>
       )}
+
+      {/* What the PO buys, line by line. Above the payment terms because the
+          scope is what the terms are terms ON, which is the order the paper
+          form puts them in too. */}
+      <PoLineEditor
+        poId={po.id}
+        projectId={params.id}
+        poValue={poValue}
+        lines={linesRes.ok ? linesRes.lines : []}
+        salesTax={linesRes.ok ? linesRes.salesTax : null}
+        freight={linesRes.ok ? linesRes.freight : null}
+        available={linesRes.ok ? linesRes.available : false}
+      />
 
       <section className="rounded-lg border bg-card shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">

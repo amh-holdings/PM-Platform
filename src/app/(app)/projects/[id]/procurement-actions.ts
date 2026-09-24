@@ -1566,3 +1566,221 @@ export async function unstagePoAmountFromAfp(
   revalidatePath(`/projects/${projectId}`);
   return { ok: true, amount, periodMonth: String(target.period_month) };
 }
+
+// ---------------------------------------------------------------------------
+// Line items on a purchase order.
+//
+// Zarina: "I need to have option to add line items for PO forms. See PO form
+// we used."
+//
+// The paper PO carries a table and the app carried one total and a sentence of
+// free text, so the detail that makes a PO checkable against an invoice lived
+// only in the PDF. Migration 0061.
+// ---------------------------------------------------------------------------
+
+/** Migration 0061 has not run yet. */
+function isMissingLines(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === "42P01" || error.code === "PGRST205") return true;
+  if (error.code === "42703" || error.code === "PGRST204") {
+    return /sales_tax|freight/i.test(error.message ?? "");
+  }
+  return /procurement_order_lines/i.test(error.message ?? "");
+}
+
+const MISSING_LINES_MESSAGE =
+  "Line items need database migration 0061. Everything else on this PO keeps working without it.";
+
+export type PoLineRow = {
+  id: string;
+  lineNo: number | null;
+  quantity: number | null;
+  description: string | null;
+  units: string | null;
+  unitPrice: number | null;
+  extendedPrice: number | null;
+};
+
+export type PoLinesResult =
+  | { ok: true; lines: PoLineRow[]; salesTax: number | null; freight: number | null; available: true }
+  | { ok: true; lines: []; salesTax: null; freight: null; available: false }
+  | { ok: false; error: string };
+
+export async function getPoLines(poId: string): Promise<PoLinesResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { data, error } = await auth.supabase
+    .from("procurement_order_lines")
+    .select("*")
+    .eq("procurement_order_id", poId)
+    .order("sort_order", { ascending: true, nullsFirst: false })
+    .order("line_no", { ascending: true, nullsFirst: false });
+  if (error) {
+    if (isMissingLines(error)) {
+      return { ok: true, lines: [], salesTax: null, freight: null, available: false };
+    }
+    return { ok: false, error: error.message };
+  }
+
+  // Selected with * rather than by name: sales_tax and freight arrive in the
+  // same migration, and a named select on a column the database does not have
+  // errors the whole request.
+  const { data: po } = await auth.supabase
+    .from("procurement_orders")
+    .select("*")
+    .eq("id", poId)
+    .maybeSingle();
+
+  const row = (po ?? {}) as { sales_tax?: number | null; freight?: number | null };
+  return {
+    ok: true,
+    available: true,
+    salesTax: row.sales_tax ?? null,
+    freight: row.freight ?? null,
+    lines: (data ?? []).map((l) => ({
+      id: l.id as string,
+      lineNo: l.line_no,
+      quantity: l.quantity,
+      description: l.description,
+      units: l.units,
+      unitPrice: l.unit_price,
+      extendedPrice: l.extended_price,
+    })),
+  };
+}
+
+export type PoLineInput = {
+  lineNo?: number | null;
+  quantity?: number | null;
+  description?: string | null;
+  units?: string | null;
+  unitPrice?: number | null;
+  extendedPrice?: number | null;
+};
+
+function toRow(input: PoLineInput) {
+  return {
+    line_no: input.lineNo ?? null,
+    quantity: input.quantity ?? null,
+    description: input.description?.trim() || null,
+    units: input.units?.trim() || null,
+    unit_price: input.unitPrice ?? null,
+    extended_price: input.extendedPrice ?? null,
+  };
+}
+
+export async function addPoLine(
+  poId: string,
+  projectId: string,
+  input: PoLineInput,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { error } = await auth.supabase
+    .from("procurement_order_lines")
+    .insert({
+      procurement_order_id: poId,
+      sort_order: input.lineNo ?? null,
+      ...toRow(input),
+    } as unknown as TablesInsert<"procurement_order_lines">);
+  if (error) {
+    return { ok: false, error: isMissingLines(error) ? MISSING_LINES_MESSAGE : error.message };
+  }
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  return { ok: true };
+}
+
+export async function updatePoLine(
+  lineId: string,
+  poId: string,
+  projectId: string,
+  input: PoLineInput,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { error } = await auth.supabase
+    .from("procurement_order_lines")
+    .update({
+      sort_order: input.lineNo ?? null,
+      ...toRow(input),
+    } as unknown as TablesUpdate<"procurement_order_lines">)
+    .eq("id", lineId);
+  if (error) {
+    return { ok: false, error: isMissingLines(error) ? MISSING_LINES_MESSAGE : error.message };
+  }
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  return { ok: true };
+}
+
+export async function deletePoLine(
+  lineId: string,
+  poId: string,
+  projectId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { error } = await auth.supabase
+    .from("procurement_order_lines")
+    .delete()
+    .eq("id", lineId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  return { ok: true };
+}
+
+export async function setPoTaxAndFreight(
+  poId: string,
+  projectId: string,
+  input: { salesTax: number | null; freight: number | null },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { error } = await auth.supabase
+    .from("procurement_orders")
+    .update({
+      sales_tax: input.salesTax,
+      freight: input.freight,
+    } as unknown as TablesUpdate<"procurement_orders">)
+    .eq("id", poId);
+  if (error) {
+    return { ok: false, error: isMissingLines(error) ? MISSING_LINES_MESSAGE : error.message };
+  }
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  return { ok: true };
+}
+
+/**
+ * Make the PO's value the total the lines build to.
+ *
+ * Never automatic. The PO value drives milestones, the procurement forecast
+ * and what the owner is billed, so replacing it from a half-entered line table
+ * would move money with nothing on screen. The editor shows both figures and
+ * this is the deliberate act.
+ */
+export async function applyLineTotalToPo(
+  poId: string,
+  projectId: string,
+  total: number,
+): Promise<{ ok: true; total: number } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+  if (!Number.isFinite(total) || total < 0) {
+    return { ok: false, error: "That is not a total." };
+  }
+
+  const { error } = await auth.supabase
+    .from("procurement_orders")
+    .update({ total_value: total } as unknown as TablesUpdate<"procurement_orders">)
+    .eq("id", poId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidatePath(`/projects/${projectId}/procurement`);
+  revalidatePath(`/projects/${projectId}/billing`);
+  return { ok: true, total };
+}
