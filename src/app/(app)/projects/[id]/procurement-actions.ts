@@ -191,9 +191,13 @@ export async function addMilestone(
   const paid = recordedPayment(computedAmount, getDate(formData.get("paid_at")));
   if (!paid.ok) return paid;
 
-  const insert: TablesInsert<"procurement_payments"> = {
+  const insert: TablesInsert<"procurement_payments"> & { side?: string } = {
     procurement_order_id: poId,
     milestone_name: name,
+    // Which agreement this row belongs to: what we pay the vendor, or what we
+    // bill the owner. Migration 0055. Anything the form does not name is a
+    // vendor row, which is what every milestone was before the two split.
+    side: getStr(formData.get("side")) === "owner" ? "owner" : "vendor",
     pct_of_total: pct,
     trigger_event: getStr(formData.get("trigger_event")),
     expected_date: getDate(formData.get("expected_date")),
@@ -204,14 +208,95 @@ export async function addMilestone(
     notes: getStr(formData.get("notes")),
   };
 
+  // Cast because `side` is not in the generated types until the next
+  // `npm run db:types` after 0055. The column is real; the types are behind.
   const { data, error } = await auth.supabase
     .from("procurement_payments")
-    .insert(insert)
+    .insert(insert as unknown as TablesInsert<"procurement_payments">)
     .select("id")
     .single();
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    return { ok: false, error: missingSideMessage(error) ?? error.message };
+  }
   revalidateMilestone(projectId, poId);
   return { ok: true, id: data.id };
+}
+
+/**
+ * Owner billing rows need the column migration 0055 adds. Until it runs the
+ * insert fails on a column the database has never heard of, and "could not
+ * find the 'side' column" tells nobody what to do about it.
+ */
+function missingSideMessage(
+  error: { code?: string; message?: string } | null,
+): string | null {
+  if (!error) return null;
+  const missing = error.code === "42703" || error.code === "PGRST204";
+  if (!missing || !/side/i.test(error.message ?? "")) return null;
+  return "Owner billing terms need database migration 0055 (payment milestone side). Vendor payment terms keep working without it.";
+}
+
+/**
+ * The standing rule, in one click: the owner is billed half the PO the day it
+ * is issued, whatever the vendor's terms say, and the rest on delivery.
+ *
+ * Written as two owner rows rather than a setting so it can be edited after
+ * the fact like any other milestone, and so a PO that does not follow the rule
+ * is just a PO with different rows rather than a special case.
+ */
+export async function seedOwnerBillingHalfOnPo(
+  poId: string,
+  projectId: string,
+): Promise<MilestoneResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { data: po } = await auth.supabase
+    .from("procurement_orders")
+    .select("total_value, expected_delivery_date, signed_at")
+    .eq("id", poId)
+    .maybeSingle();
+  const total = Number(po?.total_value ?? 0);
+  if (!(total > 0)) {
+    return { ok: false, error: "This PO has no value to take half of" };
+  }
+
+  // Half to the cent, and the balance is what is left rather than half again,
+  // so an odd total does not leave a cent unbilled forever.
+  const half = Math.round(total * 50) / 100;
+  const rest = Math.round((total - half) * 100) / 100;
+
+  const rows = [
+    {
+      procurement_order_id: poId,
+      milestone_name: "Owner - 50% on PO",
+      trigger_event: "PO signed",
+      pct_of_total: 50,
+      amount: half,
+      expected_date: po?.signed_at ?? null,
+      sort_order: 1,
+      side: "owner",
+    },
+    {
+      procurement_order_id: poId,
+      milestone_name: "Owner - balance on delivery",
+      trigger_event: "Delivery to site",
+      pct_of_total: 50,
+      amount: rest,
+      expected_date: po?.expected_delivery_date ?? null,
+      sort_order: 2,
+      side: "owner",
+    },
+  ];
+
+  const { error } = await auth.supabase
+    .from("procurement_payments")
+    .insert(rows as unknown as TablesInsert<"procurement_payments">[]);
+  if (error) {
+    return { ok: false, error: missingSideMessage(error) ?? error.message };
+  }
+  revalidateMilestone(projectId, poId);
+  return { ok: true, id: poId };
 }
 
 export async function updateMilestone(

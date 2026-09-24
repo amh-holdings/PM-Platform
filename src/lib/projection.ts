@@ -126,11 +126,21 @@ export async function buildProjection(
           "period_month, planned_amount, actual_amount, cost_codes!inner(project_id, subcontractor_id, procurement_order_id, subcontractors(payment_terms_days, retainage_pct))",
         )
         .eq("cost_codes.project_id", projectId),
+      // Cash OUT, so vendor rows only. Since 0055 a PO also carries owner
+      // rows saying what we bill the owner for it, and counting those here
+      // would book money we are receiving as money we are spending.
+      //
+      // Filtered in JS rather than in the query, and selected with * rather
+      // than by name, because the column does not exist until 0055 runs. A
+      // named select or a filter on a missing column errors the whole request
+      // and takes the dashboard down with it; * does not.
+      //
+      // Anything not explicitly "owner" counts, so a row predating 0055 or one
+      // whose side never got set still books. Cash out is the side that must
+      // not silently lose rows.
       supabase
         .from("procurement_payments")
-        .select(
-          "expected_date, paid_at, amount, paid_amount, procurement_orders!inner(project_id, po_number)",
-        )
+        .select("*, procurement_orders!inner(project_id, po_number)")
         .eq("procurement_orders.project_id", projectId),
       supabase
         .from("procurement_orders")
@@ -157,6 +167,12 @@ export async function buildProjection(
     ]);
 
   const warnings: ProjectionWarning[] = [];
+
+  // Vendor rows only, for the reason given at the query above. Applied once
+  // here so both places that walk the payments see the same set.
+  const vendorPayments = (paymentsRes.data ?? []).filter(
+    (p) => (p as { side?: string | null }).side !== "owner",
+  );
 
   const ownerTermsDays = Number(projectRes.data?.owner_payment_terms_days ?? 0);
 
@@ -187,7 +203,7 @@ export async function buildProjection(
   // Procurement orders that have no payment milestones - cash side will miss
   // them entirely if we don't surface this.
   const posWithPayments = new Set<string>();
-  for (const p of paymentsRes.data ?? []) {
+  for (const p of vendorPayments) {
     const po = p.procurement_orders as unknown as { project_id: string; po_number: string | null } | null;
     if (po) posWithPayments.add(po.po_number ?? "");
   }
@@ -447,7 +463,7 @@ export async function buildProjection(
   }
 
   // ---- VENDOR PAYMENTS -> Cost (accrual, at milestone) + Cash Out ----
-  for (const p of paymentsRes.data ?? []) {
+  for (const p of vendorPayments) {
     const date = p.paid_at ?? p.expected_date;
     if (!date) continue;
     const amount = Number(p.paid_amount ?? p.amount ?? 0);

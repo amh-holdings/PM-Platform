@@ -10,6 +10,7 @@ import { BillingAllocations } from "./billing-allocations";
 import { DeliveryTaskLink, type DeliveryTaskOption } from "./delivery-task-link";
 import { ExtractPoMilestones } from "./extract-po-milestones";
 import { MilestoneEditor } from "./milestone-editor";
+import { SeedOwnerBillingButton } from "./seed-owner-billing-button";
 import { PoSignToggle } from "./sign-toggle";
 import { UploadSignedPo } from "./upload-signed-po";
 
@@ -45,9 +46,7 @@ export default async function ProcurementDetailPage({
       .maybeSingle(),
     supabase
       .from("procurement_payments")
-      .select(
-        "id, milestone_name, pct_of_total, trigger_event, expected_date, amount, paid_amount, paid_at, sort_order, notes",
-      )
+      .select("*")
       .eq("procurement_order_id", params.poId)
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("expected_date", { ascending: true, nullsFirst: false }),
@@ -110,7 +109,16 @@ export default async function ProcurementDetailPage({
     linkedDoc = data ?? null;
   }
 
-  const milestones = payments ?? [];
+  // Two schedules on one PO since 0055. Vendor rows are what we pay the
+  // supplier and drive cash out; owner rows are what we bill the owner through
+  // the AFP. A row with no side is a vendor row, which is what they all were.
+  const allPayments = payments ?? [];
+  const ownerMilestones = allPayments.filter(
+    (m) => (m as { side?: string | null }).side === "owner",
+  );
+  const milestones = allPayments.filter(
+    (m) => (m as { side?: string | null }).side !== "owner",
+  );
   const totalPlanned = milestones.reduce(
     (s, m) => s + Number(m.amount ?? 0),
     0,
@@ -126,6 +134,26 @@ export default async function ProcurementDetailPage({
   // only the percentages said "50% of PO" next to "total $8,960.49 of
   // $8,960.49", which reads as half the money being unscheduled when the two
   // milestones cover all of it.
+  // Both editors take the same shape, and numerics come back from the driver
+  // as strings.
+  const asEditorRow = (m: (typeof allPayments)[number]) => ({
+    id: m.id,
+    milestone_name: m.milestone_name,
+    pct_of_total: m.pct_of_total == null ? null : Number(m.pct_of_total),
+    trigger_event: m.trigger_event,
+    expected_date: m.expected_date,
+    amount: m.amount == null ? null : Number(m.amount),
+    paid_at: m.paid_at,
+    paid_amount: m.paid_amount == null ? null : Number(m.paid_amount),
+    sort_order: m.sort_order,
+    notes: m.notes,
+  });
+
+  const ownerPlanned = ownerMilestones.reduce(
+    (sum, m) => sum + Number(m.amount ?? 0),
+    0,
+  );
+  const ownerPct = poValue > 0 ? (ownerPlanned / poValue) * 100 : 0;
   const totalPct = poValue > 0 ? (totalPlanned / poValue) * 100 : 0;
   const drift = poValue > 0 ? totalPlanned - poValue : 0;
 
@@ -221,7 +249,9 @@ export default async function ProcurementDetailPage({
       <section className="rounded-lg border bg-card shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">
           <div>
-            <h3 className="text-sm font-semibold">Milestone payment schedule</h3>
+            <h3 className="text-sm font-semibold">
+              Vendor payment terms
+            </h3>
             <p className="text-xs text-muted-foreground">
               {milestones.length} milestone{milestones.length === 1 ? "" : "s"}
               {" - "}
@@ -254,18 +284,40 @@ export default async function ProcurementDetailPage({
           projectId={params.id}
           poId={params.poId}
           poTotalValue={poValue}
-          milestones={milestones.map((m) => ({
-            id: m.id,
-            milestone_name: m.milestone_name,
-            pct_of_total: m.pct_of_total == null ? null : Number(m.pct_of_total),
-            trigger_event: m.trigger_event,
-            expected_date: m.expected_date,
-            amount: m.amount == null ? null : Number(m.amount),
-            paid_at: m.paid_at,
-            paid_amount: m.paid_amount == null ? null : Number(m.paid_amount),
-            sort_order: m.sort_order,
-            notes: m.notes,
-          }))}
+          side="vendor"
+          milestones={milestones.map(asEditorRow)}
+        />
+      </section>
+
+      {/* What the OWNER is billed for this PO, which is a different agreement
+          with a different party and routinely a different schedule. PO-022
+          pays the vendor 50% on deposit and 50% on delivery while the owner is
+          billed 50% of the PO total the day it is issued.
+
+          Leave it empty and the AFP falls back to the vendor terms, which is
+          how every PO worked before this existed. Nothing breaks by ignoring
+          this panel; it just keeps reading the wrong agreement. */}
+      <section className="rounded-lg border bg-card shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">
+          <div>
+            <h3 className="text-sm font-semibold">Owner billing terms</h3>
+            <p className="text-xs text-muted-foreground">
+              {ownerMilestones.length === 0
+                ? "Not set. The AFP is using the vendor payment terms above, which is only right when the owner is billed on the same schedule we pay."
+                : `${ownerMilestones.length} milestone${ownerMilestones.length === 1 ? "" : "s"} - total ${formatCurrency(ownerPlanned)} of ${formatCurrency(poValue)}${ownerPct > 0 ? ` (${ownerPct.toFixed(0)}% of PO)` : ""}`}
+            </p>
+          </div>
+          {ownerMilestones.length === 0 && poValue > 0 && (
+            <SeedOwnerBillingButton poId={params.poId} projectId={params.id} />
+          )}
+        </div>
+
+        <MilestoneEditor
+          projectId={params.id}
+          poId={params.poId}
+          poTotalValue={poValue}
+          side="owner"
+          milestones={ownerMilestones.map(asEditorRow)}
         />
       </section>
 

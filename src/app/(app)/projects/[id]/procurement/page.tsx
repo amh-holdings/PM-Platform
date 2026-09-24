@@ -35,9 +35,7 @@ export default async function ProjectProcurementPage({ params }: { params: Param
       .order("vendor_name"),
     supabase
       .from("procurement_payments")
-      .select(
-        "id, procurement_order_id, milestone_name, pct_of_total, trigger_event, amount, paid_amount, paid_at, expected_date, sort_order, notes, procurement_orders!inner(project_id)",
-      )
+      .select("*, procurement_orders!inner(project_id)")
       .eq("procurement_orders.project_id", params.id),
     supabase
       .from("billing_lines")
