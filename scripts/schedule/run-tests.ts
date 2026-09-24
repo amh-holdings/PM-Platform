@@ -22,6 +22,7 @@ import {
   workingDaysBetween,
 } from "@/lib/schedule-calendar";
 import {
+  completionNeedsAType,
   finishIsACommitment,
   progressCanBeSetByHand,
   progressFromStatus,
@@ -1048,6 +1049,50 @@ section("Status Complete is what marks a delivery done");
   same(
     "a different status spelling does not",
     progressFromStatus({ ...proc, status: "Completed", currentPct: null }),
+    null,
+  );
+}
+
+// ============================================================================
+section("Complete with nowhere to record it");
+// ============================================================================
+
+{
+  // Zarina set DEQ Inspection to Complete. The row tinted green off the
+  // status, the progress stayed "No report", and the two said different
+  // things about one task with nothing on screen to explain it. The status
+  // had saved fine; an unclassified row just has no rule for where a percent
+  // comes from, so progressFromStatus refuses it.
+  eq(
+    "Complete on an unclassified row needs a Type before it can record anything",
+    completionNeedsAType("Complete", null),
+    true,
+  );
+  eq("an empty string is unclassified too", completionNeedsAType("Complete", ""), true);
+  eq("and so is whitespace", completionNeedsAType("Complete", "  "), true);
+  eq("Approved behaves the same", completionNeedsAType("Approved", null), true);
+
+  // Construction is excluded deliberately. Its "No report" is already the
+  // accurate answer: it waits for a field report, not for a dropdown.
+  eq(
+    "construction is not nagged - it is waiting for a report, not a Type",
+    completionNeedsAType("Complete", "construction"),
+    false,
+  );
+  eq("a classified deliverable records it, so nothing to say",
+     completionNeedsAType("Complete", "deliverable"), false);
+  eq("same for procurement", completionNeedsAType("Complete", "procurement"), false);
+  eq("same for inspection", completionNeedsAType("Complete", "inspection"), false);
+
+  // Only a finished row. An unclassified row in progress is not a problem.
+  eq("In Progress is not finished", completionNeedsAType("In Progress", null), false);
+  eq("Not Started is not finished", completionNeedsAType("Not Started", null), false);
+  eq("no status at all is not finished", completionNeedsAType(null, null), false);
+
+  // And the underlying refusal is unchanged - this only explains it.
+  eq(
+    "an unclassified row still records nothing, which is the point",
+    progressFromStatus({ taskType: null, status: "Complete", currentPct: null }),
     null,
   );
 }

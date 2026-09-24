@@ -115,6 +115,7 @@ import {
   TASK_TYPES,
   TASK_TYPE_HELP,
   TASK_TYPE_LABELS,
+  completionNeedsAType,
   progressCanBeSetByHand,
 } from "@/lib/schedule-task-type";
 import {
@@ -2517,6 +2518,7 @@ function GridRow({
                   projectId={projectId}
                   savedType={t.task_type ?? null}
                   draftType={valueOf(t, "task_type") || null}
+                  status={valueOf(t, "status")}
                   isSummary={isSummary}
                 />
               );
@@ -2740,6 +2742,7 @@ function ProgressCell({
   projectId,
   savedType,
   draftType,
+  status,
   isSummary,
 }: {
   progress: Progress;
@@ -2747,6 +2750,7 @@ function ProgressCell({
   projectId: string;
   savedType: string | null;
   draftType: string | null;
+  status: string | null;
   isSummary: boolean;
 }) {
   const router = useRouter();
@@ -2821,6 +2825,20 @@ function ProgressCell({
     return (
       <span className="text-[11px] text-amber-700" title="Save the row and the percent box appears here">
         Save row first
+      </span>
+    );
+  }
+
+  // Marked finished with nowhere to record it. The row tints green off the
+  // status while the progress stays "No report", which is two answers to one
+  // question. Say which dropdown closes the gap.
+  if (!isSummary && completionNeedsAType(status, savedType)) {
+    return (
+      <span
+        className="text-[11px] text-amber-700"
+        title="Status says Complete, but an unclassified task has no rule for where its percent comes from. Set Type to Deliverable, Procurement or Inspection and the 100% follows."
+      >
+        Set a Type
       </span>
     );
   }

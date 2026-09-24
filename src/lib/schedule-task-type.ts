@@ -117,3 +117,31 @@ export function progressFromStatus(input: {
   }
   return pct === 100 ? { pct_complete: null, status_source: null } : null;
 }
+
+/**
+ * A row marked finished that has nowhere to record it.
+ *
+ * Status Complete writes 100% on a deliverable, a procurement row or an
+ * inspection, and refuses construction because a percent there belongs to an
+ * approved field report. An UNCLASSIFIED row is refused too, and for a much
+ * weaker reason: the app does not know which of those it is.
+ *
+ * That refusal is right - defaulting to "allow" would let a civil activity be
+ * marked complete with no field report behind it simply by leaving the Type
+ * blank, which is the hole the whole rule exists to close. What was wrong was
+ * doing it silently. Zarina set DEQ Inspection to Complete, the row went
+ * green, the progress stayed "No report", and the two said different things
+ * about the same task with nothing on screen to explain it.
+ *
+ * So the cell says what is missing instead. Construction is not included: its
+ * "No report" is already the accurate answer, and it is waiting for a report
+ * rather than for somebody to fill in a dropdown.
+ */
+export function completionNeedsAType(
+  status: string | null | undefined,
+  taskType: string | null | undefined,
+): boolean {
+  const s = (status ?? "").trim();
+  if (s !== COMPLETE_STATUS && s !== "Approved") return false;
+  return !(taskType ?? "").trim();
+}
