@@ -164,3 +164,104 @@ export function describeStagingEffect(input: {
     `orders. Saving adds to it, for a line total of ${fmt(total)}.`
   );
 }
+
+// ---------------------------------------------------------------------------
+// Where this PO stands on the pay application.
+//
+// Zarina: "I already added this to AFP. should say added and I would not be
+// able to add again unless I undo. So once add, there should be an undo
+// button."
+//
+// The panel read "Bill the owner for this PO - opens on $23,982.50, half the
+// PO" whether or not the full $47,965 was already staged. Nothing on the page
+// distinguished a PO nobody had touched from one already on the application,
+// so the only safe move was to open the dialog and read the staged figure out
+// of it, and the unsafe move - clicking Add again - looked identical.
+// ---------------------------------------------------------------------------
+
+export type PoAfpStanding =
+  | { state: "none" }
+  | {
+      state: "staged";
+      amount: number;
+      lineLabel: string;
+      periodMonth: string;
+    }
+  | {
+      state: "billed";
+      amount: number;
+      lineLabel: string;
+      periodMonth: string;
+      afpNumber: string | null;
+    };
+
+/** What the panel says instead of the opening-amount sentence. */
+export function describePoAfpStanding(
+  standing: PoAfpStanding,
+  formatAmount: (n: number) => string,
+  monthLabel: (periodMonth: string) => string,
+): string | null {
+  if (standing.state === "none") return null;
+  if (standing.state === "staged") {
+    return (
+      `Added to the ${monthLabel(standing.periodMonth)} application: ` +
+      `${formatAmount(standing.amount)} on ${standing.lineLabel}. ` +
+      `Undo to change it.`
+    );
+  }
+  return (
+    `Billed on ${standing.afpNumber ?? "an application"}: ` +
+    `${formatAmount(standing.amount)} on ${standing.lineLabel} for ` +
+    `${monthLabel(standing.periodMonth)}. Undo the application itself from ` +
+    `the Billing page if this has to change.`
+  );
+}
+
+/** Whether the Add button should be offered at all. */
+export function canAddToAfp(standing: PoAfpStanding): boolean {
+  return standing.state === "none";
+}
+
+/** Whether Undo should be offered here rather than on the Billing page. */
+export function canUndoFromPo(standing: PoAfpStanding): boolean {
+  return standing.state === "staged";
+}
+
+export type UndoPlan =
+  /** Other POs remain on the line. Re-sum and leave the entry alone. */
+  | { action: "resum"; remaining: PoContribution[]; plannedAmount: number }
+  /** This staging created the entry, and nothing else is on it. */
+  | { action: "delete_entry" }
+  /** The entry predates the staging. Put back what it carried. */
+  | { action: "restore"; plannedAmount: number };
+
+/**
+ * What taking this PO off the line has to do to the entry underneath.
+ *
+ * The last contribution is the one that matters. A billing_entries row may
+ * have existed before anybody typed anything - an imported cash-flow forecast
+ * that staging wrote over - and deleting it would be a fresh way to lose a
+ * figure silently. So a contribution records what it displaced, and undo puts
+ * it back. Where the staging created the row, there is nothing to put back and
+ * the row goes.
+ */
+export function planUndo(input: {
+  contributions: readonly PoContribution[];
+  poId: string;
+  createdEntry: boolean;
+  priorPlannedAmount: number | null;
+}): UndoPlan {
+  const remaining = input.contributions.filter((c) => c.poId !== input.poId);
+  if (remaining.length > 0) {
+    return {
+      action: "resum",
+      remaining: [...remaining],
+      plannedAmount: contributionTotal(remaining),
+    };
+  }
+  if (input.createdEntry) return { action: "delete_entry" };
+  return {
+    action: "restore",
+    plannedAmount: round2(Number(input.priorPlannedAmount ?? 0)),
+  };
+}

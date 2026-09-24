@@ -20,7 +20,11 @@ import {
   contributionTotal,
   describeContributions,
   describeStagingEffect,
+  describePoAfpStanding,
+  canAddToAfp,
+  canUndoFromPo,
   overwriteWarning,
+  planUndo,
 } from "../../src/lib/afp-po-staging";
 
 const money = (n: number) =>
@@ -561,6 +565,137 @@ eq(
     ),
   ),
   52445.25,
+);
+
+
+// ---------------------------------------------------------------------------
+// Added, and the way back off.
+//
+// Zarina: "I already added this to AFP. should say added and I would not be
+// able to add again unless I undo. So once add, there should be an undo
+// button."
+// ---------------------------------------------------------------------------
+
+const monthName = (m: string) =>
+  ({ "2026-09-01": "Sep 2026", "2026-10-01": "Oct 2026" })[m] ?? m;
+
+const STAGED = {
+  state: "staged" as const,
+  amount: 47965,
+  lineLabel: "5.05 POI Procurement",
+  periodMonth: "2026-09-01",
+};
+const BILLED = {
+  state: "billed" as const,
+  amount: 47965,
+  lineLabel: "5.05 POI Procurement",
+  periodMonth: "2026-09-01",
+  afpNumber: "AFP 13",
+};
+
+eq("a PO with nothing staged can be added", canAddToAfp({ state: "none" }), true);
+eq("one already staged cannot be added again", canAddToAfp(STAGED), false);
+eq("nor can one already billed", canAddToAfp(BILLED), false);
+
+eq("a staged PO can be taken back off here", canUndoFromPo(STAGED), true);
+eq("a billed one cannot - that is the Billing page's job", canUndoFromPo(BILLED), false);
+eq("and there is nothing to undo on an untouched PO", canUndoFromPo({ state: "none" }), false);
+
+eq(
+  "an untouched PO says nothing, so the opening-amount line stands",
+  describePoAfpStanding({ state: "none" }, money, monthName),
+  null,
+);
+
+check(
+  "a staged PO names the amount, the line and the period",
+  (() => {
+    const line = describePoAfpStanding(STAGED, money, monthName) ?? "";
+    return (
+      line.includes("$47,965.00") &&
+      line.includes("5.05 POI Procurement") &&
+      line.includes("Sep 2026") &&
+      line.includes("Undo")
+    );
+  })(),
+);
+
+check(
+  "a billed PO names the application and sends you to the Billing page",
+  (() => {
+    const line = describePoAfpStanding(BILLED, money, monthName) ?? "";
+    return line.includes("AFP 13") && line.includes("Billing page");
+  })(),
+);
+
+// --- what undo does to the entry underneath ---
+
+eq(
+  "with another PO still on the line, the line re-sums around the gap",
+  planUndo({
+    contributions: [
+      { poId: "po-17", amount: 47965 },
+      { poId: "po-22", amount: 4480.25 },
+    ],
+    poId: "po-17",
+    createdEntry: false,
+    priorPlannedAmount: null,
+  }),
+  { action: "resum", remaining: [{ poId: "po-22", amount: 4480.25 }], plannedAmount: 4480.25 },
+);
+
+eq(
+  "the last PO off a row the staging created takes the row with it",
+  planUndo({
+    contributions: [{ poId: "po-17", amount: 47965 }],
+    poId: "po-17",
+    createdEntry: true,
+    priorPlannedAmount: null,
+  }),
+  { action: "delete_entry" },
+);
+
+eq(
+  "the last PO off a row that predates it restores what it displaced",
+  planUndo({
+    contributions: [{ poId: "po-17", amount: 47965 }],
+    poId: "po-17",
+    createdEntry: false,
+    priorPlannedAmount: 23982.5,
+  }),
+  { action: "restore", plannedAmount: 23982.5 },
+);
+
+check(
+  "an imported forecast is never deleted by an undo",
+  planUndo({
+    contributions: [{ poId: "po-17", amount: 47965 }],
+    poId: "po-17",
+    createdEntry: false,
+    priorPlannedAmount: 8095.95,
+  }).action !== "delete_entry",
+);
+
+eq(
+  "a row that predates the staging but carried nothing restores to zero",
+  planUndo({
+    contributions: [{ poId: "po-17", amount: 47965 }],
+    poId: "po-17",
+    createdEntry: false,
+    priorPlannedAmount: null,
+  }),
+  { action: "restore", plannedAmount: 0 },
+);
+
+eq(
+  "undoing a PO that is not on the line leaves every other one alone",
+  planUndo({
+    contributions: [{ poId: "po-17", amount: 47965 }],
+    poId: "po-99",
+    createdEntry: false,
+    priorPlannedAmount: null,
+  }),
+  { action: "resum", remaining: [{ poId: "po-17", amount: 47965 }], plannedAmount: 47965 },
 );
 
 console.log(`\n${"=".repeat(60)}`);

@@ -7,7 +7,9 @@ import { defaultAfpAmountForPo } from "@/lib/billing-progress";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 
-import { AddToAfpButton } from "./add-to-afp-button";
+import { AfpStanding } from "./afp-standing";
+import { getPoAfpStanding } from "../../procurement-actions";
+import type { PoAfpStanding } from "@/lib/afp-po-staging";
 import { BillingAllocations } from "./billing-allocations";
 import { DeliveryTaskLink, type DeliveryTaskOption } from "./delivery-task-link";
 import { ExtractPoMilestones } from "./extract-po-milestones";
@@ -123,6 +125,13 @@ export default async function ProcurementDetailPage({
     0,
   );
   const poValue = Number(po.total_value ?? 0);
+  // Whether this PO is already on a pay application. Read here rather than
+  // inside the button, so the page never renders Add over money that is
+  // already staged and then correct itself a moment later.
+  const standingRes = await getPoAfpStanding(po.id, params.id);
+  const afpStanding: PoAfpStanding = standingRes.ok
+    ? standingRes.standing
+    : { state: "none" };
   // Share of the PO the schedule covers, taken from the AMOUNTS rather than
   // from pct_of_total. A milestone can carry either, and CAB Solar's carries
   // one of each: 50% on the deposit, a flat $4,985.24 on delivery. Summing
@@ -171,10 +180,11 @@ export default async function ProcurementDetailPage({
             >
               {po.status}
             </span>
-            <AddToAfpButton
+            <AfpStanding
               poId={po.id}
               projectId={params.id}
               poTotalValue={Number(po.total_value ?? 0)}
+              standing={afpStanding}
               variant="outline"
             />
             <Button asChild variant="outline" size="sm">
@@ -297,17 +307,28 @@ export default async function ProcurementDetailPage({
             </h3>
             <p className="mt-1 max-w-xl text-xs text-emerald-900/80">
               The vendor terms above are what we pay. This is what goes on the
-              pay application, and it does not have to match. Opens on{" "}
-              <span className="font-mono font-medium">
-                {formatCurrency(defaultAfpAmountForPo(poValue))}
-              </span>
-              , half the PO, and you can change it.
+              pay application, and it does not have to match.
+              {afpStanding.state === "none" ? (
+                <>
+                  {" "}Opens on{" "}
+                  <span className="font-mono font-medium">
+                    {formatCurrency(defaultAfpAmountForPo(poValue))}
+                  </span>
+                  , half the PO, and you can change it.
+                </>
+              ) : (
+                <>
+                  {" "}This PO is already on one, so there is nothing to add
+                  until it comes back off.
+                </>
+              )}
             </p>
           </div>
-          <AddToAfpButton
+          <AfpStanding
             poId={po.id}
             projectId={params.id}
             poTotalValue={poValue}
+            standing={afpStanding}
             size="default"
           />
         </div>
