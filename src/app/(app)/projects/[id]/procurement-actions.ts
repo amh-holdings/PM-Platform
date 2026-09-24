@@ -24,6 +24,7 @@ import {
   type DeliveryLinkChoice,
 } from "@/lib/schedule-po-delivery";
 import { createClient } from "@/lib/supabase/server";
+import { parseDraftLines, totalForNewPo } from "@/lib/procurement-lines";
 import { formatCurrency } from "@/lib/format";
 import type { TablesInsert, TablesUpdate } from "@/lib/database.types";
 
@@ -75,12 +76,24 @@ export async function createProcurementOrder(
     return { ok: false, error: "Vendor name is required", fieldErrors: { vendor_name: "Required" } };
   }
 
+  // Line items typed on the form, before the PO had an id to hang them off.
+  const draftLines = parseDraftLines(formData.get("draft_lines"));
+  const salesTax = getNum(formData.get("sales_tax"));
+  const freight = getNum(formData.get("freight"));
+
   const insert: TablesInsert<"procurement_orders"> = {
     project_id: projectId,
     vendor_name: vendor,
     po_number: getStr(formData.get("po_number")),
     description: getStr(formData.get("description")),
-    total_value: getNum(formData.get("total_value")),
+    // A typed total always wins. Only a blank one takes the line table, which
+    // is what the form tells people to do.
+    total_value: totalForNewPo({
+      typedTotal: getNum(formData.get("total_value")),
+      lines: draftLines,
+      salesTax,
+      freight,
+    }),
     ordered_date: getDate(formData.get("ordered_date")),
     expected_delivery_date: getDate(formData.get("expected_delivery_date")),
     actual_delivery_date: getDate(formData.get("actual_delivery_date")),
@@ -96,6 +109,45 @@ export async function createProcurementOrder(
     .select("id")
     .single();
   if (error) return { ok: false, error: error.message };
+
+  // Tax and freight live on the order. Migration 0061; without it the PO is
+  // already saved and these two figures are what is lost, not the PO.
+  if (salesTax !== null || freight !== null) {
+    await auth.supabase
+      .from("procurement_orders")
+      .update({ sales_tax: salesTax, freight } as unknown as TablesUpdate<"procurement_orders">)
+      .eq("id", data.id);
+  }
+
+  // The lines go in after the order exists. A failure here is reported rather
+  // than swallowed, and the PO stays: losing the vendor, the dates and the
+  // contract link over a line table would be the worse outcome by far.
+  if (draftLines.length > 0) {
+    const { error: linesErr } = await auth.supabase
+      .from("procurement_order_lines")
+      .insert(
+        draftLines.map((l, i) => ({
+          procurement_order_id: data.id,
+          line_no: l.lineNo,
+          sort_order: l.lineNo ?? i + 1,
+          quantity: l.quantity,
+          description: l.description,
+          units: l.units,
+          unit_price: l.unitPrice,
+          extended_price: l.extendedPrice,
+        })) as unknown as TablesInsert<"procurement_order_lines">[],
+      );
+    if (linesErr) {
+      revalidatePath(`/projects/${projectId}/procurement`);
+      return {
+        ok: false,
+        error: isMissingLines(linesErr)
+          ? `${vendor} was saved, but its line items need database migration 0061. Add them from the PO page once it has run.`
+          : `${vendor} was saved, but its line items did not: ${linesErr.message}`,
+      };
+    }
+  }
+
   revalidatePath(`/projects/${projectId}/procurement`);
   return { ok: true, id: data.id };
 }

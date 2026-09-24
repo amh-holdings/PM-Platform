@@ -166,3 +166,116 @@ export function describeTotalAgreement(
     `Nothing is changed until you apply it.`
   );
 }
+
+// ---------------------------------------------------------------------------
+// Line items typed before the PO exists.
+//
+// Zarina, looking at the Add purchase order form after the editor shipped on
+// the detail page: "nothings changed". She asked for line items on the PO
+// FORM and showed me the form. Putting them on the detail page followed the
+// milestone convention and answered a question she had not asked.
+//
+// A new PO has no id yet, so the rows cannot be written as they are typed.
+// They ride along in a hidden field and are inserted once the order exists.
+// ---------------------------------------------------------------------------
+
+export type DraftLine = {
+  lineNo: number | null;
+  quantity: number | null;
+  description: string | null;
+  units: string | null;
+  unitPrice: number | null;
+  extendedPrice: number | null;
+};
+
+function maybeNumber(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function maybeText(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return t === "" ? null : t;
+}
+
+/**
+ * Read the hidden field the form posts.
+ *
+ * Anything unreadable is nothing rather than an error: a PO that refuses to
+ * save because its line table is malformed loses the vendor, the dates and the
+ * contract link too, which is a far worse outcome than a missing line. A line
+ * with nothing on it at all is dropped, so an empty row left at the bottom of
+ * the table does not become a blank record.
+ */
+export function parseDraftLines(raw: unknown): DraftLine[] {
+  if (typeof raw !== "string" || raw.trim() === "") return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const out: DraftLine[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+    const r = item as Record<string, unknown>;
+    const line: DraftLine = {
+      lineNo: maybeNumber(r.lineNo),
+      quantity: maybeNumber(r.quantity),
+      description: maybeText(r.description),
+      units: maybeText(r.units),
+      unitPrice: maybeNumber(r.unitPrice),
+      extendedPrice: maybeNumber(r.extendedPrice),
+    };
+    const empty =
+      line.quantity === null &&
+      line.description === null &&
+      line.units === null &&
+      line.unitPrice === null &&
+      line.extendedPrice === null;
+    if (empty) continue;
+    out.push(line);
+  }
+  return out;
+}
+
+/** The draft lines as the shape poTotals reads. */
+export function draftAsLines(lines: readonly DraftLine[]): PoLine[] {
+  return lines.map((l) => ({
+    line_no: l.lineNo,
+    quantity: l.quantity,
+    description: l.description,
+    units: l.units,
+    unit_price: l.unitPrice,
+    extended_price: l.extendedPrice,
+  }));
+}
+
+/**
+ * What the PO's value should be when it is saved.
+ *
+ * A figure typed into Total PO value always wins: somebody meant it, and the
+ * lines may be a partial entry of a bigger order. Only a blank total takes the
+ * table's total, which is what the form now tells people to do.
+ */
+export function totalForNewPo(input: {
+  typedTotal: number | null;
+  lines: readonly DraftLine[];
+  salesTax?: number | null;
+  freight?: number | null;
+}): number | null {
+  if (input.typedTotal !== null && input.typedTotal !== undefined) {
+    return input.typedTotal;
+  }
+  if (input.lines.length === 0) return null;
+  const { total } = poTotals({
+    lines: draftAsLines(input.lines),
+    salesTax: input.salesTax,
+    freight: input.freight,
+  });
+  return total;
+}

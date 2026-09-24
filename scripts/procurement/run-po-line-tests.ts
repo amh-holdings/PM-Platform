@@ -12,6 +12,9 @@ import {
   nextLineNo,
   poTotals,
   totalAgreement,
+  draftAsLines,
+  parseDraftLines,
+  totalForNewPo,
 } from "../../src/lib/procurement-lines";
 
 let passed = 0;
@@ -152,6 +155,98 @@ eq(
   33.33,
 );
 eq("a negative line is allowed, for a credit", poTotals({ lines: [{ extended_price: -500 }] }).subtotal, -500);
+
+
+console.log("\nLines typed before the PO exists");
+console.log("--------------------------------");
+
+// Zarina, on the Add purchase order form: "nothings changed". She asked for
+// line items on the FORM. A new PO has no id, so they ride in a hidden field.
+
+const DRAFT_JSON = JSON.stringify([
+  { lineNo: 1, quantity: 71, description: "Domestic Beam W6x25", units: "71", unitPrice: 938.29, extendedPrice: 66618.59 },
+  { lineNo: 2, quantity: 410, description: "Domestic Beam W6x9", units: "410", unitPrice: 347, extendedPrice: 142270 },
+]);
+
+eq("two typed lines come back", parseDraftLines(DRAFT_JSON).length, 2);
+eq(
+  "and keep every field",
+  parseDraftLines(DRAFT_JSON)[0],
+  { lineNo: 1, quantity: 71, description: "Domestic Beam W6x25", units: "71", unitPrice: 938.29, extendedPrice: 66618.59 },
+);
+
+eq("an empty field posts nothing", parseDraftLines(""), []);
+eq("so does a missing one", parseDraftLines(undefined), []);
+// A PO that refuses to save over a malformed line table loses the vendor, the
+// dates and the contract link too. Far worse than a missing line.
+eq("broken JSON is no lines, never an error", parseDraftLines("{oops"), []);
+eq("and neither is something that is not a list", parseDraftLines('{"a":1}'), []);
+eq("junk inside the list is skipped", parseDraftLines('[null, 7, "x"]'), []);
+
+eq(
+  "a row left blank at the bottom is dropped, not saved empty",
+  parseDraftLines(JSON.stringify([{ lineNo: 3 }, { lineNo: 4, description: "Real" }])).length,
+  1,
+);
+
+eq(
+  "a line carrying only a description is kept",
+  parseDraftLines(JSON.stringify([{ description: "HDG included in pricing" }])).length,
+  1,
+);
+
+eq(
+  "blank text is nothing, not an empty string",
+  parseDraftLines(JSON.stringify([{ description: "   ", quantity: 1 }]))[0].description,
+  null,
+);
+
+eq(
+  "a number that is not one reads as absent",
+  parseDraftLines(JSON.stringify([{ quantity: "abc", description: "x" }]))[0].quantity,
+  null,
+);
+
+eq(
+  "draft lines total the same way saved ones do",
+  poTotals({ lines: draftAsLines(parseDraftLines(DRAFT_JSON)) }).subtotal,
+  208888.59,
+);
+
+console.log("\nWhat the new PO is worth");
+console.log("------------------------");
+
+eq(
+  "a blank total takes the line table",
+  totalForNewPo({
+    typedTotal: null,
+    lines: parseDraftLines(JSON.stringify([{ extendedPrice: 215479.49 }])),
+    freight: 22444.5,
+  }),
+  237923.99,
+);
+
+eq(
+  "a typed total always wins - somebody meant it",
+  totalForNewPo({
+    typedTotal: 300000,
+    lines: parseDraftLines(JSON.stringify([{ extendedPrice: 215479.49 }])),
+    freight: 22444.5,
+  }),
+  300000,
+);
+
+eq(
+  "a typed zero is a decision too, not a blank",
+  totalForNewPo({ typedTotal: 0, lines: parseDraftLines(DRAFT_JSON) }),
+  0,
+);
+
+eq(
+  "no total and no lines stays empty rather than becoming zero",
+  totalForNewPo({ typedTotal: null, lines: [] }),
+  null,
+);
 
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);
