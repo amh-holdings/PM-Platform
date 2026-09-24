@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MoneyInput } from "@/components/ui/money-input";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { createProcurementOrder, updateProcurementOrder } from "../procurement-actions";
@@ -175,11 +176,9 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
           </div>
           <div>
             <Label htmlFor="total_value">Total PO value</Label>
-            <Input
+            <MoneyInput
               id="total_value"
               name="total_value"
-              type="number"
-              step="0.01"
               defaultValue={values.total_value ?? ""}
             />
           </div>

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { describeTypedVsEvidence } from "@/lib/afp-po-staging";
@@ -452,17 +453,12 @@ export function BillThisPeriodClient({
                       {sourceLabel}
                     </td>
                     <td className="py-1.5 pr-2 text-right">
-                      <Input
-                        type="number"
-                        step="0.01"
+                      <MoneyInput
                         value={amounts[r.key] ?? r.amount}
-                        onChange={(e) =>
-                          setAmounts((prev) => ({
-                            ...prev,
-                            [r.key]: Number(e.target.value || 0),
-                          }))
+                        onValueChange={(v) =>
+                          setAmounts((prev) => ({ ...prev, [r.key]: v ?? 0 }))
                         }
-                        className="ml-auto h-7 w-28 text-right text-xs"
+                        className="ml-auto h-7 w-32 text-right text-xs"
                       />
                     </td>
                   </tr>

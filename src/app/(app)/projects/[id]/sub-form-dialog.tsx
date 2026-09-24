@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MoneyInput } from "@/components/ui/money-input";
 import { cn } from "@/lib/utils";
 import {
   createSubcontractor,
@@ -141,11 +142,9 @@ export function SubFormDialog({ projectId, initial, trigger }: Props) {
 
                 <div className="space-y-2">
                   <Label htmlFor="contract_value">Contract value (USD)</Label>
-                  <Input
+                  <MoneyInput
                     id="contract_value"
                     name="contract_value"
-                    type="text"
-                    inputMode="decimal"
                     defaultValue={values.contract_value ?? ""}
                     placeholder="250000"
                     aria-invalid={Boolean(fieldErrors.contract_value)}

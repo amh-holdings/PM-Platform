@@ -4,6 +4,7 @@ import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { MoneyInput } from "@/components/ui/money-input";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import {
@@ -737,11 +738,11 @@ function DraftRow({
           placeholder="Unit"
           className="h-8 rounded border border-input bg-background px-2 text-xs sm:col-span-1"
         />
-        <input
+        <MoneyInput
+          bare
           value={draft.unitCost}
-          onChange={(e) => set({ unitCost: e.target.value })}
+          onTextChange={(v) => set({ unitCost: v })}
           placeholder="Unit cost"
-          inputMode="decimal"
           className="h-8 rounded border border-input bg-background px-2 text-right text-xs sm:col-span-2"
         />
       </div>

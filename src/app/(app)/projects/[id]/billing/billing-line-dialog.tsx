@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MoneyInput } from "@/components/ui/money-input";
 import {
   createBillingLine,
   updateBillingLine,
@@ -174,11 +175,9 @@ export function BillingLineDialog({
 
                 <div className="space-y-2 sm:col-span-3">
                   <Label htmlFor="scheduled_value">Scheduled value (USD)</Label>
-                  <Input
+                  <MoneyInput
                     id="scheduled_value"
                     name="scheduled_value"
-                    type="text"
-                    inputMode="decimal"
                     defaultValue={values.scheduled_value ?? ""}
                     placeholder="85017.50"
                     aria-invalid={Boolean(fieldErrors.scheduled_value)}

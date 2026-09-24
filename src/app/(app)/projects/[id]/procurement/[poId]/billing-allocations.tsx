@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import {
@@ -217,10 +218,9 @@ export function BillingAllocations({
                           />
                         </td>
                         <td className="px-3 py-2 text-right">
-                          <Input
+                          <MoneyInput
                             value={editAmount}
-                            onChange={(e) => setEditAmount(e.target.value)}
-                            inputMode="decimal"
+                            onTextChange={setEditAmount}
                             className="h-9 text-right"
                           />
                         </td>
@@ -323,11 +323,10 @@ export function BillingAllocations({
                     onChange={(e) => setNewDesc(e.target.value)}
                     placeholder="Item description (e.g. Recloser portion)"
                   />
-                  <Input
+                  <MoneyInput
                     value={newAmount}
-                    onChange={(e) => setNewAmount(e.target.value)}
+                    onTextChange={setNewAmount}
                     placeholder="$ amount"
-                    inputMode="decimal"
                     className="text-right"
                   />
                   <div className="flex gap-2">
