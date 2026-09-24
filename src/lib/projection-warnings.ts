@@ -51,6 +51,12 @@ const GROUPS: {
     effect: "Mapped, but there is no date to place the money on.",
   },
   {
+    kind: "sub_sov_no_date",
+    title: "Subcontractor lines the forecast cannot date",
+    effect:
+      "Each one names the mapping it does have. A line mapped for evidence is not necessarily mapped to a date, and only a date puts the cost in a month.",
+  },
+  {
     kind: "billing_line_no_link",
     title: "SOV lines not mapped to the schedule",
     effect: "No mapping means no month, so the line sits out of the forecast.",
@@ -127,6 +133,10 @@ const NOTE_GROUPS: { kind: ProjectionNote["kind"]; title: string }[] = [
   {
     kind: "pipeline_co_cost",
     title: "Costs booked for change orders not approved yet",
+  },
+  {
+    kind: "sov_date_from_mapping",
+    title: "Subcontractor lines dated through their commodity or mobilization",
   },
 ];
 
