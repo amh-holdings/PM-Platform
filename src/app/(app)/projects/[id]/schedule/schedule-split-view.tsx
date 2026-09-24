@@ -2796,18 +2796,12 @@ function ProgressCell({
             err && "border-destructive",
           )}
         />
+        {/* No Done button beside it. Status = Complete is the same fact said
+            twice, and the server now derives the percent from it. Zarina:
+            "I should set the status complete and it will automatically update
+            that it is done. This is an overkill." The box stays for the rows
+            that are genuinely part way, like a lead time half run down. */}
         <span className="text-[10px] text-muted-foreground">%</span>
-        {current !== 100 && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void save(100)}
-            className="rounded border px-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
-            title="Delivered, issued or otherwise finished"
-          >
-            Done
-          </button>
-        )}
       </span>
     );
   }

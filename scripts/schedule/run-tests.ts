@@ -21,7 +21,11 @@ import {
   todayIso,
   workingDaysBetween,
 } from "@/lib/schedule-calendar";
-import { finishIsACommitment, progressCanBeSetByHand } from "../../src/lib/schedule-task-type";
+import {
+  finishIsACommitment,
+  progressCanBeSetByHand,
+  progressFromStatus,
+} from "../../src/lib/schedule-task-type";
 import {
   computeCpm,
   parsePredecessors,
@@ -116,6 +120,17 @@ function eq(name: string, actual: unknown, expected: unknown) {
     actual === expected,
     actual === expected ? "" : `got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`,
   );
+}
+
+/**
+ * Deep equality, for the assertions whose subject is an object. eq() is strict
+ * equality and stays that way: every other test in this file compares a date
+ * string, a number or a boolean, where === is the sharper check.
+ */
+function same(name: string, actual: unknown, expected: unknown) {
+  const a = JSON.stringify(actual);
+  const b = JSON.stringify(expected);
+  check(name, a === b, a === b ? "" : `got ${a}, want ${b}`);
 }
 
 function section(title: string) {
@@ -901,6 +916,86 @@ section("Which tasks accept a typed percent");
   eq("so is a deliverable's", finishIsACommitment("deliverable"), true);
   eq("construction's is not", finishIsACommitment("construction"), false);
   eq("nor is an unclassified row's", finishIsACommitment(null), false);
+}
+
+// ============================================================================
+section("Status Complete is what marks a delivery done");
+// ============================================================================
+
+{
+  const proc = { taskType: "procurement" as const };
+
+  same(
+    "Complete on an unreported procurement row writes 100",
+    progressFromStatus({ ...proc, status: "Complete", currentPct: null }),
+    { pct_complete: 100, status_source: "manual" },
+  );
+
+  same(
+    "and on one part way through",
+    progressFromStatus({ ...proc, status: "Complete", currentPct: 69 }),
+    { pct_complete: 100, status_source: "manual" },
+  );
+
+  same(
+    "a row already at 100 needs no write",
+    progressFromStatus({ ...proc, status: "Complete", currentPct: 100 }),
+    null,
+  );
+
+  same(
+    "moving off Complete clears the 100 it put there",
+    progressFromStatus({ ...proc, status: "In Progress", currentPct: 100 }),
+    { pct_complete: null, status_source: null },
+  );
+
+  same(
+    "which is what makes Undo work: the old status brings the percent back with it",
+    progressFromStatus({ ...proc, status: "Not Started", currentPct: 100 }),
+    { pct_complete: null, status_source: null },
+  );
+
+  same(
+    "a hand-typed 40% is left alone when the status moves - somebody entered it",
+    progressFromStatus({ ...proc, status: "In Progress", currentPct: 40 }),
+    null,
+  );
+
+  same(
+    "a deliverable behaves the same",
+    progressFromStatus({ taskType: "deliverable", status: "Complete", currentPct: null }),
+    { pct_complete: 100, status_source: "manual" },
+  );
+
+  same(
+    "CONSTRUCTION never - a status dropdown must not put a number on a pay application",
+    progressFromStatus({ taskType: "construction", status: "Complete", currentPct: null }),
+    null,
+  );
+
+  same(
+    "and neither does an unclassified row",
+    progressFromStatus({ taskType: null, status: "Complete", currentPct: null }),
+    null,
+  );
+
+  same(
+    "a blank status is not Complete",
+    progressFromStatus({ ...proc, status: null, currentPct: null }),
+    null,
+  );
+
+  same(
+    "padding around the value still counts",
+    progressFromStatus({ ...proc, status: " Complete ", currentPct: null }),
+    { pct_complete: 100, status_source: "manual" },
+  );
+
+  same(
+    "a different status spelling does not",
+    progressFromStatus({ ...proc, status: "Completed", currentPct: null }),
+    null,
+  );
 }
 
 // ============================================================================

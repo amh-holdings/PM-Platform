@@ -54,3 +54,44 @@ export function progressCanBeSetByHand(taskType: string | null | undefined): boo
 export function finishIsACommitment(taskType: string | null | undefined): boolean {
   return taskType === "deliverable" || taskType === "procurement";
 }
+
+/** The status value that means the task is finished. */
+export const COMPLETE_STATUS = "Complete";
+
+/**
+ * The progress a status change implies, or null when it implies nothing.
+ *
+ * Zarina: "I should set the status complete and it will automatically update
+ * that it is done." She is right, and the percent box plus a Done button
+ * beside a Status column that already says Complete was two controls for one
+ * fact.
+ *
+ * Only the two non-construction kinds. Construction progress comes from
+ * approved field reports, and letting a status dropdown write 100% there would
+ * put a number on a pay application that no report stands behind.
+ *
+ * It works in both directions. Setting Complete writes 100. Moving off
+ * Complete on a row sitting at exactly 100 clears it back to no report, which
+ * is what makes Undo behave: the undo sends the old status back and the
+ * percent follows it rather than being stranded.
+ *
+ * A row already reading the right thing returns null so nothing is written.
+ * A percent typed by hand that is not 100 is left alone when the status moves,
+ * because a half-delivered order at 40% is a fact somebody entered, not a
+ * leftover.
+ */
+export function progressFromStatus(input: {
+  taskType: string | null | undefined;
+  status: string | null | undefined;
+  currentPct: number | null | undefined;
+}): { pct_complete: number | null; status_source: string | null } | null {
+  if (!progressCanBeSetByHand(input.taskType)) return null;
+
+  const pct = input.currentPct == null ? null : Number(input.currentPct);
+  const complete = (input.status ?? "").trim() === COMPLETE_STATUS;
+
+  if (complete) {
+    return pct === 100 ? null : { pct_complete: 100, status_source: "manual" };
+  }
+  return pct === 100 ? { pct_complete: null, status_source: null } : null;
+}

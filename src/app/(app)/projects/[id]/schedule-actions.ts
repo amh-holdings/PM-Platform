@@ -10,6 +10,7 @@ import { captureScheduleSnapshot } from "@/lib/schedule-sync-server";
 import {
   TASK_TYPES,
   progressCanBeSetByHand,
+  progressFromStatus,
   type TaskType,
 } from "@/lib/schedule-task-type";
 
@@ -108,6 +109,25 @@ export async function updateScheduleTask(
   // The form only carries Type once 0051 is applied. Leaving the key out
   // otherwise keeps the update from naming a column that does not exist.
   if (formData.has("task_type")) update.task_type = parseTaskType(formData.get("task_type"));
+
+  // Same rule as the grid: on a deliverable or a procurement row the status
+  // decides the percent, because there is no field report to take one from.
+  // See progressFromStatus.
+  {
+    const { data: prior } = await auth.supabase
+      .from("schedule_tasks")
+      .select("*")
+      .eq("id", taskId)
+      .maybeSingle();
+    const derived = progressFromStatus({
+      taskType:
+        (update.task_type as string | null | undefined) ??
+        ((prior as { task_type?: string | null } | null)?.task_type ?? null),
+      status: update.status ?? null,
+      currentPct: (prior as { pct_complete?: number | null } | null)?.pct_complete ?? null,
+    });
+    if (derived) Object.assign(update, derived);
+  }
 
   const { error } = await auth.supabase
     .from("schedule_tasks")
@@ -698,6 +718,25 @@ export async function bulkUpdateScheduleTasks(
   let count = 0;
   for (const p of patches) {
     const update = cleanPatch(p);
+    // Status and progress are one fact on a deliverable or a procurement row,
+    // so the status the person picked decides the percent. Derived here rather
+    // than in the browser because pct_complete is deliberately not something
+    // the grid can post: on a construction row it still belongs to an approved
+    // field report, and progressFromStatus refuses those.
+    if ("status" in p) {
+      const prior = beforeById.get(p.id);
+      const derived = progressFromStatus({
+        // The type may be changing in this same save, so the patch wins over
+        // what the row held a moment ago.
+        taskType:
+          ("task_type" in p
+            ? (p.task_type as string | null)
+            : (prior?.task_type as string | null)) ?? null,
+        status: p.status as string | null,
+        currentPct: prior?.pct_complete as number | null,
+      });
+      if (derived) Object.assign(update, derived);
+    }
     if (!Object.keys(update).length) continue;
     const { error } = await auth.supabase
       .from("schedule_tasks")
