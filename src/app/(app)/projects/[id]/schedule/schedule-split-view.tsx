@@ -55,6 +55,7 @@ import {
   planDrop,
   buildRowIndex,
   describeDraftReplaced,
+  describeHiddenRows,
   describeSavedCells,
   pendingDraftFields,
   withoutTaskDraft,
@@ -317,6 +318,11 @@ type Props = {
   /** Migration 0051 applied. Without it the Type column is not offered. */
   typeAvailable: boolean;
   constraintState: Map<string, TaskConstraintState>;
+  /**
+   * The workspace's discipline filter. It slices the task list before this
+   * view sees it, so without being told, the grid cannot say why it is short.
+   */
+  scopeFilter?: string | null;
   draft: TaskDraft;
   setDraft: React.Dispatch<React.SetStateAction<TaskDraft>>;
 };
@@ -343,6 +349,7 @@ export function ScheduleSplitView({
   phase1Available,
   typeAvailable,
   constraintState,
+  scopeFilter = null,
   draft,
   setDraft,
 }: Props) {
@@ -605,6 +612,12 @@ export function ScheduleSplitView({
     reportedOnly || criticalOnly || slippingOnly || blockedOnly || overdueOnly ||
     unlinkedOnly || !!query.trim();
 
+  const filterCount = [
+    !!phaseFilter, !!statusFilter, hideComplete, hideInternal, reportedOnly,
+    criticalOnly, slippingOnly, blockedOnly, overdueOnly, unlinkedOnly,
+    !!query.trim(),
+  ].filter(Boolean).length;
+
   // Filtering a tree is not filtering a list. Dropping a summary because its
   // own name does not match would orphan every matching task beneath it, so a
   // summary survives when anything under it survives. Without this, "critical
@@ -629,6 +642,16 @@ export function ScheduleSplitView({
   const rows = useMemo(() => visibleRows(filtered, collapsed), [filtered, collapsed]);
 
   const maxLevel = useMemo(() => outlineDepth(allRows), [allRows]);
+
+  // Counted against every task on the PROJECT, not against this view's slice,
+  // so the scope filter shows up in the number rather than hiding inside it.
+  const hiddenNote = describeHiddenRows({
+    shown: rows.length,
+    total: allTasks.length,
+    scope: scopeFilter,
+    filterCount,
+    collapsed: filtered.length - rows.length,
+  });
 
   const rowIndexOf = useMemo(() => {
     const m = new Map<string, number>();
@@ -1710,6 +1733,22 @@ export function ScheduleSplitView({
           >
             Clear filters
           </Button>
+        )}
+        {/* Rows on the project but not on this screen, and why.
+            "Mark says he is not seeing the DEQ inspection and corrections in
+            the schedule on his end." Nothing hides a row from one person and
+            not another - there is no role filter on the schedule and the
+            policies are per project, not per row - so a row missing on one
+            screen is a filter on that screen. The grid could not say so,
+            because the scope filter lives a level up and slices the list
+            before this view ever sees it. */}
+        {hiddenNote && (
+          <span
+            className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-900"
+            title="Every task on this project is loaded. These are hidden by the filters above, not missing."
+          >
+            {hiddenNote}
+          </span>
         )}
         {showChart && <Legend />}
       </div>
