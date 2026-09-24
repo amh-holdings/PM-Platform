@@ -75,3 +75,100 @@ export function planScheduleSync(
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// A typed date the forecast is about to take back.
+//
+// Zarina, four rounds into this: "Still not reflecting." The save banner read
+// "4.4.2.2 Delivery: Start Oct 5, 26, Finish Oct 5, 26" and the row still said
+// Nov 18. Both were true. The write landed, and then the schedule page ran
+// this sync on the next load and put the forecast back, because 4.4.2.2 takes
+// its dates from a predecessor.
+//
+// That is the design above and it is the right one: a schedule whose dates
+// ignore its own logic is a spreadsheet. What was wrong is that nothing said
+// so. She typed a date, was told it saved, and watched it revert, with the
+// only explanation buried in a source comment.
+//
+// So a save that writes a date the forecast will recompute now says what will
+// happen and what would actually hold it.
+// ---------------------------------------------------------------------------
+
+export type ForecastOverwrite = {
+  wbs: string;
+  taskName: string | null;
+  /** What was just saved. */
+  typed: { start: string | null; end: string | null };
+  /** What the next page load will put back. */
+  forecast: { start: string; end: string };
+};
+
+/**
+ * Which of the dates just written will not survive the next sync.
+ *
+ * Run over the task set as it stands AFTER the save, so it answers the only
+ * question that matters: given what is now stored, what will the forecast
+ * change back? A row the sync agrees with is not reported, which is why a
+ * task with no predecessors never appears here.
+ */
+export function datesTheForecastWillReplace(input: {
+  /** Every task, with the just-saved values already applied. */
+  allTasks: CpmInput[];
+  /** WBS codes whose start or end this save wrote. */
+  touchedWbs: readonly string[];
+  calendar?: CalendarLike;
+  dataDate: string;
+}): ForecastOverwrite[] {
+  if (input.touchedWbs.length === 0) return [];
+  const touched = new Set(input.touchedWbs);
+  const plan = planScheduleSync(input.allTasks, {
+    calendar: input.calendar,
+    dataDate: input.dataDate,
+  });
+  const byWbs = new Map(input.allTasks.map((t) => [t.wbs_code, t]));
+
+  const out: ForecastOverwrite[] = [];
+  for (const entry of plan) {
+    if (!touched.has(entry.wbs)) continue;
+    const task = byWbs.get(entry.wbs);
+    out.push({
+      wbs: entry.wbs,
+      taskName: (task as { task_name?: string | null } | undefined)?.task_name ?? null,
+      typed: { start: task?.start_date ?? null, end: task?.end_date ?? null },
+      forecast: { start: entry.start, end: entry.end },
+    });
+  }
+  return out;
+}
+
+/**
+ * One line for the save banner, or null when every date will hold.
+ *
+ * Names the row, what is coming back, and the two things that would actually
+ * make a date stick. Telling somebody their edit will be undone without
+ * telling them what to do instead is only half an answer.
+ */
+export function describeForecastOverwrite(
+  overwrites: readonly ForecastOverwrite[],
+  formatDate: (iso: string) => string,
+): string | null {
+  if (overwrites.length === 0) return null;
+  const first = overwrites[0];
+  const name = `${first.wbs}${first.taskName ? ` ${first.taskName}` : ""}`;
+  const more =
+    overwrites.length > 1
+      ? ` The same goes for ${overwrites.length - 1} other row${overwrites.length - 1 === 1 ? "" : "s"}.`
+      : "";
+  // Two reasons a date gets taken back, and the wording has to cover both: the
+  // row is driven by a predecessor, or its start is behind the data date and
+  // no field report says it began, so the forecast rolls it forward. Naming
+  // only links would send somebody hunting for a predecessor that is not there.
+  return (
+    `Heads up: the forecast will put ${name} back to ` +
+    `${formatDate(first.forecast.start)} - ${formatDate(first.forecast.end)} ` +
+    `on the next load. Start and Finish follow the logic and the data date, so ` +
+    `a typed date only holds on a row nothing drives. To pin this one, set a ` +
+    `date constraint on it; otherwise change the duration, the link, or report ` +
+    `it started.${more}`
+  );
+}

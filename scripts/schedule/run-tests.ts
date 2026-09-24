@@ -37,6 +37,10 @@ import {
   statusRowTone,
 } from "../../src/lib/schedule-status-tone";
 import {
+  datesTheForecastWillReplace,
+  describeForecastOverwrite,
+} from "@/lib/schedule-sync";
+import {
   computeCpm,
   expandSummaryLinks,
   findCycleWith,
@@ -3057,6 +3061,150 @@ section("Dragging a branch above the first row of the sheet");
     "a row that has gone is still named as a row, not skipped",
     describeSavedCells([{ id: "gone", start_date: "2026-10-05" }], at, lbl, val),
     "A task: Start 2026-10-05.",
+  );
+}
+
+// ============================================================================
+// A typed date the forecast is about to take back
+//
+// Zarina, four rounds in: "Still not reflecting." The banner read "4.4.2.2
+// Delivery: Start Oct 5, 26" and the row still said Nov 18. Both were true.
+// The write landed, then the schedule page ran its sync on the next load and
+// put the forecast back, because 4.4.2.2 takes its dates from a predecessor.
+// ============================================================================
+{
+  const iso = (d: string) => d;
+  // 1.1 drives 1.2. Somebody has typed Oct 5 on 1.2 and saved it.
+  const AFTER_SAVE = [
+    {
+      wbs_code: "1.1",
+      task_name: "Lead Time",
+      predecessors: null,
+      duration_days: 29,
+      start_date: "2026-08-25",
+      end_date: "2026-10-05",
+    },
+    {
+      wbs_code: "1.2",
+      task_name: "Delivery",
+      predecessors: "1.1",
+      duration_days: 1,
+      start_date: "2026-10-05",
+      end_date: "2026-10-05",
+    },
+  ];
+
+  const replaced = datesTheForecastWillReplace({
+    allTasks: AFTER_SAVE as never,
+    touchedWbs: ["1.2"],
+    calendar: 5,
+    dataDate: "2026-09-24",
+  });
+
+  check(
+    "a task driven by a predecessor is reported",
+    replaced.length === 1 && replaced[0].wbs === "1.2",
+    JSON.stringify(replaced),
+  );
+  check(
+    "and the forecast it will be put back to is carried, not just the fact",
+    replaced[0]?.forecast.start > "2026-10-05",
+    JSON.stringify(replaced[0]),
+  );
+
+  // Worth being precise about, because my first guess at this was wrong. It is
+  // not only linked rows that get taken back. 1.1 has no predecessors at all,
+  // and its start sits behind the data date with nothing reporting it started,
+  // so the forecast rolls it forward to the data date and the warning is right
+  // to fire. The rule is "the forecast disagrees", not "it has a predecessor".
+  check(
+    "an unlinked row the data date rolls forward is reported too",
+    (() => {
+      const r = datesTheForecastWillReplace({
+        allTasks: AFTER_SAVE as never,
+        touchedWbs: ["1.1"],
+        calendar: 5,
+        dataDate: "2026-09-24",
+      });
+      return r.length === 1 && r[0].forecast.start === "2026-09-24";
+    })(),
+  );
+
+  // And the other half of that rule: an unlinked row whose dates are ahead of
+  // the data date keeps exactly what was typed on it.
+  same(
+    "an unlinked row in the future keeps its typed dates",
+    datesTheForecastWillReplace({
+      allTasks: [
+        {
+          wbs_code: "9.1",
+          task_name: "Mobilize",
+          predecessors: null,
+          duration_days: 5,
+          start_date: "2026-11-02",
+          end_date: "2026-11-06",
+        },
+      ] as never,
+      touchedWbs: ["9.1"],
+      calendar: 5,
+      dataDate: "2026-09-24",
+    }),
+    [],
+  );
+
+  same(
+    "a save that touched no dates checks nothing",
+    datesTheForecastWillReplace({
+      allTasks: AFTER_SAVE as never,
+      touchedWbs: [],
+      calendar: 5,
+      dataDate: "2026-09-24",
+    }),
+    [],
+  );
+
+  // Once the stored dates already agree with the forecast there is nothing to
+  // warn about - the sync is a fixed point and writes nothing the second time.
+  check(
+    "a row already sitting on its forecast is not reported",
+    (() => {
+      const settled = AFTER_SAVE.map((t) =>
+        t.wbs_code === "1.2"
+          ? { ...t, start_date: replaced[0].forecast.start, end_date: replaced[0].forecast.end }
+          : t,
+      );
+      return (
+        datesTheForecastWillReplace({
+          allTasks: settled as never,
+          touchedWbs: ["1.2"],
+          calendar: 5,
+          dataDate: "2026-09-24",
+        }).length === 0
+      );
+    })(),
+  );
+
+  check(
+    "the sentence names the row, the date coming back, and what would hold it",
+    (() => {
+      const line = describeForecastOverwrite(replaced, iso) ?? "";
+      return (
+        line.includes("1.2 Delivery") &&
+        line.includes("date constraint") &&
+        line.includes("data date") &&
+        line.includes(replaced[0].forecast.start)
+      );
+    })(),
+  );
+
+  eq("nothing to take back says nothing", describeForecastOverwrite([], iso), null);
+
+  check(
+    "several rows are summarised rather than listed",
+    (() => {
+      const many = [replaced[0], { ...replaced[0], wbs: "1.3" }, { ...replaced[0], wbs: "1.4" }];
+      return (describeForecastOverwrite(many, iso) ?? "").includes("2 other rows");
+    })(),
   );
 }
 

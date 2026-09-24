@@ -112,6 +112,10 @@ import {
   shortDate,
   useGanttGeometry,
 } from "./schedule-bars";
+import {
+  datesTheForecastWillReplace,
+  describeForecastOverwrite,
+} from "@/lib/schedule-sync";
 import { TaskEditDialog } from "./task-edit-dialog";
 import { hasLinkErrors } from "./predecessor-editor";
 import type { ScheduleTaskRow } from "./schedule-types";
@@ -967,8 +971,31 @@ export function ScheduleSplitView({
       patches: res.inverse,
       what: `${res.count} task${res.count === 1 ? "" : "s"}`,
     });
+    // A date written on a task that takes its dates from its logic will be put
+    // back by the sync the schedule page runs on every load. Saying so here is
+    // the difference between "it reverted" and "here is why, and here is what
+    // would hold it". See datesTheForecastWillReplace.
+    const touchedWbs = patches
+      .filter((p) => "start_date" in p || "end_date" in p)
+      .map((p) => byId.get(p.id)?.wbs_code)
+      .filter((w): w is string => !!w);
+    const saved = new Map(patches.map((p) => [p.id, p]));
+    const afterSave = allTasks.map((t) => {
+      const p = saved.get(t.id);
+      return p ? ({ ...t, ...p } as typeof t) : t;
+    });
+    const willRevert = describeForecastOverwrite(
+      datesTheForecastWillReplace({
+        allTasks: afterSave.map(asEdit) as never,
+        touchedWbs,
+        calendar,
+        dataDate,
+      }),
+      fmtDate,
+    );
+
     setMsg({
-      tone: "good",
+      tone: willRevert ? "warn" : "good",
       // The delivery note is what says whether completing a procurement row
       // actually reached the AFP, which is the whole point of doing it here
       // rather than twice. It leads, because it is the part that moves money.
@@ -992,6 +1019,7 @@ export function ScheduleSplitView({
                 ? fmtDate(String(v))
                 : String(v),
         ),
+        willRevert,
       ]
         .filter(Boolean)
         .join(" "),
