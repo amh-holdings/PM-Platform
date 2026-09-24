@@ -13,17 +13,16 @@ import { createAfpFromBillThisPeriod } from "../pay-app-actions";
 import type {
   BillableRow,
   BilledElsewhere,
-  HiddenForecast,
   NotBillableLine,
 } from "../billing-actions";
 import { billedElsewhereMessage } from "@/lib/pay-app-undo";
 import { UndoAfpButton } from "./undo-afp-button";
 import { periodLabel } from "@/lib/billing-period";
+import { amountFromPercent } from "@/lib/billing-progress";
 
 type Props = {
   projectId: string;
   rows: BillableRow[];
-  hidden: HiddenForecast[];
   /** Linked lines with nothing to bill this period, and why. */
   notBillable: NotBillableLine[];
   variant: "page" | "widget";
@@ -43,7 +42,6 @@ const CONF_STYLES: Record<string, string> = {
 export function BillThisPeriodClient({
   projectId,
   rows,
-  hidden,
   notBillable,
   variant,
   periodMonth,
@@ -71,6 +69,29 @@ export function BillThisPeriodClient({
       ]),
     ),
   );
+  // What is typed in the percent box, as text, keyed by row.
+  //
+  // Derived state would be tidier and unusable: computing the percent back out
+  // of the amount makes "5" become "5.00" the instant it is typed, and "0."
+  // collapse to "0". The box holds what was typed; the amount it produced is
+  // the thing that matters and lives in `amounts`.
+  const [pctText, setPctText] = useState<Record<string, string>>({});
+
+  function setPercent(r: BillableRow, text: string) {
+    setPctText((prev) => ({ ...prev, [r.key]: text }));
+    const money = amountFromPercent(r.basisAmount, text);
+    if (money === null) return;
+    setAmounts((prev) => ({ ...prev, [r.key]: money }));
+  }
+
+  // Typing in the money box wins: the percent that produced an older figure is
+  // no longer true of it, and leaving it on screen would state a share of the
+  // PO that is not what is about to be billed.
+  function setAmount(key: string, value: number) {
+    setAmounts((prev) => ({ ...prev, [key]: value }));
+    setPctText((prev) => (key in prev ? { ...prev, [key]: "" } : prev));
+  }
+
   // A row proposing nothing is not a projection for this period. It is a note
   // about why a line cannot bill yet, and it belongs behind a disclosure -
   // nine SOV lines with one real number and eight zeroes reads as "everything
@@ -231,6 +252,7 @@ export function BillThisPeriodClient({
                 <th className="py-1.5 pr-2 text-left font-medium">Item</th>
                 <th className="py-1.5 pr-2 text-left font-medium">Period</th>
                 <th className="py-1.5 pr-2 text-left font-medium">Source</th>
+                <th className="py-1.5 pr-2 text-right font-medium">%</th>
                 <th className="py-1.5 pr-2 text-right font-medium">Amount</th>
               </tr>
             </thead>
@@ -420,17 +442,41 @@ export function BillThisPeriodClient({
                     <td className={cn("py-1.5 pr-2 font-medium", sourceColor)}>
                       {sourceLabel}
                     </td>
+                    {/* Bill a share rather than working the money out
+                        elsewhere. POI equipment falls due at half the PO, and
+                        the arithmetic was being done on a calculator and typed
+                        back in. Type 50 and the amount follows.
+
+                        The basis is whatever the percent is honestly a percent
+                        OF: the linked POs' total on a procurement line, the
+                        scheduled value otherwise. It is in the title so nobody
+                        has to guess which. A row with neither has no percent
+                        box rather than one computing against zero. */}
+                    <td className="py-1.5 pr-2 text-right">
+                      {r.basisAmount ? (
+                        <div className="flex items-center justify-end gap-1">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="-"
+                            value={pctText[r.key] ?? ""}
+                            onChange={(e) => setPercent(r, e.target.value)}
+                            title={`Percent of the ${r.basisLabel}, ${formatCurrency(r.basisAmount)}`}
+                            className="h-7 w-16 text-right text-xs"
+                          />
+                          <span className="text-[10px] text-muted-foreground">%</span>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">-</span>
+                      )}
+                    </td>
                     <td className="py-1.5 pr-2 text-right">
                       <Input
                         type="number"
                         step="0.01"
                         value={amounts[r.key] ?? r.amount}
-                        onChange={(e) =>
-                          setAmounts((prev) => ({
-                            ...prev,
-                            [r.key]: Number(e.target.value || 0),
-                          }))
-                        }
+                        onChange={(e) => setAmount(r.key, Number(e.target.value || 0))}
                         className="ml-auto h-7 w-28 text-right text-xs"
                       />
                     </td>
@@ -439,7 +485,7 @@ export function BillThisPeriodClient({
               })}
               {visibleRows.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-4 text-center text-muted-foreground">
+                  <td colSpan={6} className="py-4 text-center text-muted-foreground">
                     {billedTo
                       ? billedElsewhereMessage({
                           periodLabel: periodLabel(periodMonth),
@@ -456,7 +502,7 @@ export function BillThisPeriodClient({
               )}
               {unsupported.length > 0 && (
                 <tr>
-                  <td colSpan={5} className="py-1.5">
+                  <td colSpan={6} className="py-1.5">
                     <button
                       type="button"
                       onClick={() => setShowUnsupported((v) => !v)}
@@ -466,9 +512,21 @@ export function BillThisPeriodClient({
                           A blocked row now carries an editable amount, so the
                           honest word is "needs a decision" - and it stops this
                           colliding with the "nothing to bill" list below, which
-                          really is read-only. */}
+                          really is read-only.
+
+                          It names the items. "Show 1 line needing a decision"
+                          is a grey link that could be about anything, and
+                          somebody hunting for SOV 5.05 has no reason to open
+                          it. Print the item numbers and the row is findable by
+                          the thing the person is actually looking for. */}
                       {showUnsupported ? "Hide" : "Show"} {unsupported.length} line
                       {unsupported.length === 1 ? "" : "s"} needing a decision
+                      {": "}
+                      {unsupported
+                        .slice(0, 4)
+                        .map((u) => u.itemNumber)
+                        .join(", ")}
+                      {unsupported.length > 4 ? ` and ${unsupported.length - 4} more` : ""}
                     </button>
                   </td>
                 </tr>
@@ -502,48 +560,6 @@ export function BillThisPeriodClient({
                     <td className="py-1.5 text-right tabular-nums text-muted-foreground">
                       {formatCurrency(n.remaining)}
                       <span className="block text-[10px]">left on the line</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </details>
-        )}
-
-        {hidden.length > 0 && (
-          <details className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
-            <summary className="cursor-pointer font-medium text-amber-800">
-              {hidden.length} forecast{hidden.length === 1 ? "" : "s"} hidden - schedule shows no progress on{" "}
-              {hidden.length === 1 ? "this item" : "these items"}
-            </summary>
-            <p className="mt-2 text-[10px] text-muted-foreground">
-              Forecast rows where the linked schedule tasks all read 0% progress.
-              If work IS happening but the schedule is stale, update the task
-              status / pct_complete on the Schedule page or via a DPR.
-            </p>
-            <table className="mt-2 w-full">
-              <thead className="text-muted-foreground">
-                <tr className="border-b border-amber-500/20">
-                  <th className="py-1 pr-2 text-left font-medium">Item</th>
-                  <th className="py-1 pr-2 text-left font-medium">Period</th>
-                  <th className="py-1 pr-2 text-right font-medium">Amount</th>
-                  <th className="py-1 pr-2 text-left font-medium">Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {hidden.map((h, i) => (
-                  <tr key={i} className="border-b border-amber-500/10 last:border-0">
-                    <td className="py-1 pr-2">
-                      {h.itemNumber} {h.description}
-                    </td>
-                    <td className="py-1 pr-2">
-                      {shortMonthLabel(h.periodMonth)}
-                    </td>
-                    <td className="py-1 pr-2 text-right">
-                      {formatCurrency(h.amount)}
-                    </td>
-                    <td className="py-1 pr-2 text-muted-foreground">
-                      {h.reason}
                     </td>
                   </tr>
                 ))}
