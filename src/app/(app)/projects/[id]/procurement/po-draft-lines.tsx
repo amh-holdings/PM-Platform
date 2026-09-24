@@ -9,6 +9,7 @@ import { formatCurrency } from "@/lib/format";
 import {
   derivedExtended,
   draftAsLines,
+  extendedIsAuto,
   poTotals,
   type DraftLine,
 } from "@/lib/procurement-lines";
@@ -59,8 +60,35 @@ export function PoDraftLines({
     ]);
   }
 
+  /**
+   * Edit a line, and total the extended price as you go.
+   *
+   * Zarina: "Should automatically total the extended." Whether it keeps
+   * following is read off the line itself rather than remembered, so a figure
+   * somebody typed and a box somebody cleared both survive a later change to
+   * the quantity. See extendedIsAuto.
+   */
   function patch(i: number, next: Partial<DraftLine>) {
-    setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...next } : l)));
+    setLines((prev) =>
+      prev.map((l, idx) => {
+        if (idx !== i) return l;
+        const merged = { ...l, ...next };
+        const touchedExtended = "extendedPrice" in next;
+        const wasAuto = extendedIsAuto({
+          quantity: l.quantity,
+          unit_price: l.unitPrice,
+          extended_price: l.extendedPrice,
+        });
+        if (touchedExtended || !wasAuto) return merged;
+        return {
+          ...merged,
+          extendedPrice: derivedExtended({
+            quantity: merged.quantity,
+            unit_price: merged.unitPrice,
+          }),
+        };
+      }),
+    );
   }
 
   return (
@@ -184,8 +212,9 @@ export function PoDraftLines({
                         className="h-8 w-full text-right text-xs"
                         aria-label={`Extended price ${i + 1}`}
                       />
-                      {/* Offered, never forced. Clearing the box is how a
-                          freight line says it carries no extended price. */}
+                      {/* The box fills itself. This is the way back after
+                          clearing it, which is how a freight line says it
+                          carries no extended price. */}
                       {suggested != null && l.extendedPrice == null && (
                         <button
                           type="button"

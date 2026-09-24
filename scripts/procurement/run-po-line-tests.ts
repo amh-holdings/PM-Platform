@@ -8,6 +8,7 @@
 import {
   derivedExtended,
   describeTotalAgreement,
+  extendedIsAuto,
   lineExtended,
   nextLineNo,
   poTotals,
@@ -246,6 +247,68 @@ eq(
   "no total and no lines stays empty rather than becoming zero",
   totalForNewPo({ typedTotal: null, lines: [] }),
   null,
+);
+
+
+console.log("\nThe extended price totals itself");
+console.log("--------------------------------");
+
+// Zarina: "Should automatically total the extended." It was a suggestion you
+// had to click, which is right for the freight line and wrong for every other
+// line on the order.
+
+eq(
+  "an untouched line follows quantity times unit price",
+  extendedIsAuto({ quantity: null, unit_price: null, extended_price: null }),
+  true,
+);
+eq(
+  "a quantity alone still follows",
+  extendedIsAuto({ quantity: 71, unit_price: null, extended_price: null }),
+  true,
+);
+eq(
+  "a figure that IS the product keeps following",
+  extendedIsAuto({ quantity: 71, unit_price: 938.29, extended_price: 66618.59 }),
+  true,
+);
+eq(
+  "a figure a person typed does not",
+  extendedIsAuto({ quantity: 71, unit_price: 938.29, extended_price: 70000 }),
+  false,
+);
+// PO-023 line 6: $22,444.50 a unit, extended column struck through, because
+// the freight is carried below the subtotal. Filling it would bill it twice.
+eq(
+  "a cleared box on a priced line is the freight case, left alone",
+  extendedIsAuto({ quantity: 1, unit_price: 22444.5, extended_price: null }),
+  false,
+);
+eq(
+  "a cent of rounding still counts as the product",
+  extendedIsAuto({ quantity: 3, unit_price: 10, extended_price: 30.001 }),
+  true,
+);
+eq(
+  "a zero somebody typed is not the product",
+  extendedIsAuto({ quantity: 71, unit_price: 938.29, extended_price: 0 }),
+  false,
+);
+
+// The three lines from her screenshot, which is what prompted this.
+eq("line 1 auto-fills", derivedExtended({ quantity: 71, unit_price: 938.29 }), 66618.59);
+eq("line 2 auto-fills", derivedExtended({ quantity: 410, unit_price: 347 }), 142270);
+eq("line 3 auto-fills", derivedExtended({ quantity: 1, unit_price: 347 }), 347);
+eq(
+  "and the three of them subtotal without a click",
+  poTotals({
+    lines: [
+      { quantity: 71, unit_price: 938.29, extended_price: 66618.59 },
+      { quantity: 410, unit_price: 347, extended_price: 142270 },
+      { quantity: 1, unit_price: 347, extended_price: 347 },
+    ],
+  }).subtotal,
+  209235.59,
 );
 
 console.log(`\n${"=".repeat(60)}`);
