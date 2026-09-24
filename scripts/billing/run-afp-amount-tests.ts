@@ -20,6 +20,7 @@ import {
   contributionTotal,
   describeContributions,
   describeStagingEffect,
+  describeTypedVsEvidence,
   describePoAfpStanding,
   canAddToAfp,
   canUndoFromPo,
@@ -696,6 +697,96 @@ eq(
     priorPlannedAmount: null,
   }),
   { action: "resum", remaining: [{ poId: "po-17", amount: 47965 }], plannedAmount: 47965 },
+);
+
+
+// ---------------------------------------------------------------------------
+// A typed figure is not a recommendation to be overridden.
+//
+// Zarina, with both POs staged and the breakdown line correct: "2 POs
+// successfully added but still no reflection to the total here." The panel
+// puts recommendedAmount in the amount box in preference to the row's own
+// amount, and the enrichment step was attaching one to typed rows too.
+// ---------------------------------------------------------------------------
+
+/** What the panel puts in the amount box. Mirrors bill-this-period-client. */
+const boxAmount = (r: { amount: number; recommendedAmount?: number | null }) =>
+  r.recommendedAmount != null ? r.recommendedAmount : r.amount;
+
+eq(
+  "an imported forecast still defers to the evidence",
+  boxAmount({ amount: 28462.75, recommendedAmount: 8095.95 }),
+  8095.95,
+);
+
+eq(
+  "a typed figure carries no recommendation, so the box is the typed sum",
+  boxAmount({ amount: 28462.75, recommendedAmount: null }),
+  28462.75,
+);
+
+check(
+  "the gap is still reported rather than swallowed",
+  (describeTypedVsEvidence({
+    typedAmount: 28462.75,
+    evidenceAmount: 8095.95,
+    formatAmount: money,
+  }) ?? "").includes("$8,095.95"),
+);
+
+check(
+  "and says the typed figure stands",
+  (describeTypedVsEvidence({
+    typedAmount: 28462.75,
+    evidenceAmount: 8095.95,
+    formatAmount: money,
+  }) ?? "").includes("stands"),
+);
+
+eq(
+  "agreement needs no sentence",
+  describeTypedVsEvidence({
+    typedAmount: 8095.95,
+    evidenceAmount: 8095.95,
+    formatAmount: money,
+  }),
+  null,
+);
+
+eq(
+  "and a cent of rounding is agreement",
+  describeTypedVsEvidence({
+    typedAmount: 8095.95,
+    evidenceAmount: 8095.951,
+    formatAmount: money,
+  }),
+  null,
+);
+
+eq(
+  "no evidence to compare against is nothing to say",
+  describeTypedVsEvidence({
+    typedAmount: 28462.75,
+    evidenceAmount: null,
+    formatAmount: money,
+  }),
+  null,
+);
+
+// End to end, the number she expects on 5.05.
+eq(
+  "50% of PO-017 plus 50% of PO-022 reaches the amount box",
+  boxAmount({
+    amount: contributionTotal(
+      applyPoContribution(
+        applyPoContribution([], "po-17", 23982.5),
+        "po-22",
+        4480.25,
+      ),
+    ),
+    recommendedAmount: null,
+  }),
+  28462.75,
 );
 
 console.log(`\n${"=".repeat(60)}`);

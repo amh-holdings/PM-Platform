@@ -1095,14 +1095,27 @@ export async function getBillThisPeriodRows(
     const match = suggestionByLineId.get(r.billingLineId);
     if (!match) return r;
     consumedLineIds.add(r.billingLineId);
-    return {
+    // A TYPED FIGURE IS NOT A RECOMMENDATION TO BE OVERRIDDEN.
+    //
+    // recommendedAmount is what the panel puts in the amount box, in
+    // preference to the row's own amount. That is right for a figure imported
+    // from a cash-flow spreadsheet months ago and wrong for one somebody typed
+    // against a purchase order this morning. Attaching it here is how
+    // Zarina's two staged POs summed correctly in the breakdown line and
+    // still showed the milestone number in the box: "2 POs successfully added
+    // but still no reflection to the total here."
+    //
+    // The evidence and the confidence stay, because what the milestones make
+    // of it is worth saying. Only the override goes.
+    const enriched = {
       ...r,
       scheduleSuggestedAmount: match.suggestedAmount,
       scheduleConfidence: match.confidence,
       scheduleSourcesSummary: match.sourcesSummary,
-      recommendedAmount: match.suggestedAmount,
       evidence: match.evidence,
     };
+    if (r.typedFromPo) return enriched;
+    return { ...enriched, recommendedAmount: match.suggestedAmount };
   });
 
   const suggestionRows: BillableRow[] = suggestions
