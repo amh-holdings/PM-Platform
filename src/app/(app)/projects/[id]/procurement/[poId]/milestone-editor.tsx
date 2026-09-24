@@ -104,7 +104,6 @@ type Props = {
    * bill the owner. Migration 0055. Defaults to vendor, which is what every
    * milestone was before the two split.
    */
-  side?: "vendor" | "owner";
 };
 
 function todayIso() {
@@ -117,7 +116,6 @@ export function MilestoneEditor({
   poId,
   poTotalValue,
   milestones,
-  side = "vendor",
 }: Props) {
   const router = useRouter();
   const [adding, setAdding] = useState(false);
@@ -144,7 +142,6 @@ export function MilestoneEditor({
     setError(null);
     // The form posts the fields; which schedule they land on is the editor's
     // to say, not something a person should have to pick on every row.
-    formData.set("side", side);
     const res = await addMilestone(poId, projectId, formData);
     setBusy(false);
     if (!res.ok) {

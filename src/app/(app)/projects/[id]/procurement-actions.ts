@@ -2,6 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 
+import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
+import {
+  defaultAfpAmountForPo,
+  hasBillingEvidence,
+  pickAfpTargetLine,
+} from "@/lib/billing-progress";
 import { recordedPayment } from "@/lib/progress";
 
 import type { ProcurementImportPlan } from "@/lib/procurement-import";
@@ -191,13 +197,9 @@ export async function addMilestone(
   const paid = recordedPayment(computedAmount, getDate(formData.get("paid_at")));
   if (!paid.ok) return paid;
 
-  const insert: TablesInsert<"procurement_payments"> & { side?: string } = {
+  const insert: TablesInsert<"procurement_payments"> = {
     procurement_order_id: poId,
     milestone_name: name,
-    // Which agreement this row belongs to: what we pay the vendor, or what we
-    // bill the owner. Migration 0055. Anything the form does not name is a
-    // vendor row, which is what every milestone was before the two split.
-    side: getStr(formData.get("side")) === "owner" ? "owner" : "vendor",
     pct_of_total: pct,
     trigger_event: getStr(formData.get("trigger_event")),
     expected_date: getDate(formData.get("expected_date")),
@@ -208,95 +210,16 @@ export async function addMilestone(
     notes: getStr(formData.get("notes")),
   };
 
-  // Cast because `side` is not in the generated types until the next
-  // `npm run db:types` after 0055. The column is real; the types are behind.
   const { data, error } = await auth.supabase
     .from("procurement_payments")
-    .insert(insert as unknown as TablesInsert<"procurement_payments">)
+    .insert(insert)
     .select("id")
     .single();
   if (error) {
-    return { ok: false, error: missingSideMessage(error) ?? error.message };
+    return { ok: false, error: error.message };
   }
   revalidateMilestone(projectId, poId);
   return { ok: true, id: data.id };
-}
-
-/**
- * Owner billing rows need the column migration 0055 adds. Until it runs the
- * insert fails on a column the database has never heard of, and "could not
- * find the 'side' column" tells nobody what to do about it.
- */
-function missingSideMessage(
-  error: { code?: string; message?: string } | null,
-): string | null {
-  if (!error) return null;
-  const missing = error.code === "42703" || error.code === "PGRST204";
-  if (!missing || !/side/i.test(error.message ?? "")) return null;
-  return "Owner billing terms need database migration 0055 (payment milestone side). Vendor payment terms keep working without it.";
-}
-
-/**
- * The standing rule, in one click: the owner is billed half the PO the day it
- * is issued, whatever the vendor's terms say, and the rest on delivery.
- *
- * Written as two owner rows rather than a setting so it can be edited after
- * the fact like any other milestone, and so a PO that does not follow the rule
- * is just a PO with different rows rather than a special case.
- */
-export async function seedOwnerBillingHalfOnPo(
-  poId: string,
-  projectId: string,
-): Promise<MilestoneResult> {
-  const auth = await assertAhcUser();
-  if (!auth.ok) return auth;
-
-  const { data: po } = await auth.supabase
-    .from("procurement_orders")
-    .select("total_value, expected_delivery_date, signed_at")
-    .eq("id", poId)
-    .maybeSingle();
-  const total = Number(po?.total_value ?? 0);
-  if (!(total > 0)) {
-    return { ok: false, error: "This PO has no value to take half of" };
-  }
-
-  // Half to the cent, and the balance is what is left rather than half again,
-  // so an odd total does not leave a cent unbilled forever.
-  const half = Math.round(total * 50) / 100;
-  const rest = Math.round((total - half) * 100) / 100;
-
-  const rows = [
-    {
-      procurement_order_id: poId,
-      milestone_name: "Owner - 50% on PO",
-      trigger_event: "PO signed",
-      pct_of_total: 50,
-      amount: half,
-      expected_date: po?.signed_at ?? null,
-      sort_order: 1,
-      side: "owner",
-    },
-    {
-      procurement_order_id: poId,
-      milestone_name: "Owner - balance on delivery",
-      trigger_event: "Delivery to site",
-      pct_of_total: 50,
-      amount: rest,
-      expected_date: po?.expected_delivery_date ?? null,
-      sort_order: 2,
-      side: "owner",
-    },
-  ];
-
-  const { error } = await auth.supabase
-    .from("procurement_payments")
-    .insert(rows as unknown as TablesInsert<"procurement_payments">[]);
-  if (error) {
-    return { ok: false, error: missingSideMessage(error) ?? error.message };
-  }
-  revalidateMilestone(projectId, poId);
-  return { ok: true, id: poId };
 }
 
 export async function updateMilestone(
@@ -936,4 +859,262 @@ export async function applyProcurementImport(
   revalidatePath(`/projects/${projectId}/billing`);
 
   return { ok: true, added, changed, milestonesAdded, milestonesChanged };
+}
+
+// ---------------------------------------------------------------------------
+// Add to AFP
+// ---------------------------------------------------------------------------
+//
+// What the owner is billed for a PO is a different agreement from what we pay
+// the vendor for it, and the person raising the PO knows the number. So rather
+// than recording a second milestone schedule and hoping the app derives the
+// right figure from it, the PO takes the figure directly and puts it on the
+// pay application as an ordinary forecast row.
+
+/** A candidate SOV line for a PO's AFP amount, with what it already carries. */
+export type AfpTargetLine = {
+  id: string;
+  itemNumber: string;
+  description: string;
+  scheduledValue: number;
+  /** Billed on this line across every prior AFP. */
+  alreadyBilled: number;
+  /** Sitting on this line for the open period, not yet on an AFP. */
+  stagedThisPeriod: number;
+  /** This PO's share of the line, where a billing allocation says so. */
+  allocated: number | null;
+};
+
+export type AfpContextResult =
+  | {
+      ok: true;
+      periodMonth: string;
+      poNumber: string | null;
+      poTotalValue: number;
+      /** Half the PO, the standing rule, as the box's opening value. */
+      suggestedAmount: number;
+      defaultBillingLineId: string | null;
+      lines: AfpTargetLine[];
+    }
+  | { ok: false; error: string };
+
+/**
+ * Everything the Add to AFP dialog needs to open with the answer already on
+ * screen: which period is being billed, which line the money lands on, what
+ * that line has had, and what half this PO comes to.
+ *
+ * The already-billed and already-staged figures are the whole guard against
+ * billing the same equipment twice. Nothing in here subtracts them for you -
+ * they are shown, at the moment the number is typed, to the person deciding.
+ */
+export async function getPoAfpContext(
+  poId: string,
+  projectId: string,
+): Promise<AfpContextResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { data: po, error: poErr } = await auth.supabase
+    .from("procurement_orders")
+    .select("id, po_number, total_value")
+    .eq("id", poId)
+    .maybeSingle();
+  if (poErr) return { ok: false, error: poErr.message };
+  if (!po) return { ok: false, error: "Purchase order not found" };
+
+  const periodMonth = await resolveBillingPeriod(auth.supabase, projectId);
+
+  const [{ data: lines }, { data: allocations }, { data: totals }] =
+    await Promise.all([
+      auth.supabase
+        .from("billing_lines")
+        .select(
+          "id, item_number, description, scheduled_value, sort_order, linked_procurement_order_ids",
+        )
+        .eq("project_id", projectId)
+        .order("sort_order", { ascending: true, nullsFirst: false })
+        .order("item_number"),
+      auth.supabase
+        .from("procurement_order_billing_allocations")
+        .select("billing_line_id, amount")
+        .eq("procurement_order_id", poId),
+      auth.supabase
+        .from("v_billing_line_totals")
+        .select("billing_line_id, total_billed")
+        .eq("project_id", projectId),
+    ]);
+
+  // Selected with * rather than by name: amount_is_manual arrives in migration
+  // 0056 and a named select on a column the database does not have yet errors
+  // the whole request, which would take the dialog down before it opens.
+  const { data: staged } = await auth.supabase
+    .from("billing_entries")
+    .select("*, billing_lines!inner(project_id)")
+    .eq("billing_lines.project_id", projectId)
+    .eq("period_month", periodMonth);
+
+  const billedByLine = new Map<string, number>();
+  for (const t of totals ?? []) {
+    if (t.billing_line_id) {
+      billedByLine.set(t.billing_line_id, Number(t.total_billed ?? 0));
+    }
+  }
+  const stagedByLine = new Map<string, number>();
+  for (const e of staged ?? []) {
+    if (hasBillingEvidence(e)) continue;
+    const id = e.billing_line_id as string | null;
+    if (!id) continue;
+    const amount =
+      Number(e.actual_amount ?? 0) > 0
+        ? Number(e.actual_amount)
+        : Number(e.planned_amount ?? 0);
+    stagedByLine.set(id, (stagedByLine.get(id) ?? 0) + amount);
+  }
+  const allocByLine = new Map<string, number>();
+  for (const a of allocations ?? []) {
+    allocByLine.set(
+      a.billing_line_id,
+      (allocByLine.get(a.billing_line_id) ?? 0) + Number(a.amount ?? 0),
+    );
+  }
+
+  const linkedLineIds = (lines ?? [])
+    .filter((l) =>
+      (
+        (l as unknown as { linked_procurement_order_ids?: string[] | null })
+          .linked_procurement_order_ids ?? []
+      ).includes(poId),
+    )
+    .map((l) => l.id);
+
+  return {
+    ok: true,
+    periodMonth,
+    poNumber: po.po_number,
+    poTotalValue: Number(po.total_value ?? 0),
+    suggestedAmount: defaultAfpAmountForPo(Number(po.total_value ?? 0)),
+    defaultBillingLineId: pickAfpTargetLine({
+      allocations: Array.from(allocByLine, ([billingLineId, amount]) => ({
+        billingLineId,
+        amount,
+      })),
+      linkedLineIds,
+    }),
+    lines: (lines ?? []).map((l) => ({
+      id: l.id,
+      itemNumber: l.item_number ?? "",
+      description: l.description ?? "",
+      scheduledValue: Number(l.scheduled_value ?? 0),
+      alreadyBilled: billedByLine.get(l.id) ?? 0,
+      stagedThisPeriod: stagedByLine.get(l.id) ?? 0,
+      allocated: allocByLine.get(l.id) ?? null,
+    })),
+  };
+}
+
+/**
+ * amount_is_manual and source_procurement_order_id arrive in migration 0056.
+ * Until it runs the write fails on a column the database has never heard of,
+ * and "could not find the 'amount_is_manual' column" tells nobody what to do.
+ */
+function missingManualAmountMessage(
+  error: { code?: string; message?: string } | null,
+): string | null {
+  if (!error) return null;
+  const missing = error.code === "42703" || error.code === "PGRST204";
+  if (!missing) return null;
+  if (!/amount_is_manual|source_procurement_order_id/i.test(error.message ?? "")) {
+    return null;
+  }
+  return "Add to AFP needs database migration 0056 (AFP amount from PO). Everything else on this PO keeps working without it.";
+}
+
+export type StageAfpResult =
+  | { ok: true; periodMonth: string; amount: number }
+  | { ok: false; error: string };
+
+/**
+ * Put an amount from this PO on the open pay application.
+ *
+ * It lands as a normal forecast entry against the SOV line, flagged manual so
+ * the Bill this period panel shows the typed figure instead of recomputing the
+ * line from PO payment milestones on the next read. From there it is an
+ * ordinary row: tick it, edit it, or leave it.
+ *
+ * One entry per line per month is a database constraint, not a choice, so a
+ * second PO landing on the same line this period replaces the figure rather
+ * than adding to it. The dialog shows what is already staged so the combined
+ * number can be typed deliberately.
+ */
+export async function stagePoAmountForAfp(
+  poId: string,
+  projectId: string,
+  input: { billingLineId: string; amount: number; periodMonth?: string },
+): Promise<StageAfpResult> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+  if (!input.billingLineId) return { ok: false, error: "Pick an SOV line" };
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    return { ok: false, error: "Amount must be greater than zero" };
+  }
+
+  const periodMonth =
+    input.periodMonth ?? (await resolveBillingPeriod(auth.supabase, projectId));
+
+  const { data: existing, error: readErr } = await auth.supabase
+    .from("billing_entries")
+    .select("*")
+    .eq("billing_line_id", input.billingLineId)
+    .eq("period_month", periodMonth)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+
+  // Money that already went out is not a forecast any more. Overwriting it
+  // here would rewrite a submitted AFP's own line from the PO page.
+  if (existing && hasBillingEvidence(existing)) {
+    return {
+      ok: false,
+      error: `This line is already on AFP ${existing.afp_number ?? "an application"} for ${periodMonth.slice(0, 7)}. Bill the next period instead.`,
+    };
+  }
+
+  const manual = {
+    amount_is_manual: true,
+    source_procurement_order_id: poId,
+  };
+
+  if (!existing) {
+    const { error } = await auth.supabase.from("billing_entries").insert({
+      billing_line_id: input.billingLineId,
+      period_month: periodMonth,
+      planned_amount: input.amount,
+      status: "forecast",
+      ...manual,
+    } as unknown as TablesInsert<"billing_entries">);
+    if (error) {
+      return { ok: false, error: missingManualAmountMessage(error) ?? error.message };
+    }
+  } else {
+    // actual_amount wins over planned_amount wherever an entry is read, so an
+    // entry carrying one has to have both rewritten or it bills the old figure.
+    const patch: Record<string, unknown> = {
+      planned_amount: input.amount,
+      ...manual,
+    };
+    if (Number(existing.actual_amount ?? 0) !== 0) {
+      patch.actual_amount = input.amount;
+    }
+    const { error } = await auth.supabase
+      .from("billing_entries")
+      .update(patch as unknown as TablesUpdate<"billing_entries">)
+      .eq("id", existing.id);
+    if (error) {
+      return { ok: false, error: missingManualAmountMessage(error) ?? error.message };
+    }
+  }
+
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidatePath(`/projects/${projectId}/billing`);
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, periodMonth, amount: input.amount };
 }

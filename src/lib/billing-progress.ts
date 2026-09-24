@@ -231,3 +231,84 @@ export function needsADecision(n: UnbillableLine): boolean {
   if (n.earned > 0.005) return n.alreadyBilled > n.earned;
   return n.procurement;
 }
+
+// ---------------------------------------------------------------------------
+// Add to AFP: a purchase order puts a typed amount on the pay application
+// ---------------------------------------------------------------------------
+//
+// A procurement line's amount is normally derived: PO payment milestones say
+// what has been earned, and the Bill this period panel recomputes it on every
+// read. That is right when the owner is billed on the same events we pay the
+// vendor on, and wrong the rest of the time - PO-022 pays the vendor 50% on
+// deposit and 50% on delivery while the owner is billed half the PO total the
+// day it goes out.
+//
+// The short way to say that is to say it: whoever raises the PO types what
+// goes on the AFP. A typed figure is a fact, so it wins over the estimate and
+// survives a reload rather than being recomputed back to the milestone answer.
+
+/** Half the PO, the standing rule, as the amount the dialog opens on. */
+export const DEFAULT_OWNER_BILL_PCT = 50;
+
+export function defaultAfpAmountForPo(poTotalValue: number): number {
+  const total = Number(poTotalValue);
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  // Multiply before dividing so 8,960.49 gives 4,480.25 rather than a float
+  // that rounds to 4,480.24.
+  return Math.round(total * DEFAULT_OWNER_BILL_PCT) / 100;
+}
+
+export type ProcurementAmount =
+  | { kind: "manual"; amount: number }
+  | { kind: "earned"; amount: number }
+  | { kind: "blocked"; reason: "already_billed" | "nothing_earned" };
+
+/**
+ * What a procurement row on the Bill this period panel is worth this period.
+ *
+ * A typed amount is taken as given and is NOT netted against what the line has
+ * already billed. The netting exists to stop a milestone estimate re-offering
+ * value the owner has already paid for, which is a guess correcting a guess.
+ * A person who opened the PO, read what the line has been billed, and typed a
+ * number has already done that subtraction. Quietly redoing it would turn
+ * their figure into a smaller one with no explanation.
+ */
+export function resolveProcurementAmount(input: {
+  manualAmount?: number | null;
+  earnedValue: number;
+  alreadyBilled: number;
+}): ProcurementAmount {
+  const manual = Number(input.manualAmount ?? 0);
+  if (Number.isFinite(manual) && manual > 0) {
+    return { kind: "manual", amount: manual };
+  }
+  const billable = Math.max(0, input.earnedValue - input.alreadyBilled);
+  if (billable > 0) return { kind: "earned", amount: billable };
+  return {
+    kind: "blocked",
+    reason: input.earnedValue > 0 ? "already_billed" : "nothing_earned",
+  };
+}
+
+/**
+ * Which SOV line an Add to AFP amount lands on by default.
+ *
+ * Billing allocations are the explicit answer: somebody has already said how
+ * much of this PO belongs to which line. Where a PO spans several, the largest
+ * share is the sensible opening guess and the dialog lets it be changed.
+ * linked_procurement_order_ids is the older, amount-less link and only decides
+ * it when there is exactly one candidate.
+ */
+export function pickAfpTargetLine(opts: {
+  allocations: { billingLineId: string; amount: number }[];
+  linkedLineIds: string[];
+}): string | null {
+  const allocs = opts.allocations.filter((a) => a.billingLineId);
+  if (allocs.length > 0) {
+    return allocs.reduce((best, a) =>
+      Number(a.amount ?? 0) > Number(best.amount ?? 0) ? a : best,
+    ).billingLineId;
+  }
+  const linked = opts.linkedLineIds.filter(Boolean);
+  return linked.length === 1 ? linked[0] : null;
+}

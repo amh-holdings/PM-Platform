@@ -15,7 +15,10 @@ import {
   type ProgressEstimate,
   resolveMilestoneTask,
 } from "@/lib/progress";
-import { needsADecision } from "@/lib/billing-progress";
+import {
+  needsADecision,
+  resolveProcurementAmount,
+} from "@/lib/billing-progress";
 import { progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import { canUndoPayApplication } from "@/lib/pay-app-undo";
@@ -738,12 +741,14 @@ export async function getBillThisPeriodRows(
   const todayIso = progressAsOf(period);
 
   // Pull forecast entries within the billing window only.
-  // billing_line_id is included explicitly so dedup against suggestions works.
+  //
+  // Selected with * rather than by name: amount_is_manual arrives in migration
+  // 0056 and a named select on a column the database does not have yet errors
+  // the whole request, which would take the Billing page down. Absent reads as
+  // not manual, which is what every row was.
   const { data: entries, error: entriesErr } = await auth.supabase
     .from("billing_entries")
-    .select(
-      "id, billing_line_id, period_month, planned_amount, retainage_amount, afp_number, status, billing_lines!inner(project_id, item_number, description)",
-    )
+    .select("*, billing_lines!inner(project_id, item_number, description)")
     .eq("billing_lines.project_id", projectId)
     .in("status", ["forecast", "suggested", "reviewed"])
     .gte("period_month", thisMonthIso)
@@ -762,6 +767,12 @@ export async function getBillThisPeriodRows(
       } | null;
       return {
         e,
+        // A person typed this figure on the PO's Add to AFP dialog. It is a
+        // fact about what the owner is billed, not an estimate to refine.
+        manualAmount:
+          (e as { amount_is_manual?: boolean | null }).amount_is_manual === true
+            ? Number(e.planned_amount ?? 0)
+            : null,
         row: {
           kind: "forecast" as const,
           key: `f:${e.id}`,
@@ -942,17 +953,21 @@ export async function getBillThisPeriodRows(
         linked,
       );
       const alreadyBilled = billedByLine.get(x.row.billingLineId) ?? 0;
-      const billable = Math.max(0, est.earnedValue - alreadyBilled);
+      const resolved = resolveProcurementAmount({
+        manualAmount: x.manualAmount,
+        earnedValue: est.earnedValue,
+        alreadyBilled,
+      });
 
-      if (billable > 0) {
-        forecastRows.push({ ...x.row, amount: billable });
-      } else if (est.earnedValue > 0) {
+      if (resolved.kind === "blocked") {
         blockRow(
           x.row,
-          `${formatCurrency(est.earnedValue)} of milestones triggered, but ${formatCurrency(alreadyBilled)} already billed on this line - nothing further earned`,
+          resolved.reason === "already_billed"
+            ? `${formatCurrency(est.earnedValue)} of milestones triggered, but ${formatCurrency(alreadyBilled)} already billed on this line - nothing further earned`
+            : est.reason,
         );
       } else {
-        blockRow(x.row, est.reason);
+        forecastRows.push({ ...x.row, amount: resolved.amount });
       }
       continue;
     }

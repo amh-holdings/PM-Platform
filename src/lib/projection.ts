@@ -170,9 +170,7 @@ export async function buildProjection(
 
   // Vendor rows only, for the reason given at the query above. Applied once
   // here so both places that walk the payments see the same set.
-  const vendorPayments = (paymentsRes.data ?? []).filter(
-    (p) => (p as { side?: string | null }).side !== "owner",
-  );
+  const vendorPayments = paymentsRes.data ?? [];
 
   const ownerTermsDays = Number(projectRes.data?.owner_payment_terms_days ?? 0);
 
