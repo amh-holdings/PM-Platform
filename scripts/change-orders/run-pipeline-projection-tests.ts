@@ -170,6 +170,126 @@ section("What the forecast says about it");
   same("and it says the money rests on an assumption", /not on an approval/.test(line), true);
 }
 
+
+/* ------------------------------------------------------------------ */
+/* The cost side                                                       */
+/* ------------------------------------------------------------------ */
+
+// Revenue without cost is not a forecast. Every pipeline CO landed in the
+// curve as pure margin, so "Margin at completion" read high by exactly the
+// cost of doing the work.
+
+import {
+  describePipelineCoCost,
+  describeUncostedPipelineCo,
+  normalizeCoNumber,
+  planPipelineCoCost,
+} from "../../src/lib/change-order-projection";
+
+console.log("\nPipeline change order COST\n");
+
+const costCos = [
+  { co_number: "CO-05", co_value: 120000, status: "draft" },
+  { co_number: "CO-06", co_value: 40000, status: "submitted" },
+  { co_number: "CO-07", co_value: 15000, status: "internal_review" },
+  { co_number: "CO-04", co_value: 90000, status: "approved" },
+  { co_number: "CO-08", co_value: 5000, status: "rejected" },
+];
+
+const plan = planPipelineCoCost({
+  cos: costCos,
+  month: "2026-10-01",
+  costAmountByCoNumber: new Map([["CO-05", 94000]]),
+  costByCoNumber: new Map([["CO-06", 31500]]),
+});
+
+same("only pipeline COs are costed", plan.entries.map((e) => e.coNumber), ["CO-05", "CO-06"]);
+same("the CO's own cost is preferred", plan.entries[0].source, "cost_amount");
+same("the cost code estimate is the fallback", plan.entries[1].source, "cost_code");
+same("the total is what goes in the month", plan.totalCost, 125500);
+same("the month is the revenue's month", plan.month, "2026-10-01");
+
+// A CO with revenue and no cost anywhere. Guessing one would be worse than
+// naming the hole, so it is named.
+same("a CO with no cost is reported, not invented", plan.uncosted, [
+  { coNumber: "CO-07", gross: 15000 },
+]);
+
+// Zero is "nobody filled this in", not "this is free". Booking it as a real
+// zero is how a change order becomes 100% margin in silence.
+same(
+  "a zero cost_amount falls through to the cost code",
+  planPipelineCoCost({
+    cos: [{ co_number: "CO-09", co_value: 20000, status: "draft" }],
+    month: "2026-10-01",
+    costAmountByCoNumber: new Map([["CO-09", 0]]),
+    costByCoNumber: new Map([["CO-09", 17000]]),
+  }).entries[0].cost,
+  17000,
+);
+
+same(
+  "zero in both places is reported as uncosted",
+  planPipelineCoCost({
+    cos: [{ co_number: "CO-09", co_value: 20000, status: "draft" }],
+    month: "2026-10-01",
+    costAmountByCoNumber: new Map([["CO-09", 0]]),
+    costByCoNumber: new Map([["CO-09", 0]]),
+  }).uncosted.length,
+  1,
+);
+
+// A zero-value CO is a time-only change. It moves a date, not cash, and
+// planPipelineCoRevenue already drops it - so the cost side must too.
+same(
+  "a time-only CO is neither costed nor reported",
+  planPipelineCoCost({
+    cos: [{ co_number: "CO-10", co_value: 0, status: "draft" }],
+    month: "2026-10-01",
+    costByCoNumber: new Map(),
+  }),
+  { month: "2026-10-01", entries: [], uncosted: [], totalCost: 0 },
+);
+
+// Revenue and cost must key COs the same way or a cost silently misses its
+// change order and the CO reads as pure margin.
+same("CO 5 keys as CO-05", normalizeCoNumber("CO 5"), "CO-05");
+same("co-5 keys as CO-05", normalizeCoNumber("co-5"), "CO-05");
+same("CO-05 keys as itself", normalizeCoNumber("CO-05"), "CO-05");
+same("a number with no digits falls back to the text", normalizeCoNumber("pending"), "PENDING");
+
+same(
+  "a cost keyed loosely still finds its CO",
+  planPipelineCoCost({
+    cos: [{ co_number: "CO-5", co_value: 120000, status: "draft" }],
+    month: "2026-10-01",
+    costByCoNumber: new Map([["CO-05", 94000]]),
+  }).entries[0].cost,
+  94000,
+);
+
+same(
+  "the cost line names where the number came from",
+  describePipelineCoCost(plan.entries[0], "2026-10-01").includes("change order's own cost"),
+  true,
+);
+same(
+  "and the fallback says so too",
+  describePipelineCoCost(plan.entries[1], "2026-10-01").includes("estimate on its cost code"),
+  true,
+);
+same(
+  "an uncosted CO says the margin is overstated",
+  describeUncostedPipelineCo(plan.uncosted[0]).includes("margin at completion is high"),
+  true,
+);
+same(
+  "and names the CO and the money",
+  describeUncostedPipelineCo(plan.uncosted[0]).includes("CO-07") &&
+    describeUncostedPipelineCo(plan.uncosted[0]).includes("15,000"),
+  true,
+);
+
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);
 if (failures.length) {
