@@ -907,18 +907,67 @@ section("Procurement - equipment on order");
 }
 
 // ============================================================================
+section("Inspection forecasts the way a deliverable does");
+// ============================================================================
+
+{
+  // Sweet Springs electrical inspection: booked for a date, overdue once that
+  // date passes, never re-planned as though the whole duration is still ahead.
+  const insp = (extra: Partial<CpmInput> = {}) =>
+    task({
+      wbs_code: "1", start_date: "2026-09-14", end_date: "2026-09-18",
+      duration_days: 4, status: "In Progress", task_type: "inspection", ...extra,
+    });
+
+  const ahead = computeCpm([insp()], { dataDate: "2026-09-16" });
+  eq("it holds the date it is booked for", ahead.byWbs.get("1")!.projectedEnd, "2026-09-18");
+  eq("and says the finish is a commitment", ahead.byWbs.get("1")!.forecastBasis, "committed");
+
+  const late = computeCpm([insp()], { dataDate: "2026-09-24" });
+  eq("once that date passes it is overdue", late.byWbs.get("1")!.projectedEnd, "2026-09-24");
+  eq("with the overdue basis", late.byWbs.get("1")!.forecastBasis, "overdue");
+
+  // Same row, same dates, as a deliverable. Identical on purpose: the separate
+  // type is for reading the schedule, not for different arithmetic.
+  const asDeliverable = computeCpm(
+    [insp({ task_type: "deliverable" })],
+    { dataDate: "2026-09-24" },
+  );
+  eq(
+    "identical to a deliverable - the type is for the reading, not the maths",
+    asDeliverable.byWbs.get("1")!.projectedEnd,
+    late.byWbs.get("1")!.projectedEnd,
+  );
+
+  // And unlike construction, which with no percent assumes all 4 days remain.
+  const asWork = computeCpm(
+    [insp({ task_type: "construction" })],
+    { dataDate: "2026-09-24" },
+  );
+  check(
+    "construction would re-plan it instead",
+    asWork.byWbs.get("1")!.projectedEnd > "2026-09-24",
+    asWork.byWbs.get("1")!.projectedEnd,
+  );
+}
+
+// ============================================================================
 section("Which tasks accept a typed percent");
 // ============================================================================
 
 {
   eq("procurement does", progressCanBeSetByHand("procurement"), true);
   eq("a deliverable does", progressCanBeSetByHand("deliverable"), true);
+  eq("an inspection does - it passed or it did not, no report gives a percent",
+     progressCanBeSetByHand("inspection"), true);
   eq("construction never does - that is the field report rule", progressCanBeSetByHand("construction"), false);
   eq("an unclassified row does not, classify it first", progressCanBeSetByHand(null), false);
   eq("and neither does a value nobody recognises", progressCanBeSetByHand("equipment"), false);
 
   eq("procurement's finish is a commitment", finishIsACommitment("procurement"), true);
   eq("so is a deliverable's", finishIsACommitment("deliverable"), true);
+  eq("and an inspection's - the date is booked, not a span of work",
+     finishIsACommitment("inspection"), true);
   eq("construction's is not", finishIsACommitment("construction"), false);
   eq("nor is an unclassified row's", finishIsACommitment(null), false);
 }

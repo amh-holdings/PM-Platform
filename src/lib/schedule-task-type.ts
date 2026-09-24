@@ -2,16 +2,28 @@
 //
 // A construction activity is measured in the field and its percent complete
 // comes only from approved daily reports. A deliverable is done when something
-// arrives - a design package, a signed contract, a permit, a passed inspection
-// - and no daily report will ever cover it. Procurement is equipment on order:
-// a lead time running down and a truck arriving on site, against a purchase
-// order rather than a field report.
+// arrives - a design package, a signed contract, a permit - and no daily
+// report will ever cover it. Procurement is equipment on order: a lead time
+// running down and a truck arriving on site, against a purchase order rather
+// than a field report. An inspection is a third-party or owner visit that
+// passes or does not.
+//
+// Inspection behaves exactly as a deliverable does in the engine, on purpose.
+// It was landing under deliverable before, which is true enough mechanically
+// and wrong on the page: an inspection is not a design package, and a schedule
+// read at a glance should say which is which. The value of the separate type
+// is the reading, not different arithmetic.
 //
 // Null means not classified yet. Migration 0051 adds the column empty on
 // purpose: the classification is reviewed per project before it is written.
-// 0057 adds procurement.
+// 0057 adds procurement, 0058 adds inspection.
 
-export const TASK_TYPES = ["construction", "deliverable", "procurement"] as const;
+export const TASK_TYPES = [
+  "construction",
+  "deliverable",
+  "procurement",
+  "inspection",
+] as const;
 
 export type TaskType = (typeof TASK_TYPES)[number];
 
@@ -19,12 +31,14 @@ export const TASK_TYPE_LABELS: Record<TaskType, string> = {
   construction: "Construction",
   deliverable: "Deliverable",
   procurement: "Procurement",
+  inspection: "Inspection",
 };
 
 export const TASK_TYPE_HELP =
   "Construction: measured in the field, progress from approved daily reports. " +
   "Deliverable: done when something is received - a design package, signed contract, permit or inspection. " +
-  "Procurement: equipment on order, done when it is delivered to site.";
+  "Procurement: equipment on order, done when it is delivered to site. " +
+  "Inspection: a third-party or owner inspection, done when it passes.";
 
 /**
  * Whether a percent can be typed in rather than taken from a field report.
@@ -42,7 +56,11 @@ export const TASK_TYPE_HELP =
  * answers itself.
  */
 export function progressCanBeSetByHand(taskType: string | null | undefined): boolean {
-  return taskType === "deliverable" || taskType === "procurement";
+  return (
+    taskType === "deliverable" ||
+    taskType === "procurement" ||
+    taskType === "inspection"
+  );
 }
 
 /**
@@ -52,7 +70,11 @@ export function progressCanBeSetByHand(taskType: string | null | undefined): boo
  * the whole duration is still to run.
  */
 export function finishIsACommitment(taskType: string | null | undefined): boolean {
-  return taskType === "deliverable" || taskType === "procurement";
+  return (
+    taskType === "deliverable" ||
+    taskType === "procurement" ||
+    taskType === "inspection"
+  );
 }
 
 /** The status value that means the task is finished. */

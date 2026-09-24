@@ -41,10 +41,15 @@ async function assertAhcUser() {
 }
 
 /**
- * Procurement needs the widened check constraint migration 0057 brings. Until
- * it runs, saving that type fails on "new row violates check constraint
- * schedule_tasks_task_type_chk", which names a database object nobody outside
- * this file has heard of.
+ * A task type the database has not been widened for yet.
+ *
+ * Each new type arrives with a migration that widens the check constraint -
+ * procurement in 0057, inspection in 0058. Until it runs, saving that type
+ * fails on "new row violates check constraint schedule_tasks_task_type_chk",
+ * which names a database object nobody outside this file has heard of.
+ *
+ * The message does not name a migration number, because it would be wrong the
+ * next time a type is added and a stale instruction is worse than a vague one.
  */
 function taskTypeConstraintMessage(
   error: { code?: string; message?: string } | null,
@@ -53,7 +58,7 @@ function taskTypeConstraintMessage(
   const hit =
     error.code === "23514" || /schedule_tasks_task_type_chk/i.test(error.message ?? "");
   if (!hit || !/task_type_chk/i.test(error.message ?? "")) return null;
-  return "The Procurement type needs database migration 0057 (schedule task type procurement). Construction and Deliverable keep working without it.";
+  return "This task type needs its database migration run before it can be saved. The types already in the database keep working without it.";
 }
 
 export type ScheduleTaskResult =
