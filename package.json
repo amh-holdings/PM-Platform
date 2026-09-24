@@ -39,7 +39,8 @@
     "db:migrate": "node scripts/db/migrate.mjs --apply",
     "db:baseline": "node scripts/db/migrate.mjs --baseline-through",
     "test:sub-sov-pdf": "tsx scripts/sub-billing/run-pdf-tests.ts",
-    "test:delivery-sync": "tsx scripts/schedule/run-delivery-sync-tests.ts"
+    "test:delivery-sync": "tsx scripts/schedule/run-delivery-sync-tests.ts",
+    "test:tailwind-content": "tsx scripts/ui/check-tailwind-content.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
