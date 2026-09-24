@@ -24,6 +24,11 @@ import {
   shortMonthLabel,
 } from "@/lib/cashflow";
 import {
+  describePipelineCo,
+  planPipelineCoRevenue,
+} from "@/lib/change-order-projection";
+import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
+import {
   aggregateConfidence,
   estimateTaskProgress,
   isSummaryOf,
@@ -71,7 +76,13 @@ export type ProjectionRow = {
 };
 
 export type ProjectionWarning = {
-  kind: "po_missing_milestones" | "billing_line_no_link" | "task_no_dates" | "underbilled" | "overbilled";
+  kind:
+    | "po_missing_milestones"
+    | "billing_line_no_link"
+    | "task_no_dates"
+    | "underbilled"
+    | "overbilled"
+    | "pipeline_change_order";
   ref: string;
   message: string;
 };
@@ -106,7 +117,7 @@ export async function buildProjection(
 
   const [
     projectRes, entriesRes, forecastsRes, paymentsRes, posRes, linesRes, tasksRes,
-    subSovRes, subBilledRes,
+    subSovRes, subBilledRes, changeOrdersRes,
   ] =
     await Promise.all([
       supabase
@@ -164,6 +175,13 @@ export async function buildProjection(
         .from("sub_pay_app_lines")
         .select("sub_sov_line_id, total_completed, sub_pay_apps!inner(project_id)")
         .eq("sub_pay_apps.project_id", projectId),
+      // Change orders that are not approved yet. An approved one is already in
+      // the forecast through its own SOV line, so only the pipeline is read
+      // here - see planPipelineCoRevenue.
+      supabase
+        .from("change_orders")
+        .select("co_number, description, co_value, status")
+        .eq("project_id", projectId),
     ]);
 
   const warnings: ProjectionWarning[] = [];
@@ -379,6 +397,42 @@ export async function buildProjection(
     const cashMonth =
       ownerTermsDays > 0 ? shiftByDaysToMonth(at.month, ownerTermsDays) : at.month;
     get(cashMonth).cashIn += remaining - retainage;
+  }
+
+  // ---- CHANGE ORDERS NOT APPROVED YET ----
+  //
+  // An approved CO is already above: it has its own SOV line and lands in the
+  // month its work finishes. Everything before approval was in the forecast
+  // nowhere, which on a projection whose job is to say what is coming is a
+  // hole rather than caution. The pipeline is assumed billed one month after
+  // the AFP being assembled now - see planPipelineCoRevenue.
+  const openPeriodMonth = await resolveBillingPeriod(supabase, projectId, today);
+  const coPlan = planPipelineCoRevenue({
+    cos: changeOrdersRes.data ?? [],
+    openPeriodMonth,
+    ownerRetainagePct: ownerRetPct,
+    ownerTermsDays,
+  });
+  if (coPlan.entries.length > 0) {
+    const accrual = get(coPlan.month);
+    accrual.revenueRecognized += coPlan.totalGross;
+    accrual.revenueForecast += coPlan.totalGross;
+    accrual.retainageForecast += coPlan.totalRetainage;
+    // Low, deliberately. This is money resting on an assumption about approval
+    // rather than on an entry, and the confidence badge should say so.
+    accrual.confidenceSignals.push("low");
+    forecastRetainage += coPlan.totalRetainage;
+    get(coPlan.cashMonth).cashIn += coPlan.totalNet;
+
+    // One line per CO, so nobody finds an extra six figures in October and has
+    // to go looking for where it came from.
+    for (const entry of coPlan.entries) {
+      warnings.push({
+        kind: "pipeline_change_order",
+        ref: entry.coNumber,
+        message: describePipelineCo(entry, coPlan.month),
+      });
+    }
   }
 
   // The same treatment on the way out, off the subcontractor SOV.

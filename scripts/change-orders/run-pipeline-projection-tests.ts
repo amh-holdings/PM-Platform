@@ -1,0 +1,181 @@
+/**
+ * Change orders that are not approved yet, in the cash-flow forecast.
+ *
+ * Zarina: "Since it is draft, you project it for the next month. For example,
+ * we have 2 draft COs, assuming it will be submitted on October, then assume
+ * it will be billed on October for AFP14."
+ *
+ * An approved CO already reaches the forecast through its own SOV line. These
+ * rules are about everything before approval, which reached it nowhere.
+ */
+
+import {
+  isPipelineCo,
+  pipelineCoBillingMonth,
+  planPipelineCoRevenue,
+  describePipelineCo,
+} from "../../src/lib/change-order-projection";
+
+let passed = 0;
+const failures: string[] = [];
+
+function same(name: string, actual: unknown, expected: unknown) {
+  const a = JSON.stringify(actual);
+  const b = JSON.stringify(expected);
+  if (a === b) {
+    passed++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    failures.push(`${name} - got ${a}, want ${b}`);
+    console.log(`  FAIL  ${name} - got ${a}, want ${b}`);
+  }
+}
+
+function section(title: string) {
+  console.log(`\n${title}\n${"-".repeat(title.length)}`);
+}
+
+section("Which change orders count");
+
+same("a draft counts", isPipelineCo("draft"), true);
+same("internal review counts", isPipelineCo("internal_review"), true);
+same(
+  "submitted counts - it is MORE likely to be billed, not less",
+  isPipelineCo("submitted"),
+  true,
+);
+same(
+  "approved does NOT - it is already in the forecast through its SOV line",
+  isPipelineCo("approved"),
+  false,
+);
+same("rejected does not", isPipelineCo("rejected"), false);
+same("void does not", isPipelineCo("void"), false);
+same("nor does a missing status", isPipelineCo(null), false);
+
+section("Which month it bills in");
+
+same(
+  "one month after the AFP being assembled - September open means October",
+  pipelineCoBillingMonth("2026-09-01"),
+  "2026-10-01",
+);
+same("it rolls the year", pipelineCoBillingMonth("2026-12-01"), "2027-01-01");
+
+section("Zarina's two draft COs");
+
+const TWO_DRAFTS = [
+  { co_number: "CO-07", co_value: 48000, status: "draft" },
+  { co_number: "CO-08", co_value: 22500, status: "draft" },
+];
+
+{
+  // September is the open AFP, so these land on AFP 14 in October. No
+  // retainage, no payment terms: the plain case first.
+  const plan = planPipelineCoRevenue({
+    cos: TWO_DRAFTS,
+    openPeriodMonth: "2026-09-01",
+    ownerRetainagePct: 0,
+    ownerTermsDays: 0,
+  });
+  same("billed in October", plan.month, "2026-10-01");
+  same("cash in October too with no terms", plan.cashMonth, "2026-10-01");
+  same("both COs are in", plan.entries.length, 2);
+  same("totalling $70,500", plan.totalGross, 70500);
+  same("and all of it is cash", plan.totalNet, 70500);
+}
+
+{
+  // The real Sweet Springs shape: 5% retainage, Net 30.
+  const plan = planPipelineCoRevenue({
+    cos: TWO_DRAFTS,
+    openPeriodMonth: "2026-09-01",
+    ownerRetainagePct: 0.05,
+    ownerTermsDays: 30,
+  });
+  same("revenue is still recognised in October", plan.month, "2026-10-01");
+  same("but Net 30 pushes the cash to November", plan.cashMonth, "2026-11-01");
+  same("retainage held is 5%", plan.totalRetainage, 3525);
+  same("so cash in is the balance", plan.totalNet, 66975);
+}
+
+section("The awkward ones");
+
+same(
+  "an approved CO in the list is skipped, not double counted",
+  planPipelineCoRevenue({
+    cos: [...TWO_DRAFTS, { co_number: "CO-06", co_value: 100000, status: "approved" }],
+    openPeriodMonth: "2026-09-01",
+    ownerRetainagePct: 0,
+    ownerTermsDays: 0,
+  }).totalGross,
+  70500,
+);
+
+same(
+  "a time-only CO carries no money and no row",
+  planPipelineCoRevenue({
+    cos: [{ co_number: "CO-03", co_value: 0, status: "draft" }],
+    openPeriodMonth: "2026-09-01",
+    ownerRetainagePct: 0.05,
+    ownerTermsDays: 0,
+  }).entries.length,
+  0,
+);
+
+{
+  // A credit reduces revenue and is real. Negative retainage is not.
+  const plan = planPipelineCoRevenue({
+    cos: [{ co_number: "CO-09", co_value: -15000, status: "draft" }],
+    openPeriodMonth: "2026-09-01",
+    ownerRetainagePct: 0.05,
+    ownerTermsDays: 0,
+  });
+  same("a credit CO is counted", plan.totalGross, -15000);
+  same("with no retainage held against it", plan.totalRetainage, 0);
+  same("so the whole credit hits cash", plan.totalNet, -15000);
+}
+
+same(
+  "nothing in the pipeline plans nothing",
+  planPipelineCoRevenue({
+    cos: [{ co_number: "CO-06", co_value: 100000, status: "approved" }],
+    openPeriodMonth: "2026-09-01",
+    ownerRetainagePct: 0.05,
+    ownerTermsDays: 30,
+  }).entries.length,
+  0,
+);
+
+same(
+  "a CO with no number still gets a label rather than blank",
+  planPipelineCoRevenue({
+    cos: [{ co_number: "  ", co_value: 1000, status: "draft" }],
+    openPeriodMonth: "2026-09-01",
+    ownerRetainagePct: 0,
+    ownerTermsDays: 0,
+  }).entries[0].coNumber,
+  "CO",
+);
+
+section("What the forecast says about it");
+
+{
+  const line = describePipelineCo(
+    { coNumber: "CO-07", status: "draft", gross: 48000, retainage: 0, net: 48000 },
+    "2026-10-01",
+  );
+  same("it names the CO", line.includes("CO-07"), true);
+  same("it names the month", line.includes("2026-10"), true);
+  same("and it says the money rests on an assumption", /not on an approval/.test(line), true);
+}
+
+console.log(`\n${"=".repeat(60)}`);
+console.log(`${passed} passed, ${failures.length} failed`);
+if (failures.length) {
+  console.log("\nFailures:");
+  for (const f of failures) console.log(`  - ${f}`);
+  console.log("=".repeat(60));
+  process.exit(1);
+}
+console.log("=".repeat(60));
