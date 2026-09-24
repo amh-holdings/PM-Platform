@@ -49,6 +49,12 @@ const GROUPS: {
     title: "SOV lines not mapped to the schedule",
     effect: "No mapping means no month, so the line sits out of the forecast.",
   },
+  {
+    kind: "pipeline_change_order",
+    title: "Change orders assumed billed, not yet approved",
+    effect:
+      "In the forecast on an assumption about approval, not on an approval. If the owner says no, the month loses it.",
+  },
   { kind: "underbilled", title: "Billed less than earned", effect: "Revenue is later than the work." },
   { kind: "overbilled", title: "Billed more than earned", effect: "Revenue is ahead of the work." },
 ];
