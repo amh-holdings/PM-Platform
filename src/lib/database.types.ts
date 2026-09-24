@@ -1813,8 +1813,57 @@ export type Database = {
           },
         ]
       }
+      procurement_order_lines: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          extended_price: number | null
+          id: string
+          line_no: number | null
+          procurement_order_id: string
+          quantity: number | null
+          sort_order: number | null
+          unit_price: number | null
+          units: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          description?: string | null
+          extended_price?: number | null
+          id?: string
+          line_no?: number | null
+          procurement_order_id: string
+          quantity?: number | null
+          sort_order?: number | null
+          unit_price?: number | null
+          units?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          description?: string | null
+          extended_price?: number | null
+          id?: string
+          line_no?: number | null
+          procurement_order_id?: string
+          quantity?: number | null
+          sort_order?: number | null
+          unit_price?: number | null
+          units?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "procurement_order_lines_procurement_order_id_fkey"
+            columns: ["procurement_order_id"]
+            isOneToOne: false
+            referencedRelation: "procurement_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       procurement_orders: {
         Row: {
+          freight: number | null
+          sales_tax: number | null
           actual_delivery_date: string | null
           created_at: string | null
           description: string | null
@@ -1834,6 +1883,8 @@ export type Database = {
           vendor_name: string
         }
         Insert: {
+          freight?: number | null
+          sales_tax?: number | null
           actual_delivery_date?: string | null
           created_at?: string | null
           description?: string | null
@@ -1853,6 +1904,8 @@ export type Database = {
           vendor_name: string
         }
         Update: {
+          freight?: number | null
+          sales_tax?: number | null
           actual_delivery_date?: string | null
           created_at?: string | null
           description?: string | null

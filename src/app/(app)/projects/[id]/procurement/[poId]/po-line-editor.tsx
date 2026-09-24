@@ -1,0 +1,530 @@
+"use client";
+
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
+import { formatCurrency } from "@/lib/format";
+import {
+  derivedExtended,
+  describeTotalAgreement,
+  nextLineNo,
+  poTotals,
+  totalAgreement,
+} from "@/lib/procurement-lines";
+
+import {
+  addPoLine,
+  applyLineTotalToPo,
+  deletePoLine,
+  setPoTaxAndFreight,
+  updatePoLine,
+  type PoLineRow,
+} from "../../procurement-actions";
+
+/**
+ * The PO's line items, laid out the way the paper form is.
+ *
+ * Zarina: "I need to have option to add line items for PO forms. See PO form
+ * we used." Line, quantity, description, units, unit price, extended price,
+ * then Subtotal, Sales Tax, Freight, Total.
+ *
+ * Extended price is offered from quantity times unit price and can be cleared,
+ * because the real document does not always derive it. On PO-023 the freight
+ * line carries a unit price and no extended price, since the freight is
+ * carried below the subtotal instead; deriving it would bill it twice.
+ */
+export function PoLineEditor({
+  poId,
+  projectId,
+  poValue,
+  lines,
+  salesTax,
+  freight,
+  available,
+}: {
+  poId: string;
+  projectId: string;
+  poValue: number;
+  lines: PoLineRow[];
+  salesTax: number | null;
+  freight: number | null;
+  available: boolean;
+}) {
+  const router = useRouter();
+  const [, startTransition] = useTransition();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+
+  const blank = {
+    lineNo: String(nextLineNo(lines.map((l) => ({ line_no: l.lineNo })))),
+    quantity: "",
+    description: "",
+    units: "",
+    unitPrice: null as number | null,
+    extendedPrice: null as number | null,
+  };
+  const [draft, setDraft] = useState(blank);
+  const [tax, setTax] = useState<number | null>(salesTax);
+  const [frt, setFrt] = useState<number | null>(freight);
+
+  const asLines = lines.map((l) => ({
+    line_no: l.lineNo,
+    quantity: l.quantity,
+    unit_price: l.unitPrice,
+    extended_price: l.extendedPrice,
+  }));
+  const totals = poTotals({ lines: asLines, salesTax: tax, freight: frt });
+  const agreement = totalAgreement({
+    lines: asLines,
+    salesTax: tax,
+    freight: frt,
+    poValue,
+  });
+  const agreementNote = describeTotalAgreement(agreement, formatCurrency);
+
+  async function run(
+    fn: () => Promise<{ ok: true } | { ok: false; error: string }>,
+  ) {
+    setBusy(true);
+    setError(null);
+    const res = await fn();
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.error);
+      return false;
+    }
+    startTransition(() => router.refresh());
+    return true;
+  }
+
+  async function add() {
+    const ok = await run(() =>
+      addPoLine(poId, projectId, {
+        lineNo: draft.lineNo.trim() === "" ? null : Number(draft.lineNo),
+        quantity: draft.quantity.trim() === "" ? null : Number(draft.quantity),
+        description: draft.description,
+        units: draft.units,
+        unitPrice: draft.unitPrice,
+        extendedPrice: draft.extendedPrice,
+      }),
+    );
+    if (ok) {
+      setDraft({
+        ...blank,
+        lineNo: String(
+          nextLineNo([...asLines, { line_no: Number(draft.lineNo) || null }]),
+        ),
+      });
+    }
+  }
+
+  // Offered, not forced. Clearing the box is how a line like freight says it
+  // carries no extended price.
+  const suggested = derivedExtended({
+    quantity: draft.quantity.trim() === "" ? null : Number(draft.quantity),
+    unit_price: draft.unitPrice,
+  });
+
+  return (
+    <section className="rounded-lg border bg-card shadow-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 border-b px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold">Line items</h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            What the PO buys, line by line. The subtotal is the extended prices;
+            tax and freight sit below it, the way the paper form reads.
+          </p>
+        </div>
+        <div className="text-right text-xs">
+          <div className="text-muted-foreground">Total from lines</div>
+          <div className="font-mono text-sm font-medium">
+            {formatCurrency(totals.total)}
+          </div>
+        </div>
+      </div>
+
+      {!available && (
+        <p className="border-b bg-amber-50 px-4 py-2 text-xs text-amber-800">
+          Line items need database migration 0061. Everything else on this PO
+          keeps working without it.
+        </p>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="border-b bg-muted/40 text-muted-foreground">
+            <tr>
+              <th className="px-2 py-2 text-left font-medium">Line</th>
+              <th className="px-2 py-2 text-right font-medium">Quantity</th>
+              <th className="px-2 py-2 text-left font-medium">Description</th>
+              <th className="px-2 py-2 text-left font-medium">Units</th>
+              <th className="px-2 py-2 text-right font-medium">Unit price</th>
+              <th className="px-2 py-2 text-right font-medium">Extended price</th>
+              <th className="px-2 py-2" />
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((l) => (
+              <LineRow
+                key={l.id}
+                line={l}
+                busy={busy}
+                editing={editing === l.id}
+                onEdit={() => setEditing(l.id)}
+                onCancel={() => setEditing(null)}
+                onSave={async (patch) => {
+                  const ok = await run(() =>
+                    updatePoLine(l.id, poId, projectId, patch),
+                  );
+                  if (ok) setEditing(null);
+                }}
+                onDelete={() => run(() => deletePoLine(l.id, poId, projectId))}
+              />
+            ))}
+
+            {lines.length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-2 py-3 text-muted-foreground">
+                  No line items yet. Add them below and the subtotal builds
+                  itself.
+                </td>
+              </tr>
+            )}
+
+            {/* The row you type into. */}
+            <tr className="border-t bg-muted/20">
+              <td className="px-2 py-2">
+                <Input
+                  value={draft.lineNo}
+                  onChange={(e) => setDraft({ ...draft, lineNo: e.target.value })}
+                  inputMode="numeric"
+                  className="h-8 w-14 text-xs"
+                  aria-label="Line number"
+                />
+              </td>
+              <td className="px-2 py-2">
+                <Input
+                  value={draft.quantity}
+                  onChange={(e) => setDraft({ ...draft, quantity: e.target.value })}
+                  inputMode="decimal"
+                  className="h-8 w-20 text-right text-xs"
+                  aria-label="Quantity"
+                />
+              </td>
+              <td className="px-2 py-2">
+                <Input
+                  value={draft.description}
+                  onChange={(e) =>
+                    setDraft({ ...draft, description: e.target.value })
+                  }
+                  placeholder="Domestic Beam W6x25 cut @ (3.3m)"
+                  className="h-8 min-w-[16rem] text-xs"
+                  aria-label="Description"
+                />
+              </td>
+              <td className="px-2 py-2">
+                <Input
+                  value={draft.units}
+                  onChange={(e) => setDraft({ ...draft, units: e.target.value })}
+                  placeholder="EA"
+                  className="h-8 w-16 text-xs"
+                  aria-label="Units"
+                />
+              </td>
+              <td className="px-2 py-2">
+                <MoneyInput
+                  value={draft.unitPrice}
+                  onValueChange={(v) => setDraft({ ...draft, unitPrice: v })}
+                  className="h-8 w-28 text-right text-xs"
+                  aria-label="Unit price"
+                />
+              </td>
+              <td className="px-2 py-2">
+                <MoneyInput
+                  value={draft.extendedPrice}
+                  onValueChange={(v) => setDraft({ ...draft, extendedPrice: v })}
+                  className="h-8 w-32 text-right text-xs"
+                  aria-label="Extended price"
+                />
+                {suggested != null && draft.extendedPrice == null && (
+                  <button
+                    type="button"
+                    className="mt-1 block w-full text-right text-[10px] text-emerald-700 hover:underline"
+                    onClick={() => setDraft({ ...draft, extendedPrice: suggested })}
+                  >
+                    use {formatCurrency(suggested)}
+                  </button>
+                )}
+              </td>
+              <td className="px-2 py-2 text-right">
+                <Button size="sm" disabled={busy} onClick={() => void add()}>
+                  Add
+                </Button>
+              </td>
+            </tr>
+          </tbody>
+
+          <tfoot className="border-t">
+            <tr>
+              <td colSpan={4} />
+              <td className="px-2 py-1.5 text-right text-muted-foreground">
+                Subtotal
+              </td>
+              <td className="px-2 py-1.5 text-right font-mono">
+                {formatCurrency(totals.subtotal)}
+              </td>
+              <td />
+            </tr>
+            <tr>
+              <td colSpan={4} />
+              <td className="px-2 py-1.5 text-right text-muted-foreground">
+                Sales tax
+              </td>
+              <td className="px-2 py-1.5 text-right">
+                <MoneyInput
+                  value={tax}
+                  onValueChange={setTax}
+                  onBlur={() =>
+                    void run(() =>
+                      setPoTaxAndFreight(poId, projectId, {
+                        salesTax: tax,
+                        freight: frt,
+                      }),
+                    )
+                  }
+                  className="ml-auto h-8 w-32 text-right text-xs"
+                  aria-label="Sales tax"
+                />
+              </td>
+              <td />
+            </tr>
+            <tr>
+              <td colSpan={4} />
+              <td className="px-2 py-1.5 text-right text-muted-foreground">
+                Freight
+              </td>
+              <td className="px-2 py-1.5 text-right">
+                <MoneyInput
+                  value={frt}
+                  onValueChange={setFrt}
+                  onBlur={() =>
+                    void run(() =>
+                      setPoTaxAndFreight(poId, projectId, {
+                        salesTax: tax,
+                        freight: frt,
+                      }),
+                    )
+                  }
+                  className="ml-auto h-8 w-32 text-right text-xs"
+                  aria-label="Freight"
+                />
+              </td>
+              <td />
+            </tr>
+            <tr className="border-t">
+              <td colSpan={4} />
+              <td className="px-2 py-2 text-right font-medium">Total</td>
+              <td className="px-2 py-2 text-right font-mono font-semibold">
+                {formatCurrency(totals.total)}
+              </td>
+              <td />
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      {totals.pricedButNotExtended > 0 && (
+        <p className="border-t px-4 py-2 text-[11px] text-muted-foreground">
+          {totals.pricedButNotExtended} line
+          {totals.pricedButNotExtended === 1 ? " carries" : "s carry"} a unit
+          price with no extended price, so
+          {totals.pricedButNotExtended === 1 ? " it is" : " they are"} not in the
+          subtotal. That is how the paper form handles freight and anything
+          included in another line.
+        </p>
+      )}
+
+      {agreementNote && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t bg-amber-50 px-4 py-2">
+          <p className="text-xs text-amber-900">{agreementNote}</p>
+          {(agreement.state === "adopt" || agreement.state === "disagrees") && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() =>
+                void run(() =>
+                  applyLineTotalToPo(poId, projectId, agreement.total),
+                )
+              }
+            >
+              Set PO value to {formatCurrency(agreement.total)}
+            </Button>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <p className="border-t px-4 py-2 text-xs text-red-600">{error}</p>
+      )}
+    </section>
+  );
+}
+
+function LineRow({
+  line,
+  busy,
+  editing,
+  onEdit,
+  onCancel,
+  onSave,
+  onDelete,
+}: {
+  line: PoLineRow;
+  busy: boolean;
+  editing: boolean;
+  onEdit: () => void;
+  onCancel: () => void;
+  onSave: (patch: {
+    lineNo: number | null;
+    quantity: number | null;
+    description: string;
+    units: string;
+    unitPrice: number | null;
+    extendedPrice: number | null;
+  }) => void;
+  onDelete: () => void;
+}) {
+  const [lineNo, setLineNo] = useState(line.lineNo == null ? "" : String(line.lineNo));
+  const [quantity, setQuantity] = useState(
+    line.quantity == null ? "" : String(line.quantity),
+  );
+  const [description, setDescription] = useState(line.description ?? "");
+  const [units, setUnits] = useState(line.units ?? "");
+  const [unitPrice, setUnitPrice] = useState<number | null>(line.unitPrice);
+  const [extendedPrice, setExtendedPrice] = useState<number | null>(
+    line.extendedPrice,
+  );
+
+  if (!editing) {
+    return (
+      <tr className="border-b last:border-0">
+        <td className="px-2 py-1.5 font-mono text-muted-foreground">
+          {line.lineNo ?? "-"}
+        </td>
+        <td className="px-2 py-1.5 text-right font-mono">
+          {line.quantity ?? "-"}
+        </td>
+        <td className="px-2 py-1.5">{line.description ?? "-"}</td>
+        <td className="px-2 py-1.5 text-muted-foreground">{line.units ?? "-"}</td>
+        <td className="px-2 py-1.5 text-right font-mono">
+          {line.unitPrice == null ? "-" : formatCurrency(line.unitPrice)}
+        </td>
+        <td className="px-2 py-1.5 text-right font-mono">
+          {line.extendedPrice == null ? "-" : formatCurrency(line.extendedPrice)}
+        </td>
+        <td className="whitespace-nowrap px-2 py-1.5 text-right">
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={onEdit}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            className="ml-2 text-muted-foreground hover:text-destructive"
+            onClick={onDelete}
+          >
+            Remove
+          </button>
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <tr className="border-b bg-accent/40 last:border-0">
+      <td className="px-2 py-1.5">
+        <Input
+          value={lineNo}
+          onChange={(e) => setLineNo(e.target.value)}
+          inputMode="numeric"
+          className="h-8 w-14 text-xs"
+          aria-label="Line number"
+        />
+      </td>
+      <td className="px-2 py-1.5">
+        <Input
+          value={quantity}
+          onChange={(e) => setQuantity(e.target.value)}
+          inputMode="decimal"
+          className="h-8 w-20 text-right text-xs"
+          aria-label="Quantity"
+        />
+      </td>
+      <td className="px-2 py-1.5">
+        <Input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          className="h-8 min-w-[16rem] text-xs"
+          aria-label="Description"
+        />
+      </td>
+      <td className="px-2 py-1.5">
+        <Input
+          value={units}
+          onChange={(e) => setUnits(e.target.value)}
+          className="h-8 w-16 text-xs"
+          aria-label="Units"
+        />
+      </td>
+      <td className="px-2 py-1.5">
+        <MoneyInput
+          value={unitPrice}
+          onValueChange={setUnitPrice}
+          className="h-8 w-28 text-right text-xs"
+          aria-label="Unit price"
+        />
+      </td>
+      <td className="px-2 py-1.5">
+        <MoneyInput
+          value={extendedPrice}
+          onValueChange={setExtendedPrice}
+          className="h-8 w-32 text-right text-xs"
+          aria-label="Extended price"
+        />
+      </td>
+      <td className="whitespace-nowrap px-2 py-1.5 text-right">
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={() =>
+            onSave({
+              lineNo: lineNo.trim() === "" ? null : Number(lineNo),
+              quantity: quantity.trim() === "" ? null : Number(quantity),
+              description,
+              units,
+              unitPrice,
+              extendedPrice,
+            })
+          }
+        >
+          Save
+        </Button>
+        <button
+          type="button"
+          className="ml-2 text-muted-foreground hover:text-foreground"
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+      </td>
+    </tr>
+  );
+}
