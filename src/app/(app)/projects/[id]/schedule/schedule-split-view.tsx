@@ -117,6 +117,7 @@ import {
   TASK_TYPE_LABELS,
   progressCanBeSetByHand,
 } from "@/lib/schedule-task-type";
+import { STATUS_TONE, rowTone } from "@/lib/schedule-status-tone";
 
 // Fields the grid edits in place. Anything not here is either derived (float,
 // projected dates), owned by another workflow (progress comes from approved
@@ -248,15 +249,6 @@ function widthStorageKey(projectId: string): string {
 function chartStorageKey(projectId: string): string {
   return `schedule-show-chart:${projectId}`;
 }
-
-const STATUS_TONE: Record<string, string> = {
-  Complete: "bg-emerald-100 text-emerald-900",
-  "In Progress": "bg-blue-100 text-blue-900",
-  Awaiting: "bg-amber-100 text-amber-900",
-  "Not Started": "bg-muted text-muted-foreground",
-  Rejected: "bg-destructive/10 text-destructive",
-  Approved: "bg-emerald-100 text-emerald-900",
-};
 
 function fmtDate(iso: string | null): string {
   if (!iso) return "-";
@@ -2343,8 +2335,15 @@ function GridRow({
         focused && "ring-1 ring-inset ring-primary/60",
         selected && "bg-blue-50/60",
         rowDirty && "bg-amber-50/60",
-        !selected && !rowDirty && c?.critical && "bg-destructive/5",
-        !selected && !rowDirty && !c?.critical && c?.nearCritical && "bg-amber-50/40",
+        // Selection and unsaved edits are about what YOU just did, so they win.
+        // Under that, status and the critical path argue it out in rowTone.
+        !selected &&
+          !rowDirty &&
+          rowTone({
+            status: valueOf(t, "status"),
+            critical: !!c?.critical,
+            nearCritical: !!c?.nearCritical,
+          }),
         dragging && "opacity-40",
       )}
       style={{
