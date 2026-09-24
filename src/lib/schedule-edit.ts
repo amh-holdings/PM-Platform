@@ -2322,3 +2322,54 @@ export function describeSavedCells<T extends Record<string, unknown>>(
   const shown = parts.slice(0, maxRows).join(". ");
   return `${shown}. And ${parts.length - maxRows} more.`;
 }
+
+// ---------------------------------------------------------------------------
+// Rows that are on the project but not on the screen.
+//
+// Zarina: "Mark says he is not seeing the DEQ inspection and corrections in
+// the schedule on his end."
+//
+// Nothing in the app hides a schedule row from one person and not another.
+// There is no role filter on the schedule query, and the row-level policies
+// are per project, not per row: a role either reads the whole schedule or none
+// of it. So a row that is missing on one screen and present on another is a
+// filter on that screen.
+//
+// The grid could not say that. Its "Clear filters" button only appears for the
+// filters the grid itself owns, and the scope filter lives a level up in the
+// workspace and slices the task list before the grid ever sees it. So a row
+// could be hidden by the scope, by Hide complete, or by a leftover search, and
+// the grid showed a shorter list with nothing to explain it - which reads as
+// "the row is not there".
+// ---------------------------------------------------------------------------
+
+/** One line for the toolbar, or null when everything on the project is shown. */
+export function describeHiddenRows(input: {
+  /** Rows currently drawn. */
+  shown: number;
+  /** Rows on the project. */
+  total: number;
+  /** The scope filter's label, when one is set. */
+  scope?: string | null;
+  /** How many of the grid's own filters are on. */
+  filterCount: number;
+  /** Rows folded away under a collapsed summary. */
+  collapsed?: number;
+}): string | null {
+  const hidden = Math.max(0, input.total - input.shown);
+  if (hidden === 0) return null;
+
+  const reasons: string[] = [];
+  if (input.scope) reasons.push(`the ${input.scope} scope`);
+  if (input.filterCount > 0) {
+    reasons.push(`${input.filterCount} filter${input.filterCount === 1 ? "" : "s"}`);
+  }
+  if (input.collapsed && input.collapsed > 0) {
+    reasons.push(`${input.collapsed} collapsed row${input.collapsed === 1 ? "" : "s"}`);
+  }
+
+  const why = reasons.length
+    ? ` Hidden by ${reasons.join(" and ")}.`
+    : " Hidden by a filter.";
+  return `${input.shown} of ${input.total} rows.${why}`;
+}

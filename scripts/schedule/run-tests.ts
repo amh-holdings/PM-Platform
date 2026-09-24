@@ -88,6 +88,7 @@ import {
   ancestorTrail,
   describeAncestorTrail,
   describeDraftReplaced,
+  describeHiddenRows,
   describeSavedCells,
   pendingDraftFields,
   withoutTaskDraft,
@@ -3205,6 +3206,68 @@ section("Dragging a branch above the first row of the sheet");
       const many = [replaced[0], { ...replaced[0], wbs: "1.3" }, { ...replaced[0], wbs: "1.4" }];
       return (describeForecastOverwrite(many, iso) ?? "").includes("2 other rows");
     })(),
+  );
+}
+
+// ============================================================================
+// Rows on the project but not on the screen
+//
+// Zarina: "Mark says he is not seeing the DEQ inspection and corrections in
+// the schedule on his end." Nothing in the app hides a schedule row from one
+// person and not another: there is no role filter on the schedule query, and
+// the row-level policies are per project, not per row. So a row missing on one
+// screen is a filter on that screen, and the grid has to say so.
+// ============================================================================
+{
+  eq(
+    "everything shown says nothing",
+    describeHiddenRows({ shown: 92, total: 92, filterCount: 0 }),
+    null,
+  );
+
+  // The one that would have answered Mark in a second.
+  eq(
+    "the scope filter is named, because it slices the list a level above the grid",
+    describeHiddenRows({ shown: 78, total: 92, scope: "Civil", filterCount: 0 }),
+    "78 of 92 rows. Hidden by the Civil scope.",
+  );
+
+  eq(
+    "a filter on its own is counted",
+    describeHiddenRows({ shown: 90, total: 92, filterCount: 1 }),
+    "90 of 92 rows. Hidden by 1 filter.",
+  );
+
+  eq(
+    "and reads as plural past one",
+    describeHiddenRows({ shown: 40, total: 92, filterCount: 3 }),
+    "40 of 92 rows. Hidden by 3 filters.",
+  );
+
+  eq(
+    "scope and filters together",
+    describeHiddenRows({ shown: 70, total: 92, scope: "Civil", filterCount: 2 }),
+    "70 of 92 rows. Hidden by the Civil scope and 2 filters.",
+  );
+
+  eq(
+    "a folded summary counts too - the rows are there, just not drawn",
+    describeHiddenRows({ shown: 80, total: 92, filterCount: 0, collapsed: 12 }),
+    "80 of 92 rows. Hidden by 12 collapsed rows.",
+  );
+
+  // Rows can go missing without any of the three reasons being set, and the
+  // note must still fire rather than staying silent about a short list.
+  eq(
+    "rows missing for no reason we can name still get reported",
+    describeHiddenRows({ shown: 50, total: 92, filterCount: 0 }),
+    "50 of 92 rows. Hidden by a filter.",
+  );
+
+  eq(
+    "more shown than the project has is not a negative count",
+    describeHiddenRows({ shown: 95, total: 92, filterCount: 0 }),
+    null,
   );
 }
 

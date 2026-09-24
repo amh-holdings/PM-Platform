@@ -609,6 +609,7 @@ export function ScheduleWorkspace({
           phase1Available={phase1Available}
           typeAvailable={typeAvailable}
           constraintState={constraintState}
+          scopeFilter={scopeFilter || null}
           draft={draft}
           setDraft={setDraft}
         />
