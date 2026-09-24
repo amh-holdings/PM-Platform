@@ -941,7 +941,15 @@ export function ScheduleSplitView({
     });
     setMsg({
       tone: "good",
-      text: `${res.count} task${res.count === 1 ? "" : "s"} saved. Float and the projection have been recalculated. The baseline is untouched, so the variance is still visible.`,
+      // The delivery note is what says whether completing a procurement row
+      // actually reached the AFP, which is the whole point of doing it here
+      // rather than twice. It leads, because it is the part that moves money.
+      text: [
+        res.deliveryNote,
+        `${res.count} task${res.count === 1 ? "" : "s"} saved. Float and the projection have been recalculated. The baseline is untouched, so the variance is still visible.`,
+      ]
+        .filter(Boolean)
+        .join(" "),
     });
     startTransition(() => router.refresh());
   }
