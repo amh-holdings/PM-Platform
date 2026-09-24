@@ -279,3 +279,34 @@ export function totalForNewPo(input: {
   });
   return total;
 }
+
+/**
+ * Whether the extended price should keep following quantity times unit price.
+ *
+ * Zarina: "Should automatically total the extended." It was a suggestion you
+ * had to click, which is right for the freight line and wrong for every other
+ * line on the order, and every other line is most of them.
+ *
+ * So it fills itself, and stops the moment somebody says otherwise. Two ways
+ * of saying otherwise, both read off the line rather than remembered:
+ *
+ * A figure that is not quantity times unit price was typed by a person. Left
+ * alone.
+ *
+ * A blank extended price on a line that HAS a unit price is the freight case:
+ * PO-023 line 6 carries $22,444.50 a unit with the extended column struck
+ * through, because the freight is carried below the subtotal. Filling that in
+ * would bill it twice. Left alone, and the "use $22,444.50" link comes back so
+ * it can be undone.
+ *
+ * A blank line with no unit price yet has said nothing at all, so it follows.
+ */
+export function extendedIsAuto(line: PoLine): boolean {
+  const derived = derivedExtended(line);
+  const current = line.extended_price;
+  if (current === null || current === undefined) {
+    return line.unit_price === null || line.unit_price === undefined;
+  }
+  if (derived === null) return false;
+  return Math.abs(derived - Number(current)) < 0.005;
+}

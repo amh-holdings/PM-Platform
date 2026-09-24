@@ -10,6 +10,7 @@ import { formatCurrency } from "@/lib/format";
 import {
   derivedExtended,
   describeTotalAgreement,
+  extendedIsAuto,
   nextLineNo,
   poTotals,
   totalAgreement,
@@ -122,8 +123,33 @@ export function PoLineEditor({
     }
   }
 
-  // Offered, not forced. Clearing the box is how a line like freight says it
-  // carries no extended price.
+  /**
+   * Edit the row being added, totalling the extended price as you go.
+   *
+   * Zarina: "Should automatically total the extended." Whether it keeps
+   * following is read off the row rather than remembered, so a typed figure
+   * and a deliberately cleared box both survive a later quantity change.
+   */
+  function patchDraft(next: Partial<typeof draft>, touchedExtended = false) {
+    setDraft((prev) => {
+      const merged = { ...prev, ...next };
+      const wasAuto = extendedIsAuto({
+        quantity: prev.quantity.trim() === "" ? null : Number(prev.quantity),
+        unit_price: prev.unitPrice,
+        extended_price: prev.extendedPrice,
+      });
+      if (touchedExtended || !wasAuto) return merged;
+      return {
+        ...merged,
+        extendedPrice: derivedExtended({
+          quantity: merged.quantity.trim() === "" ? null : Number(merged.quantity),
+          unit_price: merged.unitPrice,
+        }),
+      };
+    });
+  }
+
+  // The box fills itself. This is the way back after clearing it.
   const suggested = derivedExtended({
     quantity: draft.quantity.trim() === "" ? null : Number(draft.quantity),
     unit_price: draft.unitPrice,
@@ -221,7 +247,7 @@ export function PoLineEditor({
               <td className="px-2 py-2">
                 <Input
                   value={draft.quantity}
-                  onChange={(e) => setDraft({ ...draft, quantity: e.target.value })}
+                  onChange={(e) => patchDraft({ quantity: e.target.value })}
                   inputMode="decimal"
                   className="h-8 w-full text-right text-xs"
                   aria-label="Quantity"
@@ -250,7 +276,7 @@ export function PoLineEditor({
               <td className="px-2 py-2">
                 <MoneyInput
                   value={draft.unitPrice}
-                  onValueChange={(v) => setDraft({ ...draft, unitPrice: v })}
+                  onValueChange={(v) => patchDraft({ unitPrice: v })}
                   className="h-8 w-full text-right text-xs"
                   aria-label="Unit price"
                 />
@@ -258,7 +284,7 @@ export function PoLineEditor({
               <td className="px-2 py-2">
                 <MoneyInput
                   value={draft.extendedPrice}
-                  onValueChange={(v) => setDraft({ ...draft, extendedPrice: v })}
+                  onValueChange={(v) => patchDraft({ extendedPrice: v }, true)}
                   className="h-8 w-full text-right text-xs"
                   aria-label="Extended price"
                 />
@@ -422,6 +448,33 @@ function LineRow({
     line.extendedPrice,
   );
 
+  /**
+   * Retotal the extended price while the row is being edited.
+   *
+   * Same rule as everywhere else: it follows quantity times unit price until
+   * the row says otherwise, and what the row says is read off the row. A typed
+   * figure stands and a cleared box on a priced line stays cleared, which is
+   * the freight case.
+   */
+  function retotal(next: { quantity?: string; unitPrice?: number | null }) {
+    const q = next.quantity ?? quantity;
+    const u = next.unitPrice === undefined ? unitPrice : next.unitPrice;
+    if (next.quantity !== undefined) setQuantity(next.quantity);
+    if (next.unitPrice !== undefined) setUnitPrice(next.unitPrice);
+    const wasAuto = extendedIsAuto({
+      quantity: quantity.trim() === "" ? null : Number(quantity),
+      unit_price: unitPrice,
+      extended_price: extendedPrice,
+    });
+    if (!wasAuto) return;
+    setExtendedPrice(
+      derivedExtended({
+        quantity: q.trim() === "" ? null : Number(q),
+        unit_price: u,
+      }),
+    );
+  }
+
   if (!editing) {
     return (
       <tr className="border-b last:border-0">
@@ -474,7 +527,7 @@ function LineRow({
       <td className="px-2 py-1.5">
         <Input
           value={quantity}
-          onChange={(e) => setQuantity(e.target.value)}
+          onChange={(e) => retotal({ quantity: e.target.value })}
           inputMode="decimal"
           className="h-8 w-full text-right text-xs"
           aria-label="Quantity"
@@ -499,7 +552,7 @@ function LineRow({
       <td className="px-2 py-1.5">
         <MoneyInput
           value={unitPrice}
-          onValueChange={setUnitPrice}
+          onValueChange={(v) => retotal({ unitPrice: v })}
           className="h-8 w-full text-right text-xs"
           aria-label="Unit price"
         />
