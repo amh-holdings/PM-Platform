@@ -204,7 +204,12 @@ export function findCycleWith(
   for (const t of tasks) {
     const l =
       t.wbs_code === editedWbs ? editedLinks : parsePredecessors(t.predecessors);
-    links.set(t.wbs_code, l.filter((x) => known.has(x.pred)));
+    // A summary link is really a link to everything under it, so the loop
+    // check has to see it that way or a cycle through a branch gets through.
+    links.set(
+      t.wbs_code,
+      expandSummaryLinks(l, tasks).filter((x) => known.has(x.pred)),
+    );
   }
   return topoSort(Array.from(known), links).cycle;
 }
@@ -214,6 +219,97 @@ export function leavesOf<T extends { wbs_code: string }>(tasks: T[]): T[] {
   return tasks.filter(
     (t) => !tasks.some((o) => o.wbs_code !== t.wbs_code && o.wbs_code.startsWith(t.wbs_code + ".")),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Linking to a whole branch.
+//
+// Zarina: "Should show parent line suggestion as well so they represent once
+// all child task are done it will trigger a line."
+//
+// The picker only ever offered leaves, and the engine only ever scheduled
+// them, so naming a summary as a predecessor did nothing at all. That also
+// meant a row vanished from the picker the moment somebody added a child under
+// it, which is what "we can't add predecessors that are just recently added"
+// was: not the new row missing, the row it was added under.
+//
+// A summary predecessor means the branch. Finish-to-start against 4.4.7 is
+// "after everything under 4.4.7 is finished", which is one link per leaf
+// underneath - the engine already takes the latest of several predecessors, so
+// fanning out says exactly that with no new machinery.
+//
+// Start-to-start and start-to-finish are NOT expanded this way. Against a
+// branch they mean its EARLIEST start, and a fan-out takes the latest, so it
+// would quietly schedule the opposite of what was asked. The editor does not
+// offer them on a summary.
+// ---------------------------------------------------------------------------
+
+/** Relationship types a summary predecessor can carry. */
+export const SUMMARY_REL_TYPES: RelType[] = ["FS", "FF"];
+
+export function summaryCodesOf<T extends { wbs_code: string }>(
+  tasks: T[],
+): Set<string> {
+  const codes = tasks.map((t) => t.wbs_code);
+  const summaries = new Set<string>();
+  for (const code of codes) {
+    if (codes.some((o) => o !== code && o.startsWith(code + "."))) {
+      summaries.add(code);
+    }
+  }
+  return summaries;
+}
+
+export function leafCodesUnder<T extends { wbs_code: string }>(
+  code: string,
+  tasks: T[],
+): string[] {
+  const leaves = new Set(leavesOf(tasks).map((t) => t.wbs_code));
+  return tasks
+    .map((t) => t.wbs_code)
+    .filter((c) => c.startsWith(code + ".") && leaves.has(c))
+    .sort();
+}
+
+/**
+ * Rewrite a task's links so a summary predecessor points at its leaves.
+ *
+ * A branch with nothing schedulable under it drops the link rather than
+ * inventing one, the same way an unresolvable code always has. A duplicate -
+ * the same leaf reached directly and through its parent - keeps the stronger
+ * lag, because two links to one task is one constraint and the tighter of the
+ * two is the real one.
+ */
+export function expandSummaryLinks<T extends { wbs_code: string }>(
+  links: readonly Link[],
+  tasks: T[],
+): Link[] {
+  const summaries = summaryCodesOf(tasks);
+  if (summaries.size === 0) return [...links];
+
+  const out: Link[] = [];
+  const byPred = new Map<string, number>();
+  const push = (link: Link) => {
+    const key = `${link.pred}|${link.type}`;
+    const at = byPred.get(key);
+    if (at === undefined) {
+      byPred.set(key, out.length);
+      out.push(link);
+      return;
+    }
+    if (link.lag > out[at].lag) out[at] = link;
+  };
+
+  for (const link of links) {
+    if (!summaries.has(link.pred) || !SUMMARY_REL_TYPES.includes(link.type)) {
+      push(link);
+      continue;
+    }
+    for (const leaf of leafCodesUnder(link.pred, tasks)) {
+      push({ pred: leaf, type: link.type, lag: link.lag });
+    }
+  }
+  return out;
 }
 
 export function isMilestoneTask(t: CpmInput): boolean {
@@ -477,7 +573,11 @@ export function computeCpm(
   for (const t of tasks) {
     links.set(
       t.wbs_code,
-      parsePredecessors(t.predecessors).filter((l) => known.has(l.pred)),
+      // Summary predecessors resolve to the leaves under them BEFORE the
+      // unknown-code filter, which only knows about leaves.
+      expandSummaryLinks(parsePredecessors(t.predecessors), allTasks).filter(
+        (l) => known.has(l.pred),
+      ),
     );
   }
 

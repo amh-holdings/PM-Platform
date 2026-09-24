@@ -26,6 +26,7 @@ export function TaskCombobox<T extends SearchableTask>({
   options,
   onChange,
   rowOf,
+  branchSizeOf,
   invalid,
   placeholder = "Type a row number, code or task name",
 }: {
@@ -34,6 +35,8 @@ export function TaskCombobox<T extends SearchableTask>({
   options: readonly T[];
   onChange: (wbs: string) => void;
   rowOf?: (wbs: string) => number | null | undefined;
+  /** How many tasks sit under this code, when it is a branch rather than work. */
+  branchSizeOf?: (wbs: string) => number;
   invalid?: boolean;
   placeholder?: string;
 }) {
@@ -53,8 +56,10 @@ export function TaskCombobox<T extends SearchableTask>({
     row: rowOf?.(value) ?? null,
   });
 
+  // 200 rather than 50. Branches are listed now, which adds rows, and a
+  // person scrolling for a code they have not finished typing should reach it.
   const { matches, hidden } = useMemo(
-    () => searchTasks(options, query ?? "", { rowOf }),
+    () => searchTasks(options, query ?? "", { rowOf, limit: 200 }),
     [options, query, rowOf],
   );
 
@@ -141,12 +146,12 @@ export function TaskCombobox<T extends SearchableTask>({
         >
           {matches.length === 0 && (
             <p className="px-2 py-2 text-xs text-muted-foreground">
-              No task matches that. Summary rows are not listed - only rows that
-              carry their own dates can drive another task.
+              No task or branch matches that.
             </p>
           )}
           {matches.map((o, i) => {
             const row = rowOf?.(o.wbs_code);
+            const branch = branchSizeOf?.(o.wbs_code) ?? 0;
             return (
               <button
                 key={o.wbs_code}
@@ -169,6 +174,11 @@ export function TaskCombobox<T extends SearchableTask>({
                   {row != null ? row : o.wbs_code}
                 </span>
                 <span className="truncate">{o.task_name}</span>
+                {branch > 0 && (
+                  <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                    branch of {branch}
+                  </span>
+                )}
                 {row != null && (
                   <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">
                     {o.wbs_code}
