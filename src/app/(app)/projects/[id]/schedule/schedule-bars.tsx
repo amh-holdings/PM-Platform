@@ -38,7 +38,10 @@ export const HEADER_H = 36;
  * so a header that has drifted is a header you cannot drag the right edge of.
  */
 // Drag handle, tick box, and the Insert row control that appears on hover.
-export const GUTTER_W = 78;
+// Measured to the three controls rather than rounded up: the gutter is the
+// first thing the eye crosses, and slack there reads as the grid starting
+// late.
+export const GUTTER_W = 68;
 export const ACTION_W = 56;
 
 export const ZOOMS = [

@@ -189,6 +189,23 @@ type Column = {
    * asked for.
    */
   flex?: boolean;
+  /**
+   * Which edge the values sit against. Numbers go right so the units line up
+   * and a 6 reads against a 365 at a glance; everything else goes left.
+   *
+   * It is on the COLUMN rather than in each cell because the header has to
+   * match. "#" sat left above right-aligned row numbers, which is what made
+   * the first two columns look out of true.
+   */
+  align?: "left" | "right";
+  /**
+   * Draws a rule down the right edge of this column.
+   *
+   * On "#" only. A right-aligned row number ending 6px from a left-aligned
+   * WBS code reads as one value with a space in it: "3 4.2" looks like a
+   * number, not like row 3, code 4.2.
+   */
+  divider?: boolean;
 };
 
 // Widths are fixed rather than fluid so the grid and the bars keep the same
@@ -198,8 +215,10 @@ const ALL_COLUMNS: Column[] = [
   {
     key: "row",
     label: "#",
-    width: 44,
+    width: 48,
     derived: true,
+    align: "right",
+    divider: true,
     title: "Row number, the way Smartsheet numbers a sheet. Type one of these into a Predecessors cell instead of a WBS code. Numbers come from the whole schedule, so filtering leaves gaps rather than renumbering.",
   },
   { key: "code", label: "Code", width: 70 },
@@ -209,7 +228,7 @@ const ALL_COLUMNS: Column[] = [
   { key: "assigned", label: "Assigned", width: 110 },
   { key: "phase", label: "Phase", width: 104 },
   { key: "progress", label: "Progress", width: 96, derived: true, title: "Percent complete. Green is from an approved field report, amber was set by hand, grey is rolled up from the leaves below. Hover for the report date." },
-  { key: "dur", label: "Dur", width: 44 },
+  { key: "dur", label: "Dur", width: 44, align: "right" },
   { key: "start", label: "Start", width: 120 },
   { key: "finish", label: "Finish", width: 120 },
   {
@@ -224,9 +243,10 @@ const ALL_COLUMNS: Column[] = [
     label: "Float",
     width: 72,
     derived: true,
+    align: "right",
     title: "Total float over free float. Total is how far the project can absorb; free is how far this task can move without touching a successor.",
   },
-  { key: "variance", label: "vs Base", width: 72, derived: true },
+  { key: "variance", label: "vs Base", width: 72, derived: true, align: "right" },
   { key: "predecessors", label: "Predecessors", width: 170 },
 ];
 
@@ -2057,10 +2077,12 @@ export function ScheduleSplitView({
                 style={{ height: HEADER_H }}
               >
                 <div
-                  className="flex shrink-0 items-center gap-1 px-1.5"
+                  className="flex shrink-0 items-center gap-0.5 px-1"
                   style={{ width: GUTTER_W }}
                 >
-                  <span className="w-3" />
+                  {/* Stands in for the drag handle, so the select-all box sits
+                      over the row boxes rather than half a control left. */}
+                  <span className="w-3 shrink-0" />
                   <input
                     type="checkbox"
                     checked={allSelected}
@@ -2077,6 +2099,10 @@ export function ScheduleSplitView({
                       "relative px-1.5",
                       !c.flex && "shrink-0",
                       c.derived && "text-muted-foreground/70",
+                      // The header has to sit over its own values or the
+                      // column reads crooked however well the cells line up.
+                      c.align === "right" && "text-right",
+                      c.divider && "border-r",
                     )}
                     style={
                       c.flex
@@ -2486,7 +2512,7 @@ function GridRow({
       }}
     >
       <div
-        className="flex shrink-0 items-center gap-1 px-1.5"
+        className="flex shrink-0 items-center gap-0.5 px-1"
         style={{ width: GUTTER_W }}
       >
         <span
@@ -2525,7 +2551,14 @@ function GridRow({
         return (
           <div
             key={col.key}
-            className={cn("px-1", !col.flex && "shrink-0")}
+            className={cn(
+              // Same padding as the header. They were px-1 against px-1.5,
+              // which put every value half a step left of its own heading.
+              "px-1.5",
+              !col.flex && "shrink-0",
+              col.align === "right" && "text-right",
+              col.divider && "border-r",
+            )}
             style={
               col.flex
                 ? { flexGrow: 1, flexShrink: 1, flexBasis: col.width, minWidth: col.width }
