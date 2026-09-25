@@ -1657,7 +1657,7 @@ export type PoLineRow = {
    * that arrives on one truck leaves these null and uses the PO-level link.
    */
   linkedDeliveryTaskWbsCode: string | null;
-  actualDeliveryDate: string | null;
+
 };
 
 export type PoLinesResult =
@@ -1709,8 +1709,6 @@ export async function getPoLines(poId: string): Promise<PoLinesResult> {
       linkedDeliveryTaskWbsCode:
         (l as { linked_delivery_task_wbs_code?: string | null }).linked_delivery_task_wbs_code ??
         null,
-      actualDeliveryDate:
-        (l as { actual_delivery_date?: string | null }).actual_delivery_date ?? null,
     })),
   };
 }
@@ -1805,17 +1803,17 @@ export async function setPoLineDelivery(
   lineId: string,
   poId: string,
   projectId: string,
-  input: { wbsCode: string | null; actualDeliveryDate?: string | null },
+  input: { wbsCode: string | null },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
+  // The schedule row and nothing else. An item carries no arrival date of its
+  // own. Zarina: "If the delivery date in the schedule is different on when it
+  // actually arrives, I will just adjust schedule and not here."
   const patch: Record<string, unknown> = {
     linked_delivery_task_wbs_code: input.wbsCode?.trim() || null,
   };
-  if (input.actualDeliveryDate !== undefined) {
-    patch.actual_delivery_date = input.actualDeliveryDate || null;
-  }
 
   const { error } = await auth.supabase
     .from("procurement_order_lines")

@@ -755,7 +755,6 @@ export async function buildProjection(
       line_no?: number | null;
       description?: string | null;
       linked_delivery_task_wbs_code?: string | null;
-      actual_delivery_date?: string | null;
     };
     const list = linesByPo.get(row.procurement_order_id) ?? [];
     list.push({
@@ -763,7 +762,6 @@ export async function buildProjection(
       line_no: row.line_no ?? null,
       description: row.description ?? null,
       linked_delivery_task_wbs_code: row.linked_delivery_task_wbs_code ?? null,
-      actual_delivery_date: row.actual_delivery_date ?? null,
     });
     linesByPo.set(row.procurement_order_id, list);
   }

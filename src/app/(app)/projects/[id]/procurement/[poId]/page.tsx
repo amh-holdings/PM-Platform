@@ -144,7 +144,6 @@ export default async function ProcurementDetailPage({
     line_no: l.lineNo,
     description: l.description,
     linked_delivery_task_wbs_code: l.linkedDeliveryTaskWbsCode,
-    actual_delivery_date: l.actualDeliveryDate,
   }));
 
   // Every schedule row any part of this PO is delivered against: the order's
