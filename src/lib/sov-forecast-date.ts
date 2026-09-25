@@ -51,9 +51,16 @@ export type FinishResolver = (
   wbsCode: string,
 ) => { wbs: string; month: string } | null;
 
+// Two different failures wear the word commodity, and they are fixed on two
+// different screens. "No commodity selected" is the Edit mapping dialog on the
+// sub billing page. "Commodity selected but it reaches no task" is the
+// commodity tracker. One message for both sends half the people to the wrong
+// place, which is the mistake this whole module exists to stop repeating.
 const MISSING: Record<string, string> = {
   commodity:
     "is mapped to commodity quantities, and no commodity on it is linked to a schedule task",
+  commodity_none:
+    "is set to earn on commodity quantities but no commodity is selected on it, so there is nothing to date it from",
   schedule: "links to work with no planned finish date",
   milestone: "is milestone-triggered on a task that was not found or has no finish date",
   on_site:
@@ -114,11 +121,13 @@ export function resolveSovMonth(input: {
     };
   }
 
+  const key =
+    method === "commodity" && commodityIds.length === 0 ? "commodity_none" : method;
   return {
     month: null,
     source: null,
     via: null,
-    why: MISSING[method] ?? MISSING.unmapped,
+    why: MISSING[key] ?? MISSING.unmapped,
   };
 }
 
