@@ -95,11 +95,16 @@ type Milestone = {
   sort_order: number | null;
   notes: string | null;
   /**
-   * One line saying what date the cash forecast uses for this row and where
-   * it came from, or null when the Expected column already says it. Computed
-   * on the server by describeMilestoneDate.
+   * What date this row actually runs on and where it came from.
+   *
+   * `drives` is true when the schedule supplies it, which makes it the
+   * Expected value rather than a footnote. Computed on the server.
    */
-  forecast?: string | null;
+  forecast?: {
+    date: string | null;
+    drives: boolean;
+    note: string | null;
+  } | null;
 };
 
 type Props = {
@@ -287,17 +292,34 @@ export function MilestoneEditor({
                     {formatCurrency(Number(m.amount ?? 0))}
                   </td>
                   <td className="px-2 py-1.5 text-muted-foreground">
-                    <div>{m.expected_date ? formatDate(m.expected_date) : "-"}</div>
-                    {m.forecast && (
+                    {/* The schedule is the source of truth for a delivery, so
+                        when it supplies the date it is the value here and the
+                        typed one is demoted to a note. Anything else shows
+                        what was typed, because that is all there is. */}
+                    {m.forecast?.drives && m.forecast.date ? (
+                      <>
+                        <div className="font-medium text-foreground">
+                          {formatDate(m.forecast.date)}
+                        </div>
+                        {m.expected_date && m.expected_date !== m.forecast.date && (
+                          <div className="text-[10px] text-muted-foreground">
+                            typed {formatDate(m.expected_date)}, superseded
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div>{m.expected_date ? formatDate(m.expected_date) : "-"}</div>
+                    )}
+                    {m.forecast?.note && (
                       <div
                         className={cn(
                           "text-[10px]",
-                          m.forecast.startsWith("No date")
+                          m.forecast.note.startsWith("No date")
                             ? "text-amber-700"
                             : "text-muted-foreground",
                         )}
                       >
-                        {m.forecast}
+                        {m.forecast.note}
                       </div>
                     )}
                   </td>

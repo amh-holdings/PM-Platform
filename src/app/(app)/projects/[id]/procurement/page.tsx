@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { nextDueDate } from "@/lib/po-payment-forecast";
+import { syncScheduleDates } from "@/lib/schedule-sync-server";
 import type { ExistingOrder } from "@/lib/procurement-import";
 import { ProcurementImportDialog } from "./procurement-import-dialog";
 
@@ -19,6 +20,11 @@ const STATUS_TONE: Record<string, string> = {
 
 export default async function ProjectProcurementPage({ params }: { params: Params }) {
   const supabase = createClient();
+
+  // Next due reads schedule task finishes, which are the live forecast held in
+  // a column. Sync before reading them or this page can disagree with the
+  // schedule page about the same delivery.
+  await syncScheduleDates(supabase, params.id);
 
   const [
     { data: orders, error },
