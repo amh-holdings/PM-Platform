@@ -49,7 +49,13 @@ export function PoLineDeliveries({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  if (lines.length === 0) return null;
+  // A PO with one item has nothing to split. Zarina, looking at a
+  // single-line PO: "We have this linked, then there's another on the same
+  // form." The order-level link above already says which schedule row that
+  // one item lands on, and repeating it here is a second control for one
+  // fact, which is the thing that keeps biting us. The section appears when
+  // there are at least two items, which is the only case it was built for.
+  if (lines.length < 2) return null;
 
   const save = async (lineId: string, wbsCode: string | null) => {
     setBusy(lineId);
@@ -77,7 +83,10 @@ export function PoLineDeliveries({
         </div>
         <span className="text-xs text-muted-foreground">
           {linked} of {lines.length} linked
-          {poTaskWbs ? `, the rest follow ${poTaskWbs}` : ""}
+          {/* "the rest" is a lie when there is no rest. */}
+          {linked < lines.length && poTaskWbs
+            ? `, the rest follow ${poTaskWbs}`
+            : ""}
         </span>
       </div>
 
