@@ -37,9 +37,9 @@ export const HEADER_H = 36;
  * rows beneath it. That is not cosmetic: the resize handles live in the header,
  * so a header that has drifted is a header you cannot drag the right edge of.
  */
-export const GUTTER_W = 60;
-// Wide enough for Open plus the Insert row control beside it.
-export const ACTION_W = 84;
+// Drag handle, tick box, and the Insert row control that appears on hover.
+export const GUTTER_W = 78;
+export const ACTION_W = 56;
 
 export const ZOOMS = [
   { label: "Fit", px: 0 },

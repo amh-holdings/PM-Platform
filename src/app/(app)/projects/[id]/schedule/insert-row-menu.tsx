@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { insertPositionsFor, planInsertAt } from "@/lib/schedule-insert";
 import type { EditTask } from "@/lib/schedule-edit";
 
@@ -16,6 +17,11 @@ import { TaskEditDialog } from "./task-edit-dialog";
 // Three choices per row, and the code the new task will take is worked out
 // before the dialog opens so it is on screen next to the choice. Nothing
 // existing is renumbered to make room - see schedule-insert for why.
+//
+// It lives in the row's left gutter, beside the drag handle and the tick box,
+// and appears on hover. It shipped once at the right-hand end of the row next
+// to Open, which on a grid this wide is past the horizontal scroll: "I do not
+// see that function." A control nobody scrolls to is a control nobody has.
 
 type Props = {
   projectId: string;
@@ -28,6 +34,10 @@ type Props = {
   typeAvailable: boolean;
   calendar: React.ComponentProps<typeof TaskEditDialog>["calendar"];
   rowIndex?: React.ComponentProps<typeof TaskEditDialog>["rowIndex"];
+  /** Which way the menu opens. In the left gutter it opens rightwards. */
+  align?: "left" | "right";
+  /** Applied to the wrapper, for the hover reveal. */
+  className?: string;
   onDone?: () => void;
 };
 
@@ -42,6 +52,8 @@ export function InsertRowMenu({
   typeAvailable,
   calendar,
   rowIndex,
+  align = "right",
+  className,
   onDone,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -49,7 +61,15 @@ export function InsertRowMenu({
   const options = insertPositionsFor(editTasks, anchorWbs);
 
   return (
-    <span className="relative inline-block">
+    <span
+      className={cn(
+        "relative inline-block",
+        className,
+        // An open menu stays put when the pointer leaves the row, or picking
+        // the second item would mean chasing it.
+        open && "opacity-100",
+      )}
+    >
       <Button
         variant="ghost"
         size="sm"
@@ -69,7 +89,12 @@ export function InsertRowMenu({
             onClick={() => setOpen(false)}
             aria-hidden
           />
-          <span className="absolute right-0 top-6 z-50 block w-64 rounded-md border bg-popover p-1 shadow-lg">
+          <span
+            className={cn(
+              "absolute top-6 z-50 block w-64 rounded-md border bg-popover p-1 shadow-lg",
+              align === "left" ? "left-0" : "right-0",
+            )}
+          >
             {options.map((o) => {
               const plan = planInsertAt({
                 tasks: editTasks,

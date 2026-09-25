@@ -2462,7 +2462,7 @@ function GridRow({
       onDragOver={onDragOver}
       onDrop={onDrop}
       className={cn(
-        "flex items-center border-b text-sm",
+        "group flex items-center border-b text-sm",
         focused && "ring-1 ring-inset ring-primary/60",
         selected && "bg-blue-50/60",
         rowDirty && "bg-amber-50/60",
@@ -2499,6 +2499,23 @@ function GridRow({
           ⠿
         </span>
         <input type="checkbox" checked={selected} onChange={(e) => onSelect(e.target.checked)} />
+        {/* Hover to reveal. Next to the handle and the tick box, where the eye
+            already is, rather than at the far right of a grid this wide. */}
+        <InsertRowMenu
+          projectId={projectId}
+          anchorWbs={t.wbs_code}
+          editTasks={editTasks}
+          phaseOptions={phaseOptions}
+          statusOptions={statusOptions}
+          allTasks={allTasks}
+          phase1Available={phase1Available}
+          typeAvailable={typeAvailable}
+          calendar={calendar}
+          rowIndex={rowIndex}
+          align="left"
+          className="opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+          onDone={() => onDialogSaved(t.id)}
+        />
       </div>
 
       {columns.map((col) => {
@@ -2746,20 +2763,7 @@ function GridRow({
         }
       })}
 
-      <div className="flex shrink-0 items-center px-1" style={{ width: ACTION_W }}>
-        <InsertRowMenu
-          projectId={projectId}
-          anchorWbs={t.wbs_code}
-          editTasks={editTasks}
-          phaseOptions={phaseOptions}
-          statusOptions={statusOptions}
-          allTasks={allTasks}
-          phase1Available={phase1Available}
-          typeAvailable={typeAvailable}
-          calendar={calendar}
-          rowIndex={rowIndex}
-          onDone={() => onDialogSaved(t.id)}
-        />
+      <div className="shrink-0 px-1" style={{ width: ACTION_W }}>
         <TaskEditDialog
           projectId={projectId}
           task={t}
