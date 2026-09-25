@@ -185,12 +185,34 @@ check(
   (commodityGap.why ?? "").includes("no commodity on it is linked to a schedule task"),
 );
 
+// Two different failures, two different screens. "No commodity selected" is
+// fixed in the Edit mapping dialog; "selected but it reaches no task" is fixed
+// on the commodity tracker. One message for both sends half the people to the
+// wrong place. This is the Lumina case: six lines set to commodity quantities
+// with Evidence reading "(none)", which is an empty linked_commodity_ids.
 check(
-  "a commodity line with no commodity chosen says so the same way",
+  "a commodity line with nothing selected says nothing is selected",
   (resolveSovMonth({
     line: { itemNumber: "2", verificationMethod: "commodity", linkedCommodityIds: [] },
     finishOf,
-  }).why ?? "").includes("commodity quantities"),
+  }).why ?? "").includes("no commodity is selected on it"),
+);
+
+check(
+  "and it is NOT told the commodity is missing a task link",
+  !(resolveSovMonth({
+    line: { itemNumber: "2", verificationMethod: "commodity", linkedCommodityIds: [] },
+    finishOf,
+  }).why ?? "").includes("linked to a schedule task"),
+);
+
+check(
+  "a line whose commodity exists but reaches no task gets the other message",
+  (resolveSovMonth({
+    line: { itemNumber: "2", verificationMethod: "commodity", linkedCommodityIds: ["c1"] },
+    finishOf,
+    wbsByCommodityId: new Map([["c1", ["9.9"]]]),
+  }).why ?? "").includes("no commodity on it is linked to a schedule task"),
 );
 
 check(
