@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { TablesUpdate } from "@/lib/database.types";
 import { parsePredecessors, serializeLinks } from "@/lib/schedule-cpm";
 import { orderRenames } from "@/lib/schedule-edit";
+import { planInsertAt, type InsertPosition } from "@/lib/schedule-insert";
 import { todayIso } from "@/lib/schedule-calendar";
 import {
   describeAfpFollowUp,
@@ -506,18 +507,38 @@ export async function createScheduleTask(
     return { ok: false, error: "A date constraint needs a date." };
   }
 
-  // Slot the new row directly after its parent's last descendant, so a task
-  // added to a branch appears inside that branch rather than at the bottom of
-  // the schedule. sort_order is spaced by 10s, leaving room to insert without
-  // renumbering the whole list.
+  // Where the row goes.
+  //
+  // Two ways in. With an anchor, it lands exactly above, below or inside the
+  // row somebody pointed at - see schedule-insert for why the anchor's code is
+  // never renumbered to make room. Without one, the old behaviour: after the
+  // last row in its own branch.
+  const anchorWbs = getStr(formData.get("insert_anchor_wbs"));
+  const rawPosition = getStr(formData.get("insert_position"));
+  const position: InsertPosition | null =
+    rawPosition === "above" || rawPosition === "below" || rawPosition === "child"
+      ? rawPosition
+      : null;
+
   const { data: siblings } = await auth.supabase
     .from("schedule_tasks")
-    .select("wbs_code, sort_order")
+    .select("id, wbs_code, task_name, predecessors, sort_order, level_code")
     .eq("project_id", projectId);
 
   const parent = wbs.includes(".") ? wbs.slice(0, wbs.lastIndexOf(".")) : null;
   let sortOrder = 10;
-  if (siblings?.length) {
+  let respacing: { id: string; sort_order: number }[] = [];
+
+  if (anchorWbs && position) {
+    const plan = planInsertAt({
+      tasks: (siblings ?? []) as never,
+      anchorWbs,
+      position,
+    });
+    if (!plan.ok) return { ok: false, error: plan.error ?? "Could not place the row." };
+    sortOrder = plan.sortOrder;
+    respacing = plan.sortUpdates;
+  } else if (siblings?.length) {
     const branch = parent
       ? siblings.filter(
           (s) => s.wbs_code === parent || s.wbs_code.startsWith(parent + "."),
@@ -526,6 +547,18 @@ export async function createScheduleTask(
     const pool = branch.length ? branch : siblings;
     const max = pool.reduce((m, s) => Math.max(m, s.sort_order ?? 0), 0);
     sortOrder = max + (branch.length ? 1 : 10);
+  }
+
+  // Respace first. Landing the new row before the neighbours have moved out of
+  // its way puts two rows on one number for as long as the writes take, and a
+  // failure halfway leaves the row where nobody asked for it.
+  for (const r of respacing) {
+    const { error: e } = await auth.supabase
+      .from("schedule_tasks")
+      .update({ sort_order: r.sort_order })
+      .eq("id", r.id)
+      .eq("project_id", projectId);
+    if (e) return { ok: false, error: `Could not make room for the new row: ${e.message}` };
   }
 
   const row = {

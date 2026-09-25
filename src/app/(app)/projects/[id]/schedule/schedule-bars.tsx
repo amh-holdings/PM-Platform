@@ -38,7 +38,8 @@ export const HEADER_H = 36;
  * so a header that has drifted is a header you cannot drag the right edge of.
  */
 export const GUTTER_W = 60;
-export const ACTION_W = 56;
+// Wide enough for Open plus the Insert row control beside it.
+export const ACTION_W = 84;
 
 export const ZOOMS = [
   { label: "Fit", px: 0 },
