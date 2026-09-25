@@ -182,6 +182,20 @@ export function forecastMilestoneDate(input: {
   };
 }
 
+/**
+ * Whether the schedule, not the typed date, is what this milestone runs on.
+ *
+ * "For the delivery schedule, the source of truth should always be the
+ * schedule." When this is true the PO page shows the derived date AS the
+ * Expected value and demotes the typed one, rather than printing the typed
+ * date in the column and the real one in small grey text underneath. Two
+ * dates on one row, with the stale one as the headline, is not a source of
+ * truth - it is a choice the reader has to make.
+ */
+export function scheduleDrivesDate(at: MilestoneDate): boolean {
+  return at.source === "schedule" || at.source === "arrived";
+}
+
 /** One line for the PO page, under the typed date. */
 export function describeMilestoneDate(
   at: MilestoneDate,

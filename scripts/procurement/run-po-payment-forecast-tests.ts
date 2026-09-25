@@ -10,6 +10,7 @@
  */
 
 import {
+  scheduleDrivesDate,
   addDaysIso,
   describeMilestoneDate,
   describeScheduleMove,
@@ -248,6 +249,58 @@ same(
     deliveryTask: task,
   }),
   null,
+);
+
+console.log("\nWhich date is the headline\n");
+
+// The schedule is the source of truth for a delivery, so when it supplies the
+// date it IS the Expected value. Printing the typed date in the column and the
+// real one in grey underneath leaves the reader to choose.
+check(
+  "a schedule-driven milestone is run by the schedule",
+  scheduleDrivesDate(
+    forecastMilestoneDate({ milestone: onDelivery, po, deliveryTask: task }),
+  ),
+);
+check(
+  "so is one the goods have already arrived for",
+  scheduleDrivesDate(
+    forecastMilestoneDate({
+      milestone: onDelivery,
+      po: { ...po, actual_delivery_date: "2026-09-12" },
+      deliveryTask: task,
+    }),
+  ),
+);
+check(
+  "a deposit is not - its typed date is the only date there is",
+  !scheduleDrivesDate(
+    forecastMilestoneDate({
+      milestone: { milestone_name: "Deposit", trigger_event: "PO release", expected_date: "2026-07-01" },
+      po,
+      deliveryTask: task,
+    }),
+  ),
+);
+check(
+  "nor is a paid one - that date already happened",
+  !scheduleDrivesDate(
+    forecastMilestoneDate({
+      milestone: { ...onDelivery, paid_at: "2026-09-30" },
+      po,
+      deliveryTask: task,
+    }),
+  ),
+);
+check(
+  "nor is one with nothing behind it",
+  !scheduleDrivesDate(
+    forecastMilestoneDate({
+      milestone: onDelivery,
+      po: { ...po, linked_delivery_task_wbs_code: null },
+      deliveryTask: null,
+    }),
+  ),
 );
 
 console.log("\nWhat it says on screen\n");

@@ -9,7 +9,9 @@ import { formatCurrency, formatDate } from "@/lib/format";
 import {
   describeMilestoneDate,
   forecastMilestoneDate,
+  scheduleDrivesDate,
 } from "@/lib/po-payment-forecast";
+import { syncScheduleDates } from "@/lib/schedule-sync-server";
 
 import { AfpStanding } from "./afp-standing";
 import { PoLineEditor } from "./po-line-editor";
@@ -107,6 +109,15 @@ export default async function ProcurementDetailPage({
     }));
   }
 
+  // Start and Finish ARE the live forecast, and the column holds whatever the
+  // last sync left there. The schedule page and the dashboard both sync before
+  // reading; this page did not, so a delivery date here could disagree with
+  // the same task on the schedule until somebody opened the schedule. Zarina:
+  // "the source of truth should always be the schedule. The forecast does not
+  // match what's in the schedule." Sync first, like everywhere else that reads
+  // these dates.
+  await syncScheduleDates(supabase, params.id);
+
   // The linked delivery task, read directly rather than picked out of the
   // options above: that list is filtered on the task name containing
   // "delivery", and a PO can be linked to a task called something else.
@@ -171,15 +182,18 @@ export default async function ProcurementDetailPage({
     paid_amount: m.paid_amount == null ? null : Number(m.paid_amount),
     sort_order: m.sort_order,
     notes: m.notes,
-    // What date the cash forecast actually uses for this row, and why. A
-    // delivery payment follows the linked schedule task, so the typed
-    // Expected date is not always the one the curve is drawn on. Saying so
-    // here is cheaper than somebody finding the difference on the dashboard
-    // and having to work back to this page.
-    forecast: describeMilestoneDate(
-      forecastMilestoneDate({ milestone: m, po, deliveryTask: linkedTask }),
-      linkedTask?.task_name ?? null,
-    ),
+    // What date this row actually runs on, and where it came from. When the
+    // schedule supplies it, it IS the Expected value and the typed date is
+    // demoted - see scheduleDrivesDate. Printing the typed date as the
+    // headline with the real one in grey underneath left the reader to pick.
+    forecast: (() => {
+      const at = forecastMilestoneDate({ milestone: m, po, deliveryTask: linkedTask });
+      return {
+        date: at.date,
+        drives: scheduleDrivesDate(at),
+        note: describeMilestoneDate(at, linkedTask?.task_name ?? null),
+      };
+    })(),
   });
 
   const totalPct = poValue > 0 ? (totalPlanned / poValue) * 100 : 0;
