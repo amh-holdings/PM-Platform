@@ -11,6 +11,7 @@ import {
   addMilestone,
   deleteMilestone,
   markMilestonePaid,
+  setMilestoneLine,
   updateMilestone,
 } from "../../procurement-actions";
 import { cn } from "@/lib/utils";
@@ -95,6 +96,11 @@ type Milestone = {
   sort_order: number | null;
   notes: string | null;
   /**
+   * Which item on the PO this payment is for, when it is for one item rather
+   * than the whole order. Null is the whole order. Migration 0062.
+   */
+  procurement_order_line_id?: string | null;
+  /**
    * What date this row actually runs on and where it came from.
    *
    * `drives` is true when the schedule supplies it, which makes it the
@@ -113,6 +119,15 @@ type Props = {
   poTotalValue: number;
   milestones: Milestone[];
   /**
+   * The items on this PO, for tying a payment to one of them.
+   *
+   * Zarina: "there are POs that has multiple deliveries on it. And each item
+   * inside a PO can be linked to a line in the schedule." A PO with one
+   * delivery has nothing to choose between, so the control only appears once
+   * there is more than one item.
+   */
+  lines?: { id: string; label: string }[];
+  /**
    * Which schedule this editor is editing: what we pay the vendor, or what we
    * bill the owner. Migration 0055. Defaults to vendor, which is what every
    * milestone was before the two split.
@@ -129,6 +144,7 @@ export function MilestoneEditor({
   poId,
   poTotalValue,
   milestones,
+  lines = [],
 }: Props) {
   const router = useRouter();
   const [adding, setAdding] = useState(false);
@@ -142,6 +158,19 @@ export function MilestoneEditor({
   const [payingId, setPayingId] = useState<string | null>(null);
   const [paidDate, setPaidDate] = useState("");
   const [paidAmount, setPaidAmount] = useState("");
+
+  /** Tie a payment to one item on the PO, or back to the whole order. */
+  async function onSetLine(milestoneId: string, lineId: string | null) {
+    setBusy(true);
+    setError(null);
+    const res = await setMilestoneLine(milestoneId, poId, projectId, lineId);
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    startTransition(() => router.refresh());
+  }
 
   function openPayment(m: Milestone) {
     setError(null);
@@ -272,6 +301,28 @@ export function MilestoneEditor({
                       <div className="text-[10px] text-muted-foreground">
                         {m.notes}
                       </div>
+                    )}
+                    {/* Which item this payment is for. A whole-order milestone
+                        waits for the last item to land; one tied to an item
+                        follows that item. Only worth a control when there is
+                        more than one item to choose between. */}
+                    {lines.length > 1 && (
+                      <select
+                        value={m.procurement_order_line_id ?? ""}
+                        disabled={busy}
+                        onChange={(e) =>
+                          void onSetLine(m.id, e.target.value || null)
+                        }
+                        className="mt-1 h-6 max-w-[16rem] rounded border border-input bg-background px-1 text-[10px] text-muted-foreground"
+                        aria-label={`What ${m.milestone_name} pays for`}
+                      >
+                        <option value="">Pays for the whole order</option>
+                        {lines.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            Pays for {l.label}
+                          </option>
+                        ))}
+                      </select>
                     )}
                   </td>
                   <td className="px-2 py-1.5 text-muted-foreground">

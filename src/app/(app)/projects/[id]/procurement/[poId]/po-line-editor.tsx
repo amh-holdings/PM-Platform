@@ -12,8 +12,10 @@ import {
   describeTotalAgreement,
   extendedIsAuto,
   nextLineNo,
+  parseUnits,
   poTotals,
   totalAgreement,
+  unitsText,
 } from "@/lib/procurement-lines";
 
 import {
@@ -29,8 +31,14 @@ import {
  * The PO's line items, laid out the way the paper form is.
  *
  * Zarina: "I need to have option to add line items for PO forms. See PO form
- * we used." Line, quantity, description, units, unit price, extended price,
- * then Subtotal, Sales Tax, Freight, Total.
+ * we used." Line, description, units, unit price, extended price, then
+ * Subtotal, Sales Tax, Freight, Total.
+ *
+ * Quantity and Units were two boxes until Zarina said "they are just the same
+ * with units". They are one box now that reads the way the line reads out
+ * loud, "410 EA". The number is still parsed out and stored in quantity, so
+ * the extended price keeps totalling itself and nothing downstream changed.
+ * See parseUnits.
  *
  * Extended price is offered from quantity times unit price and can be cleared,
  * because the real document does not always derive it. On PO-023 the freight
@@ -62,7 +70,6 @@ export function PoLineEditor({
 
   const blank = {
     lineNo: String(nextLineNo(lines.map((l) => ({ line_no: l.lineNo })))),
-    quantity: "",
     description: "",
     units: "",
     unitPrice: null as number | null,
@@ -106,9 +113,9 @@ export function PoLineEditor({
     const ok = await run(() =>
       addPoLine(poId, projectId, {
         lineNo: draft.lineNo.trim() === "" ? null : Number(draft.lineNo),
-        quantity: draft.quantity.trim() === "" ? null : Number(draft.quantity),
+        quantity: parseUnits(draft.units).quantity,
         description: draft.description,
-        units: draft.units,
+        units: parseUnits(draft.units).units ?? "",
         unitPrice: draft.unitPrice,
         extendedPrice: draft.extendedPrice,
       }),
@@ -134,7 +141,7 @@ export function PoLineEditor({
     setDraft((prev) => {
       const merged = { ...prev, ...next };
       const wasAuto = extendedIsAuto({
-        quantity: prev.quantity.trim() === "" ? null : Number(prev.quantity),
+        quantity: parseUnits(prev.units).quantity,
         unit_price: prev.unitPrice,
         extended_price: prev.extendedPrice,
       });
@@ -142,7 +149,7 @@ export function PoLineEditor({
       return {
         ...merged,
         extendedPrice: derivedExtended({
-          quantity: merged.quantity.trim() === "" ? null : Number(merged.quantity),
+          quantity: parseUnits(merged.units).quantity,
           unit_price: merged.unitPrice,
         }),
       };
@@ -151,7 +158,7 @@ export function PoLineEditor({
 
   // The box fills itself. This is the way back after clearing it.
   const suggested = derivedExtended({
-    quantity: draft.quantity.trim() === "" ? null : Number(draft.quantity),
+    quantity: parseUnits(draft.units).quantity,
     unit_price: draft.unitPrice,
   });
 
@@ -186,18 +193,16 @@ export function PoLineEditor({
             {/* Fixed widths, so a header sits over its own box. Without
                 them the browser sizes each column to its content and a
                 narrow input drifts away from the label above it. */}
-            <col className="w-[6%]" />
-            <col className="w-[10%]" />
-            <col className="w-[30%]" />
-            <col className="w-[9%]" />
-            <col className="w-[15%]" />
-            <col className="w-[17%]" />
-            <col className="w-[13%]" />
+            <col className="w-[7%]" />
+            <col className="w-[36%]" />
+            <col className="w-[12%]" />
+            <col className="w-[16%]" />
+            <col className="w-[18%]" />
+            <col className="w-[11%]" />
           </colgroup>
           <thead className="border-b bg-muted/40 text-muted-foreground">
             <tr>
               <th className="px-5 py-2 text-left font-medium">Line</th>
-              <th className="px-5 py-2 text-right font-medium">Quantity</th>
               <th className="px-5 py-2 text-left font-medium">Description</th>
               <th className="px-5 py-2 text-left font-medium">Units</th>
               <th className="px-5 py-2 text-right font-medium">Unit price</th>
@@ -226,7 +231,7 @@ export function PoLineEditor({
 
             {lines.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-2 py-3 text-muted-foreground">
+                <td colSpan={6} className="px-2 py-3 text-muted-foreground">
                   No line items yet. Add them below and the subtotal builds
                   itself.
                 </td>
@@ -246,15 +251,6 @@ export function PoLineEditor({
               </td>
               <td className="px-2 py-2">
                 <Input
-                  value={draft.quantity}
-                  onChange={(e) => patchDraft({ quantity: e.target.value })}
-                  inputMode="decimal"
-                  className="h-8 w-full text-right text-xs"
-                  aria-label="Quantity"
-                />
-              </td>
-              <td className="px-2 py-2">
-                <Input
                   value={draft.description}
                   onChange={(e) =>
                     setDraft({ ...draft, description: e.target.value })
@@ -267,8 +263,8 @@ export function PoLineEditor({
               <td className="px-2 py-2">
                 <Input
                   value={draft.units}
-                  onChange={(e) => setDraft({ ...draft, units: e.target.value })}
-                  placeholder="EA"
+                  onChange={(e) => patchDraft({ units: e.target.value })}
+                  placeholder="410 EA"
                   className="h-8 w-full text-xs"
                   aria-label="Units"
                 />
@@ -308,7 +304,7 @@ export function PoLineEditor({
 
           <tfoot className="border-t">
             <tr>
-              <td colSpan={4} />
+              <td colSpan={3} />
               <td className="px-5 py-1.5 text-right text-muted-foreground">
                 Subtotal
               </td>
@@ -318,7 +314,7 @@ export function PoLineEditor({
               <td />
             </tr>
             <tr>
-              <td colSpan={4} />
+              <td colSpan={3} />
               <td className="px-5 py-1.5 text-right text-muted-foreground">
                 Sales tax
               </td>
@@ -341,7 +337,7 @@ export function PoLineEditor({
               <td />
             </tr>
             <tr>
-              <td colSpan={4} />
+              <td colSpan={3} />
               <td className="px-5 py-1.5 text-right text-muted-foreground">
                 Freight
               </td>
@@ -364,7 +360,7 @@ export function PoLineEditor({
               <td />
             </tr>
             <tr className="border-t">
-              <td colSpan={4} />
+              <td colSpan={3} />
               <td className="px-5 py-2 text-right font-medium">Total</td>
               <td className="px-5 py-2 text-right font-mono font-semibold">
                 {formatCurrency(totals.total)}
@@ -438,11 +434,11 @@ function LineRow({
   onDelete: () => void;
 }) {
   const [lineNo, setLineNo] = useState(line.lineNo == null ? "" : String(line.lineNo));
-  const [quantity, setQuantity] = useState(
-    line.quantity == null ? "" : String(line.quantity),
-  );
   const [description, setDescription] = useState(line.description ?? "");
-  const [units, setUnits] = useState(line.units ?? "");
+  // One box. "410 EA" goes back out as quantity 410 and units EA.
+  const [units, setUnits] = useState(
+    unitsText({ quantity: line.quantity, units: line.units }),
+  );
   const [unitPrice, setUnitPrice] = useState<number | null>(line.unitPrice);
   const [extendedPrice, setExtendedPrice] = useState<number | null>(
     line.extendedPrice,
@@ -456,20 +452,20 @@ function LineRow({
    * figure stands and a cleared box on a priced line stays cleared, which is
    * the freight case.
    */
-  function retotal(next: { quantity?: string; unitPrice?: number | null }) {
-    const q = next.quantity ?? quantity;
+  function retotal(next: { units?: string; unitPrice?: number | null }) {
+    const nextUnits = next.units ?? units;
     const u = next.unitPrice === undefined ? unitPrice : next.unitPrice;
-    if (next.quantity !== undefined) setQuantity(next.quantity);
+    if (next.units !== undefined) setUnits(next.units);
     if (next.unitPrice !== undefined) setUnitPrice(next.unitPrice);
     const wasAuto = extendedIsAuto({
-      quantity: quantity.trim() === "" ? null : Number(quantity),
+      quantity: parseUnits(units).quantity,
       unit_price: unitPrice,
       extended_price: extendedPrice,
     });
     if (!wasAuto) return;
     setExtendedPrice(
       derivedExtended({
-        quantity: q.trim() === "" ? null : Number(q),
+        quantity: parseUnits(nextUnits).quantity,
         unit_price: u,
       }),
     );
@@ -481,11 +477,10 @@ function LineRow({
         <td className="px-5 py-1.5 font-mono text-muted-foreground">
           {line.lineNo ?? "-"}
         </td>
-        <td className="px-5 py-1.5 text-right font-mono">
-          {line.quantity ?? "-"}
-        </td>
         <td className="px-5 py-1.5 truncate">{line.description ?? "-"}</td>
-        <td className="px-5 py-1.5 text-muted-foreground">{line.units ?? "-"}</td>
+        <td className="px-5 py-1.5 whitespace-nowrap text-muted-foreground">
+          {unitsText({ quantity: line.quantity, units: line.units }) || "-"}
+        </td>
         <td className="px-5 py-1.5 text-right font-mono">
           {line.unitPrice == null ? "-" : formatCurrency(line.unitPrice)}
         </td>
@@ -526,15 +521,6 @@ function LineRow({
       </td>
       <td className="px-2 py-1.5">
         <Input
-          value={quantity}
-          onChange={(e) => retotal({ quantity: e.target.value })}
-          inputMode="decimal"
-          className="h-8 w-full text-right text-xs"
-          aria-label="Quantity"
-        />
-      </td>
-      <td className="px-2 py-1.5">
-        <Input
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           className="h-8 w-full text-xs"
@@ -544,7 +530,8 @@ function LineRow({
       <td className="px-2 py-1.5">
         <Input
           value={units}
-          onChange={(e) => setUnits(e.target.value)}
+          onChange={(e) => retotal({ units: e.target.value })}
+          placeholder="410 EA"
           className="h-8 w-full text-xs"
           aria-label="Units"
         />
@@ -572,9 +559,9 @@ function LineRow({
           onClick={() =>
             onSave({
               lineNo: lineNo.trim() === "" ? null : Number(lineNo),
-              quantity: quantity.trim() === "" ? null : Number(quantity),
+              quantity: parseUnits(units).quantity,
               description,
-              units,
+              units: parseUnits(units).units ?? "",
               unitPrice,
               extendedPrice,
             })

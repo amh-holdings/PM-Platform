@@ -44,6 +44,7 @@ import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import {
   describeScheduleMove,
   forecastMilestoneDate,
+  type PoForecastLine,
 } from "@/lib/po-payment-forecast";
 import {
   aggregateConfidence,
@@ -158,7 +159,7 @@ export async function buildProjection(
   const [
     projectRes, entriesRes, forecastsRes, paymentsRes, posRes, linesRes, tasksRes,
     subSovRes, subBilledRes, changeOrdersRes, payAppsRes, costCodesRes,
-    commodityLinksRes, dprsRes,
+    poLinesRes, commodityLinksRes, dprsRes,
   ] =
     await Promise.all([
       supabase
@@ -237,6 +238,14 @@ export async function buildProjection(
         .from("cost_codes")
         .select("code, is_change_order, estimated_cost")
         .eq("project_id", projectId),
+      // Line items, for a PO with more than one delivery. Each item can point
+      // at its own schedule row, and a payment milestone can say which item it
+      // pays for. Selected with * because 0061 and 0062 may not have run, and
+      // a named select on a missing column errors the whole request.
+      supabase
+        .from("procurement_order_lines")
+        .select("*, procurement_orders!inner(project_id)")
+        .eq("procurement_orders.project_id", projectId),
       // A commodity-mapped SOV line reaches the schedule through its
       // commodities. schedule_task_id, not wbs_code, so it needs the task ids.
       supabase
@@ -736,6 +745,29 @@ export async function buildProjection(
   const poById = new Map((posRes.data ?? []).map((o) => [o.id, o]));
   const taskByWbs = new Map((tasksRes.data ?? []).map((t) => [t.wbs_code, t]));
 
+  // Line items grouped by PO. Empty on a project where 0061 or 0062 has not
+  // run, which puts every milestone back on the PO-level link.
+  const linesByPo = new Map<string, PoForecastLine[]>();
+  for (const l of poLinesRes.data ?? []) {
+    const row = l as {
+      id: string;
+      procurement_order_id: string;
+      line_no?: number | null;
+      description?: string | null;
+      linked_delivery_task_wbs_code?: string | null;
+      actual_delivery_date?: string | null;
+    };
+    const list = linesByPo.get(row.procurement_order_id) ?? [];
+    list.push({
+      id: row.id,
+      line_no: row.line_no ?? null,
+      description: row.description ?? null,
+      linked_delivery_task_wbs_code: row.linked_delivery_task_wbs_code ?? null,
+      actual_delivery_date: row.actual_delivery_date ?? null,
+    });
+    linesByPo.set(row.procurement_order_id, list);
+  }
+
   for (const p of vendorPayments) {
     const amount = Number(p.paid_amount ?? p.amount ?? 0);
     if (amount <= 0) continue;
@@ -747,6 +779,8 @@ export async function buildProjection(
       milestone: p,
       po: order ?? {},
       deliveryTask,
+      lines: linesByPo.get(p.procurement_order_id) ?? [],
+      taskOf: (wbs) => taskByWbs.get(wbs) ?? null,
     });
 
     const poLabel = order?.po_number ?? order?.vendor_name ?? "A purchase order";

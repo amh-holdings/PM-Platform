@@ -38,6 +38,27 @@ export type PoForecastMilestone = {
   trigger_event?: string | null;
   expected_date?: string | null;
   paid_at?: string | null;
+  /**
+   * The PO line this milestone pays for. Null means the whole order, which is
+   * every milestone written before migration 0062.
+   */
+  procurement_order_line_id?: string | null;
+};
+
+/**
+ * One item on the PO, and the schedule row it lands on.
+ *
+ * Zarina: "there are POs that has multiple deliveries on it. And each item
+ * inside a PO can be linked to a line in the schedule." FTC Solar delivers
+ * piles and racking on different dates against different schedule rows, so one
+ * link for the whole PO put the second shipment on the first one's date.
+ */
+export type PoForecastLine = {
+  id?: string | null;
+  line_no?: number | null;
+  description?: string | null;
+  linked_delivery_task_wbs_code?: string | null;
+  actual_delivery_date?: string | null;
 };
 
 export type PoForecastOrder = {
@@ -56,11 +77,12 @@ export type DeliveryTaskDate = {
 };
 
 export type MilestoneDateSource =
-  | "paid"       // already paid, the paid date stands
-  | "arrived"    // the PO carries an actual delivery date
-  | "schedule"   // the linked delivery task's planned finish
-  | "typed"      // the expected_date somebody entered
-  | "none";      // no date anywhere, so this money is not in the curve
+  | "paid"        // already paid, the paid date stands
+  | "arrived"     // an actual delivery date, on the line or the PO
+  | "schedule"    // a linked delivery task's planned finish
+  | "last_line"   // no link of its own, so the last of the PO's items
+  | "typed"       // the expected_date somebody entered
+  | "none";       // no date anywhere, so this money is not in the curve
 
 export type MilestoneDate = {
   /** The date the forecast should bucket this milestone on, if there is one. */
@@ -68,6 +90,8 @@ export type MilestoneDate = {
   source: MilestoneDateSource;
   /** The delivery task the date came from, when it came from one. */
   viaWbs: string | null;
+  /** The PO line the date came from, when a line supplied it. */
+  viaLine: { id: string | null; label: string } | null;
   /** Net terms applied on top of the delivery date, in days. */
   termsDays: number;
   /**
@@ -118,68 +142,127 @@ function monthOf(iso: string | null): string | null {
   return iso ? iso.slice(0, 7) : null;
 }
 
+/** "Line 3 Racking" when both are known, else whichever there is. */
+export function lineLabel(line: PoForecastLine): string {
+  const no = line.line_no != null ? `Line ${line.line_no}` : null;
+  const desc = line.description?.trim() || null;
+  if (no && desc) return `${no} ${desc}`;
+  return no ?? desc ?? "an item";
+}
+
 export function forecastMilestoneDate(input: {
   milestone: PoForecastMilestone;
   po: PoForecastOrder;
   /** The task named by the PO's linked_delivery_task_wbs_code, if found. */
   deliveryTask?: DeliveryTaskDate | null;
+  /** The PO's line items, when migration 0062 has run and any are linked. */
+  lines?: readonly PoForecastLine[];
+  /** Resolves any WBS code to its schedule row. */
+  taskOf?: (wbs: string) => DeliveryTaskDate | null | undefined;
 }): MilestoneDate {
   const { milestone, po, deliveryTask } = input;
   const typed = milestone.expected_date ?? null;
+  const lines = input.lines ?? [];
+  const none = { viaWbs: null, viaLine: null, termsDays: 0, supersedes: null } as const;
 
   if (milestone.paid_at) {
-    return {
-      date: milestone.paid_at,
-      source: "paid",
-      viaWbs: null,
-      termsDays: 0,
-      supersedes: null,
-    };
+    return { date: milestone.paid_at, source: "paid", ...none };
   }
 
   if (!isDeliveryTrigger(milestone)) {
-    return {
-      date: typed,
-      source: typed ? "typed" : "none",
-      viaWbs: null,
-      termsDays: 0,
-      supersedes: null,
-    };
+    return { date: typed, source: typed ? "typed" : "none", ...none };
   }
 
   const termsDays = netTermsDays(po.payment_terms_summary);
+  const moved = (date: string) =>
+    typed && monthOf(typed) !== monthOf(date) ? typed : null;
 
-  // It is already here. Nothing the schedule plans can be truer than that.
-  if (po.actual_delivery_date) {
-    const date = addDaysIso(po.actual_delivery_date, termsDays);
+  const taskFor = (wbs: string | null | undefined): DeliveryTaskDate | null => {
+    if (!wbs) return null;
+    if (input.taskOf) return input.taskOf(wbs) ?? null;
+    // Without a resolver the only task in hand is the PO-level one.
+    return deliveryTask?.wbs_code === wbs ? deliveryTask : null;
+  };
+
+  // 1. The item this milestone pays for. A PO that pays per delivery says so
+  //    on the milestone, and that item's own dates beat everything the order
+  //    says about itself.
+  const own = milestone.procurement_order_line_id
+    ? lines.find((l) => l.id === milestone.procurement_order_line_id)
+    : undefined;
+
+  if (own?.actual_delivery_date) {
+    const date = addDaysIso(own.actual_delivery_date, termsDays);
     return {
       date,
       source: "arrived",
       viaWbs: null,
+      viaLine: { id: own.id ?? null, label: lineLabel(own) },
       termsDays,
-      supersedes: typed && monthOf(typed) !== monthOf(date) ? typed : null,
+      supersedes: moved(date),
     };
   }
+  if (own) {
+    const task = taskFor(own.linked_delivery_task_wbs_code);
+    if (task?.end_date) {
+      const date = addDaysIso(task.end_date, termsDays);
+      return {
+        date,
+        source: "schedule",
+        viaWbs: task.wbs_code,
+        viaLine: { id: own.id ?? null, label: lineLabel(own) },
+        termsDays,
+        supersedes: moved(date),
+      };
+    }
+  }
 
-  const planned = po.linked_delivery_task_wbs_code ? (deliveryTask?.end_date ?? null) : null;
-  if (planned) {
-    const date = addDaysIso(planned, termsDays);
+  // 2. The whole order has arrived, or is linked as one delivery. Unchanged
+  //    from before 0062, and still right for a PO that comes on one truck.
+  if (po.actual_delivery_date) {
+    const date = addDaysIso(po.actual_delivery_date, termsDays);
+    return { date, source: "arrived", viaWbs: null, viaLine: null, termsDays, supersedes: moved(date) };
+  }
+
+  const poTask = po.linked_delivery_task_wbs_code ? (deliveryTask?.end_date ?? null) : null;
+  if (poTask) {
+    const date = addDaysIso(poTask, termsDays);
     return {
       date,
       source: "schedule",
       viaWbs: deliveryTask?.wbs_code ?? po.linked_delivery_task_wbs_code ?? null,
+      viaLine: null,
       termsDays,
-      supersedes: typed && monthOf(typed) !== monthOf(date) ? typed : null,
+      supersedes: moved(date),
     };
   }
 
-  return {
-    date: typed,
-    source: typed ? "typed" : "none",
-    viaWbs: null,
-    termsDays: 0,
-    supersedes: null,
-  };
+  // 3. No link of its own and none on the order, but the items are linked.
+  //    A milestone that covers the whole PO is not earned until the last item
+  //    lands, so it takes the latest of them. Taking the first would pay for
+  //    equipment that is still on a truck.
+  const dated = lines
+    .map((l) => {
+      const task = taskFor(l.linked_delivery_task_wbs_code);
+      const end = l.actual_delivery_date ?? task?.end_date ?? null;
+      return end ? { line: l, wbs: task?.wbs_code ?? null, end } : null;
+    })
+    .filter((x): x is { line: PoForecastLine; wbs: string | null; end: string } => x !== null);
+
+  if (dated.length > 0) {
+    const last = dated.reduce((a, b) => (b.end > a.end ? b : a));
+    const date = addDaysIso(last.end, termsDays);
+    return {
+      date,
+      source: "last_line",
+      viaWbs: last.wbs,
+      viaLine: { id: last.line.id ?? null, label: lineLabel(last.line) },
+      termsDays,
+      supersedes: moved(date),
+    };
+  }
+
+  return { date: typed, source: typed ? "typed" : "none", ...none };
 }
 
 /**
@@ -193,7 +276,7 @@ export function forecastMilestoneDate(input: {
  * truth - it is a choice the reader has to make.
  */
 export function scheduleDrivesDate(at: MilestoneDate): boolean {
-  return at.source === "schedule" || at.source === "arrived";
+  return at.source === "schedule" || at.source === "arrived" || at.source === "last_line";
 }
 
 /** One line for the PO page, under the typed date. */
@@ -201,18 +284,27 @@ export function describeMilestoneDate(
   at: MilestoneDate,
   taskName?: string | null,
 ): string | null {
+  const terms = at.termsDays > 0 ? ` plus Net ${at.termsDays}` : "";
+  // Which item, when the PO has more than one delivery and this milestone
+  // rides on a particular one. Silent on a single-delivery PO.
+  const item = at.viaLine ? `, for ${at.viaLine.label}` : "";
+
   switch (at.source) {
     case "paid":
       return null; // the Paid column already says it
     case "arrived":
       return at.termsDays > 0
-        ? `Forecast ${at.date}, delivered plus Net ${at.termsDays}`
-        : `Forecast ${at.date}, the recorded delivery date`;
+        ? `Forecast ${at.date}, delivered${item} plus Net ${at.termsDays}`
+        : `Forecast ${at.date}, the recorded delivery date${item}`;
     case "schedule": {
       const via = taskName ? `${at.viaWbs} ${taskName}` : (at.viaWbs ?? "the delivery task");
-      return at.termsDays > 0
-        ? `Forecast ${at.date}, follows ${via} plus Net ${at.termsDays}`
-        : `Forecast ${at.date}, follows ${via}`;
+      return `Forecast ${at.date}, follows ${via}${terms}${item}`;
+    }
+    case "last_line": {
+      // A milestone covering the whole PO is not earned until the last item
+      // lands, so say which one it is waiting on.
+      const via = at.viaWbs ? `${at.viaWbs}` : "the last delivery";
+      return `Forecast ${at.date}, the last item to land${item ? ` (${at.viaLine?.label})` : ""}, follows ${via}${terms}`;
     }
     case "typed":
       return null; // the date is already on screen
