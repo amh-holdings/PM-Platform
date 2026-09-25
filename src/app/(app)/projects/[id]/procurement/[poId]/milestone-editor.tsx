@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MoneyInput } from "@/components/ui/money-input";
+import { amountFromPct, pctFromAmount } from "@/lib/milestone-split";
 import {
   addMilestone,
   deleteMilestone,
@@ -289,6 +290,7 @@ export function MilestoneEditor({
                 <EditRow
                   key={m.id}
                   m={m}
+                  poTotalValue={poTotalValue}
                   onCancel={() => setEditId(null)}
                   onSubmit={(fd) => onUpdate(fd, m.id)}
                   busy={busy}
@@ -532,9 +534,27 @@ function AddRow({
   onSubmit: (fd: FormData) => void;
   busy: boolean;
 }) {
+  // The two boxes say the same thing, so whichever one is being typed in
+  // drives the other. Zarina: "if I write here the % amount it should
+  // calculate automatically." See milestone-split.
   const [pct, setPct] = useState("");
-  const computedAmount =
-    pct && Number(pct) > 0 ? (poTotalValue * Number(pct)) / 100 : null;
+  const [amount, setAmount] = useState<number | null>(null);
+
+  function typePct(next: string) {
+    setPct(next);
+    const n = next.trim() === "" ? null : Number(next);
+    const derived = amountFromPct(poTotalValue, n);
+    if (derived !== null) setAmount(derived);
+    else if (n === null) setAmount(null);
+  }
+
+  function typeAmount(next: number | null) {
+    setAmount(next);
+    const derived = pctFromAmount(poTotalValue, next);
+    if (derived !== null) setPct(String(derived));
+    else if (next === null) setPct("");
+  }
+
   return (
     <tr className="border-b bg-emerald-500/5">
       <td colSpan={7} className="p-3">
@@ -555,7 +575,7 @@ function AddRow({
               type="number"
               step="0.01"
               value={pct}
-              onChange={(e) => setPct(e.target.value)}
+              onChange={(e) => typePct(e.target.value)}
               placeholder="10"
             />
           </div>
@@ -564,7 +584,9 @@ function AddRow({
             <MoneyInput
               id="m-amount"
               name="amount"
-              placeholder={computedAmount != null ? computedAmount.toFixed(2) : ""}
+              value={amount}
+              onValueChange={typeAmount}
+              placeholder="0.00"
             />
           </div>
           <div>
@@ -604,15 +626,40 @@ function AddRow({
 
 function EditRow({
   m,
+  poTotalValue,
   onCancel,
   onSubmit,
   busy,
 }: {
   m: Milestone;
+  poTotalValue: number;
   onCancel: () => void;
   onSubmit: (fd: FormData) => void;
   busy: boolean;
 }) {
+  // Same two-way rule as the add row. This is the one she was looking at: 50
+  // in the % box next to the full PO value in Amount, and Amount is what
+  // reaches the cash flow.
+  const [pct, setPct] = useState(
+    m.pct_of_total == null ? "" : String(m.pct_of_total),
+  );
+  const [amount, setAmount] = useState<number | null>(m.amount ?? null);
+
+  function typePct(next: string) {
+    setPct(next);
+    const n = next.trim() === "" ? null : Number(next);
+    const derived = amountFromPct(poTotalValue, n);
+    if (derived !== null) setAmount(derived);
+    else if (n === null) setAmount(null);
+  }
+
+  function typeAmount(next: number | null) {
+    setAmount(next);
+    const derived = pctFromAmount(poTotalValue, next);
+    if (derived !== null) setPct(String(derived));
+    else if (next === null) setPct("");
+  }
+
   return (
     <tr className="border-b bg-amber-500/5">
       <td colSpan={7} className="p-3">
@@ -635,7 +682,8 @@ function EditRow({
               name="pct_of_total"
               type="number"
               step="0.01"
-              defaultValue={m.pct_of_total ?? ""}
+              value={pct}
+              onChange={(e) => typePct(e.target.value)}
             />
           </div>
           <div>
@@ -643,7 +691,8 @@ function EditRow({
             <MoneyInput
               id={`ma-${m.id}`}
               name="amount"
-              defaultValue={m.amount ?? ""}
+              value={amount}
+              onValueChange={typeAmount}
             />
           </div>
           <div>
