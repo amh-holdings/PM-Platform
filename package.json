@@ -48,6 +48,7 @@
     "test:po-payment-forecast": "tsx scripts/procurement/run-po-payment-forecast-tests.ts",
     "test:owner-cash-date": "tsx scripts/billing/run-owner-cash-date-tests.ts",
     "test:sov-forecast-date": "tsx scripts/sub-billing/run-sov-forecast-date-tests.ts",
+    "test:retainage-rate": "tsx scripts/sub-billing/run-retainage-rate-tests.ts",
     "test:schedule-insert": "tsx scripts/schedule/run-insert-tests.ts"
   },
   "dependencies": {

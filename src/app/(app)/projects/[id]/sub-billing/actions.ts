@@ -7,6 +7,7 @@ import { requireCapability } from "@/lib/sub-billing-auth";
 import { runVerificationCore } from "@/lib/sub-billing-run";
 import { approvedToDateByItem, type BillHeader, type BillLine, type SovLine } from "@/lib/sub-billing";
 import { parsePastedSovLines } from "@/lib/sub-sov-import";
+import { parseRetainageRate } from "@/lib/retainage-rate";
 import type { SubBillingClient, SubPayAppStatus } from "@/lib/sub-billing.types";
 
 export type ActionResult =
@@ -806,4 +807,53 @@ export async function importSovLines(
     removed,
     skipped: parsed.skipped.map((s) => `Row ${s.row}: ${s.reason}`),
   };
+}
+
+// ---------------------------------------------------------------------------
+// The retainage rate on a subcontract.
+//
+// Zarina: "Can you add option to add retainage to subs SOVs."
+//
+// Everything already reads this rate. The next-bill projection prices against
+// it, every pay application captures it at creation, and the cash flow holds
+// it back out of what goes to the sub. It was only settable from the Add
+// subcontractor dialog, which nobody reopens once a sub exists, so a rate that
+// was not known at entry stayed at the column default of 0 and the forecast
+// showed nothing held.
+//
+// Applications already written keep the rate they captured. Changing it here
+// governs the next bill and the forecast, not history, which is the same rule
+// the app follows everywhere else that a rate is captured at creation.
+// ---------------------------------------------------------------------------
+
+export async function setSubRetainagePct(
+  projectId: string,
+  subcontractorId: string,
+  raw: string,
+): Promise<ActionResult> {
+  const guard = await requireCapability("enterSubBill");
+  if (!guard.ok) return guard;
+
+  const pct = parseRetainageRate(raw);
+  if (pct === "invalid") {
+    return { ok: false, error: "Retainage must be a number from 0 to 100" };
+  }
+  if (pct === null) {
+    return { ok: false, error: "Enter a retainage rate, or 0 if nothing is held" };
+  }
+
+  const db = subBillingClient();
+  const { error } = await db
+    .from("subcontractors")
+    .update({ retainage_pct: pct })
+    .eq("id", subcontractorId)
+    .eq("project_id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/sub-billing/${subcontractorId}`);
+  revalidatePath(`/projects/${projectId}/sub-billing`);
+  // The cash flow withholds this from what goes out, so the dashboard is stale
+  // the moment it changes.
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
 }
