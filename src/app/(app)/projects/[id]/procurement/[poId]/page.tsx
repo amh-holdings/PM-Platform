@@ -9,12 +9,14 @@ import { formatCurrency, formatDate } from "@/lib/format";
 import {
   describeMilestoneDate,
   forecastMilestoneDate,
+  lineLabel,
   scheduleDrivesDate,
 } from "@/lib/po-payment-forecast";
 import { syncScheduleDates } from "@/lib/schedule-sync-server";
 
 import { AfpStanding } from "./afp-standing";
 import { PoLineEditor } from "./po-line-editor";
+import { PoLineDeliveries } from "./po-line-deliveries";
 import { getPoAfpStanding, getPoLines } from "../../procurement-actions";
 import type { PoAfpStanding } from "@/lib/afp-po-staging";
 import { BillingAllocations } from "./billing-allocations";
@@ -133,6 +135,39 @@ export default async function ProcurementDetailPage({
     linkedTask = data ?? null;
   }
 
+  // Read before the task lookup below, which needs to know which schedule
+  // rows the individual items point at.
+  const linesRes = await getPoLines(po.id);
+  const poLines = linesRes.ok && linesRes.available ? linesRes.lines : [];
+  const forecastLines = poLines.map((l) => ({
+    id: l.id,
+    line_no: l.lineNo,
+    description: l.description,
+    linked_delivery_task_wbs_code: l.linkedDeliveryTaskWbsCode,
+    actual_delivery_date: l.actualDeliveryDate,
+  }));
+
+  // Every schedule row any part of this PO is delivered against: the order's
+  // own link, plus one per line for a PO with more than one delivery.
+  const lineLinkCodes = Array.from(
+    new Set(
+      poLines
+        .map((l) => l.linkedDeliveryTaskWbsCode)
+        .filter((c): c is string => !!c),
+    ),
+  );
+  const taskByWbs = new Map<string, { wbs_code: string; task_name: string | null; end_date: string | null }>();
+  if (linkedTask) taskByWbs.set(linkedTask.wbs_code, linkedTask);
+  const unresolved = lineLinkCodes.filter((c) => !taskByWbs.has(c));
+  if (unresolved.length > 0) {
+    const { data } = await supabase
+      .from("schedule_tasks")
+      .select("wbs_code, task_name, end_date")
+      .eq("project_id", params.id)
+      .in("wbs_code", unresolved);
+    for (const t of data ?? []) taskByWbs.set(t.wbs_code, t);
+  }
+
   let linkedDoc: { file_name: string } | null = null;
   if (po.document_id) {
     const { data } = await supabase
@@ -159,7 +194,6 @@ export default async function ProcurementDetailPage({
   // Whether this PO is already on a pay application. Read here rather than
   // inside the button, so the page never renders Add over money that is
   // already staged and then correct itself a moment later.
-  const linesRes = await getPoLines(po.id);
   const standingRes = await getPoAfpStanding(po.id, params.id);
   const afpStanding: PoAfpStanding = standingRes.ok
     ? standingRes.standing
@@ -182,12 +216,27 @@ export default async function ProcurementDetailPage({
     paid_amount: m.paid_amount == null ? null : Number(m.paid_amount),
     sort_order: m.sort_order,
     notes: m.notes,
+    // Read off the row rather than the generated type: the column arrives
+    // with migration 0062 and the types are generated from the live database,
+    // so until Phil runs it this is simply absent and every milestone pays
+    // for the whole order, which is what they all did before.
+    procurement_order_line_id:
+      (m as { procurement_order_line_id?: string | null })
+        .procurement_order_line_id ?? null,
     // What date this row actually runs on, and where it came from. When the
     // schedule supplies it, it IS the Expected value and the typed date is
     // demoted - see scheduleDrivesDate. Printing the typed date as the
     // headline with the real one in grey underneath left the reader to pick.
     forecast: (() => {
-      const at = forecastMilestoneDate({ milestone: m, po, deliveryTask: linkedTask });
+      const at = forecastMilestoneDate({
+        milestone: m,
+        po,
+        deliveryTask: linkedTask,
+        // A PO with more than one delivery links each item to its own
+        // schedule row, and a milestone says which item it pays for.
+        lines: forecastLines,
+        taskOf: (wbs) => taskByWbs.get(wbs) ?? null,
+      });
       return {
         date: at.date,
         drives: scheduleDrivesDate(at),
@@ -308,6 +357,18 @@ export default async function ProcurementDetailPage({
         available={linesRes.ok ? linesRes.available : false}
       />
 
+      {/* Directly under the items, because it is a column on the same table
+          that would not fit on it. Zarina: "there are POs that has multiple
+          deliveries on it. And each item inside a PO can be linked to a line
+          in the schedule." */}
+      <PoLineDeliveries
+        poId={po.id}
+        projectId={params.id}
+        lines={poLines}
+        options={deliveryOptions}
+        poTaskWbs={po.linked_delivery_task_wbs_code ?? null}
+      />
+
       <section className="rounded-lg border bg-card shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">
           <div>
@@ -345,6 +406,10 @@ export default async function ProcurementDetailPage({
           poId={params.poId}
           poTotalValue={poValue}
           milestones={milestones.map(asEditorRow)}
+          lines={poLines.map((l) => ({
+            id: l.id,
+            label: lineLabel({ line_no: l.lineNo, description: l.description }),
+          }))}
         />
       </section>
 

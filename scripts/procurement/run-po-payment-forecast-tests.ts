@@ -10,6 +10,7 @@
  */
 
 import {
+  lineLabel,
   scheduleDrivesDate,
   addDaysIso,
   describeMilestoneDate,
@@ -95,6 +96,7 @@ same(
     date: "2026-12-18",
     source: "schedule",
     viaWbs: "4.4.2.2",
+    viaLine: null,
     termsDays: 30,
     supersedes: "2026-10-05",
   },
@@ -141,7 +143,7 @@ same(
     po: { ...po, actual_delivery_date: "2026-09-12" },
     deliveryTask: task,
   }),
-  { date: "2026-10-12", source: "arrived", viaWbs: null, termsDays: 30, supersedes: null },
+  { date: "2026-10-12", source: "arrived", viaWbs: null, viaLine: null, termsDays: 30, supersedes: null },
 );
 
 // paid_at is money that has left the bank on a day that happened. Nothing
@@ -153,7 +155,7 @@ same(
     po: { ...po, actual_delivery_date: "2026-09-12" },
     deliveryTask: task,
   }),
-  { date: "2026-09-30", source: "paid", viaWbs: null, termsDays: 0, supersedes: null },
+  { date: "2026-09-30", source: "paid", viaWbs: null, viaLine: null, termsDays: 0, supersedes: null },
 );
 
 same(
@@ -163,7 +165,7 @@ same(
     po,
     deliveryTask: task,
   }),
-  { date: "2026-07-01", source: "typed", viaWbs: null, termsDays: 0, supersedes: null },
+  { date: "2026-07-01", source: "typed", viaWbs: null, viaLine: null, termsDays: 0, supersedes: null },
 );
 
 same(
@@ -185,7 +187,7 @@ same(
     po: { ...po, linked_delivery_task_wbs_code: null },
     deliveryTask: null,
   }),
-  { date: "2026-10-05", source: "typed", viaWbs: null, termsDays: 0, supersedes: null },
+  { date: "2026-10-05", source: "typed", viaWbs: null, viaLine: null, termsDays: 0, supersedes: null },
 );
 
 // The PO points at a task, the task has no finish. Same position as no link
@@ -209,7 +211,7 @@ same(
     po: { ...po, linked_delivery_task_wbs_code: null },
     deliveryTask: null,
   }),
-  { date: null, source: "none", viaWbs: null, termsDays: 0, supersedes: null },
+  { date: null, source: "none", viaWbs: null, viaLine: null, termsDays: 0, supersedes: null },
 );
 
 console.log("\nDate arithmetic\n");
@@ -250,6 +252,203 @@ same(
   }),
   null,
 );
+
+console.log("\nA PO with more than one delivery\n");
+
+// Zarina: "there are POs that has multiple deliveries on it. And each item
+// inside a PO can be linked to a line in the schedule." FTC Solar delivers
+// piles and racking on different dates against different schedule rows.
+const SCHEDULE: Record<string, { wbs_code: string; task_name: string; end_date: string }> = {
+  "4.3.1.2": { wbs_code: "4.3.1.2", task_name: "Pile Delivery", end_date: "2026-10-29" },
+  "4.3.2.2": { wbs_code: "4.3.2.2", task_name: "Racking Delivery", end_date: "2026-11-18" },
+};
+const taskOf = (w: string) => SCHEDULE[w] ?? null;
+
+const PILES = { id: "l1", line_no: 1, description: "Piles", linked_delivery_task_wbs_code: "4.3.1.2" };
+const RACKING = { id: "l2", line_no: 2, description: "Racking", linked_delivery_task_wbs_code: "4.3.2.2" };
+const LINES = [PILES, RACKING];
+
+// No PO-level link at all. Each milestone rides on its own item.
+const multiPo = { ...po, linked_delivery_task_wbs_code: null, payment_terms_summary: null };
+
+same(
+  "a milestone tied to the piles line follows the pile delivery",
+  forecastMilestoneDate({
+    milestone: { ...onDelivery, procurement_order_line_id: "l1" },
+    po: multiPo,
+    lines: LINES,
+    taskOf,
+  }),
+  {
+    date: "2026-10-29",
+    source: "schedule",
+    viaWbs: "4.3.1.2",
+    viaLine: { id: "l1", label: "Line 1 Piles" },
+    termsDays: 0,
+    supersedes: null,
+  },
+);
+
+same(
+  "and the racking milestone follows the racking delivery, three weeks later",
+  forecastMilestoneDate({
+    milestone: { ...onDelivery, procurement_order_line_id: "l2" },
+    po: multiPo,
+    lines: LINES,
+    taskOf,
+  }).date,
+  "2026-11-18",
+);
+
+// This is the whole point. One link for the PO gave both shipments one date.
+check(
+  "the two deliveries no longer land on the same day",
+  forecastMilestoneDate({
+    milestone: { ...onDelivery, procurement_order_line_id: "l1" },
+    po: multiPo, lines: LINES, taskOf,
+  }).date !==
+    forecastMilestoneDate({
+      milestone: { ...onDelivery, procurement_order_line_id: "l2" },
+      po: multiPo, lines: LINES, taskOf,
+    }).date,
+);
+
+// An item that has physically landed beats its own plan, same as the PO rule.
+same(
+  "an item that has arrived beats the task it was linked to",
+  forecastMilestoneDate({
+    milestone: { ...onDelivery, procurement_order_line_id: "l1" },
+    po: multiPo,
+    lines: [{ ...PILES, actual_delivery_date: "2026-10-20" }, RACKING],
+    taskOf,
+  }),
+  {
+    date: "2026-10-20",
+    source: "arrived",
+    viaWbs: null,
+    viaLine: { id: "l1", label: "Line 1 Piles" },
+    termsDays: 0,
+    supersedes: null,
+  },
+);
+
+console.log("\nA milestone that covers the whole order\n");
+
+// No line named, so it is not earned until the last item lands. Taking the
+// first would pay for equipment still on a truck.
+same(
+  "with no line named it waits for the last delivery",
+  forecastMilestoneDate({ milestone: onDelivery, po: multiPo, lines: LINES, taskOf }),
+  {
+    date: "2026-11-18",
+    source: "last_line",
+    viaWbs: "4.3.2.2",
+    viaLine: { id: "l2", label: "Line 2 Racking" },
+    termsDays: 0,
+    supersedes: null,
+  },
+);
+
+same(
+  "the order of the lines does not decide it, the dates do",
+  forecastMilestoneDate({
+    milestone: onDelivery,
+    po: multiPo,
+    lines: [RACKING, PILES],
+    taskOf,
+  }).date,
+  "2026-11-18",
+);
+
+// A PO-level link is a deliberate statement that the order arrives as one
+// delivery, so it outranks reading the items.
+same(
+  "a PO-level link still wins over guessing from the lines",
+  forecastMilestoneDate({
+    milestone: onDelivery,
+    po: { ...po, payment_terms_summary: null },
+    deliveryTask: task,
+    lines: LINES,
+    taskOf,
+  }).source,
+  "schedule",
+);
+
+// The line the milestone names outranks the PO-level link: the PO pays per
+// delivery, and the milestone says which one.
+same(
+  "but a line named on the milestone outranks even that",
+  forecastMilestoneDate({
+    milestone: { ...onDelivery, procurement_order_line_id: "l1" },
+    po: { ...po, payment_terms_summary: null },
+    deliveryTask: task,
+    lines: LINES,
+    taskOf,
+  }).viaWbs,
+  "4.3.1.2",
+);
+
+same(
+  "a line with no schedule link falls through to the rest",
+  forecastMilestoneDate({
+    milestone: { ...onDelivery, procurement_order_line_id: "l3", expected_date: "2026-10-05" },
+    po: multiPo,
+    lines: [{ id: "l3", line_no: 3, description: "Freight" }],
+    taskOf,
+  }),
+  { date: "2026-10-05", source: "typed", viaWbs: null, viaLine: null, termsDays: 0, supersedes: null },
+);
+
+same(
+  "no lines at all behaves exactly as it did before 0062",
+  forecastMilestoneDate({
+    milestone: { ...onDelivery, expected_date: "2026-10-05" },
+    po,
+    deliveryTask: task,
+  }).source,
+  "schedule",
+);
+
+check(
+  "Net terms apply to a line date the same way",
+  forecastMilestoneDate({
+    milestone: { ...onDelivery, procurement_order_line_id: "l1" },
+    po: { ...multiPo, payment_terms_summary: "Net 30" },
+    lines: LINES,
+    taskOf,
+  }).date === "2026-11-28",
+);
+
+check(
+  "the note names the item when there is more than one delivery",
+  (describeMilestoneDate(
+    forecastMilestoneDate({
+      milestone: { ...onDelivery, procurement_order_line_id: "l2" },
+      po: multiPo, lines: LINES, taskOf,
+    }),
+    "Racking Delivery",
+  ) ?? "").includes("Line 2 Racking"),
+);
+
+check(
+  "and says which item the whole-order milestone is waiting on",
+  (describeMilestoneDate(
+    forecastMilestoneDate({ milestone: onDelivery, po: multiPo, lines: LINES, taskOf }),
+  ) ?? "").includes("last item to land"),
+);
+
+check(
+  "a single-delivery PO says nothing about items",
+  !(describeMilestoneDate(
+    forecastMilestoneDate({ milestone: onDelivery, po, deliveryTask: task }),
+    "Delivery",
+  ) ?? "").includes("for Line"),
+);
+
+same("a line with both numbers and a name reads as both", lineLabel(PILES), "Line 1 Piles");
+same("a nameless line reads as its number", lineLabel({ line_no: 4 }), "Line 4");
+same("a numberless line reads as its name", lineLabel({ description: "Freight" }), "Freight");
+same("an empty line still reads as something", lineLabel({}), "an item");
 
 console.log("\nWhich date is the headline\n");
 

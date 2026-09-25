@@ -310,3 +310,55 @@ export function extendedIsAuto(line: PoLine): boolean {
   if (derived === null) return false;
   return Math.abs(derived - Number(current)) < 0.005;
 }
+
+// ---------------------------------------------------------------------------
+// One box where Quantity and Units were two.
+//
+// Zarina, looking at the line-item form: "Can you remove the quantity to this
+// form as well as they are just the same with units."
+//
+// The paper PO prints them side by side, so the form copied that: a number in
+// Quantity and "EA" in Units. Typing 410 and then EA to say one thing is two
+// boxes for one fact, and the pair was the widest part of a table that already
+// scrolls sideways.
+//
+// So the form now has one box and it reads the way the line reads out loud:
+// "410 EA". The number still has to exist, because the extended price follows
+// quantity times unit price and she asked for that to total itself. It is
+// parsed off the front of what is typed and stored in quantity exactly as
+// before, so every existing line, import, total and forecast is untouched -
+// only the number of boxes changed.
+// ---------------------------------------------------------------------------
+
+/** The leading number, then whatever is left. Either half may be missing. */
+export function parseUnits(raw: string): {
+  quantity: number | null;
+  units: string | null;
+} {
+  const text = raw.trim();
+  if (text === "") return { quantity: null, units: null };
+
+  // A leading number, with or without thousands commas, with or without a
+  // decimal part, and ".5" on its own. Anything else is all units.
+  const m = /^(-?(?:\d[\d,]*(?:\.\d+)?|\.\d+))\s*(.*)$/.exec(text);
+  if (!m) return { quantity: null, units: text };
+
+  const n = Number(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(n)) return { quantity: null, units: text };
+
+  const rest = m[2].trim();
+  return { quantity: n, units: rest === "" ? null : rest };
+}
+
+/** The same line back as one string, so the box round-trips what it parsed. */
+export function unitsText(line: Pick<PoLine, "quantity" | "units">): string {
+  const q = line.quantity;
+  const parts: string[] = [];
+  if (q !== null && q !== undefined && String(q).trim() !== "") {
+    const n = Number(q);
+    parts.push(Number.isFinite(n) ? String(n) : String(q));
+  }
+  const u = line.units?.trim();
+  if (u) parts.push(u);
+  return parts.join(" ");
+}

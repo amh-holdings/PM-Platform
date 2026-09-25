@@ -1651,6 +1651,13 @@ export type PoLineRow = {
   units: string | null;
   unitPrice: number | null;
   extendedPrice: number | null;
+  /**
+   * The schedule row this item lands on, and when it really did. Migration
+   * 0062. A PO with more than one delivery links each item separately; a PO
+   * that arrives on one truck leaves these null and uses the PO-level link.
+   */
+  linkedDeliveryTaskWbsCode: string | null;
+  actualDeliveryDate: string | null;
 };
 
 export type PoLinesResult =
@@ -1698,6 +1705,12 @@ export async function getPoLines(poId: string): Promise<PoLinesResult> {
       units: l.units,
       unitPrice: l.unit_price,
       extendedPrice: l.extended_price,
+      // Selected with * above, so these are simply absent until 0062 runs.
+      linkedDeliveryTaskWbsCode:
+        (l as { linked_delivery_task_wbs_code?: string | null }).linked_delivery_task_wbs_code ??
+        null,
+      actualDeliveryDate:
+        (l as { actual_delivery_date?: string | null }).actual_delivery_date ?? null,
     })),
   };
 }
@@ -1764,6 +1777,79 @@ export async function updatePoLine(
     return { ok: false, error: isMissingLines(error) ? MISSING_LINES_MESSAGE : error.message };
   }
   revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  return { ok: true };
+}
+
+/** Migration 0062 has not run yet. */
+function isMissingLineLink(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === "42703" || error.code === "PGRST204") {
+    return /linked_delivery_task_wbs_code|actual_delivery_date|procurement_order_line_id/i.test(
+      error.message ?? "",
+    );
+  }
+  return false;
+}
+
+const MISSING_LINE_LINK_MESSAGE =
+  "Per-item delivery links need database migration 0062. The PO keeps working without it, on one delivery date for the whole order.";
+
+/**
+ * Point one PO line at the schedule row it is delivered against.
+ *
+ * Its own action rather than a field on updatePoLine, so a project where 0062
+ * has not run can still edit quantities and prices. A named column that does
+ * not exist errors the whole request.
+ */
+export async function setPoLineDelivery(
+  lineId: string,
+  poId: string,
+  projectId: string,
+  input: { wbsCode: string | null; actualDeliveryDate?: string | null },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const patch: Record<string, unknown> = {
+    linked_delivery_task_wbs_code: input.wbsCode?.trim() || null,
+  };
+  if (input.actualDeliveryDate !== undefined) {
+    patch.actual_delivery_date = input.actualDeliveryDate || null;
+  }
+
+  const { error } = await auth.supabase
+    .from("procurement_order_lines")
+    .update(patch as never)
+    .eq("id", lineId);
+  if (error) {
+    if (isMissingLineLink(error)) return { ok: false, error: MISSING_LINE_LINK_MESSAGE };
+    return { ok: false, error: isMissingLines(error) ? MISSING_LINES_MESSAGE : error.message };
+  }
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
+}
+
+/** Tie a payment milestone to the item it pays for, or untie it. */
+export async function setMilestoneLine(
+  milestoneId: string,
+  poId: string,
+  projectId: string,
+  lineId: string | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { error } = await auth.supabase
+    .from("procurement_payments")
+    .update({ procurement_order_line_id: lineId } as never)
+    .eq("id", milestoneId);
+  if (error) {
+    if (isMissingLineLink(error)) return { ok: false, error: MISSING_LINE_LINK_MESSAGE };
+    return { ok: false, error: error.message };
+  }
+  revalidatePath(`/projects/${projectId}/procurement/${poId}`);
+  revalidatePath(`/projects/${projectId}`);
   return { ok: true };
 }
 

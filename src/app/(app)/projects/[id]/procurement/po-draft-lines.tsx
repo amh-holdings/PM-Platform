@@ -10,7 +10,9 @@ import {
   derivedExtended,
   draftAsLines,
   extendedIsAuto,
+  parseUnits,
   poTotals,
+  unitsText,
   type DraftLine,
 } from "@/lib/procurement-lines";
 
@@ -67,6 +69,11 @@ export function PoDraftLines({
    * following is read off the line itself rather than remembered, so a figure
    * somebody typed and a box somebody cleared both survive a later change to
    * the quantity. See extendedIsAuto.
+   *
+   * Quantity and Units are one box here too, the same as on the detail page.
+   * Zarina: "they are just the same with units." A patch that carries units
+   * carries the quantity parsed out of it, so the extended price still
+   * follows. See parseUnits.
    */
   function patch(i: number, next: Partial<DraftLine>) {
     setLines((prev) =>
@@ -124,18 +131,16 @@ export function PoDraftLines({
               {/* Fixed widths, so a header sits over its own box. Without
                   them the browser sizes each column to its content and a
                   narrow input drifts away from the label above it. */}
-              <col className="w-[6%]" />
-              <col className="w-[10%]" />
-              <col className="w-[30%]" />
-              <col className="w-[9%]" />
-              <col className="w-[15%]" />
-              <col className="w-[17%]" />
-              <col className="w-[13%]" />
+              <col className="w-[7%]" />
+              <col className="w-[36%]" />
+              <col className="w-[12%]" />
+              <col className="w-[16%]" />
+              <col className="w-[18%]" />
+              <col className="w-[11%]" />
             </colgroup>
             <thead className="text-muted-foreground">
               <tr>
                 <th className="px-4 py-1 text-left font-medium">Line</th>
-                <th className="px-4 py-1 text-right font-medium">Qty</th>
                 <th className="px-4 py-1 text-left font-medium">Description</th>
                 <th className="px-4 py-1 text-left font-medium">Units</th>
                 <th className="px-4 py-1 text-right font-medium">Unit price</th>
@@ -167,20 +172,6 @@ export function PoDraftLines({
                     </td>
                     <td className="px-1 py-1">
                       <Input
-                        value={l.quantity ?? ""}
-                        onChange={(e) =>
-                          patch(i, {
-                            quantity:
-                              e.target.value === "" ? null : Number(e.target.value),
-                          })
-                        }
-                        inputMode="decimal"
-                        className="h-8 w-full text-right text-xs"
-                        aria-label={`Quantity ${i + 1}`}
-                      />
-                    </td>
-                    <td className="px-1 py-1">
-                      <Input
                         value={l.description ?? ""}
                         onChange={(e) => patch(i, { description: e.target.value })}
                         placeholder="Domestic Beam W6x25 cut @ (3.3m)"
@@ -190,9 +181,15 @@ export function PoDraftLines({
                     </td>
                     <td className="px-1 py-1">
                       <Input
-                        value={l.units ?? ""}
-                        onChange={(e) => patch(i, { units: e.target.value })}
-                        placeholder="EA"
+                        value={unitsText(l)}
+                        onChange={(e) => {
+                          const parsed = parseUnits(e.target.value);
+                          patch(i, {
+                            quantity: parsed.quantity,
+                            units: parsed.units,
+                          });
+                        }}
+                        placeholder="410 EA"
                         className="h-8 w-full text-xs"
                         aria-label={`Units ${i + 1}`}
                       />
@@ -243,7 +240,7 @@ export function PoDraftLines({
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={4} />
+                <td colSpan={3} />
                 <td className="px-4 py-1 text-right text-muted-foreground">
                   Subtotal
                 </td>
@@ -253,7 +250,7 @@ export function PoDraftLines({
                 <td />
               </tr>
               <tr>
-                <td colSpan={4} />
+                <td colSpan={3} />
                 <td className="px-4 py-1 text-right text-muted-foreground">
                   Sales tax
                 </td>
@@ -268,7 +265,7 @@ export function PoDraftLines({
                 <td />
               </tr>
               <tr>
-                <td colSpan={4} />
+                <td colSpan={3} />
                 <td className="px-4 py-1 text-right text-muted-foreground">
                   Freight
                 </td>
@@ -283,7 +280,7 @@ export function PoDraftLines({
                 <td />
               </tr>
               <tr>
-                <td colSpan={4} />
+                <td colSpan={3} />
                 <td className="px-4 py-1 text-right font-medium">Total</td>
                 <td className="px-4 py-1 text-right font-mono font-semibold">
                   {formatCurrency(totals.total)}

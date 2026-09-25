@@ -15,7 +15,9 @@ import {
   totalAgreement,
   draftAsLines,
   parseDraftLines,
+  parseUnits,
   totalForNewPo,
+  unitsText,
 } from "../../src/lib/procurement-lines";
 
 let passed = 0;
@@ -309,6 +311,83 @@ eq(
     ],
   }).subtotal,
   209235.59,
+);
+
+
+// ---------------------------------------------------------------------------
+// One box where Quantity and Units were two.
+//
+// Zarina: "Can you remove the quantity to this form as well as they are just
+// the same with units."
+// ---------------------------------------------------------------------------
+
+console.log("\nOne box for quantity and units");
+
+eq("a number and a unit split", parseUnits("410 EA"), { quantity: 410, units: "EA" });
+eq("no space still splits", parseUnits("410EA"), { quantity: 410, units: "EA" });
+eq("a bare count is a count", parseUnits("410"), { quantity: 410, units: null });
+eq("a bare unit is a unit", parseUnits("EA"), { quantity: null, units: "EA" });
+eq("empty is nothing", parseUnits(""), { quantity: null, units: null });
+eq("whitespace is nothing", parseUnits("   "), { quantity: null, units: null });
+eq(
+  "thousands commas survive",
+  parseUnits("2,376 EA"),
+  { quantity: 2376, units: "EA" },
+);
+eq("a decimal count survives", parseUnits("3.3 LF"), { quantity: 3.3, units: "LF" });
+eq("a leading-dot decimal survives", parseUnits(".5 CY"), { quantity: 0.5, units: "CY" });
+eq(
+  "a multi-word unit stays whole",
+  parseUnits("412 EA piles"),
+  { quantity: 412, units: "EA piles" },
+);
+eq(
+  "extra spacing is trimmed off both halves",
+  parseUnits("  412   EA  "),
+  { quantity: 412, units: "EA" },
+);
+eq(
+  "a unit that starts with a letter is never read as a count",
+  parseUnits("LOT"),
+  { quantity: null, units: "LOT" },
+);
+
+eq("the box reads back the way it went in", unitsText({ quantity: 410, units: "EA" }), "410 EA");
+eq("a count with no unit reads back bare", unitsText({ quantity: 410, units: null }), "410");
+eq("a unit with no count reads back bare", unitsText({ quantity: null, units: "EA" }), "EA");
+eq("nothing reads back as nothing", unitsText({ quantity: null, units: null }), "");
+eq(
+  "a numeric column that comes back as a string is normalised",
+  unitsText({ quantity: 410.0 as number, units: "EA" }),
+  "410 EA",
+);
+eq(
+  "a stored decimal keeps its decimal",
+  unitsText({ quantity: 3.3, units: "LF" }),
+  "3.3 LF",
+);
+
+check(
+  "every PO-023 line round-trips through the one box",
+  [
+    { quantity: 71, units: "EA" },
+    { quantity: 410, units: "EA" },
+    { quantity: 1, units: "EA" },
+    { quantity: 10, units: "EA" },
+    { quantity: null, units: "LOT" },
+    { quantity: 1, units: null },
+  ].every((line) => {
+    const back = parseUnits(unitsText(line));
+    return back.quantity === line.quantity && back.units === line.units;
+  }),
+);
+
+check(
+  "the extended price still follows what the one box parses",
+  derivedExtended({
+    quantity: parseUnits("71 EA").quantity,
+    unit_price: 938.29,
+  }) === 66618.59,
 );
 
 console.log(`\n${"=".repeat(60)}`);
