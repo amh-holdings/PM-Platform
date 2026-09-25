@@ -52,3 +52,8 @@ comment on column public.procurement_payments.procurement_order_line_id is
 
 create index if not exists procurement_payments_line_idx
   on public.procurement_payments(procurement_order_line_id);
+
+-- Without this the columns exist but PostgREST keeps serving its cached
+-- schema, so the app still reports them missing until the cache turns over
+-- on its own. Every migration from 0057 on carries it.
+notify pgrst, 'reload schema';
