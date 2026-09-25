@@ -117,6 +117,7 @@ import {
   datesTheForecastWillReplace,
   describeForecastOverwrite,
 } from "@/lib/schedule-sync";
+import { InsertRowMenu } from "./insert-row-menu";
 import { TaskEditDialog } from "./task-edit-dialog";
 import { hasLinkErrors } from "./predecessor-editor";
 import type { ScheduleTaskRow } from "./schedule-types";
@@ -515,6 +516,9 @@ export function ScheduleSplitView({
   // Measured against the whole project, not the filtered view: a branch can be
   // out of order while every row on screen looks fine.
   const wbsOrder = useMemo(() => outOfWbsOrder(allTasks.map(asEdit)), [allTasks]);
+  // Built once rather than per row: Insert needs every task on the project to
+  // work out the next free code and the sort order of the slot.
+  const editTasks = useMemo(() => allTasks.map(asEdit), [allTasks]);
 
   // The trace panel and the grid have to agree. Reading "waits on 5.1.1.2" next
   // to a Predecessors column showing "12" is how you end up trusting neither.
@@ -2121,6 +2125,7 @@ export function ScheduleSplitView({
                     key={t.id}
                     t={t}
                     r={r}
+                    editTasks={editTasks}
                     columns={resolvedColumns}
                     cpm={previewCpm.byWbs.get(t.wbs_code)}
                     progress={progress.get(t.wbs_code) ?? { kind: "none" }}
@@ -2392,6 +2397,8 @@ export function ScheduleSplitView({
 type GridRowProps = {
   /** The Edit task dialog saved this row, so its unsaved cells are stale. */
   onDialogSaved: (taskId: string) => void;
+  /** Every task in edit shape, so Insert can work out the code and the slot. */
+  editTasks: EditTask[];
   t: ScheduleTaskRow;
   r: number;
   columns: Column[];
@@ -2433,7 +2440,7 @@ function GridRow({
   statusOptions, calendar, constraint, dragging, dropAt,
   onDragStart, onDragEnd, onDragOver, onDrop,
   projectId, phaseOptions, allTasks, phase1Available, typeAvailable, rowIndex, predAsRows,
-  onDialogSaved,
+  onDialogSaved, editTasks,
 }: GridRowProps) {
   const indent = Math.max(0, (t.level_code ?? 1) - 1) * 10;
   const rowDirty = columns.some((col) => {
@@ -2739,7 +2746,20 @@ function GridRow({
         }
       })}
 
-      <div className="shrink-0 px-1" style={{ width: ACTION_W }}>
+      <div className="flex shrink-0 items-center px-1" style={{ width: ACTION_W }}>
+        <InsertRowMenu
+          projectId={projectId}
+          anchorWbs={t.wbs_code}
+          editTasks={editTasks}
+          phaseOptions={phaseOptions}
+          statusOptions={statusOptions}
+          allTasks={allTasks}
+          phase1Available={phase1Available}
+          typeAvailable={typeAvailable}
+          calendar={calendar}
+          rowIndex={rowIndex}
+          onDone={() => onDialogSaved(t.id)}
+        />
         <TaskEditDialog
           projectId={projectId}
           task={t}

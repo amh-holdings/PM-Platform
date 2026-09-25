@@ -104,6 +104,12 @@ type Props = {
   // same way the Predecessors column does. Optional - without it the picker
   // falls back to WBS codes, which is what the standalone call sites want.
   rowIndex?: RowIndex;
+  /**
+   * Where the new row goes, when it was opened from a row's Insert menu
+   * rather than from the Add task button. The anchor's own code is never
+   * renumbered to make room - see schedule-insert.
+   */
+  insertAt?: { anchorWbs: string; position: "above" | "below" | "child"; note?: string };
   onDone?: () => void;
 };
 
@@ -120,6 +126,7 @@ export function TaskEditDialog({
   typeAvailable = false,
   calendar = 5,
   rowIndex,
+  insertAt,
   onDone,
 }: Props) {
   const creating = mode === "create";
@@ -191,6 +198,12 @@ export function TaskEditDialog({
       setError(linkError);
       return;
     }
+    // Carried on the form rather than as arguments, so the action reads one
+    // shape whichever button opened it.
+    if (creating && insertAt) {
+      formData.set("insert_anchor_wbs", insertAt.anchorWbs);
+      formData.set("insert_position", insertAt.position);
+    }
     setSubmitting(true);
     setError(null);
     const result = creating
@@ -247,6 +260,9 @@ export function TaskEditDialog({
                 {/* Which branch this row sits in. "Delivery" repeats down four
                     branches, so the code on its own does not tell you whether
                     you opened the right one. */}
+                {creating && insertAt?.note && (
+                  <p className="text-xs text-muted-foreground">{insertAt.note}</p>
+                )}
                 {trail && (
                   <p className="truncate text-xs text-muted-foreground" title={trail}>
                     {trail}
