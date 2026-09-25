@@ -19,6 +19,7 @@ import {
   forecastMilestoneDate,
   forecastPoDates,
   isDeliveryTrigger,
+  isSigningTrigger,
   netTermsDays,
   nextDueDate,
 } from "../../src/lib/po-payment-forecast";
@@ -642,6 +643,173 @@ check(
   "two items on one PO can land in two different cash-flow months",
   cashMonth("l1", "2026-10-29", "2026-11-18") !==
     cashMonth("l2", "2026-10-29", "2026-11-18"),
+);
+
+
+// ---------------------------------------------------------------------------
+// A milestone that fires when the PO is signed.
+//
+// Zarina: "Can you add option for net 30 after PO, or is it a hidden
+// understand that if set trigger to PO release, then it will be automatically
+// net 30?"
+//
+// The trigger says WHEN it is earned, the PO's payment terms say how long
+// after that it is paid. Two facts, two fields. Only delivery triggers ever
+// had their two halves put together.
+// ---------------------------------------------------------------------------
+
+console.log("\nA milestone that fires on signing\n");
+
+const signedPo = {
+  ...po,
+  signed_at: "2026-06-17",
+  ordered_date: "2026-06-01",
+  payment_terms_summary: "Net 30",
+};
+const release = { milestone_name: "Downpayment", trigger_event: "PO Release" };
+
+same(
+  "PO Release takes the signed date plus the PO's Net 30",
+  forecastMilestoneDate({ milestone: release, po: signedPo }),
+  {
+    date: "2026-07-17",
+    source: "signed",
+    viaWbs: null,
+    viaLine: null,
+    termsDays: 30,
+    supersedes: null,
+  },
+);
+
+check(
+  "every signing wording behaves the same way",
+  ["PO Release", "PO Signed", "Deposit", "Down payment", "Mobilization"].every(
+    (t) =>
+      forecastMilestoneDate({
+        milestone: { milestone_name: t, trigger_event: t },
+        po: signedPo,
+      }).date === "2026-07-17",
+  ),
+);
+
+same(
+  "no net terms on the PO means the signing date itself",
+  forecastMilestoneDate({
+    milestone: release,
+    po: { ...signedPo, payment_terms_summary: null },
+  }).date,
+  "2026-06-17",
+);
+
+same(
+  "Net 60 moves it a month further out",
+  forecastMilestoneDate({
+    milestone: release,
+    po: { ...signedPo, payment_terms_summary: "Net 60" },
+  }).date,
+  "2026-08-16",
+);
+
+// The signed date is a fact, so it beats the guess, exactly as a delivery
+// date does. The typed date is reported as superseded when the month moves.
+same(
+  "the signed date beats a typed one, and says so",
+  forecastMilestoneDate({
+    milestone: { ...release, expected_date: "2026-09-15" },
+    po: signedPo,
+  }),
+  {
+    date: "2026-07-17",
+    source: "signed",
+    viaWbs: null,
+    viaLine: null,
+    termsDays: 30,
+    supersedes: "2026-09-15",
+  },
+);
+
+// Before it is signed, a typed date is somebody's judgement about when that
+// will happen. The ordered date is only a stand-in, so it does not overrule.
+const unsigned = { ...signedPo, signed_at: null };
+same(
+  "an unsigned PO keeps the typed date",
+  forecastMilestoneDate({
+    milestone: { ...release, expected_date: "2026-09-15" },
+    po: unsigned,
+  }),
+  {
+    date: "2026-09-15",
+    source: "typed",
+    viaWbs: null,
+    viaLine: null,
+    termsDays: 0,
+    supersedes: null,
+  },
+);
+same(
+  "an unsigned PO with nothing typed falls back to the ordered date plus terms",
+  forecastMilestoneDate({ milestone: release, po: unsigned }),
+  {
+    date: "2026-07-01",
+    source: "ordered",
+    viaWbs: null,
+    viaLine: null,
+    termsDays: 30,
+    supersedes: null,
+  },
+);
+same(
+  "no signed date, no typed date and no ordered date is still no date",
+  forecastMilestoneDate({
+    milestone: release,
+    po: { ...unsigned, ordered_date: null },
+  }).date,
+  null,
+);
+
+// This is the whole point: money that was outside the curve is now in it.
+check(
+  "the deposit she reported now has a date",
+  forecastMilestoneDate({ milestone: release, po: signedPo }).date !== null,
+);
+
+// A paid milestone is still never re-dated.
+same(
+  "paid still wins over everything",
+  forecastMilestoneDate({
+    milestone: { ...release, paid_at: "2026-06-20" },
+    po: signedPo,
+  }).source,
+  "paid",
+);
+
+// A signing trigger must never be read as a delivery one, or a deposit would
+// start following the schedule.
+check(
+  "a delivery wording is not a signing trigger",
+  !isSigningTrigger({ trigger_event: "Delivery to site" }) &&
+    !isSigningTrigger({ trigger_event: "Commissioning" }),
+);
+check(
+  "a signing wording is not a delivery trigger",
+  !isDeliveryTrigger({ trigger_event: "PO Release" }),
+);
+
+// And the derived date reaches the cash flow in the right month.
+same(
+  "the signed date buckets into July",
+  monthIsoFromDate(forecastMilestoneDate({ milestone: release, po: signedPo }).date!),
+  "2026-07-01",
+);
+same(
+  "Net 60 buckets it into August instead",
+  monthIsoFromDate(
+    forecastMilestoneDate({
+      milestone: release,
+      po: { ...signedPo, payment_terms_summary: "Net 60" },
+    }).date!,
+  ),
+  "2026-08-01",
 );
 
 console.log(`\n${"=".repeat(60)}`);

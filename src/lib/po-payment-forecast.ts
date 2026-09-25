@@ -67,6 +67,10 @@ export type PoForecastOrder = {
   linked_delivery_task_wbs_code?: string | null;
   actual_delivery_date?: string | null;
   payment_terms_summary?: string | null;
+  /** When the PO was signed. What a PO release milestone fires on. */
+  signed_at?: string | null;
+  /** When the PO was raised. The planned stand-in before it is signed. */
+  ordered_date?: string | null;
 };
 
 export type DeliveryTaskDate = {
@@ -80,6 +84,8 @@ export type MilestoneDateSource =
   | "arrived"     // an actual delivery date, on the line or the PO
   | "schedule"    // a linked delivery task's planned finish
   | "last_line"   // no link of its own, so the last of the PO's items
+  | "signed"      // the PO's signing date, for a milestone that fires on it
+  | "ordered"     // the PO's ordered date, before it has been signed
   | "typed"       // the expected_date somebody entered
   | "none";       // no date anywhere, so this money is not in the curve
 
@@ -136,6 +142,30 @@ export function isDeliveryTrigger(m: PoForecastMilestone): boolean {
   return /deliver/.test(t);
 }
 
+/**
+ * A milestone that fires when the PO is signed.
+ *
+ * Zarina: "Can you add option for net 30 after PO, or is it a hidden
+ * understand that if set trigger to PO release, then it will be automatically
+ * net 30?"
+ *
+ * Neither, until now. The trigger says WHEN money is earned and the PO's
+ * payment terms say how long after that it is paid. They are two different
+ * facts in two different fields, which is right. What was missing is that
+ * only delivery triggers ever got their two halves put together: a PO release
+ * milestone fell through to whatever date somebody typed, so the Net 30 on
+ * the PO did nothing and the deposit sat outside the cash forecast entirely.
+ *
+ * The wording matches milestoneTriggered in progress.ts, which has decided
+ * for months that these fire on signing. That rule is what earns the money on
+ * the billing side; this is the same rule deciding when it is paid.
+ */
+export function isSigningTrigger(m: PoForecastMilestone): boolean {
+  const t = (m.trigger_event ?? m.milestone_name ?? "").toLowerCase();
+  if (/commission/.test(t) || /deliver/.test(t)) return false;
+  return /signed|po release|deposit|down|mob/.test(t);
+}
+
 /** The month a date falls in, as YYYY-MM. Null in, null out. */
 function monthOf(iso: string | null): string | null {
   return iso ? iso.slice(0, 7) : null;
@@ -168,13 +198,30 @@ export function forecastMilestoneDate(input: {
     return { date: milestone.paid_at, source: "paid", ...none };
   }
 
-  if (!isDeliveryTrigger(milestone)) {
-    return { date: typed, source: typed ? "typed" : "none", ...none };
-  }
-
   const termsDays = netTermsDays(po.payment_terms_summary);
   const moved = (date: string) =>
     typed && monthOf(typed) !== monthOf(date) ? typed : null;
+
+  // A milestone that fires on signing. The signed date is a fact and beats
+  // the typed guess the same way a delivery date does. Before it is signed
+  // the typed date is somebody's judgement about when that will happen, so
+  // it wins over the ordered date, which is only a stand-in.
+  if (isSigningTrigger(milestone)) {
+    if (po.signed_at) {
+      const date = addDaysIso(po.signed_at.slice(0, 10), termsDays);
+      return { date, source: "signed", viaWbs: null, viaLine: null, termsDays, supersedes: moved(date) };
+    }
+    if (typed) return { date: typed, source: "typed", ...none };
+    if (po.ordered_date) {
+      const date = addDaysIso(po.ordered_date.slice(0, 10), termsDays);
+      return { date, source: "ordered", viaWbs: null, viaLine: null, termsDays, supersedes: null };
+    }
+    return { date: null, source: "none", ...none };
+  }
+
+  if (!isDeliveryTrigger(milestone)) {
+    return { date: typed, source: typed ? "typed" : "none", ...none };
+  }
 
   const taskFor = (wbs: string | null | undefined): DeliveryTaskDate | null => {
     if (!wbs) return null;
@@ -270,7 +317,16 @@ export function forecastMilestoneDate(input: {
  * truth - it is a choice the reader has to make.
  */
 export function scheduleDrivesDate(at: MilestoneDate): boolean {
-  return at.source === "schedule" || at.source === "arrived" || at.source === "last_line";
+  return (
+    at.source === "schedule" ||
+    at.source === "arrived" ||
+    at.source === "last_line" ||
+    // The signing date is a recorded fact about this PO, the same as an
+    // arrival date. The ordered date only ever fills a blank, so nothing is
+    // being demoted when it does.
+    at.source === "signed" ||
+    at.source === "ordered"
+  );
 }
 
 /** One line for the PO page, under the typed date. */
@@ -279,6 +335,7 @@ export function describeMilestoneDate(
   taskName?: string | null,
 ): string | null {
   const terms = at.termsDays > 0 ? ` plus Net ${at.termsDays}` : "";
+  const termsDays = at.termsDays;
   // Which item, when the PO has more than one delivery and this milestone
   // rides on a particular one. Silent on a single-delivery PO.
   const item = at.viaLine ? `, for ${at.viaLine.label}` : "";
@@ -299,6 +356,16 @@ export function describeMilestoneDate(
       // lands, so say which one it is waiting on.
       const via = at.viaWbs ? `${at.viaWbs}` : "the last delivery";
       return `Forecast ${at.date}, the last item to land${item ? ` (${at.viaLine?.label})` : ""}, follows ${via}${terms}`;
+    }
+    case "signed":
+      return termsDays > 0
+        ? `Forecast ${at.date}, PO signed${terms}`
+        : `Forecast ${at.date}, the date the PO was signed`;
+    case "ordered": {
+      // Said plainly, because this one is a stand-in. The money is in the
+      // curve on a guess about when the PO gets signed.
+      const when = termsDays > 0 ? ` and paid Net ${at.termsDays}` : "";
+      return `Forecast ${at.date}, the PO is not signed yet, so this assumes it is signed on the date it was raised${when}`;
     }
     case "typed":
       return null; // the date is already on screen

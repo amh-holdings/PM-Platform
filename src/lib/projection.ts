@@ -198,7 +198,7 @@ export async function buildProjection(
       supabase
         .from("procurement_orders")
         .select(
-          "id, po_number, vendor_name, status, linked_delivery_task_wbs_code, actual_delivery_date, payment_terms_summary",
+          "id, po_number, vendor_name, status, linked_delivery_task_wbs_code, actual_delivery_date, payment_terms_summary, signed_at, ordered_date",
         )
         .eq("project_id", projectId),
       supabase
