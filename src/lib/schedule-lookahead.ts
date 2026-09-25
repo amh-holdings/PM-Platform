@@ -17,6 +17,7 @@ import {
   type CalendarLike,
 } from "@/lib/schedule-calendar";
 import type { CpmOutput } from "@/lib/schedule-cpm";
+import { nearestNamedAncestor } from "@/lib/schedule-task-search";
 
 const DAY_MS = 86_400_000;
 
@@ -84,14 +85,8 @@ export function parentLabel(
   wbs: string,
   nameByWbs: ReadonlyMap<string, string>,
 ): string | null {
-  let at = wbs;
-  for (;;) {
-    const dot = at.lastIndexOf(".");
-    if (dot === -1) return null;
-    at = at.slice(0, dot);
-    const name = nameByWbs.get(at);
-    if (name) return `${at} ${name}`;
-  }
+  const at = nearestNamedAncestor(wbs, nameByWbs);
+  return at ? `${at.wbs} ${at.name}` : null;
 }
 
 export function buildLookahead(

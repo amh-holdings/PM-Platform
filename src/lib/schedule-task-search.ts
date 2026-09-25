@@ -17,13 +17,44 @@ export type SearchableTask = {
   task_name: string;
 };
 
-/** Everything about a task somebody might reasonably type. */
+/**
+ * The nearest ancestor that actually has a name.
+ *
+ * Nearest rather than the immediate parent, because a WBS is not required to
+ * carry a row at every level: 4.4.2.1 may have no 4.4.2 on the schedule, and
+ * stopping there would report no parent for a task that plainly sits in a
+ * branch.
+ */
+export function nearestNamedAncestor(
+  wbs: string,
+  nameByWbs: ReadonlyMap<string, string>,
+): { wbs: string; name: string } | null {
+  let at = wbs;
+  for (;;) {
+    const dot = at.lastIndexOf(".");
+    if (dot === -1) return null;
+    at = at.slice(0, dot);
+    const name = nameByWbs.get(at);
+    if (name) return { wbs: at, name };
+  }
+}
+
+/**
+ * Everything about a task somebody might reasonably type.
+ *
+ * The parent's name is in here, which is the point: Sweet Springs carries a
+ * "Delivery" under CAB Hangers, Maddox 1500kVA, Recloser, GroundWorks and
+ * PowerFactors. Typing "delivery" returns five identical-looking rows.
+ * Typing "cab delivery" now returns one.
+ */
 export function taskSearchText(
   task: SearchableTask,
   row?: number | null,
+  parentName?: string | null,
 ): string {
   const parts = [task.wbs_code, task.task_name];
   if (row != null) parts.push(String(row));
+  if (parentName) parts.push(parentName);
   return parts.join(" ").toLowerCase();
 }
 
@@ -53,10 +84,11 @@ export function scoreTaskMatch(
   task: SearchableTask,
   query: string,
   row?: number | null,
+  parentName?: string | null,
 ): number {
   const q = query.trim().toLowerCase();
   if (!q) return 1;
-  if (!matchesTaskQuery(taskSearchText(task, row), q)) return 0;
+  if (!matchesTaskQuery(taskSearchText(task, row, parentName), q)) return 0;
 
   const code = task.wbs_code.toLowerCase();
   const name = task.task_name.toLowerCase();
@@ -83,14 +115,19 @@ export type TaskSearchResult<T> = {
 export function searchTasks<T extends SearchableTask>(
   options: readonly T[],
   query: string,
-  opts: { rowOf?: (wbs: string) => number | null | undefined; limit?: number } = {},
+  opts: {
+    rowOf?: (wbs: string) => number | null | undefined;
+    parentNameOf?: (wbs: string) => string | null | undefined;
+    limit?: number;
+  } = {},
 ): TaskSearchResult<T> {
   const limit = opts.limit ?? 50;
   const scored: { task: T; score: number; at: number }[] = [];
 
   options.forEach((task, at) => {
     const row = opts.rowOf?.(task.wbs_code) ?? null;
-    const score = scoreTaskMatch(task, query, row);
+    const parentName = opts.parentNameOf?.(task.wbs_code) ?? null;
+    const score = scoreTaskMatch(task, query, row, parentName);
     if (score > 0) scored.push({ task, score, at });
   });
 
@@ -104,12 +141,19 @@ export function searchTasks<T extends SearchableTask>(
   };
 }
 
-/** What the box reads when it is not being typed in. */
+/**
+ * What the box reads when it is not being typed in.
+ *
+ * The branch is named when there is one, because "16 - Lead Time" does not
+ * tell you which of five Lead Times you picked.
+ */
 export function taskDisplayLabel(
   wbs: string,
-  opts: { name?: string | null; row?: number | null },
+  opts: { name?: string | null; row?: number | null; parentName?: string | null },
 ): string {
   if (!wbs) return "";
   const head = opts.row != null ? String(opts.row) : wbs;
-  return opts.name ? `${head} - ${opts.name}` : `${wbs} (not found)`;
+  if (!opts.name) return `${wbs} (not found)`;
+  const tail = opts.parentName ? ` (${opts.parentName})` : "";
+  return `${head} - ${opts.name}${tail}`;
 }
