@@ -313,23 +313,38 @@ check(
     }).date,
 );
 
-// An item that has physically landed beats its own plan, same as the PO rule.
+// An item carries no arrival date of its own. Zarina: "If the delivery date
+// in the schedule is different on when it actually arrives, I will just
+// adjust schedule and not here." One fact, one place.
+// Moving the schedule row moves the payment. That is the whole mechanism she
+// asked for: adjust the schedule, not a second box on this page.
 same(
-  "an item that has arrived beats the task it was linked to",
+  "moving the schedule row moves the item's payment with it",
   forecastMilestoneDate({
     milestone: { ...onDelivery, procurement_order_line_id: "l1" },
     po: multiPo,
-    lines: [{ ...PILES, actual_delivery_date: "2026-10-20" }, RACKING],
-    taskOf,
-  }),
-  {
-    date: "2026-10-20",
-    source: "arrived",
-    viaWbs: null,
-    viaLine: { id: "l1", label: "Line 1 Piles" },
-    termsDays: 0,
-    supersedes: null,
-  },
+    lines: LINES,
+    taskOf: (wbs) =>
+      wbs === "4.3.1.2"
+        ? { wbs_code: "4.3.1.2", task_name: "Pile Delivery", end_date: "2026-10-20" }
+        : taskOf(wbs),
+  }).date,
+  "2026-10-20",
+);
+
+// And the whole-order case reads the schedule too, never a stored arrival.
+same(
+  "a whole-order milestone waits for the last schedule row, not a stored date",
+  forecastMilestoneDate({
+    milestone: onDelivery,
+    po: multiPo,
+    lines: LINES,
+    taskOf: (wbs) =>
+      wbs === "4.3.2.2"
+        ? { wbs_code: "4.3.2.2", task_name: "Racking Delivery", end_date: "2026-12-04" }
+        : taskOf(wbs),
+  }).date,
+  "2026-12-04",
 );
 
 console.log("\nA milestone that covers the whole order\n");

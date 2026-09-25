@@ -58,7 +58,6 @@ export type PoForecastLine = {
   line_no?: number | null;
   description?: string | null;
   linked_delivery_task_wbs_code?: string | null;
-  actual_delivery_date?: string | null;
 };
 
 export type PoForecastOrder = {
@@ -191,17 +190,12 @@ export function forecastMilestoneDate(input: {
     ? lines.find((l) => l.id === milestone.procurement_order_line_id)
     : undefined;
 
-  if (own?.actual_delivery_date) {
-    const date = addDaysIso(own.actual_delivery_date, termsDays);
-    return {
-      date,
-      source: "arrived",
-      viaWbs: null,
-      viaLine: { id: own.id ?? null, label: lineLabel(own) },
-      termsDays,
-      supersedes: moved(date),
-    };
-  }
+  // An item has no arrival date of its own, deliberately. Zarina: "If the
+  // delivery date in the schedule is different on when it actually arrives,
+  // I will just adjust schedule and not here." A second place to record the
+  // same fact is a second place for it to be wrong, and she has been clear
+  // that the schedule wins. So an item follows its schedule row and nothing
+  // else. The ORDER still carries one, for a PO with no item links at all.
   if (own) {
     const task = taskFor(own.linked_delivery_task_wbs_code);
     if (task?.end_date) {
@@ -244,7 +238,7 @@ export function forecastMilestoneDate(input: {
   const dated = lines
     .map((l) => {
       const task = taskFor(l.linked_delivery_task_wbs_code);
-      const end = l.actual_delivery_date ?? task?.end_date ?? null;
+      const end = task?.end_date ?? null;
       return end ? { line: l, wbs: task?.wbs_code ?? null, end } : null;
     })
     .filter((x): x is { line: PoForecastLine; wbs: string | null; end: string } => x !== null);

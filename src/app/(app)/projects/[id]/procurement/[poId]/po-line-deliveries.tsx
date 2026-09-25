@@ -3,7 +3,6 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
-import { Input } from "@/components/ui/input";
 import { formatDate } from "@/lib/format";
 import { lineLabel } from "@/lib/po-payment-forecast";
 
@@ -26,6 +25,10 @@ import type { DeliveryTaskOption } from "./delivery-task-link";
  *
  * Linking an item here overrides the order-level link for any payment
  * milestone tied to that item. Leave them all blank and nothing changes.
+ *
+ * There is no arrival date on an item, on purpose. Zarina: "If the delivery
+ * date in the schedule is different on when it actually arrives, I will just
+ * adjust schedule and not here." One fact, one place. The schedule row is it.
  */
 export function PoLineDeliveries({
   poId,
@@ -48,13 +51,10 @@ export function PoLineDeliveries({
 
   if (lines.length === 0) return null;
 
-  const save = async (
-    lineId: string,
-    input: { wbsCode: string | null; actualDeliveryDate?: string | null },
-  ) => {
+  const save = async (lineId: string, wbsCode: string | null) => {
     setBusy(lineId);
     setError(null);
-    const res = await setPoLineDelivery(lineId, poId, projectId, input);
+    const res = await setPoLineDelivery(lineId, poId, projectId, { wbsCode });
     setBusy(null);
     if (!res.ok) {
       setError(res.error);
@@ -93,7 +93,6 @@ export function PoLineDeliveries({
             <tr>
               <th className="px-2 py-2 text-left font-medium">Item</th>
               <th className="px-2 py-2 text-left font-medium">Delivered against</th>
-              <th className="px-2 py-2 text-left font-medium">Arrived</th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -119,7 +118,7 @@ export function PoLineDeliveries({
                     <select
                       value={l.linkedDeliveryTaskWbsCode ?? ""}
                       disabled={busy === l.id}
-                      onChange={(e) => save(l.id, { wbsCode: e.target.value || null })}
+                      onChange={(e) => save(l.id, e.target.value || null)}
                       className="h-8 w-full max-w-sm rounded-md border border-input bg-background px-2 text-xs"
                       aria-label={`Schedule row for line ${l.lineNo ?? ""}`}
                     >
@@ -135,22 +134,6 @@ export function PoLineDeliveries({
                         </option>
                       ))}
                     </select>
-                  </td>
-                  <td className="px-2 py-2 align-top">
-                    <Input
-                      type="date"
-                      defaultValue={l.actualDeliveryDate ?? ""}
-                      disabled={busy === l.id}
-                      onBlur={(e) =>
-                        e.target.value !== (l.actualDeliveryDate ?? "") &&
-                        save(l.id, {
-                          wbsCode: l.linkedDeliveryTaskWbsCode,
-                          actualDeliveryDate: e.target.value || null,
-                        })
-                      }
-                      className="h-8 w-[10rem] text-xs"
-                      aria-label={`Arrival date for line ${l.lineNo ?? ""}`}
-                    />
                   </td>
                 </tr>
               );
