@@ -27,6 +27,7 @@ export function TaskCombobox<T extends SearchableTask>({
   onChange,
   rowOf,
   branchSizeOf,
+  parentNameOf,
   invalid,
   placeholder = "Type a row number, code or task name",
 }: {
@@ -37,6 +38,17 @@ export function TaskCombobox<T extends SearchableTask>({
   rowOf?: (wbs: string) => number | null | undefined;
   /** How many tasks sit under this code, when it is a branch rather than work. */
   branchSizeOf?: (wbs: string) => number;
+  /**
+   * The branch this task sits in.
+   *
+   * Zarina: "can you add the parent name to the children task so I can make
+   * sure it is the same delivery task for a certain parent task." Sweet
+   * Springs carries a Lead Time and a Delivery under CAB Hangers, Maddox
+   * 1500kVA, Recloser, GroundWorks and PowerFactors. Without the branch, five
+   * rows in this list read "Delivery" and the only thing separating them is a
+   * WBS code nobody has memorised.
+   */
+  parentNameOf?: (wbs: string) => string | null | undefined;
   invalid?: boolean;
   placeholder?: string;
 }) {
@@ -54,13 +66,17 @@ export function TaskCombobox<T extends SearchableTask>({
   const selectedLabel = taskDisplayLabel(value, {
     name: nameByCode.get(value) ?? null,
     row: rowOf?.(value) ?? null,
+    parentName: parentNameOf?.(value) ?? null,
   });
 
   // 200 rather than 50. Branches are listed now, which adds rows, and a
   // person scrolling for a code they have not finished typing should reach it.
   const { matches, hidden } = useMemo(
-    () => searchTasks(options, query ?? "", { rowOf, limit: 200 }),
-    [options, query, rowOf],
+    // parentNameOf goes in so "cab delivery" finds the one under CAB
+    // Hangers. Searching the name alone returns all five Deliveries and
+    // leaves the reading to the person, which is the problem.
+    () => searchTasks(options, query ?? "", { rowOf, parentNameOf, limit: 200 }),
+    [options, query, rowOf, parentNameOf],
   );
 
   useEffect(() => {
@@ -152,6 +168,7 @@ export function TaskCombobox<T extends SearchableTask>({
           {matches.map((o, i) => {
             const row = rowOf?.(o.wbs_code);
             const branch = branchSizeOf?.(o.wbs_code) ?? 0;
+            const parent = parentNameOf?.(o.wbs_code);
             return (
               <button
                 key={o.wbs_code}
@@ -173,7 +190,13 @@ export function TaskCombobox<T extends SearchableTask>({
                 <span className="font-mono text-muted-foreground">
                   {row != null ? row : o.wbs_code}
                 </span>
-                <span className="truncate">{o.task_name}</span>
+                <span className="shrink-0 truncate">{o.task_name}</span>
+                {/* Which branch it belongs to. The single most useful thing
+                    on the row when the name repeats, so it goes right beside
+                    the name rather than at the end. */}
+                {parent && branch === 0 && (
+                  <span className="truncate text-muted-foreground">in {parent}</span>
+                )}
                 {branch > 0 && (
                   <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">
                     branch of {branch}

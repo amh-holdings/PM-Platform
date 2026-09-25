@@ -15,6 +15,8 @@ import {
   type Link,
   type RelType,
 } from "@/lib/schedule-cpm";
+import { nearestNamedAncestor } from "@/lib/schedule-task-search";
+
 import { TaskCombobox } from "./task-combobox";
 
 export type LinkTask = {
@@ -207,6 +209,9 @@ export function PredecessorEditor({
                 rowOf={(wbs) => rowIndex?.byWbs.get(wbs) ?? null}
                 branchSizeOf={(wbs) =>
                   summaries.has(wbs) ? leafCountUnder(wbs) : 0
+                }
+                parentNameOf={(wbs) =>
+                  nearestNamedAncestor(wbs, nameByWbs)?.name ?? null
                 }
                 invalid={!!l.pred && !nameByWbs.has(l.pred)}
               />

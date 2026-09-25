@@ -22,6 +22,7 @@ import {
   workingDaysBetween,
 } from "@/lib/schedule-calendar";
 import {
+  nearestNamedAncestor,
   searchTasks,
   taskDisplayLabel,
 } from "../../src/lib/schedule-task-search";
@@ -3568,6 +3569,88 @@ section("Dragging a branch above the first row of the sheet");
     "214 (not found)",
   );
   eq("nothing picked reads as empty", taskDisplayLabel("", { name: null, row: null }), "");
+
+  // --- which branch the task sits in ---
+  //
+  // Zarina: "can you add the parent name to the children task so I can make
+  // sure it is the same delivery task for a certain parent task." Sweet
+  // Springs carries a Delivery under CAB Hangers, Maddox 1500kVA, Recloser,
+  // GroundWorks and PowerFactors. Five rows reading "Delivery" separated only
+  // by a WBS code nobody has memorised.
+  const BRANCHED = new Map<string, string>([
+    ["4.4", "Electrical Equipment"],
+    ["4.4.2", "CAB Hangers"],
+    ["4.4.3", "Maddox 1500kVA"],
+  ]);
+
+  same(
+    "a child reports the branch it sits in",
+    nearestNamedAncestor("4.4.2.2", BRANCHED),
+    { wbs: "4.4.2", name: "CAB Hangers" },
+  );
+
+  same(
+    "a sibling under a different branch reports that one",
+    nearestNamedAncestor("4.4.3.2", BRANCHED),
+    { wbs: "4.4.3", name: "Maddox 1500kVA" },
+  );
+
+  // A WBS does not have to carry a row at every level. Stopping at the
+  // immediate parent would report no branch for a task that plainly has one.
+  same(
+    "it walks past a level that has no row of its own",
+    nearestNamedAncestor("4.4.9.1.1", BRANCHED),
+    { wbs: "4.4", name: "Electrical Equipment" },
+  );
+
+  same("a top-level task has no branch", nearestNamedAncestor("5", BRANCHED), null);
+  same("nor does one whose ancestors are all missing", nearestNamedAncestor("9.9.9", BRANCHED), null);
+
+  // The point of putting it in the search text: narrowing five Deliveries
+  // down to one by naming the branch.
+  const PARENTED = [
+    { wbs_code: "4.4.2.2", task_name: "Delivery" },
+    { wbs_code: "4.4.3.2", task_name: "Delivery" },
+  ];
+  const parentNameOf = (w: string) => nearestNamedAncestor(w, BRANCHED)?.name ?? null;
+
+  same(
+    "typing the branch name finds the right Delivery",
+    searchTasks(PARENTED, "cab delivery", { parentNameOf }).matches.map((t) => t.wbs_code),
+    ["4.4.2.2"],
+  );
+
+  same(
+    "and the other branch finds the other one",
+    searchTasks(PARENTED, "maddox delivery", { parentNameOf }).matches.map((t) => t.wbs_code),
+    ["4.4.3.2"],
+  );
+
+  eq(
+    "the name alone still returns both, as it must",
+    searchTasks(PARENTED, "delivery", { parentNameOf }).matches.length,
+    2,
+  );
+
+  // Without the parent in the haystack, "cab" matches nothing at all - which
+  // is what it did before, and why five rows looked identical.
+  eq(
+    "searching without the branch cannot tell them apart",
+    searchTasks(PARENTED, "cab delivery", {}).matches.length,
+    0,
+  );
+
+  eq(
+    "the box names the branch of what is picked",
+    taskDisplayLabel("4.4.2.2", { name: "Delivery", row: 17, parentName: "CAB Hangers" }),
+    "17 - Delivery (CAB Hangers)",
+  );
+
+  eq(
+    "a task with no branch reads as it always did",
+    taskDisplayLabel("5", { name: "Commissioning", row: 90, parentName: null }),
+    "90 - Commissioning",
+  );
 }
 
 // ============================================================================
