@@ -22,6 +22,7 @@ import {
   netTermsDays,
   nextDueDate,
 } from "../../src/lib/po-payment-forecast";
+import { monthIsoFromDate } from "../../src/lib/cashflow";
 
 let passed = 0;
 const failures: string[] = [];
@@ -573,6 +574,75 @@ check("the move line names the task", line.includes("4.4.2.2 Delivery"));
 
 same("one move reads as one", describeScheduleMoveCount(1), "1 vendor payment takes its date from the schedule");
 check("several read as several", describeScheduleMoveCount(4).startsWith("4 vendor payments"));
+
+
+// ---------------------------------------------------------------------------
+// The seam into the cash flow.
+//
+// Zarina: "Can you confirm that this moves the cashflow forcast well?"
+//
+// buildProjection does exactly two things with what forecastMilestoneDate
+// returns: monthIsoFromDate(at.date), then it adds the amount to that month's
+// vendorCashOut. So composing those two here is the same arithmetic the curve
+// does, and a move that crosses a month boundary has to land in the new month.
+// ---------------------------------------------------------------------------
+
+console.log("\nThe seam into the cash flow\n");
+
+/** What the curve buckets this milestone into, for a given schedule. */
+const cashMonth = (lineId: string | null, pileEnd: string, rackEnd: string) =>
+  monthIsoFromDate(
+    forecastMilestoneDate({
+      milestone: lineId
+        ? { ...onDelivery, procurement_order_line_id: lineId }
+        : onDelivery,
+      po: multiPo,
+      lines: LINES,
+      taskOf: (wbs) =>
+        wbs === "4.3.1.2"
+          ? { wbs_code: "4.3.1.2", task_name: "Pile Delivery", end_date: pileEnd }
+          : wbs === "4.3.2.2"
+            ? { wbs_code: "4.3.2.2", task_name: "Racking Delivery", end_date: rackEnd }
+            : taskOf(wbs),
+    }).date!,
+  );
+
+same(
+  "the piles payment sits in the month the pile delivery sits in",
+  cashMonth("l1", "2026-10-29", "2026-11-18"),
+  "2026-10-01",
+);
+same(
+  "the racking payment sits in its own, later month",
+  cashMonth("l2", "2026-10-29", "2026-11-18"),
+  "2026-11-01",
+);
+same(
+  "slipping the pile delivery into November moves that money to November",
+  cashMonth("l1", "2026-11-03", "2026-11-18"),
+  "2026-11-01",
+);
+same(
+  "pulling the racking delivery into October moves that money to October",
+  cashMonth("l2", "2026-10-29", "2026-10-30"),
+  "2026-10-01",
+);
+same(
+  "a whole-order payment rides the LAST delivery, so slipping racking moves it",
+  cashMonth(null, "2026-10-29", "2026-12-02"),
+  "2026-12-01",
+);
+same(
+  "and slipping the FIRST delivery leaves a whole-order payment where it was",
+  cashMonth(null, "2026-11-03", "2026-11-18"),
+  "2026-11-01",
+);
+
+check(
+  "two items on one PO can land in two different cash-flow months",
+  cashMonth("l1", "2026-10-29", "2026-11-18") !==
+    cashMonth("l2", "2026-10-29", "2026-11-18"),
+);
 
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);
