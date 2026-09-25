@@ -176,7 +176,16 @@ export function MilestoneEditor({
   function openPayment(m: Milestone) {
     setError(null);
     setPayingId(m.id);
-    setPaidDate(m.paid_at ?? todayIso());
+    // Blank, not today. Zarina: "I selected paid on 7/17, but it reads
+    // september." A date input shows three separate segments in whatever
+    // order the browser's locale puts them, and hers reads dd/mm/yyyy while
+    // the app prints Sep 17, 2026. Seeding it with today handed her a
+    // complete date where changing one segment leaves the other two as
+    // today's, so an edited day with September still on it saves silently
+    // and looks deliberate. Empty forces all three to be entered, and the
+    // line under the box reads the choice back the way the page will print
+    // it, so a month that is not the one meant is visible before Save.
+    setPaidDate(m.paid_at ?? "");
     setPaidAmount(String(Number(m.paid_amount ?? m.amount ?? 0)));
   }
 
@@ -379,14 +388,22 @@ export function MilestoneEditor({
                   <td className="px-2 py-1.5">
                     {payingId === m.id ? (
                       <div className="flex flex-wrap items-center gap-1">
-                        <Input
-                          type="date"
-                          max={todayIso()}
-                          value={paidDate}
-                          onChange={(e) => setPaidDate(e.target.value)}
-                          className="h-8 w-[9.5rem] text-xs"
-                          aria-label="Date paid"
-                        />
+                        <div>
+                          <Input
+                            type="date"
+                            max={todayIso()}
+                            value={paidDate}
+                            onChange={(e) => setPaidDate(e.target.value)}
+                            className="h-8 w-[9.5rem] text-xs"
+                            aria-label="Date paid"
+                          />
+                          {/* The date read back the way this page prints it,
+                              so a dd/mm box and a Mon D, YYYY column cannot
+                              disagree without somebody seeing it. */}
+                          <div className="mt-0.5 text-[10px] text-muted-foreground">
+                            {paidDate ? formatDate(paidDate) : "Pick the date it was paid"}
+                          </div>
+                        </div>
                         <MoneyInput
                           value={paidAmount}
                           onTextChange={setPaidAmount}
