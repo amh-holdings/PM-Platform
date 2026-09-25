@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { METHOD_LABEL, STATUS_LABEL, STATUS_TONE } from "../constants";
 import { MappingRow } from "./mapping-row";
 import { SovEditor } from "./sov-editor";
+import { SubRetainage } from "./sub-retainage";
 
 type Params = { id: string; subId: string };
 
@@ -314,6 +315,19 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
             {sovVariance > 0 ? " over" : " under"}. Every percentage on this page is priced off
             the SOV, so the two should tie out before a bill is approved.
           </p>
+        )}
+
+        {/* The rate is priced against the SOV, so it lives with the SOV
+            rather than in a dialog on another page. Zarina: "Can you add
+            option to add retainage to subs SOVs." */}
+        {canEditSov && (
+          <SubRetainage
+            projectId={params.id}
+            subcontractorId={params.subId}
+            pct={Number(sub.retainage_pct ?? 0)}
+            sovTotal={sovTotal}
+            showDollars={showDollars}
+          />
         )}
 
         {canEditSov && (
