@@ -19,6 +19,7 @@ import {
   forecastMilestoneDate,
   forecastPoDates,
   isDeliveryTrigger,
+  isCommissioningTrigger,
   isSigningTrigger,
   netTermsDays,
   nextDueDate,
@@ -170,14 +171,83 @@ same(
   { date: "2026-07-01", source: "typed", viaWbs: null, viaLine: null, termsDays: 0, supersedes: null },
 );
 
+// Commissioning used to keep its typed date untouched. Zarina:
+// "Commissioning doesnt have a forecast for net 30." The typed date is the
+// commissioning DAY, there is still no task to derive it from, but the PO's
+// terms are applied on top of it now, because this column is the day money
+// leaves the bank.
 same(
-  "commissioning keeps its typed date, there is no task pointing at it",
+  "commissioning is the typed day plus the PO's terms",
   forecastMilestoneDate({
     milestone: { milestone_name: "Commissioning", trigger_event: "Commissioning", expected_date: "2026-12-20" },
     po,
     deliveryTask: task,
+  }),
+  {
+    date: "2027-01-19",
+    source: "commissioning",
+    viaWbs: null,
+    viaLine: null,
+    termsDays: 30,
+    supersedes: "2026-12-20",
+  },
+);
+
+// With no terms on the PO there is nothing to add, so nothing changes and
+// nothing is said about it.
+same(
+  "no terms leaves the commissioning date exactly as typed",
+  forecastMilestoneDate({
+    milestone: { milestone_name: "Commissioning", trigger_event: "Commissioning", expected_date: "2026-12-20" },
+    po: { ...po, payment_terms_summary: null },
+  }),
+  { date: "2026-12-20", source: "typed", viaWbs: null, viaLine: null, termsDays: 0, supersedes: null },
+);
+
+same(
+  "a commissioning milestone with no date typed still has no date",
+  forecastMilestoneDate({
+    milestone: { milestone_name: "Commissioning", trigger_event: "Commissioning" },
+    po,
+  }).date,
+  null,
+);
+
+same(
+  "a paid commissioning milestone is never re-dated",
+  forecastMilestoneDate({
+    milestone: {
+      milestone_name: "Commissioning",
+      trigger_event: "Commissioning",
+      expected_date: "2026-12-20",
+      paid_at: "2026-12-22",
+    },
+    po,
   }).source,
-  "typed",
+  "paid",
+);
+
+// Her row: commissioning 16 Dec, Net 30, so the money goes out 15 Jan.
+same(
+  "the row she reported now pays 30 days after commissioning",
+  forecastMilestoneDate({
+    milestone: {
+      milestone_name: "Commissioning",
+      trigger_event: "Commissioning complete - Net 30",
+      expected_date: "2026-12-16",
+    },
+    po: { ...po, payment_terms_summary: "Net 30" },
+  }).date,
+  "2027-01-15",
+);
+
+// Commissioning must never be read as a delivery or a signing trigger, or it
+// would start following the schedule or the signing date.
+check(
+  "commissioning is only ever a commissioning trigger",
+  isCommissioningTrigger({ trigger_event: "Commissioning complete - Net 30" }) &&
+    !isDeliveryTrigger({ trigger_event: "Commissioning complete - Net 30" }) &&
+    !isSigningTrigger({ trigger_event: "Commissioning complete - Net 30" }),
 );
 
 console.log("\nWhen there is nothing to go on\n");
@@ -231,10 +301,17 @@ const milestones = [
   { milestone_name: "Commissioning", trigger_event: "Commissioning", expected_date: "2027-01-15" },
 ];
 
+// The commissioning row reads "commissioning" rather than "typed" since
+// Zarina asked for the PO's Net 30 to reach it. 2027-01-15 plus 30 days.
 same(
   "each milestone is dated by its own rule",
   forecastPoDates({ po, milestones, deliveryTask: task }).map((d) => d.source),
-  ["paid", "schedule", "typed"],
+  ["paid", "schedule", "commissioning"],
+);
+same(
+  "and the commissioning one lands 30 days after the day typed",
+  forecastPoDates({ po, milestones, deliveryTask: task })[2].date,
+  "2027-02-14",
 );
 
 // Next due skips the paid deposit and reads the delivery payment off the

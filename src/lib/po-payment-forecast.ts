@@ -86,6 +86,7 @@ export type MilestoneDateSource =
   | "last_line"   // no link of its own, so the last of the PO's items
   | "signed"      // the PO's signing date, for a milestone that fires on it
   | "ordered"     // the PO's ordered date, before it has been signed
+  | "commissioning" // the typed commissioning date, plus the PO's net terms
   | "typed"       // the expected_date somebody entered
   | "none";       // no date anywhere, so this money is not in the curve
 
@@ -160,6 +161,26 @@ export function isDeliveryTrigger(m: PoForecastMilestone): boolean {
  * for months that these fire on signing. That rule is what earns the money on
  * the billing side; this is the same rule deciding when it is paid.
  */
+/**
+ * A milestone that fires when the equipment is commissioned.
+ *
+ * Zarina: "Commissioning doesnt have a forecast for net 30."
+ *
+ * Right, and it was the last trigger with its two halves apart. Commissioning
+ * is not on the schedule the way a delivery is, and this PO does not point at
+ * a commissioning task, so there is nothing to derive the EVENT date from and
+ * the typed date has to stand for it. What was wrong is that the terms were
+ * then never applied on top, so a row that says "Commissioning complete -
+ * Net 30" paid on the commissioning day itself.
+ *
+ * The Expected column is the day money leaves the bank everywhere else on
+ * this table. It is that here too now.
+ */
+export function isCommissioningTrigger(m: PoForecastMilestone): boolean {
+  const t = (m.trigger_event ?? m.milestone_name ?? "").toLowerCase();
+  return /commission/.test(t);
+}
+
 export function isSigningTrigger(m: PoForecastMilestone): boolean {
   const t = (m.trigger_event ?? m.milestone_name ?? "").toLowerCase();
   if (/commission/.test(t) || /deliver/.test(t)) return false;
@@ -217,6 +238,26 @@ export function forecastMilestoneDate(input: {
       return { date, source: "ordered", viaWbs: null, viaLine: null, termsDays, supersedes: null };
     }
     return { date: null, source: "none", ...none };
+  }
+
+  // Commissioning: the typed date is the commissioning day, and the PO's
+  // terms say how long after it the money goes. With no terms there is
+  // nothing to add, so it stays exactly what was typed and says nothing.
+  if (isCommissioningTrigger(milestone)) {
+    if (!typed) return { date: null, source: "none", ...none };
+    if (termsDays === 0) return { date: typed, source: "typed", ...none };
+    const date = addDaysIso(typed, termsDays);
+    return {
+      date,
+      source: "commissioning",
+      viaWbs: null,
+      viaLine: null,
+      termsDays,
+      // Always the typed date, not just a cross-month move: here it is the
+      // commissioning day rather than a competing guess at the cash day, and
+      // the note reads it back so the arithmetic is visible.
+      supersedes: typed,
+    };
   }
 
   if (!isDeliveryTrigger(milestone)) {
@@ -325,7 +366,10 @@ export function scheduleDrivesDate(at: MilestoneDate): boolean {
     // arrival date. The ordered date only ever fills a blank, so nothing is
     // being demoted when it does.
     at.source === "signed" ||
-    at.source === "ordered"
+    at.source === "ordered" ||
+    // The typed date is the commissioning day, the derived one is the day it
+    // is paid, and this column is the day it is paid.
+    at.source === "commissioning"
   );
 }
 
@@ -367,6 +411,8 @@ export function describeMilestoneDate(
       const when = termsDays > 0 ? ` and paid Net ${at.termsDays}` : "";
       return `Forecast ${at.date}, the PO is not signed yet, so this assumes it is signed on the date it was raised${when}`;
     }
+    case "commissioning":
+      return `Forecast ${at.date}, commissioning ${at.supersedes ?? "as typed"}${terms}`;
     case "typed":
       return null; // the date is already on screen
     case "none":
