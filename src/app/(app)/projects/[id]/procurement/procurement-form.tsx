@@ -29,7 +29,6 @@ export type ProcurementFormValues = {
   actual_delivery_date: string | null;
   status: string | null;
   payment_terms_summary: string | null;
-  net_terms_days: number | null;
   document_id: string | null;
   notes: string | null;
 };
@@ -53,7 +52,6 @@ const EMPTY: ProcurementFormValues = {
   actual_delivery_date: null,
   status: "active",
   payment_terms_summary: null,
-  net_terms_days: null,
   document_id: null,
   notes: null,
 };
@@ -315,11 +313,13 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
               <PoDraftLines />
             </div>
           )}
-          {/* The summary is the human record of what the PO says. The
-              number next to it is the one the forecast uses. Zarina: "add a
-              column for specific net terms then the forcast will draw from
-              that not just on a text field." */}
-          <div>
+          {/* The human record of what the paper PO says, and nothing more.
+              Net terms used to sit next to it as a number for the whole
+              order; it moved onto the milestone row, because four milestones
+              on one PO can sit on four different clocks and only the row
+              knows which. Zarina: "Instead of the summary from the uploaded
+              PO, can you just do it when adding a milestone?" */}
+          <div className="sm:col-span-2">
             <Label htmlFor="payment_terms_summary">Payment terms (free-text summary)</Label>
             <Input
               id="payment_terms_summary"
@@ -327,24 +327,10 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
               defaultValue={values.payment_terms_summary ?? ""}
               placeholder="e.g. 10% PO, 80% delivery, 10% commissioning"
             />
-          </div>
-          <div>
-            <Label htmlFor="net_terms_days">Net terms (days)</Label>
-            <Input
-              id="net_terms_days"
-              name="net_terms_days"
-              type="number"
-              min={0}
-              max={365}
-              step={1}
-              defaultValue={values.net_terms_days ?? ""}
-              placeholder="30"
-            />
             <p className="mt-0.5 text-[11px] text-muted-foreground">
-              Days after each milestone&apos;s trigger that payment is due.
-              This is what the cash forecast uses. Leave blank and it reads
-              &quot;Net NN&quot; out of the summary instead. Enter 0 for paid
-              on the trigger date.
+              What the PO says, in its own words. Net terms are set per
+              milestone on the payment schedule below, so a deposit due on
+              signing and a delivery at Net 30 can say so separately.
             </p>
           </div>
           <div className="sm:col-span-2">

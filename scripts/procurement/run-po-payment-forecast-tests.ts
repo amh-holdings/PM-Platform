@@ -1005,6 +1005,125 @@ same(
   "2027-01-30",
 );
 
+// ---------------------------------------------------------------------------
+// Net terms on the milestone, which is the row that actually pays.
+//
+// Zarina, on a PO reading "20% Down Payment, 10% Engineering, 40% Progress
+// payment, 30% upon delivery": "Instead of the summary from the uploaded PO,
+// can you just do it when adding a milestone?"
+//
+// Four milestones, four clocks. A single number on the order picks one of
+// them and is wrong three times, so the row wins when it says anything and
+// the order is only what it falls back to.
+// ---------------------------------------------------------------------------
+
+console.log("\nNet terms from the milestone\n");
+
+const msPo = { payment_terms_summary: "Net 30", net_terms_days: 60 };
+
+same(
+  "the milestone wins over the order",
+  resolveNetTerms(msPo, { net_terms_days: 15 }),
+  15,
+);
+same(
+  "a blank milestone falls back to the order",
+  resolveNetTerms(msPo, { net_terms_days: null }),
+  60,
+);
+same(
+  "no milestone at all falls back to the order",
+  resolveNetTerms(msPo),
+  60,
+);
+same(
+  "blank at both levels falls back to the summary",
+  resolveNetTerms({ payment_terms_summary: "Net 45" }, { net_terms_days: null }),
+  45,
+);
+// The same null-is-not-zero rule, one level down. A deposit due on signing
+// with no lag has to be able to say so on a PO whose other rows are Net 30.
+same(
+  "zero on the milestone means zero, not 'ask the order'",
+  resolveNetTerms(msPo, { net_terms_days: 0 }),
+  0,
+);
+// Out of range is a typo, not an instruction to pay in a year. It falls
+// through to the order rather than being stored or honoured.
+same(
+  "an out-of-range milestone falls through to the order",
+  resolveNetTerms(msPo, { net_terms_days: 400 }),
+  60,
+);
+same(
+  "a negative milestone falls through to the order",
+  resolveNetTerms(msPo, { net_terms_days: -5 }),
+  60,
+);
+same(
+  "a fractional milestone is truncated, not dropped",
+  resolveNetTerms(msPo, { net_terms_days: 20.9 }),
+  20,
+);
+
+// End to end, on the PO she was looking at. One order, four milestones, and
+// each one lands where its own terms put it rather than all four sharing the
+// order's number.
+const mixedPo = {
+  ...po,
+  signed_at: "2026-06-17",
+  payment_terms_summary: "20% Down Payment, 10% Engineering, 40% Progress payment, 30% upon delivery",
+  net_terms_days: 30,
+};
+
+same(
+  "a deposit set to 0 pays on the signing date, not 30 days later",
+  forecastMilestoneDate({
+    milestone: { milestone_name: "Down Payment", trigger_event: "PO Release", net_terms_days: 0 },
+    po: mixedPo,
+  }).date,
+  "2026-06-17",
+);
+same(
+  "engineering on the same PO still runs at its own Net 45",
+  forecastMilestoneDate({
+    milestone: {
+      milestone_name: "Engineering",
+      trigger_event: "Engineering",
+      expected_date: "2026-07-01",
+      net_terms_days: 45,
+    },
+    po: mixedPo,
+  }).date,
+  "2026-08-15",
+);
+same(
+  "and a row that says nothing still takes the order's 30",
+  forecastMilestoneDate({
+    milestone: {
+      milestone_name: "Progress payment",
+      trigger_event: "Progress payment",
+      expected_date: "2026-07-01",
+    },
+    po: mixedPo,
+  }).date,
+  "2026-07-31",
+);
+// Paid is still paid. Terms at any level never re-date money that has left.
+same(
+  "terms on the milestone do not move a payment already made",
+  forecastMilestoneDate({
+    milestone: {
+      milestone_name: "Down Payment",
+      trigger_event: "PO Release",
+      net_terms_days: 90,
+      paid_at: "2026-06-20",
+    },
+    po: mixedPo,
+  }).date,
+  "2026-06-20",
+);
+
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);
 if (failures.length) {

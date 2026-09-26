@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { MoneyInput } from "@/components/ui/money-input";
 import { amountFromPct, pctFromAmount } from "@/lib/milestone-split";
 import {
@@ -44,9 +43,12 @@ import {
 function TriggerSelect({
   id,
   defaultValue,
+  form,
 }: {
   id: string;
   defaultValue?: string | null;
+  /** The form this control belongs to, when it is rendered outside it. */
+  form?: string;
 }) {
   const current = (defaultValue ?? "").trim();
   const inList = MILESTONE_TRIGGERS.some((t) => t.value === current);
@@ -56,6 +58,7 @@ function TriggerSelect({
       <select
         id={id}
         name="trigger_event"
+        form={form}
         defaultValue={current}
         className="h-9 w-full rounded-md border bg-background px-2 text-xs"
       >
@@ -102,6 +105,11 @@ type Milestone = {
    */
   procurement_order_line_id?: string | null;
   /**
+   * Days after this milestone's trigger that it is paid. Migration 0064.
+   * Null means this row says nothing, so the PO's number is used.
+   */
+  net_terms_days?: number | null;
+  /**
    * What date this row actually runs on and where it came from.
    *
    * `drives` is true when the schedule supplies it, which makes it the
@@ -129,6 +137,16 @@ type Props = {
    */
   lines?: { id: string; label: string }[];
   /**
+   * What the PO itself says its net terms are, in days.
+   *
+   * Only a fallback and a starting point now. A milestone with its own number
+   * ignores this; one without it shows this in grey, because that is the
+   * number the forecast is actually using and a blank cell would not say so.
+   * A new row opens on it pre-filled, which is the bit Zarina asked for: "it
+   * will just pre-fill the columns and I will just recheck and save."
+   */
+  poNetTerms?: number;
+  /**
    * Which schedule this editor is editing: what we pay the vendor, or what we
    * bill the owner. Migration 0055. Defaults to vendor, which is what every
    * milestone was before the two split.
@@ -146,6 +164,7 @@ export function MilestoneEditor({
   poTotalValue,
   milestones,
   lines = [],
+  poNetTerms = 0,
 }: Props) {
   const router = useRouter();
   const [adding, setAdding] = useState(false);
@@ -281,12 +300,28 @@ export function MilestoneEditor({
       )}
 
       <div className="overflow-x-auto">
-        <table className="w-full text-xs">
+        {/* Fixed widths, and the add and edit rows use the same cells
+            rather than a grid of their own. They used to be one full-width
+            cell holding a seven-column grid, so "Amount" in the header sat
+            over the Expected box and every label had to be read twice.
+            Zarina: "make sure the columns and header columns are aligned." */}
+        <table className="w-full min-w-[72rem] table-fixed text-xs">
+          <colgroup>
+            <col />
+            <col className="w-[5.5rem]" />
+            <col className="w-[10rem]" />
+            <col className="w-[5rem]" />
+            <col className="w-[8rem]" />
+            <col className="w-[9rem]" />
+            <col className="w-[10rem]" />
+            <col className="w-[12.5rem]" />
+          </colgroup>
           <thead className="bg-muted/30 text-muted-foreground">
             <tr className="border-b">
               <th className="px-2 py-2 text-left font-medium">Milestone</th>
+              <th className="px-2 py-2 text-right font-medium">Net terms</th>
               <th className="px-2 py-2 text-left font-medium">Trigger</th>
-              <th className="px-2 py-2 text-right font-medium">%</th>
+              <th className="px-2 py-2 text-right font-medium">% of PO</th>
               <th className="px-2 py-2 text-right font-medium">Amount</th>
               <th className="px-2 py-2 text-left font-medium">Expected</th>
               <th className="px-2 py-2 text-left font-medium">Paid</th>
@@ -300,6 +335,7 @@ export function MilestoneEditor({
                   key={m.id}
                   m={m}
                   poTotalValue={poTotalValue}
+                  poNetTerms={poNetTerms}
                   onCancel={() => setEditId(null)}
                   onSubmit={(fd) => onUpdate(fd, m.id)}
                   busy={busy}
@@ -324,7 +360,7 @@ export function MilestoneEditor({
                         onChange={(e) =>
                           void onSetLine(m.id, e.target.value || null)
                         }
-                        className="mt-1 h-6 max-w-[16rem] rounded border border-input bg-background px-1 text-[10px] text-muted-foreground"
+                        className="mt-1 h-6 w-full rounded border border-input bg-background px-1 text-[10px] text-muted-foreground"
                         aria-label={`What ${m.milestone_name} pays for`}
                       >
                         <option value="">Pays for the whole order</option>
@@ -335,6 +371,13 @@ export function MilestoneEditor({
                         ))}
                       </select>
                     )}
+                  </td>
+                  {/* What this row is actually forecast on. A number of
+                      its own reads plain; nothing of its own shows the PO's
+                      number in grey, because that is what the forecast is
+                      using and an empty cell would not say so. */}
+                  <td className="px-2 py-1.5 text-right tabular-nums">
+                    <NetTermsCell own={m.net_terms_days ?? null} fallback={poNetTerms} />
                   </td>
                   <td className="px-2 py-1.5 text-muted-foreground">
                     {m.trigger_event ?? "-"}
@@ -387,14 +430,14 @@ export function MilestoneEditor({
                   </td>
                   <td className="px-2 py-1.5">
                     {payingId === m.id ? (
-                      <div className="flex flex-wrap items-center gap-1">
+                      <div className="space-y-1">
                         <div>
                           <Input
                             type="date"
                             max={todayIso()}
                             value={paidDate}
                             onChange={(e) => setPaidDate(e.target.value)}
-                            className="h-8 w-[9.5rem] text-xs"
+                            className="h-8 w-full text-xs"
                             aria-label="Date paid"
                           />
                           {/* The date read back the way this page prints it,
@@ -407,7 +450,7 @@ export function MilestoneEditor({
                         <MoneyInput
                           value={paidAmount}
                           onTextChange={setPaidAmount}
-                          className="h-8 w-28 text-right text-xs"
+                          className="h-8 w-full text-right text-xs"
                           aria-label="Amount paid"
                         />
                       </div>
@@ -425,7 +468,7 @@ export function MilestoneEditor({
                     )}
                   </td>
                   <td className="px-2 py-1.5 text-right">
-                    <div className="flex justify-end gap-1">
+                    <div className="flex flex-wrap justify-end gap-1">
                       {payingId === m.id ? (
                         <>
                           <Button
@@ -502,7 +545,7 @@ export function MilestoneEditor({
             {milestones.length === 0 && !adding && (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="px-2 py-4 text-center text-muted-foreground"
                 >
                   No milestones yet. Add a deposit, delivery, and any
@@ -514,6 +557,7 @@ export function MilestoneEditor({
             {adding && (
               <AddRow
                 poTotalValue={poTotalValue}
+                poNetTerms={poNetTerms}
                 onCancel={() => setAdding(false)}
                 onSubmit={onAdd}
                 busy={busy}
@@ -522,6 +566,17 @@ export function MilestoneEditor({
           </tbody>
         </table>
       </div>
+
+      {adding && (
+        <div className="border-t bg-muted/20 px-3 py-2 text-[10px] text-muted-foreground">
+          Filling in <span className="font-medium">Already paid on</span>{" "}
+          records the payment as made, so it lands in the month it left rather
+          than in the forecast ahead. An amount, or a % to work one out from,
+          is required with it - a payment of nothing counts as nothing. Net
+          terms left blank falls back to the PO; 0 means paid on the trigger
+          date.
+        </div>
+      )}
 
       {!adding && (
         <div className="border-t bg-muted/20 px-3 py-2">
@@ -540,22 +595,43 @@ export function MilestoneEditor({
   );
 }
 
-function AddRow({
-  poTotalValue,
-  onCancel,
-  onSubmit,
-  busy,
+/**
+ * What the Net terms column reads on a saved row.
+ *
+ * Grey when the number is the PO's rather than this row's, so the difference
+ * between "this milestone says Net 30" and "nothing here says anything, so
+ * the order's 30 is being used" is visible without opening the row. A dash
+ * means genuinely nothing anywhere, which is same-day payment.
+ */
+function NetTermsCell({
+  own,
+  fallback,
 }: {
-  poTotalValue: number;
-  onCancel: () => void;
-  onSubmit: (fd: FormData) => void;
-  busy: boolean;
+  own: number | null;
+  fallback: number;
 }) {
-  // The two boxes say the same thing, so whichever one is being typed in
-  // drives the other. Zarina: "if I write here the % amount it should
-  // calculate automatically." See milestone-split.
-  const [pct, setPct] = useState("");
-  const [amount, setAmount] = useState<number | null>(null);
+  if (own != null) return <>Net {own}</>;
+  if (fallback > 0) {
+    return (
+      <span
+        className="text-muted-foreground"
+        title="Not set on this milestone, so the PO's terms are used. Edit the row to set it here."
+      >
+        Net {fallback}
+      </span>
+    );
+  }
+  return <span className="text-muted-foreground">-</span>;
+}
+
+/**
+ * The two boxes that say the same thing, wired so whichever one is being
+ * typed in drives the other. Zarina: "if I write here the % amount it should
+ * calculate automatically." See milestone-split.
+ */
+function useSplit(poTotalValue: number, initialPct: string, initialAmount: number | null) {
+  const [pct, setPct] = useState(initialPct);
+  const [amount, setAmount] = useState<number | null>(initialAmount);
 
   function typePct(next: string) {
     setPct(next);
@@ -572,70 +648,158 @@ function AddRow({
     else if (next === null) setPct("");
   }
 
+  return { pct, amount, typePct, typeAmount };
+}
+
+/**
+ * Net terms, as a cell in the row rather than a field on the PO.
+ *
+ * Zarina: "Instead of the summary from the uploaded PO, can you just do it
+ * when adding a milestone?" One PO carries four milestones on four clocks -
+ * a deposit due on signing with no lag, engineering at Net 30, a progress
+ * payment at Net 45 - and a single number on the order cannot say that.
+ *
+ * Blank is not zero. Blank falls back to the PO, zero means paid on the
+ * trigger date, which is why the placeholder shows the PO's number rather
+ * than pre-filling it on an edit: pre-filling would turn "inherits" into
+ * "stated" the first time anybody saved the row for another reason.
+ */
+function NetTermsInput({
+  id,
+  form,
+  defaultValue,
+  fallback,
+}: {
+  id: string;
+  form: string;
+  defaultValue?: number | null;
+  fallback: number;
+}) {
   return (
-    <tr className="border-b bg-emerald-500/5">
-      <td colSpan={7} className="p-3">
-        <form action={onSubmit} className="grid gap-2 sm:grid-cols-[1fr_140px_100px_140px_130px_130px_auto]">
-          <div>
-            <Label htmlFor="m-name" className="text-[10px]">Milestone name *</Label>
-            <Input id="m-name" name="milestone_name" placeholder="Deposit / Delivery / Commissioning" required />
-          </div>
-          <div>
-            <Label htmlFor="m-trigger" className="text-[10px]">Trigger</Label>
-            <TriggerSelect id="m-trigger" />
-          </div>
-          <div>
-            <Label htmlFor="m-pct" className="text-[10px]">% of PO</Label>
-            <Input
-              id="m-pct"
-              name="pct_of_total"
-              type="number"
-              step="0.01"
-              value={pct}
-              onChange={(e) => typePct(e.target.value)}
-              placeholder="10"
-            />
-          </div>
-          <div>
-            <Label htmlFor="m-amount" className="text-[10px]">Amount</Label>
-            <MoneyInput
-              id="m-amount"
-              name="amount"
-              value={amount}
-              onValueChange={typeAmount}
-              placeholder="0.00"
-            />
-          </div>
-          <div>
-            <Label htmlFor="m-expected" className="text-[10px]">Expected date</Label>
-            <Input id="m-expected" name="expected_date" type="date" />
-          </div>
-          {/* Most POs on a job that predates the app were paid before anyone
-              was entering milestones. Recording that took adding a milestone
-              and then marking it paid - two actions for one fact. */}
-          <div>
-            <Label htmlFor="m-paid" className="text-[10px]">Already paid on</Label>
-            <Input id="m-paid" name="paid_at" type="date" />
-          </div>
-          <div className="flex items-end justify-end gap-1">
-            <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onCancel}>
-              Cancel
-            </Button>
-            <Button type="submit" size="sm" disabled={busy}>
-              Add
-            </Button>
-          </div>
-          <div className="sm:col-span-7">
-            <Input name="notes" placeholder="Notes (optional)" />
-          </div>
-          <p className="text-[10px] text-muted-foreground sm:col-span-7">
-            Filling in <span className="font-medium">Already paid on</span>{" "}
-            records the payment as made, so it lands in the month it left
-            rather than in the forecast ahead. An amount, or a % to work one
-            out from, is required with it - a payment of nothing counts as
-            nothing.
-          </p>
-        </form>
+    <Input
+      id={id}
+      name="net_terms_days"
+      form={form}
+      type="number"
+      min={0}
+      max={365}
+      step={1}
+      defaultValue={defaultValue ?? ""}
+      placeholder={fallback > 0 ? String(fallback) : "0"}
+      className="h-9 text-right"
+      aria-label="Net terms in days"
+    />
+  );
+}
+
+function AddRow({
+  poTotalValue,
+  poNetTerms,
+  onCancel,
+  onSubmit,
+  busy,
+}: {
+  poTotalValue: number;
+  poNetTerms: number;
+  onCancel: () => void;
+  onSubmit: (fd: FormData) => void;
+  busy: boolean;
+}) {
+  const { pct, amount, typePct, typeAmount } = useSplit(poTotalValue, "", null);
+  const formId = "milestone-add";
+
+  // The form element itself holds nothing. Every control sits in its own
+  // table cell and joins it by `form`, which is what keeps the boxes under
+  // the headers they belong to. Wrapping the row in a form instead would
+  // either break the table or collapse back into one grid-in-a-cell.
+  return (
+    <tr className="border-b bg-emerald-500/5 align-top">
+      <td className="px-2 py-2">
+        <form id={formId} action={onSubmit} className="hidden" />
+        <Input
+          id="m-name"
+          name="milestone_name"
+          form={formId}
+          placeholder="Deposit / Delivery / Commissioning"
+          className="h-9"
+          required
+          aria-label="Milestone name"
+        />
+        <Input
+          name="notes"
+          form={formId}
+          placeholder="Notes (optional)"
+          className="mt-1 h-8 text-[11px]"
+          aria-label="Notes"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <NetTermsInput id="m-terms" form={formId} defaultValue={poNetTerms > 0 ? poNetTerms : null} fallback={poNetTerms} />
+      </td>
+      <td className="px-2 py-2">
+        <TriggerSelect id="m-trigger" form={formId} />
+      </td>
+      <td className="px-2 py-2">
+        <Input
+          id="m-pct"
+          name="pct_of_total"
+          form={formId}
+          type="number"
+          step="0.01"
+          value={pct}
+          onChange={(e) => typePct(e.target.value)}
+          placeholder="10"
+          className="h-9 text-right"
+          aria-label="Percent of PO"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <MoneyInput
+          id="m-amount"
+          name="amount"
+          form={formId}
+          value={amount}
+          onValueChange={typeAmount}
+          placeholder="0.00"
+          className="h-9 text-right"
+          aria-label="Amount"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <Input
+          id="m-expected"
+          name="expected_date"
+          form={formId}
+          type="date"
+          className="h-9"
+          aria-label="Expected date"
+        />
+      </td>
+      {/* Most POs on a job that predates the app were paid before anyone was
+          entering milestones. Recording that took adding a milestone and then
+          marking it paid - two actions for one fact. */}
+      <td className="px-2 py-2">
+        <Input
+          id="m-paid"
+          name="paid_at"
+          form={formId}
+          type="date"
+          className="h-9"
+          aria-label="Already paid on"
+        />
+        <p className="mt-0.5 text-[10px] text-muted-foreground">
+          Records it as already paid
+        </p>
+      </td>
+      <td className="px-2 py-2">
+        <div className="flex flex-wrap justify-end gap-1">
+          <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} size="sm" disabled={busy}>
+            Add
+          </Button>
+        </div>
       </td>
     </tr>
   );
@@ -644,99 +808,120 @@ function AddRow({
 function EditRow({
   m,
   poTotalValue,
+  poNetTerms,
   onCancel,
   onSubmit,
   busy,
 }: {
   m: Milestone;
   poTotalValue: number;
+  poNetTerms: number;
   onCancel: () => void;
   onSubmit: (fd: FormData) => void;
   busy: boolean;
 }) {
-  // Same two-way rule as the add row. This is the one she was looking at: 50
-  // in the % box next to the full PO value in Amount, and Amount is what
-  // reaches the cash flow.
-  const [pct, setPct] = useState(
+  // This is the row she was looking at: 50 in the % box next to the full PO
+  // value in Amount, and Amount is what reaches the cash flow.
+  const { pct, amount, typePct, typeAmount } = useSplit(
+    poTotalValue,
     m.pct_of_total == null ? "" : String(m.pct_of_total),
+    m.amount ?? null,
   );
-  const [amount, setAmount] = useState<number | null>(m.amount ?? null);
-
-  function typePct(next: string) {
-    setPct(next);
-    const n = next.trim() === "" ? null : Number(next);
-    const derived = amountFromPct(poTotalValue, n);
-    if (derived !== null) setAmount(derived);
-    else if (n === null) setAmount(null);
-  }
-
-  function typeAmount(next: number | null) {
-    setAmount(next);
-    const derived = pctFromAmount(poTotalValue, next);
-    if (derived !== null) setPct(String(derived));
-    else if (next === null) setPct("");
-  }
+  const formId = `milestone-edit-${m.id}`;
 
   return (
-    <tr className="border-b bg-amber-500/5">
-      <td colSpan={7} className="p-3">
-        <form
-          action={onSubmit}
-          className="grid gap-2 sm:grid-cols-[1fr_140px_100px_140px_140px_auto]"
-        >
-          <div>
-            <Label htmlFor={`mn-${m.id}`} className="text-[10px]">Milestone name</Label>
-            <Input id={`mn-${m.id}`} name="milestone_name" defaultValue={m.milestone_name} required />
-          </div>
-          <div>
-            <Label htmlFor={`mt-${m.id}`} className="text-[10px]">Trigger</Label>
-            <TriggerSelect id={`mt-${m.id}`} defaultValue={m.trigger_event} />
-          </div>
-          <div>
-            <Label htmlFor={`mp-${m.id}`} className="text-[10px]">%</Label>
-            <Input
-              id={`mp-${m.id}`}
-              name="pct_of_total"
-              type="number"
-              step="0.01"
-              value={pct}
-              onChange={(e) => typePct(e.target.value)}
-            />
-          </div>
-          <div>
-            <Label htmlFor={`ma-${m.id}`} className="text-[10px]">Amount</Label>
-            <MoneyInput
-              id={`ma-${m.id}`}
-              name="amount"
-              value={amount}
-              onValueChange={typeAmount}
-            />
-          </div>
-          <div>
-            <Label htmlFor={`me-${m.id}`} className="text-[10px]">Expected</Label>
-            <Input
-              id={`me-${m.id}`}
-              name="expected_date"
-              type="date"
-              defaultValue={m.expected_date ?? ""}
-            />
-          </div>
-          <div className="flex items-end justify-end gap-1">
-            <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onCancel}>
-              Cancel
-            </Button>
-            <Button type="submit" size="sm" disabled={busy}>
-              Save
-            </Button>
-          </div>
-          <div className="sm:col-span-6">
-            <Input
-              name="notes"
-              defaultValue={m.notes ?? ""}
-              placeholder="Notes (optional)"
-            />
-          </div>
-        </form>
+    <tr className="border-b bg-amber-500/5 align-top">
+      <td className="px-2 py-2">
+        <form id={formId} action={onSubmit} className="hidden" />
+        <Input
+          id={`mn-${m.id}`}
+          name="milestone_name"
+          form={formId}
+          defaultValue={m.milestone_name}
+          className="h-9"
+          required
+          aria-label="Milestone name"
+        />
+        <Input
+          name="notes"
+          form={formId}
+          defaultValue={m.notes ?? ""}
+          placeholder="Notes (optional)"
+          className="mt-1 h-8 text-[11px]"
+          aria-label="Notes"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <NetTermsInput
+          id={`mtd-${m.id}`}
+          form={formId}
+          defaultValue={m.net_terms_days ?? null}
+          fallback={poNetTerms}
+        />
+      </td>
+      <td className="px-2 py-2">
+        <TriggerSelect id={`mt-${m.id}`} form={formId} defaultValue={m.trigger_event} />
+      </td>
+      <td className="px-2 py-2">
+        <Input
+          id={`mp-${m.id}`}
+          name="pct_of_total"
+          form={formId}
+          type="number"
+          step="0.01"
+          value={pct}
+          onChange={(e) => typePct(e.target.value)}
+          className="h-9 text-right"
+          aria-label="Percent of PO"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <MoneyInput
+          id={`ma-${m.id}`}
+          name="amount"
+          form={formId}
+          value={amount}
+          onValueChange={typeAmount}
+          className="h-9 text-right"
+          aria-label="Amount"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <Input
+          id={`me-${m.id}`}
+          name="expected_date"
+          form={formId}
+          type="date"
+          defaultValue={m.expected_date ?? ""}
+          className="h-9"
+          aria-label="Expected date"
+        />
+      </td>
+      {/* Read-only here on purpose. A payment is recorded and corrected
+          through Mark paid, which checks the amount and refuses a future
+          date; a second date box on this row would be a second way to say
+          the same thing and only one of them would be checked. */}
+      <td className="px-2 py-2 text-muted-foreground">
+        {m.paid_at ? (
+          <>
+            <div className="text-emerald-700">
+              {formatCurrency(Number(m.paid_amount ?? m.amount ?? 0))}
+            </div>
+            <div className="text-[10px]">paid {formatDate(m.paid_at)}</div>
+          </>
+        ) : (
+          <span className="text-[10px]">Use Mark paid</span>
+        )}
+      </td>
+      <td className="px-2 py-2">
+        <div className="flex flex-wrap justify-end gap-1">
+          <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} size="sm" disabled={busy}>
+            Save
+          </Button>
+        </div>
       </td>
     </tr>
   );

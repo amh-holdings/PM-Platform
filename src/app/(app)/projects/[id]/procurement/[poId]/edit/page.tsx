@@ -45,14 +45,7 @@ export default async function EditProcurementPage({
       <ProcurementForm
         projectId={params.id}
         mode="edit"
-        // net_terms_days arrives with 0063. Read off the row rather than
-        // the generated type, which is built from the live database, so the
-        // form still opens on a PO that predates it.
-        initial={{
-          ...po,
-          net_terms_days:
-            (po as { net_terms_days?: number | null }).net_terms_days ?? null,
-        }}
+        initial={po}
         documents={(docs ?? []).map((d) => ({ id: d.id, label: d.file_name }))}
       />
     </div>

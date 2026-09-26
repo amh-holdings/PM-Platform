@@ -43,6 +43,13 @@ export type PoForecastMilestone = {
    * every milestone written before migration 0062.
    */
   procurement_order_line_id?: string | null;
+  /**
+   * Days after this milestone's trigger that it is paid. Migration 0064.
+   *
+   * Null means nothing stated on this row, and the order's number is used
+   * instead. Zero is an answer: paid on the trigger date with no lag.
+   */
+  net_terms_days?: number | null;
 };
 
 /**
@@ -134,19 +141,37 @@ export function netTermsDays(summary: string | null | undefined): number {
  * specific net terms then the forcast will draw from that not just on a text
  * field."
  *
- * The column wins when it is set, including when it is set to zero, because
- * zero is somebody saying "no delay" rather than saying nothing. A null
- * column falls back to reading the summary exactly as before, so every PO
- * keeps working whether or not 0063 has run and whether or not anybody has
- * filled the field in.
+ * Then, on a PO reading "20% Down Payment, 10% Engineering, 40% Progress
+ * payment, 30% upon delivery": "Instead of the summary from the uploaded PO,
+ * can you just do it when adding a milestone?"
+ *
+ * So three sources, most specific first. The milestone's own number, because
+ * four milestones on one PO can sit on four different clocks and only the
+ * row knows which. Then the order's number, which is what 0063 filled in and
+ * what a fresh milestone is seeded from. Then the summary text, parsed the
+ * way it always was.
+ *
+ * A set value wins at every level, including zero, because zero is somebody
+ * saying "no delay" rather than saying nothing. Null falls through. So every
+ * PO keeps working whether or not 0063 and 0064 have run and whether or not
+ * anybody has filled the field in.
  */
-export function resolveNetTerms(po: PoForecastOrder): number {
-  const n = po.net_terms_days;
-  if (n !== null && n !== undefined && Number.isFinite(n)) {
-    const v = Math.trunc(n);
-    if (v >= 0 && v <= 365) return v;
-  }
+export function resolveNetTerms(
+  po: PoForecastOrder,
+  milestone?: PoForecastMilestone | null,
+): number {
+  const own = statedTerms(milestone?.net_terms_days);
+  if (own !== null) return own;
+  const order = statedTerms(po.net_terms_days);
+  if (order !== null) return order;
   return netTermsDays(po.payment_terms_summary);
+}
+
+/** A stored net-terms value, or null when it is blank or out of range. */
+function statedTerms(n: number | null | undefined): number | null {
+  if (n === null || n === undefined || !Number.isFinite(n)) return null;
+  const v = Math.trunc(n);
+  return v >= 0 && v <= 365 ? v : null;
 }
 
 export function addDaysIso(iso: string, days: number): string {
@@ -256,7 +281,7 @@ export function forecastMilestoneDate(input: {
     return { date: milestone.paid_at, source: "paid", ...none };
   }
 
-  const termsDays = resolveNetTerms(po);
+  const termsDays = resolveNetTerms(po, milestone);
   const moved = (date: string) =>
     typed && monthOf(typed) !== monthOf(date) ? typed : null;
 
