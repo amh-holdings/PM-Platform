@@ -19,7 +19,7 @@ import {
   forecastMilestoneDate,
   forecastPoDates,
   isDeliveryTrigger,
-  isCommissioningTrigger,
+  isTypedEventTrigger,
   isSigningTrigger,
   netTermsDays,
   nextDueDate,
@@ -185,7 +185,7 @@ same(
   }),
   {
     date: "2027-01-19",
-    source: "commissioning",
+    source: "event",
     viaWbs: null,
     viaLine: null,
     termsDays: 30,
@@ -245,7 +245,7 @@ same(
 // would start following the schedule or the signing date.
 check(
   "commissioning is only ever a commissioning trigger",
-  isCommissioningTrigger({ trigger_event: "Commissioning complete - Net 30" }) &&
+  isTypedEventTrigger({ trigger_event: "Commissioning complete - Net 30" }) &&
     !isDeliveryTrigger({ trigger_event: "Commissioning complete - Net 30" }) &&
     !isSigningTrigger({ trigger_event: "Commissioning complete - Net 30" }),
 );
@@ -306,7 +306,7 @@ const milestones = [
 same(
   "each milestone is dated by its own rule",
   forecastPoDates({ po, milestones, deliveryTask: task }).map((d) => d.source),
-  ["paid", "schedule", "commissioning"],
+  ["paid", "schedule", "event"],
 );
 same(
   "and the commissioning one lands 30 days after the day typed",
@@ -887,6 +887,68 @@ same(
     }).date!,
   ),
   "2026-08-01",
+);
+
+
+// ---------------------------------------------------------------------------
+// Engineering and progress payments follow the same rule.
+//
+// Zarina, on a PO reading "20% Down Payment, 10% Engineering, 40% Progress
+// payment, 30% upon delivery": "Can you make sure that it fixes all POs."
+// Half that order's value sat on two wordings nothing recognised.
+// ---------------------------------------------------------------------------
+
+console.log("\nEngineering and progress payments\n");
+
+const netPo = { ...po, payment_terms_summary: "Net 30" };
+
+for (const t of ["Engineering", "Progress payment", "Commissioning"]) {
+  same(
+    `${t} takes the typed day plus the PO's Net 30`,
+    forecastMilestoneDate({
+      milestone: { milestone_name: t, trigger_event: t, expected_date: "2026-12-16" },
+      po: netPo,
+    }).date,
+    "2027-01-15",
+  );
+  check(
+    `${t} never reads as a delivery or a signing trigger`,
+    !isDeliveryTrigger({ trigger_event: t }) && !isSigningTrigger({ trigger_event: t }),
+  );
+}
+
+// The wordings that actually appeared on her PO, not the tidy dropdown ones.
+same(
+  "the PO's own wording works, not just the dropdown value",
+  forecastMilestoneDate({
+    milestone: {
+      milestone_name: "Engineering",
+      trigger_event: "10% Engineering",
+      expected_date: "2026-10-01",
+    },
+    po: netPo,
+  }).date,
+  "2026-10-31",
+);
+
+// An engineering DOWN PAYMENT must not fire on signing just because the word
+// down is in it. The event check runs first.
+check(
+  "engineering beats the deposit wording inside the same string",
+  !isSigningTrigger({ trigger_event: "Engineering down payment" }) &&
+    isTypedEventTrigger({ trigger_event: "Engineering down payment" }),
+);
+check(
+  "progress payment on delivery is the event, not the delivery",
+  !isDeliveryTrigger({ trigger_event: "Progress payment on delivery" }),
+);
+
+// And a PO release is still a PO release.
+check(
+  "the signing triggers are untouched",
+  ["PO Release", "PO Signed", "Deposit", "Down payment", "Mobilization"].every(
+    (t) => isSigningTrigger({ trigger_event: t }) && !isTypedEventTrigger({ trigger_event: t }),
+  ),
 );
 
 console.log(`\n${"=".repeat(60)}`);

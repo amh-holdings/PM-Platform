@@ -86,7 +86,7 @@ export type MilestoneDateSource =
   | "last_line"   // no link of its own, so the last of the PO's items
   | "signed"      // the PO's signing date, for a milestone that fires on it
   | "ordered"     // the PO's ordered date, before it has been signed
-  | "commissioning" // the typed commissioning date, plus the PO's net terms
+  | "event"       // a typed event date, plus the PO's net terms
   | "typed"       // the expected_date somebody entered
   | "none";       // no date anywhere, so this money is not in the curve
 
@@ -139,7 +139,9 @@ export function addDaysIso(iso: string, days: number): string {
  */
 export function isDeliveryTrigger(m: PoForecastMilestone): boolean {
   const t = (m.trigger_event ?? m.milestone_name ?? "").toLowerCase();
-  if (/commission/.test(t)) return false;
+  // "Engineering delivered" and "Progress payment on delivery" are the event,
+  // not the equipment landing, so they must not start following the schedule.
+  if (isTypedEventTrigger(m)) return false;
   return /deliver/.test(t);
 }
 
@@ -162,28 +164,35 @@ export function isDeliveryTrigger(m: PoForecastMilestone): boolean {
  * the billing side; this is the same rule deciding when it is paid.
  */
 /**
- * A milestone that fires when the equipment is commissioned.
+ * A milestone whose event date has to be typed, because nothing in the app
+ * knows it.
  *
- * Zarina: "Commissioning doesnt have a forecast for net 30."
+ * Zarina: "Commissioning doesnt have a forecast for net 30." Then, on a PO
+ * reading "20% Down Payment, 10% Engineering, 40% Progress payment, 30% upon
+ * delivery": "Can you make sure that it fixes all POs."
  *
- * Right, and it was the last trigger with its two halves apart. Commissioning
- * is not on the schedule the way a delivery is, and this PO does not point at
- * a commissioning task, so there is nothing to derive the EVENT date from and
- * the typed date has to stand for it. What was wrong is that the terms were
- * then never applied on top, so a row that says "Commissioning complete -
- * Net 30" paid on the commissioning day itself.
+ * A delivery has a schedule row and a PO release has a signing date. These
+ * three have neither. Commissioning is not on the schedule, engineering is
+ * not tracked here, and a progress payment is earned by work in place, which
+ * this app measures on the SOV rather than off a PO. So the typed date stands
+ * for the EVENT, which is the honest answer.
  *
- * The Expected column is the day money leaves the bank everywhere else on
- * this table. It is that here too now.
+ * What was wrong is that the PO's terms were then never applied on top, so a
+ * row saying "Commissioning complete - Net 30" paid on the commissioning day
+ * itself, and the other two were not even recognised. The Expected column is
+ * the day money leaves the bank everywhere else on this table. It is that
+ * here too now, for all three.
  */
-export function isCommissioningTrigger(m: PoForecastMilestone): boolean {
+export function isTypedEventTrigger(m: PoForecastMilestone): boolean {
   const t = (m.trigger_event ?? m.milestone_name ?? "").toLowerCase();
-  return /commission/.test(t);
+  return /commission|engineer|progress/.test(t);
 }
 
 export function isSigningTrigger(m: PoForecastMilestone): boolean {
   const t = (m.trigger_event ?? m.milestone_name ?? "").toLowerCase();
-  if (/commission/.test(t) || /deliver/.test(t)) return false;
+  // Checked first, so "Engineering down payment" reads as engineering rather
+  // than as a deposit that fires the moment the PO is signed.
+  if (isTypedEventTrigger(m) || /deliver/.test(t)) return false;
   return /signed|po release|deposit|down|mob/.test(t);
 }
 
@@ -240,16 +249,17 @@ export function forecastMilestoneDate(input: {
     return { date: null, source: "none", ...none };
   }
 
-  // Commissioning: the typed date is the commissioning day, and the PO's
-  // terms say how long after it the money goes. With no terms there is
-  // nothing to add, so it stays exactly what was typed and says nothing.
-  if (isCommissioningTrigger(milestone)) {
+  // Commissioning, engineering, progress: the typed date is the day the
+  // event happens, and the PO's terms say how long after it the money goes.
+  // With no terms there is nothing to add, so it stays exactly what was
+  // typed and says nothing.
+  if (isTypedEventTrigger(milestone)) {
     if (!typed) return { date: null, source: "none", ...none };
     if (termsDays === 0) return { date: typed, source: "typed", ...none };
     const date = addDaysIso(typed, termsDays);
     return {
       date,
-      source: "commissioning",
+      source: "event",
       viaWbs: null,
       viaLine: null,
       termsDays,
@@ -369,7 +379,7 @@ export function scheduleDrivesDate(at: MilestoneDate): boolean {
     at.source === "ordered" ||
     // The typed date is the commissioning day, the derived one is the day it
     // is paid, and this column is the day it is paid.
-    at.source === "commissioning"
+    at.source === "event"
   );
 }
 
@@ -411,8 +421,10 @@ export function describeMilestoneDate(
       const when = termsDays > 0 ? ` and paid Net ${at.termsDays}` : "";
       return `Forecast ${at.date}, the PO is not signed yet, so this assumes it is signed on the date it was raised${when}`;
     }
-    case "commissioning":
-      return `Forecast ${at.date}, commissioning ${at.supersedes ?? "as typed"}${terms}`;
+    case "event":
+      // Deliberately does not name the event. The trigger column is one cell
+      // to the left and already says which one it is.
+      return `Forecast ${at.date}, ${at.supersedes ?? "the date typed"}${terms}`;
     case "typed":
       return null; // the date is already on screen
     case "none":

@@ -349,6 +349,29 @@ export const MILESTONE_TRIGGERS: {
     label: "Commissioning - does not earn yet",
     hint: "Held back until commissioning is modelled. Record a paid date to bill it.",
   },
+  // Zarina, on a PO reading "20% Down Payment, 10% Engineering, 40%
+  // Progress payment, 30% upon delivery": "Can you make sure that it fixes
+  // all POs." Half that order's value sat on two wordings the matcher had
+  // never heard of, so those milestones earned nothing AND carried no
+  // forecast date, and nothing on screen said why.
+  //
+  // They are in the "later" group with commissioning on purpose. Signing a
+  // PO does not earn engineering, and a progress payment is earned by work
+  // actually done, which this app measures on the SOV rather than off a PO.
+  // Being recognised is what buys them a forecast date: type the event date
+  // and the PO's net terms are applied to it.
+  {
+    value: "Engineering",
+    group: "later",
+    label: "Engineering - does not earn yet, type the date it is due",
+    hint: "Earns nothing on its own. Type the engineering date and the PO's net terms run from it.",
+  },
+  {
+    value: "Progress payment",
+    group: "later",
+    label: "Progress payment - does not earn yet, type the date it is due",
+    hint: "Earns nothing on its own. Type the date and the PO's net terms run from it.",
+  },
 ];
 
 
@@ -373,7 +396,7 @@ export const MILESTONE_TRIGGER_GROUPS: {
 export function isRecognisedTrigger(trigger: string | null | undefined): boolean {
   const t = (trigger ?? "").toLowerCase();
   if (!t.trim()) return false;
-  return /commission|deliver|signed|po release|deposit|down|mob/.test(t);
+  return /commission|engineer|progress|deliver|signed|po release|deposit|down|mob/.test(t);
 }
 
 export function milestoneTriggered(
@@ -388,6 +411,12 @@ export function milestoneTriggered(
   if (/commission/.test(t)) {
     return { fired: false, why: "awaiting commissioning" };
   }
+  // Checked before the signing wordings below, so "Engineering down payment"
+  // reads as engineering rather than as a deposit. Neither earns off a PO:
+  // engineering is earned when it is delivered and a progress payment is
+  // earned by work in place, which this app measures on the SOV.
+  if (/engineer/.test(t)) return { fired: false, why: "awaiting engineering" };
+  if (/progress/.test(t)) return { fired: false, why: "awaiting progress" };
   if (/deliver/.test(t)) {
     return delivered
       ? { fired: true, why: `delivered ${po.actual_delivery_date}` }
