@@ -34,9 +34,8 @@ export default async function ProjectProcurementPage({ params }: { params: Param
   ] = await Promise.all([
     supabase
       .from("procurement_orders")
-      .select(
-        "id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, signed_at, notes, linked_delivery_task_wbs_code",
-      )
+      // See the PO detail page: "*" so the list survives a missing 0063.
+      .select("*")
       .eq("project_id", params.id)
       .order("ordered_date", { ascending: false, nullsFirst: false })
       .order("vendor_name"),

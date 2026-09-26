@@ -21,6 +21,7 @@ import {
   isDeliveryTrigger,
   isTypedEventTrigger,
   isSigningTrigger,
+  resolveNetTerms,
   netTermsDays,
   nextDueDate,
 } from "../../src/lib/po-payment-forecast";
@@ -949,6 +950,59 @@ check(
   ["PO Release", "PO Signed", "Deposit", "Down payment", "Mobilization"].every(
     (t) => isSigningTrigger({ trigger_event: t }) && !isTypedEventTrigger({ trigger_event: t }),
   ),
+);
+
+
+// ---------------------------------------------------------------------------
+// Net terms as a column, not a phrase.
+//
+// Zarina: "Can you separate the net terms instead? Like add a column for
+// specific net terms then the forcast will draw from that not just on a text
+// field."
+// ---------------------------------------------------------------------------
+
+console.log("\nNet terms from the column\n");
+
+same("the column wins over the summary", resolveNetTerms({ net_terms_days: 45, payment_terms_summary: "Net 30" }), 45);
+same("no column falls back to the summary", resolveNetTerms({ payment_terms_summary: "Net 30" }), 30);
+same("a null column falls back too", resolveNetTerms({ net_terms_days: null, payment_terms_summary: "Net 60" }), 60);
+
+// The whole point of keeping null and zero apart. Zero is an answer.
+same("zero in the column means zero, not 'read the text'", resolveNetTerms({ net_terms_days: 0, payment_terms_summary: "Net 30" }), 0);
+same("nothing anywhere is zero days", resolveNetTerms({}), 0);
+same("prose with no net in it is zero days", resolveNetTerms({ payment_terms_summary: "20% Down Payment, 10% Engineering, 40% Progress payment, 30% upon delivery" }), 0);
+
+// Out-of-range values are typos, not terms. Fall back rather than store them.
+same("a negative column is ignored", resolveNetTerms({ net_terms_days: -5, payment_terms_summary: "Net 30" }), 30);
+same("over a year is ignored", resolveNetTerms({ net_terms_days: 400, payment_terms_summary: "Net 30" }), 30);
+same("a fraction is truncated", resolveNetTerms({ net_terms_days: 30.9 }), 30);
+same("NaN is ignored", resolveNetTerms({ net_terms_days: Number.NaN, payment_terms_summary: "Net 45" }), 45);
+
+// End to end: the column moves the forecast date.
+const colPo = { ...po, signed_at: "2026-06-17", payment_terms_summary: "Net 30", net_terms_days: 60 };
+same(
+  "the column, not the summary, decides when the deposit is paid",
+  forecastMilestoneDate({
+    milestone: { milestone_name: "Downpayment", trigger_event: "PO Release" },
+    po: colPo,
+  }).date,
+  "2026-08-16",
+);
+same(
+  "and a zero column pays on the day itself",
+  forecastMilestoneDate({
+    milestone: { milestone_name: "Downpayment", trigger_event: "PO Release" },
+    po: { ...colPo, net_terms_days: 0 },
+  }).date,
+  "2026-06-17",
+);
+same(
+  "the column reaches a commissioning milestone too",
+  forecastMilestoneDate({
+    milestone: { milestone_name: "Commissioning", trigger_event: "Commissioning", expected_date: "2026-12-16" },
+    po: { ...colPo, net_terms_days: 45 },
+  }).date,
+  "2027-01-30",
 );
 
 console.log(`\n${"=".repeat(60)}`);

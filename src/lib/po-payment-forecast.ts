@@ -67,6 +67,12 @@ export type PoForecastOrder = {
   linked_delivery_task_wbs_code?: string | null;
   actual_delivery_date?: string | null;
   payment_terms_summary?: string | null;
+  /**
+   * Days after the trigger that payment is due, as a number. Migration 0063.
+   * Null means not stated, and the summary is read instead. Zero is an
+   * answer, not a blank.
+   */
+  net_terms_days?: number | null;
   /** When the PO was signed. What a PO release milestone fires on. */
   signed_at?: string | null;
   /** When the PO was raised. The planned stand-in before it is signed. */
@@ -119,6 +125,28 @@ export function netTermsDays(summary: string | null | undefined): number {
   if (!m) return 0;
   const n = Number(m[1]);
   return Number.isFinite(n) && n > 0 && n <= 365 ? n : 0;
+}
+
+/**
+ * How many days after the trigger this PO pays.
+ *
+ * Zarina: "Can you separate the net terms instead? Like add a column for
+ * specific net terms then the forcast will draw from that not just on a text
+ * field."
+ *
+ * The column wins when it is set, including when it is set to zero, because
+ * zero is somebody saying "no delay" rather than saying nothing. A null
+ * column falls back to reading the summary exactly as before, so every PO
+ * keeps working whether or not 0063 has run and whether or not anybody has
+ * filled the field in.
+ */
+export function resolveNetTerms(po: PoForecastOrder): number {
+  const n = po.net_terms_days;
+  if (n !== null && n !== undefined && Number.isFinite(n)) {
+    const v = Math.trunc(n);
+    if (v >= 0 && v <= 365) return v;
+  }
+  return netTermsDays(po.payment_terms_summary);
 }
 
 export function addDaysIso(iso: string, days: number): string {
@@ -228,7 +256,7 @@ export function forecastMilestoneDate(input: {
     return { date: milestone.paid_at, source: "paid", ...none };
   }
 
-  const termsDays = netTermsDays(po.payment_terms_summary);
+  const termsDays = resolveNetTerms(po);
   const moved = (date: string) =>
     typed && monthOf(typed) !== monthOf(date) ? typed : null;
 

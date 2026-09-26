@@ -55,6 +55,46 @@ function getNum(value: FormDataEntryValue | null): number | null {
   const n = Number(value.replace(/[$,\s]/g, ""));
   return Number.isFinite(n) ? n : null;
 }
+/**
+ * Net terms as a whole number of days, or null for "not stated".
+ *
+ * Blank stays null so the forecast keeps falling back to the summary rather
+ * than quietly becoming same-day payment. Zero is kept, because zero is
+ * somebody answering the question. Anything outside 0 to 365 is a typo and is
+ * dropped rather than stored, matching the check on the column.
+ */
+function getNetTermsDays(value: FormDataEntryValue | null): number | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const n = Number(value.trim());
+  if (!Number.isFinite(n)) return null;
+  const days = Math.trunc(n);
+  return days >= 0 && days <= 365 ? days : null;
+}
+
+/**
+ * Write net_terms_days on its own, after the PO is safely saved.
+ *
+ * Migration 0063 adds the column. A write naming a column that does not exist
+ * fails the whole statement, so this cannot ride along in the main insert or
+ * update: a PO would refuse to save over one number somebody may not even
+ * have typed. It is deliberately not reported either, because until 0063 runs
+ * the forecast reads "Net NN" out of the summary exactly as it always has,
+ * which is the behaviour being replaced, not lost.
+ */
+async function writeNetTerms(
+  supabase: ReturnType<typeof createClient>,
+  poId: string,
+  formData: FormData,
+): Promise<void> {
+  if (!formData.has("net_terms_days")) return;
+  await supabase
+    .from("procurement_orders")
+    .update({
+      net_terms_days: getNetTermsDays(formData.get("net_terms_days")),
+    } as unknown as TablesUpdate<"procurement_orders">)
+    .eq("id", poId);
+}
+
 function getDate(value: FormDataEntryValue | null): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
   return value;
@@ -119,6 +159,12 @@ export async function createProcurementOrder(
       .eq("id", data.id);
   }
 
+  // Net terms, same reasoning, migration 0063. Written separately and not
+  // reported, because a PO that refuses to save over one number somebody may
+  // not even have typed is the worse outcome. Until 0063 runs the forecast
+  // reads "Net NN" out of the summary exactly as it did before.
+  await writeNetTerms(auth.supabase, data.id, formData);
+
   // The lines go in after the order exists. A failure here is reported rather
   // than swallowed, and the PO stays: losing the vendor, the dates and the
   // contract link over a line table would be the worse outcome by far.
@@ -178,6 +224,10 @@ export async function updateProcurementOrder(
     .update(update)
     .eq("id", poId);
   if (error) return { ok: false, error: error.message };
+
+  // Separate, for the same reason as on create. See writeNetTerms.
+  await writeNetTerms(auth.supabase, poId, formData);
+
   revalidatePath(`/projects/${projectId}/procurement`);
   revalidatePath(`/projects/${projectId}/procurement/${poId}`);
   return { ok: true, id: poId };

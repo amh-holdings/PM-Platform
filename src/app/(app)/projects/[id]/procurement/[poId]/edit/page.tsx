@@ -17,9 +17,8 @@ export default async function EditProcurementPage({
   const [{ data: po }, { data: docs }] = await Promise.all([
     supabase
       .from("procurement_orders")
-      .select(
-        "id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, document_id, notes",
-      )
+      // See the PO detail page: "*" so a PO that predates 0063 still edits.
+      .select("*")
       .eq("id", params.poId)
       .maybeSingle(),
     supabase
@@ -46,7 +45,14 @@ export default async function EditProcurementPage({
       <ProcurementForm
         projectId={params.id}
         mode="edit"
-        initial={po}
+        // net_terms_days arrives with 0063. Read off the row rather than
+        // the generated type, which is built from the live database, so the
+        // form still opens on a PO that predates it.
+        initial={{
+          ...po,
+          net_terms_days:
+            (po as { net_terms_days?: number | null }).net_terms_days ?? null,
+        }}
         documents={(docs ?? []).map((d) => ({ id: d.id, label: d.file_name }))}
       />
     </div>
