@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
+import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/format";
 import { lineLabel } from "@/lib/po-payment-forecast";
 
@@ -49,12 +50,12 @@ export function PoLineDeliveries({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // A PO with one item has nothing to split. Zarina, looking at a
-  // single-line PO: "We have this linked, then there's another on the same
-  // form." The order-level link above already says which schedule row that
-  // one item lands on, and repeating it here is a second control for one
-  // fact, which is the thing that keeps biting us. The section appears when
-  // there are at least two items, which is the only case it was built for.
+  const linked = lines.filter((l) => l.linkedDeliveryTaskWbsCode).length;
+  // Open when the PO is already split. Closed is not "hidden": the line and
+  // the button below still say the rule and offer the split.
+  const [open, setOpen] = useState(linked > 0);
+
+  // A PO with one item has nothing to split at all.
   if (lines.length < 2) return null;
 
   const save = async (lineId: string, wbsCode: string | null) => {
@@ -69,7 +70,29 @@ export function PoLineDeliveries({
     startTransition(() => router.refresh());
   };
 
-  const linked = lines.filter((l) => l.linkedDeliveryTaskWbsCode).length;
+  // Nothing split yet, so there is nothing here the order-level link above
+  // does not already say. Zarina, on a two-line PO with neither item linked:
+  // "Double linking is up again." A table of two rows both reading "Follow
+  // the whole order (4.3.2.2)" is that one fact printed three times.
+  //
+  // So it collapses to one line and a button until the PO is actually split.
+  // Most POs arrive on one truck, including this one: a tracking system and
+  // its import duty are not two deliveries.
+  if (!open && linked === 0) {
+    return (
+      <section className="rounded-lg border bg-card px-4 py-3 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground">
+            All {lines.length} items arrive together
+            {poTaskWbs ? ` on ${poTaskWbs}` : ""}.
+          </p>
+          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+            Split deliveries by item
+          </Button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="rounded-lg border bg-card p-4 shadow-sm">
@@ -82,11 +105,14 @@ export function PoLineDeliveries({
           </p>
         </div>
         <span className="text-xs text-muted-foreground">
-          {linked} of {lines.length} linked
-          {/* "the rest" is a lie when there is no rest. */}
-          {linked < lines.length && poTaskWbs
-            ? `, the rest follow ${poTaskWbs}`
-            : ""}
+          {/* "the rest" is a lie when there is no rest, and "0 of 2 linked"
+              was the wrong headline when the answer is "they all arrive
+              together". */}
+          {linked === 0
+            ? `All ${lines.length} items follow the whole order${poTaskWbs ? ` (${poTaskWbs})` : ""}`
+            : linked === lines.length
+              ? `all ${lines.length} linked`
+              : `${linked} of ${lines.length} linked${poTaskWbs ? `, the rest follow ${poTaskWbs}` : ""}`}
         </span>
       </div>
 
