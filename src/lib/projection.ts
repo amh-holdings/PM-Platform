@@ -197,9 +197,9 @@ export async function buildProjection(
         .eq("procurement_orders.project_id", projectId),
       supabase
         .from("procurement_orders")
-        .select(
-          "id, po_number, vendor_name, status, linked_delivery_task_wbs_code, actual_delivery_date, payment_terms_summary, signed_at, ordered_date",
-        )
+        // See the PO detail page: "*" so the whole cash flow does not fail
+        // on one column that has not been added yet.
+        .select("*")
         .eq("project_id", projectId),
       supabase
         .from("billing_lines")

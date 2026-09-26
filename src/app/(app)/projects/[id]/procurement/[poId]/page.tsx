@@ -51,9 +51,11 @@ export default async function ProcurementDetailPage({
   ] = await Promise.all([
     supabase
       .from("procurement_orders")
-      .select(
-        "id, project_id, vendor_name, po_number, description, total_value, ordered_date, expected_delivery_date, actual_delivery_date, status, payment_terms_summary, document_id, notes, signed_at, linked_delivery_task_wbs_code",
-      )
+      // "*" rather than a named list: net_terms_days arrives with migration
+      // 0063, and PostgREST errors the whole request when a NAMED column is
+      // missing while "*" simply returns what exists. This page must not go
+      // blank between a deploy and a migration.
+      .select("*")
       .eq("id", params.poId)
       .maybeSingle(),
     supabase
