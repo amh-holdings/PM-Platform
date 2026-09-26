@@ -73,28 +73,81 @@ function getNetTermsDays(value: FormDataEntryValue | null): number | null {
   return days >= 0 && days <= 365 ? days : null;
 }
 
+/** Migration 0064 has not run yet. */
+function isMissingNetTerms(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === "42703" || error.code === "PGRST204") {
+    return /net_terms_days/i.test(error.message ?? "");
+  }
+  return false;
+}
+
+const MISSING_NET_TERMS_MESSAGE =
+  "Per-milestone net terms need database migration 0064. Until it runs the forecast uses the PO's terms for every milestone, which is what it did before.";
+
 /**
  * Write a milestone's net_terms_days on its own, after the row is saved.
  *
  * Migration 0064 adds the column. A write naming a column that does not exist
  * fails the whole statement, so this cannot ride along in the insert or the
  * update: a milestone would refuse to save over one number somebody may not
- * even have typed. It is deliberately not reported either, because until 0064
- * runs the forecast falls back to the order's number and then to the summary
- * exactly as it does today, which is the behaviour being replaced, not lost.
+ * even have typed. Saving the row still succeeds; the number is what does
+ * not land, and the caller is told so rather than being left to assume it
+ * did. Zarina: "net terms are not showing."
  */
 async function writeMilestoneNetTerms(
   supabase: ReturnType<typeof createClient>,
   milestoneId: string,
   formData: FormData,
-): Promise<void> {
-  if (!formData.has("net_terms_days")) return;
-  await supabase
+): Promise<string | null> {
+  if (!formData.has("net_terms_days")) return null;
+  const { error } = await supabase
     .from("procurement_payments")
     .update({
       net_terms_days: getNetTermsDays(formData.get("net_terms_days")),
     } as unknown as TablesUpdate<"procurement_payments">)
     .eq("id", milestoneId);
+  if (!error) return null;
+  return isMissingNetTerms(error) ? MISSING_NET_TERMS_MESSAGE : error.message;
+}
+
+/**
+ * Set net terms on one milestone, straight from the table.
+ *
+ * Its own action rather than a field you have to open Edit to reach. The
+ * column read "-" on every row with no way to type in it, which is the whole
+ * of "net terms are not showing": the number was only settable through a form
+ * two clicks away, and on a database without 0064 typing it there failed
+ * silently. This reports.
+ */
+export async function setMilestoneNetTerms(
+  milestoneId: string,
+  poId: string,
+  projectId: string,
+  days: number | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const value =
+    days === null || !Number.isFinite(days)
+      ? null
+      : Math.trunc(days) >= 0 && Math.trunc(days) <= 365
+        ? Math.trunc(days)
+        : null;
+
+  const { error } = await auth.supabase
+    .from("procurement_payments")
+    .update({ net_terms_days: value } as unknown as TablesUpdate<"procurement_payments">)
+    .eq("id", milestoneId);
+  if (error) {
+    return {
+      ok: false,
+      error: isMissingNetTerms(error) ? MISSING_NET_TERMS_MESSAGE : error.message,
+    };
+  }
+  revalidateMilestone(projectId, poId);
+  return { ok: true };
 }
 
 function getDate(value: FormDataEntryValue | null): string | null {
@@ -250,7 +303,13 @@ export async function deleteProcurementOrder(
 // ============ MILESTONES ============
 
 export type MilestoneResult =
-  | { ok: true; id: string }
+  /**
+   * `warning` is for the part that did not land on a row that did. Net terms
+   * is written after the milestone is saved, so on a database without 0064
+   * the milestone is real and only the number is missing. Reporting that as a
+   * failure would have the form refuse to close over a row it just created.
+   */
+  | { ok: true; id: string; warning?: string }
   | { ok: false; error: string };
 
 /**
@@ -332,9 +391,9 @@ export async function addMilestone(
   if (error) {
     return { ok: false, error: error.message };
   }
-  await writeMilestoneNetTerms(auth.supabase, data.id, formData);
+  const termsErr = await writeMilestoneNetTerms(auth.supabase, data.id, formData);
   revalidateMilestone(projectId, poId);
-  return { ok: true, id: data.id };
+  return { ok: true, id: data.id, warning: termsErr ?? undefined };
 }
 
 export async function updateMilestone(
@@ -360,9 +419,9 @@ export async function updateMilestone(
     .update(update)
     .eq("id", milestoneId);
   if (error) return { ok: false, error: error.message };
-  await writeMilestoneNetTerms(auth.supabase, milestoneId, formData);
+  const termsErr = await writeMilestoneNetTerms(auth.supabase, milestoneId, formData);
   revalidateMilestone(projectId, poId);
-  return { ok: true, id: milestoneId };
+  return { ok: true, id: milestoneId, warning: termsErr ?? undefined };
 }
 
 /**
