@@ -416,6 +416,14 @@ export default async function ProcurementDetailPage({
           // terms moved onto the milestone with 0064; this is the fallback
           // the forecast uses and the number a new row opens on.
           poNetTerms={resolveNetTerms(po)}
+          // Whether 0064 has run, read off the rows themselves rather than
+          // guessed. The reads use "*", so a database without the column
+          // simply does not return the key - absent and null look the same
+          // once mapped, so the check has to happen on the raw row. Without
+          // this the column offers a box that quietly saves nothing.
+          netTermsReady={
+            milestones.length === 0 || "net_terms_days" in milestones[0]
+          }
           milestones={milestones.map(asEditorRow)}
           lines={poLines.map((l) => ({
             id: l.id,

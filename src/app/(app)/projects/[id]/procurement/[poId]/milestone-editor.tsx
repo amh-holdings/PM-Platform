@@ -12,6 +12,7 @@ import {
   deleteMilestone,
   markMilestonePaid,
   setMilestoneLine,
+  setMilestoneNetTerms,
   updateMilestone,
 } from "../../procurement-actions";
 import { cn } from "@/lib/utils";
@@ -147,6 +148,14 @@ type Props = {
    */
   poNetTerms?: number;
   /**
+   * Whether migration 0064 has run, so the Net terms column can be written.
+   *
+   * Without it the boxes would take a number and drop it. Better to say once
+   * what is missing and show the PO's number the rows are actually running
+   * on than to offer an input that silently does nothing.
+   */
+  netTermsReady?: boolean;
+  /**
    * Which schedule this editor is editing: what we pay the vendor, or what we
    * bill the owner. Migration 0055. Defaults to vendor, which is what every
    * milestone was before the two split.
@@ -165,12 +174,17 @@ export function MilestoneEditor({
   milestones,
   lines = [],
   poNetTerms = 0,
+  netTermsReady = true,
 }: Props) {
   const router = useRouter();
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Something saved, but a piece of it did not. Not an error - the row is
+  // there - so it is said in amber next to the table rather than in red over
+  // a form that then refuses to close.
+  const [warning, setWarning] = useState<string | null>(null);
   const [, startTransition] = useTransition();
   // Which milestone is having its payment recorded, and what is typed so far.
   // Most of these POs were paid before this app existed, so the date is an
@@ -178,6 +192,20 @@ export function MilestoneEditor({
   const [payingId, setPayingId] = useState<string | null>(null);
   const [paidDate, setPaidDate] = useState("");
   const [paidAmount, setPaidAmount] = useState("");
+
+  /** Set net terms on one row, straight from the table. */
+  async function onSetNetTerms(milestoneId: string, days: number | null) {
+    setBusy(true);
+    setError(null);
+    setWarning(null);
+    const res = await setMilestoneNetTerms(milestoneId, poId, projectId, days);
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    startTransition(() => router.refresh());
+  }
 
   /** Tie a payment to one item on the PO, or back to the whole order. */
   async function onSetLine(milestoneId: string, lineId: string | null) {
@@ -219,6 +247,7 @@ export function MilestoneEditor({
       setError(res.error);
       return;
     }
+    setWarning(res.warning ?? null);
     setAdding(false);
     startTransition(() => router.refresh());
   }
@@ -232,6 +261,7 @@ export function MilestoneEditor({
       setError(res.error);
       return;
     }
+    setWarning(res.warning ?? null);
     setEditId(null);
     startTransition(() => router.refresh());
   }
@@ -298,6 +328,19 @@ export function MilestoneEditor({
           {error}
         </div>
       )}
+      {warning && !error && (
+        <div className="border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-800">
+          {warning}
+        </div>
+      )}
+      {!netTermsReady && (
+        <div className="border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-800">
+          Per-milestone net terms need database migration 0064. Until it runs
+          every milestone uses the PO&apos;s terms
+          {poNetTerms > 0 ? ` (Net ${poNetTerms})` : ", and this PO states none"},
+          which is what the forecast did before.
+        </div>
+      )}
 
       <div className="overflow-x-auto">
         {/* Fixed widths, and the add and edit rows use the same cells
@@ -305,10 +348,10 @@ export function MilestoneEditor({
             cell holding a seven-column grid, so "Amount" in the header sat
             over the Expected box and every label had to be read twice.
             Zarina: "make sure the columns and header columns are aligned." */}
-        <table className="w-full min-w-[72rem] table-fixed text-xs">
+        <table className="w-full min-w-[73rem] table-fixed text-xs">
           <colgroup>
             <col />
-            <col className="w-[5.5rem]" />
+            <col className="w-[6rem]" />
             <col className="w-[10rem]" />
             <col className="w-[5rem]" />
             <col className="w-[8rem]" />
@@ -336,6 +379,7 @@ export function MilestoneEditor({
                   m={m}
                   poTotalValue={poTotalValue}
                   poNetTerms={poNetTerms}
+                  netTermsReady={netTermsReady}
                   onCancel={() => setEditId(null)}
                   onSubmit={(fd) => onUpdate(fd, m.id)}
                   busy={busy}
@@ -372,12 +416,20 @@ export function MilestoneEditor({
                       </select>
                     )}
                   </td>
-                  {/* What this row is actually forecast on. A number of
-                      its own reads plain; nothing of its own shows the PO's
-                      number in grey, because that is what the forecast is
-                      using and an empty cell would not say so. */}
-                  <td className="px-2 py-1.5 text-right tabular-nums">
-                    <NetTermsCell own={m.net_terms_days ?? null} fallback={poNetTerms} />
+                  {/* Typed here, not two clicks away in Edit. It read "-"
+                      on every row with nothing to click, which is the whole
+                      of "net terms are not showing": on this PO nothing
+                      states net terms anywhere, so there was nothing to show
+                      and no way to say what it should be. */}
+                  <td className="px-2 py-1.5">
+                    <NetTermsCell
+                      own={m.net_terms_days ?? null}
+                      fallback={poNetTerms}
+                      ready={netTermsReady}
+                      disabled={busy}
+                      onSet={(days) => void onSetNetTerms(m.id, days)}
+                      label={m.milestone_name}
+                    />
                   </td>
                   <td className="px-2 py-1.5 text-muted-foreground">
                     {m.trigger_event ?? "-"}
@@ -558,6 +610,7 @@ export function MilestoneEditor({
               <AddRow
                 poTotalValue={poTotalValue}
                 poNetTerms={poNetTerms}
+                netTermsReady={netTermsReady}
                 onCancel={() => setAdding(false)}
                 onSubmit={onAdd}
                 busy={busy}
@@ -596,32 +649,92 @@ export function MilestoneEditor({
 }
 
 /**
- * What the Net terms column reads on a saved row.
+ * The Net terms column, typed in place.
  *
- * Grey when the number is the PO's rather than this row's, so the difference
- * between "this milestone says Net 30" and "nothing here says anything, so
- * the order's 30 is being used" is visible without opening the row. A dash
- * means genuinely nothing anywhere, which is same-day payment.
+ * A box rather than text, because the number is the point of the column and
+ * on most of these POs nothing states it yet. Blank is not zero: blank means
+ * this row says nothing and the PO's number is used, which is why the
+ * placeholder shows that number rather than the box being pre-filled with it.
+ * Filling it in would turn "inherits" into "stated" without anyone deciding.
+ *
+ * Saves on blur, not on every keystroke, so typing 45 does not pass through
+ * a saved 4 on the way.
  */
 function NetTermsCell({
   own,
   fallback,
+  ready,
+  disabled,
+  onSet,
+  label,
 }: {
   own: number | null;
   fallback: number;
+  ready: boolean;
+  disabled: boolean;
+  onSet: (days: number | null) => void;
+  label: string;
 }) {
-  if (own != null) return <>Net {own}</>;
-  if (fallback > 0) {
+  const [text, setText] = useState(own == null ? "" : String(own));
+  // The saved value is what the box goes back to when the row re-renders,
+  // so a refresh after somebody else's edit is not fought by stale local
+  // text. Only re-seed when the stored number actually changed.
+  const [seed, setSeed] = useState(own);
+  if (seed !== own) {
+    setSeed(own);
+    setText(own == null ? "" : String(own));
+  }
+
+  function commit() {
+    const raw = text.trim();
+    const next = raw === "" ? null : Number(raw);
+    if (next !== null && (!Number.isFinite(next) || next < 0 || next > 365)) {
+      setText(own == null ? "" : String(own));
+      return;
+    }
+    const cleaned = next === null ? null : Math.trunc(next);
+    if (cleaned === own) return;
+    onSet(cleaned);
+  }
+
+  // No column to write to. Show what the row is actually running on rather
+  // than an input that would take a number and drop it; the banner above
+  // says why.
+  if (!ready) {
     return (
-      <span
-        className="text-muted-foreground"
-        title="Not set on this milestone, so the PO's terms are used. Edit the row to set it here."
-      >
-        Net {fallback}
-      </span>
+      <div className="text-right tabular-nums text-muted-foreground">
+        {fallback > 0 ? `Net ${fallback}` : "-"}
+      </div>
     );
   }
-  return <span className="text-muted-foreground">-</span>;
+
+  return (
+    <div className="flex items-center justify-end">
+      <Input
+        type="number"
+        min={0}
+        max={365}
+        step={1}
+        value={text}
+        disabled={disabled}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+        placeholder={fallback > 0 ? String(fallback) : "-"}
+        className="h-7 w-16 px-1 text-right text-xs"
+        aria-label={`Net terms in days for ${label}`}
+        title={
+          own != null
+            ? "Days after this milestone's trigger that it is paid."
+            : fallback > 0
+              ? `Blank, so the PO's Net ${fallback} is used. Type a number to set it on this milestone.`
+              : "Nothing states net terms on this PO. Type the days after the trigger that this one is paid."
+        }
+      />
+    </div>
+  );
 }
 
 /**
@@ -669,12 +782,21 @@ function NetTermsInput({
   form,
   defaultValue,
   fallback,
+  ready,
 }: {
   id: string;
   form: string;
   defaultValue?: number | null;
   fallback: number;
+  ready: boolean;
 }) {
+  if (!ready) {
+    return (
+      <div className="pt-2 text-right text-[10px] text-muted-foreground">
+        needs 0064
+      </div>
+    );
+  }
   return (
     <Input
       id={id}
@@ -695,12 +817,14 @@ function NetTermsInput({
 function AddRow({
   poTotalValue,
   poNetTerms,
+  netTermsReady,
   onCancel,
   onSubmit,
   busy,
 }: {
   poTotalValue: number;
   poNetTerms: number;
+  netTermsReady: boolean;
   onCancel: () => void;
   onSubmit: (fd: FormData) => void;
   busy: boolean;
@@ -734,7 +858,13 @@ function AddRow({
         />
       </td>
       <td className="px-2 py-2">
-        <NetTermsInput id="m-terms" form={formId} defaultValue={poNetTerms > 0 ? poNetTerms : null} fallback={poNetTerms} />
+        <NetTermsInput
+          id="m-terms"
+          form={formId}
+          defaultValue={poNetTerms > 0 ? poNetTerms : null}
+          fallback={poNetTerms}
+          ready={netTermsReady}
+        />
       </td>
       <td className="px-2 py-2">
         <TriggerSelect id="m-trigger" form={formId} />
@@ -809,6 +939,7 @@ function EditRow({
   m,
   poTotalValue,
   poNetTerms,
+  netTermsReady,
   onCancel,
   onSubmit,
   busy,
@@ -816,6 +947,7 @@ function EditRow({
   m: Milestone;
   poTotalValue: number;
   poNetTerms: number;
+  netTermsReady: boolean;
   onCancel: () => void;
   onSubmit: (fd: FormData) => void;
   busy: boolean;
@@ -857,6 +989,7 @@ function EditRow({
           form={formId}
           defaultValue={m.net_terms_days ?? null}
           fallback={poNetTerms}
+          ready={netTermsReady}
         />
       </td>
       <td className="px-2 py-2">
