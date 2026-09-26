@@ -10,6 +10,7 @@ import {
   describeMilestoneDate,
   forecastMilestoneDate,
   lineLabel,
+  resolveNetTerms,
   scheduleDrivesDate,
 } from "@/lib/po-payment-forecast";
 import { syncScheduleDates } from "@/lib/schedule-sync-server";
@@ -224,6 +225,11 @@ export default async function ProcurementDetailPage({
     procurement_order_line_id:
       (m as { procurement_order_line_id?: string | null })
         .procurement_order_line_id ?? null,
+    // Same reasoning, one migration later: net_terms_days arrives with 0064,
+    // and until it runs every milestone reads blank and falls back to the
+    // PO's number, which is exactly what they all did before.
+    net_terms_days:
+      (m as { net_terms_days?: number | null }).net_terms_days ?? null,
     // What date this row actually runs on, and where it came from. When the
     // schedule supplies it, it IS the Expected value and the typed date is
     // demoted - see scheduleDrivesDate. Printing the typed date as the
@@ -406,6 +412,10 @@ export default async function ProcurementDetailPage({
           projectId={params.id}
           poId={params.poId}
           poTotalValue={poValue}
+          // What the PO says, for the rows that say nothing themselves. Net
+          // terms moved onto the milestone with 0064; this is the fallback
+          // the forecast uses and the number a new row opens on.
+          poNetTerms={resolveNetTerms(po)}
           milestones={milestones.map(asEditorRow)}
           lines={poLines.map((l) => ({
             id: l.id,

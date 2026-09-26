@@ -73,6 +73,7 @@ export function ExtractPoMilestones({
         trigger_event: m.trigger_event,
         expected_date: m.expected_date,
         notes: m.notes,
+        net_terms_days: m.net_terms_days,
       }));
       const result = await applyExtractedMilestones(poId, projectId, stripped, summary);
       if (!result.ok) {
@@ -176,6 +177,7 @@ export function ExtractPoMilestones({
                 <tr className="border-b">
                   <th className="w-8 py-1.5 text-left font-medium"></th>
                   <th className="py-1.5 pr-2 text-left font-medium">Milestone</th>
+                  <th className="py-1.5 pr-2 text-right font-medium">Net terms</th>
                   <th className="py-1.5 pr-2 text-left font-medium">Trigger</th>
                   <th className="py-1.5 pr-2 text-right font-medium">%</th>
                   <th className="py-1.5 pr-2 text-right font-medium">Amount</th>
@@ -214,6 +216,27 @@ export function ExtractPoMilestones({
                           {m.notes}
                         </div>
                       )}
+                    </td>
+                    {/* Pre-filled from the PO's terms rather than left
+                        blank. "If a PO is uploaded it will just pre-fill the
+                        columns and I will just recheck and save." */}
+                    <td className="py-1.5 pr-2 text-right">
+                      <Input
+                        type="number"
+                        min={0}
+                        max={365}
+                        step={1}
+                        value={m.net_terms_days ?? ""}
+                        onChange={(e) =>
+                          updateMilestone(i, {
+                            net_terms_days: e.target.value
+                              ? Number(e.target.value)
+                              : null,
+                          })
+                        }
+                        className="h-7 w-16 text-right text-xs"
+                        aria-label="Net terms in days"
+                      />
                     </td>
                     <td className="py-1.5 pr-2">
                       <Input

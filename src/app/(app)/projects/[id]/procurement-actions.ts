@@ -9,6 +9,7 @@ import {
   pickAfpTargetLine,
 } from "@/lib/billing-progress";
 import { recordedPayment } from "@/lib/progress";
+import { resolveNetTerms } from "@/lib/po-payment-forecast";
 
 import type { ProcurementImportPlan } from "@/lib/procurement-import";
 import {
@@ -58,10 +59,11 @@ function getNum(value: FormDataEntryValue | null): number | null {
 /**
  * Net terms as a whole number of days, or null for "not stated".
  *
- * Blank stays null so the forecast keeps falling back to the summary rather
- * than quietly becoming same-day payment. Zero is kept, because zero is
- * somebody answering the question. Anything outside 0 to 365 is a typo and is
- * dropped rather than stored, matching the check on the column.
+ * Blank stays null so the milestone keeps falling back to the PO's number,
+ * and then to the summary, rather than quietly becoming same-day payment.
+ * Zero is kept, because zero is somebody answering the question. Anything
+ * outside 0 to 365 is a typo and is dropped rather than stored, matching the
+ * check on the column.
  */
 function getNetTermsDays(value: FormDataEntryValue | null): number | null {
   if (typeof value !== "string" || !value.trim()) return null;
@@ -72,27 +74,27 @@ function getNetTermsDays(value: FormDataEntryValue | null): number | null {
 }
 
 /**
- * Write net_terms_days on its own, after the PO is safely saved.
+ * Write a milestone's net_terms_days on its own, after the row is saved.
  *
- * Migration 0063 adds the column. A write naming a column that does not exist
- * fails the whole statement, so this cannot ride along in the main insert or
- * update: a PO would refuse to save over one number somebody may not even
- * have typed. It is deliberately not reported either, because until 0063 runs
- * the forecast reads "Net NN" out of the summary exactly as it always has,
- * which is the behaviour being replaced, not lost.
+ * Migration 0064 adds the column. A write naming a column that does not exist
+ * fails the whole statement, so this cannot ride along in the insert or the
+ * update: a milestone would refuse to save over one number somebody may not
+ * even have typed. It is deliberately not reported either, because until 0064
+ * runs the forecast falls back to the order's number and then to the summary
+ * exactly as it does today, which is the behaviour being replaced, not lost.
  */
-async function writeNetTerms(
+async function writeMilestoneNetTerms(
   supabase: ReturnType<typeof createClient>,
-  poId: string,
+  milestoneId: string,
   formData: FormData,
 ): Promise<void> {
   if (!formData.has("net_terms_days")) return;
   await supabase
-    .from("procurement_orders")
+    .from("procurement_payments")
     .update({
       net_terms_days: getNetTermsDays(formData.get("net_terms_days")),
-    } as unknown as TablesUpdate<"procurement_orders">)
-    .eq("id", poId);
+    } as unknown as TablesUpdate<"procurement_payments">)
+    .eq("id", milestoneId);
 }
 
 function getDate(value: FormDataEntryValue | null): string | null {
@@ -163,7 +165,6 @@ export async function createProcurementOrder(
   // reported, because a PO that refuses to save over one number somebody may
   // not even have typed is the worse outcome. Until 0063 runs the forecast
   // reads "Net NN" out of the summary exactly as it did before.
-  await writeNetTerms(auth.supabase, data.id, formData);
 
   // The lines go in after the order exists. A failure here is reported rather
   // than swallowed, and the PO stays: losing the vendor, the dates and the
@@ -225,8 +226,6 @@ export async function updateProcurementOrder(
     .eq("id", poId);
   if (error) return { ok: false, error: error.message };
 
-  // Separate, for the same reason as on create. See writeNetTerms.
-  await writeNetTerms(auth.supabase, poId, formData);
 
   revalidatePath(`/projects/${projectId}/procurement`);
   revalidatePath(`/projects/${projectId}/procurement/${poId}`);
@@ -333,6 +332,7 @@ export async function addMilestone(
   if (error) {
     return { ok: false, error: error.message };
   }
+  await writeMilestoneNetTerms(auth.supabase, data.id, formData);
   revalidateMilestone(projectId, poId);
   return { ok: true, id: data.id };
 }
@@ -360,6 +360,7 @@ export async function updateMilestone(
     .update(update)
     .eq("id", milestoneId);
   if (error) return { ok: false, error: error.message };
+  await writeMilestoneNetTerms(auth.supabase, milestoneId, formData);
   revalidateMilestone(projectId, poId);
   return { ok: true, id: milestoneId };
 }
@@ -525,6 +526,15 @@ export type ExtractedMilestone = {
   trigger_event: string;
   expected_date: string | null;
   notes: string;
+  /**
+   * Days after the trigger this milestone pays. Migration 0064.
+   *
+   * Zarina: "If a PO is uploaded it will just pre-fill the columns and I will
+   * just recheck and save." The relay does not return this, so it is seeded
+   * here from what the PO already says and shown in the review table as a
+   * number to correct rather than a blank to fill.
+   */
+  net_terms_days: number | null;
 };
 
 export type ExtractPoTermsResult =
@@ -583,11 +593,46 @@ export async function extractPoPaymentTerms(
   }
 
   const data = await response.json();
+  const summary: string = data.payment_terms_summary ?? "";
+
+  // Pre-fill the net terms column rather than handing back an empty one.
+  //
+  // The relay reads the PDF for the payment SCHEDULE - the names, the
+  // percentages, what each one fires on - and says nothing about how long
+  // after that the money goes. That half is already on record in two places,
+  // so use them: the number on the PO if 0063 found one, otherwise the "Net
+  // NN" in the summary the relay just read back. Every extracted row starts
+  // on the same number, which is right far more often than blank is, and the
+  // review table is where a row that differs gets corrected before Apply.
+  const { data: poRow } = await auth.supabase
+    .from("procurement_orders")
+    .select("*")
+    .eq("id", procurementOrderId)
+    .maybeSingle();
+  const seeded = resolveNetTerms({
+    net_terms_days:
+      (poRow as { net_terms_days?: number | null } | null)?.net_terms_days ??
+      null,
+    payment_terms_summary: summary || (poRow?.payment_terms_summary ?? null),
+  });
+
+  const milestones: ExtractedMilestone[] = (data.milestones ?? []).map(
+    (m: Partial<ExtractedMilestone>) => ({
+      milestone_name: m.milestone_name ?? "",
+      pct_of_total: m.pct_of_total ?? null,
+      amount: m.amount ?? null,
+      trigger_event: m.trigger_event ?? "",
+      expected_date: m.expected_date ?? null,
+      notes: m.notes ?? "",
+      net_terms_days: m.net_terms_days ?? (seeded > 0 ? seeded : null),
+    }),
+  );
+
   return {
     ok: true,
-    milestones: data.milestones ?? [],
+    milestones,
     total_pct: data.total_pct ?? null,
-    payment_terms_summary: data.payment_terms_summary ?? "",
+    payment_terms_summary: summary,
     notes: data.notes ?? "",
     source_document: data.source_document ?? "",
     elapsed_ms: data.elapsed_ms ?? 0,
@@ -628,10 +673,34 @@ export async function applyExtractedMilestones(
     sort_order: idx + 1,
   }));
 
-  const { error: insErr } = await auth.supabase
+  const { data: inserted, error: insErr } = await auth.supabase
     .from("procurement_payments")
-    .insert(rows);
+    .insert(rows)
+    .select("id");
   if (insErr) return { ok: false, error: insErr.message };
+
+  // Net terms goes on afterwards, for the same reason it does on a single
+  // milestone: naming a column that 0064 has not added yet fails the whole
+  // statement, and losing an extracted payment schedule over one number is a
+  // far worse trade than losing the number. Grouped by value so a PO whose
+  // rows all sit on Net 30 costs one update rather than one per row.
+  const ids = (inserted ?? []).map((r) => r.id);
+  if (ids.length === milestones.length) {
+    const byTerms = new Map<number | null, string[]>();
+    milestones.forEach((m, i) => {
+      const days =
+        m.net_terms_days == null ? null : Math.trunc(Number(m.net_terms_days));
+      const key = days != null && days >= 0 && days <= 365 ? days : null;
+      if (key === null) return;
+      byTerms.set(key, [...(byTerms.get(key) ?? []), ids[i]]);
+    });
+    for (const [days, group] of Array.from(byTerms.entries())) {
+      await auth.supabase
+        .from("procurement_payments")
+        .update({ net_terms_days: days } as unknown as TablesUpdate<"procurement_payments">)
+        .in("id", group);
+    }
+  }
 
   // Also update the PO summary line if provided.
   if (paymentTermsSummary && paymentTermsSummary.trim()) {

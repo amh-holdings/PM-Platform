@@ -117,7 +117,18 @@ export const MoneyInput = React.forwardRef<HTMLInputElement, MoneyInputProps>(
             className,
           )}
         />
-        {name && <input type="hidden" name={name} value={moneyFormValue(shown)} />}
+        {/* Carries the same `form` as the visible box. Without it a box
+            rendered in a table cell outside its <form> posts nothing, because
+            only elements the form owns reach FormData - and a table row
+            cannot be wrapped in a form and still line up with its headers. */}
+        {name && (
+          <input
+            type="hidden"
+            name={name}
+            form={props.form}
+            value={moneyFormValue(shown)}
+          />
+        )}
       </>
     );
   },
