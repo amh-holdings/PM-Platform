@@ -309,13 +309,25 @@ export default async function ProcurementDetailPage({
         isSigned={Boolean(po.signed_at)}
       />
 
+      {/* One card, two levels of the same decision: does the whole order
+          land together, or does each item land on its own schedule row.
+          They were two cards and read as two competing links. Zarina, twice:
+          "Double linking is up again." */}
       <DeliveryTaskLink
         poId={po.id}
         projectId={params.id}
         currentWbs={po.linked_delivery_task_wbs_code}
         currentEndDate={po.expected_delivery_date}
         options={deliveryOptions}
-      />
+      >
+        <PoLineDeliveries
+          poId={po.id}
+          projectId={params.id}
+          lines={poLines}
+          options={deliveryOptions}
+          poTaskWbs={po.linked_delivery_task_wbs_code ?? null}
+        />
+      </DeliveryTaskLink>
 
       <section className="grid gap-3 sm:grid-cols-4">
         <SmallCell label="PO #" value={po.po_number ?? "-"} mono />
@@ -362,18 +374,6 @@ export default async function ProcurementDetailPage({
         salesTax={linesRes.ok ? linesRes.salesTax : null}
         freight={linesRes.ok ? linesRes.freight : null}
         available={linesRes.ok ? linesRes.available : false}
-      />
-
-      {/* Directly under the items, because it is a column on the same table
-          that would not fit on it. Zarina: "there are POs that has multiple
-          deliveries on it. And each item inside a PO can be linked to a line
-          in the schedule." */}
-      <PoLineDeliveries
-        poId={po.id}
-        projectId={params.id}
-        lines={poLines}
-        options={deliveryOptions}
-        poTaskWbs={po.linked_delivery_task_wbs_code ?? null}
       />
 
       <section className="rounded-lg border bg-card shadow-sm">
