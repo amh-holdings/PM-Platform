@@ -1,10 +1,8 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 
 import { setProcurementDeliveryTaskLink } from "../../procurement-actions";
@@ -17,30 +15,69 @@ export type DeliveryTaskOption = {
   parentName: string | null;
 };
 
+/**
+ * One schedule row, written the same way everywhere it is offered.
+ *
+ * The date is in the label rather than a column, because this used to be a
+ * table with an End date column and dropping it would have lost the one piece
+ * of information that decides which row is the right one.
+ */
+export function deliveryOptionLabel(o: DeliveryTaskOption): string {
+  const who = o.parentName ? `${o.parentName} ` : "";
+  const when = o.endDate ? ` - ${formatDate(o.endDate)}` : "";
+  return `${o.wbsCode} ${who}${o.name}${when}`;
+}
+
 type Props = {
   poId: string;
   projectId: string;
   currentWbs: string | null;
   currentEndDate: string | null;
   options: DeliveryTaskOption[];
+  /** The per-item picker, rendered inside this card. */
+  children?: ReactNode;
 };
 
-// Picker that links a PO to a schedule delivery task. Selecting one
-// updates procurement_orders.linked_delivery_task_wbs_code AND copies
-// the task's end_date into expected_delivery_date so the AI extraction
-// and cash projection both see the same number.
+/**
+ * Which schedule row this PO is delivered against.
+ *
+ * Zarina: "I need this to be like the other one selection before which is a
+ * dropdown and should be able to pick per line item as some PO contains
+ * multiple equipments and should be link to different schedule."
+ *
+ * Two changes, and they are the same change. The picker was a scrolling table
+ * of 14 rows with a Pick button on each, so choosing a delivery row meant
+ * hunting through a list that was taller than the card. It is a dropdown now,
+ * with the end date in the option text so the column it replaces is not lost.
+ *
+ * And the per-item picker lives in this card rather than in one of its own
+ * further down the page. They were always one decision - does the whole order
+ * land together, or does each item land on its own row - and splitting it
+ * across two cards is what made it read as two competing links. She has
+ * reported that twice as "double linking".
+ *
+ * Selecting a row updates procurement_orders.linked_delivery_task_wbs_code and
+ * copies the task's end date into expected_delivery_date, so the AI extraction
+ * and the cash projection both see the same number.
+ */
 export function DeliveryTaskLink({
   poId,
   projectId,
   currentWbs,
   currentEndDate,
   options,
+  children,
 }: Props) {
   const router = useRouter();
   const [busy, startBusy] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   const current = options.find((o) => o.wbsCode === currentWbs);
+  // A row that is linked but no longer in the list. The options come from a
+  // name search for "delivery", so renaming a schedule row drops it out. In a
+  // table that only looked wrong; in a select it would read as Not linked and
+  // the next change would overwrite a real link without anyone deciding to.
+  const orphaned = currentWbs != null && current === undefined;
 
   function handlePick(wbs: string | null) {
     setError(null);
@@ -56,44 +93,71 @@ export function DeliveryTaskLink({
 
   return (
     <section className="rounded-lg border bg-card p-4 shadow-sm">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold">Schedule delivery task</h3>
-          <p className="text-xs text-muted-foreground">
-            Linking the PO to its delivery task auto-fills expected delivery
-            date and lets Net X math fire off the schedule.
-          </p>
-        </div>
+      <div>
+        <h3 className="text-sm font-semibold">Schedule delivery</h3>
+        <p className="text-xs text-muted-foreground">
+          Point the PO at the schedule row it lands on. The date comes from the
+          schedule, and net terms run from it.
+        </p>
       </div>
 
-      {current ? (
-        <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs">
-          <div className="font-medium text-emerald-700">
-            Linked: {current.wbsCode} {current.name}
-          </div>
-          <div className="mt-0.5 text-muted-foreground">
-            Delivery window: {current.startDate ? formatDate(current.startDate) : "?"} -{" "}
-            {current.endDate ? formatDate(current.endDate) : "?"}
-          </div>
-          <div className="mt-1 text-muted-foreground">
-            expected_delivery_date sync&apos;d to {currentEndDate ? formatDate(currentEndDate) : "(unset)"}
-          </div>
-          <div className="mt-2 flex flex-wrap gap-1">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handlePick(null)}
-              disabled={busy}
-              className="h-6 px-2 text-[10px]"
-            >
-              {busy ? "..." : "Unlink"}
-            </Button>
-          </div>
-        </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <label
+          htmlFor="po-delivery-task"
+          className="text-xs font-medium text-muted-foreground"
+        >
+          Whole order
+        </label>
+        <select
+          id="po-delivery-task"
+          value={currentWbs ?? ""}
+          disabled={busy || options.length === 0}
+          onChange={(e) => handlePick(e.target.value || null)}
+          className="h-9 w-full max-w-xl rounded-md border border-input bg-background px-2 text-xs"
+        >
+          <option value="">
+            {options.length === 0
+              ? "No delivery tasks in the schedule"
+              : "Not linked - no schedule row"}
+          </option>
+          {options.map((o) => (
+            <option key={o.wbsCode} value={o.wbsCode}>
+              {deliveryOptionLabel(o)}
+            </option>
+          ))}
+          {orphaned && (
+            <option value={currentWbs as string}>
+              {currentWbs} - not in the schedule&apos;s delivery rows any more
+            </option>
+          )}
+        </select>
+      </div>
+
+      {/* The consequence of the choice, under the box that makes it. The old
+          card printed the WBS, the window and the synced date on three lines;
+          the row is named in the dropdown itself now, so only what it did to
+          the PO is left to say. */}
+      {orphaned ? (
+        <p className="mt-1.5 text-xs text-amber-700">
+          {currentWbs} is linked but is not one of the schedule&apos;s delivery
+          rows. Either it was renamed, or it was deleted. Pick the right row, or
+          rename it back on the schedule.
+        </p>
+      ) : current ? (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Plans to land{" "}
+          <span className="font-medium text-foreground">
+            {current.endDate ? formatDate(current.endDate) : "on no dated row"}
+          </span>
+          {currentEndDate && (
+            <>, so expected delivery reads {formatDate(currentEndDate)}</>
+          )}
+          .
+        </p>
       ) : (
-        <p className="mt-3 text-xs text-amber-700">
-          No schedule task linked. AI date estimates will fall back to PDF
-          shipping boilerplate instead of the project schedule.
+        <p className="mt-1.5 text-xs text-amber-700">
+          Nothing linked, so delivery dates fall back to whatever the PDF says
+          rather than the project schedule.
         </p>
       )}
 
@@ -103,70 +167,7 @@ export function DeliveryTaskLink({
         </p>
       )}
 
-      <div className="mt-3">
-        <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-          Pick delivery task ({options.length} available)
-        </div>
-        <div className="max-h-60 overflow-y-auto rounded-md border">
-          <table className="w-full text-xs">
-            <thead className="bg-muted/30 text-muted-foreground">
-              <tr className="border-b">
-                <th className="px-2 py-1 text-left font-medium">WBS</th>
-                <th className="px-2 py-1 text-left font-medium">Equipment / Vendor</th>
-                <th className="px-2 py-1 text-left font-medium">End date</th>
-                <th className="px-2 py-1 text-left font-medium"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {options.length === 0 && (
-                <tr>
-                  <td colSpan={4} className="px-2 py-2 text-center text-muted-foreground">
-                    No delivery tasks in schedule
-                  </td>
-                </tr>
-              )}
-              {options.map((o) => {
-                const isCurrent = o.wbsCode === currentWbs;
-                return (
-                  <tr
-                    key={o.wbsCode}
-                    className={cn(
-                      "border-b last:border-0",
-                      isCurrent && "bg-emerald-500/5",
-                    )}
-                  >
-                    <td className="px-2 py-1 font-mono">{o.wbsCode}</td>
-                    <td className="px-2 py-1">
-                      <div>{o.parentName ?? "-"}</div>
-                      <div className="text-[10px] text-muted-foreground">
-                        {o.name}
-                      </div>
-                    </td>
-                    <td className="px-2 py-1 text-muted-foreground">
-                      {o.endDate ? formatDate(o.endDate) : "-"}
-                    </td>
-                    <td className="px-2 py-1 text-right">
-                      {isCurrent ? (
-                        <span className="text-[10px] text-emerald-700">linked</span>
-                      ) : (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handlePick(o.wbsCode)}
-                          disabled={busy}
-                          className="h-6 px-2 text-[10px]"
-                        >
-                          Pick
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {children}
     </section>
   );
 }

@@ -11,7 +11,7 @@ import {
   setPoLineDelivery,
   type PoLineRow,
 } from "../../procurement-actions";
-import type { DeliveryTaskOption } from "./delivery-task-link";
+import { deliveryOptionLabel, type DeliveryTaskOption } from "./delivery-task-link";
 
 /**
  * Which schedule row each item on the PO is delivered against.
@@ -19,8 +19,13 @@ import type { DeliveryTaskOption } from "./delivery-task-link";
  * Zarina: "there are POs that has multiple deliveries on it. And each item
  * inside a PO can be linked to a line in the schedule."
  *
- * The PO-level link above says the whole order arrives as one delivery, which
- * is right for most POs and wrong for FTC Solar, where piles and racking land
+ * Rendered inside the Schedule delivery card, directly under the whole-order
+ * dropdown, because it is the same decision: the order lands together, or each
+ * item lands on its own row. As a card of its own it read as a second,
+ * competing link, which Zarina reported twice as "double linking".
+ *
+ * The order-level link says the whole order arrives as one delivery, which is
+ * right for most POs and wrong for FTC Solar, where piles and racking land
  * three weeks apart against different schedule rows. One link gave both
  * shipments one date.
  *
@@ -80,25 +85,23 @@ export function PoLineDeliveries({
   // its import duty are not two deliveries.
   if (!open && linked === 0) {
     return (
-      <section className="rounded-lg border bg-card px-4 py-3 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs text-muted-foreground">
-            All {lines.length} items arrive together
-            {poTaskWbs ? ` on ${poTaskWbs}` : ""}.
-          </p>
-          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-            Split deliveries by item
-          </Button>
-        </div>
-      </section>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+        <p className="text-xs text-muted-foreground">
+          All {lines.length} items arrive together
+          {poTaskWbs ? ` on ${poTaskWbs}` : ""}.
+        </p>
+        <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+          Split deliveries by item
+        </Button>
+      </div>
     );
   }
 
   return (
-    <section className="rounded-lg border bg-card p-4 shadow-sm">
+    <div className="mt-3 border-t pt-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold">Deliveries by item</h3>
+          <h4 className="text-xs font-semibold">Deliveries by item</h4>
           <p className="text-xs text-muted-foreground">
             Point each item at the schedule row it lands on. A payment tied to
             that item then follows it, instead of one date for the whole order.
@@ -135,6 +138,11 @@ export function PoLineDeliveries({
               const task = options.find(
                 (o) => o.wbsCode === l.linkedDeliveryTaskWbsCode,
               );
+              // Same trap as the whole-order picker: a linked row that has
+              // been renamed out of the "delivery" search would read as
+              // unlinked, and the next change would quietly overwrite it.
+              const orphaned =
+                l.linkedDeliveryTaskWbsCode != null && task === undefined;
               return (
                 <tr key={l.id}>
                   <td className="px-2 py-2 align-top">
@@ -164,10 +172,15 @@ export function PoLineDeliveries({
                       </option>
                       {options.map((o) => (
                         <option key={o.wbsCode} value={o.wbsCode}>
-                          {o.wbsCode} {o.parentName ? `${o.parentName} ` : ""}
-                          {o.name}
+                          {deliveryOptionLabel(o)}
                         </option>
                       ))}
+                      {orphaned && (
+                        <option value={l.linkedDeliveryTaskWbsCode as string}>
+                          {l.linkedDeliveryTaskWbsCode} - not a delivery row any
+                          more
+                        </option>
+                      )}
                     </select>
                   </td>
                 </tr>
@@ -176,6 +189,6 @@ export function PoLineDeliveries({
           </tbody>
         </table>
       </div>
-    </section>
+    </div>
   );
 }
