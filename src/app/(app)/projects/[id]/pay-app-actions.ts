@@ -6,6 +6,8 @@ import { createClient } from "@/lib/supabase/server";
 import { friendlyAppNumberError, nextAppNumber } from "@/lib/afp-number";
 import { canUndoPayApplication } from "@/lib/pay-app-undo";
 import { forecastAmountPatch, pairForecastAmounts } from "@/lib/billing-progress";
+import { buildPayAppLines, type PayAppEntry } from "@/lib/pay-app-lines";
+import { readAmendments } from "@/lib/sov-amendments-db";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -116,10 +118,11 @@ export async function createPayApplication(
     };
   }
 
-  // Pull every billing_line for the project + its entries
+  // Pull every billing_line for the project + its entries, and the change
+  // order allocations that say what each line's scope really is.
   const { data: lines, error: linesErr } = await auth.supabase
     .from("billing_lines")
-    .select("id, item_number, description, scheduled_value, sort_order")
+    .select("id, item_number, description, scheduled_value, sort_order, change_order_id")
     .eq("project_id", input.projectId)
     .order("sort_order", { ascending: true, nullsFirst: false })
     .order("item_number", { ascending: true });
@@ -133,119 +136,66 @@ export async function createPayApplication(
     )
     .in("billing_line_id", lineIds);
 
-  // Bucket entries per line. The "this period" amount uses actual_amount when
-  // set, falling back to planned_amount. That way a freshly promoted forecast
-  // (planned only, no actual yet) still rolls into the pay app, but real
-  // billed amounts win when both exist.
-  type Bucket = {
-    previous: number;
-    thisPeriodIds: string[];
-    thisPeriodAmount: number;
-  };
-  const buckets = new Map<string, Bucket>();
-  for (const l of lines ?? []) {
-    buckets.set(l.id, { previous: 0, thisPeriodIds: [], thisPeriodAmount: 0 });
-  }
-  const filterSet =
-    input.onlyEntryIds && input.onlyEntryIds.length > 0
-      ? new Set(input.onlyEntryIds)
-      : null;
-
-  // A prior-month row counts as previously billed only when something shows it
-  // actually went out: a pay_application_id, an afp_number, or a status past
-  // 'forecast'.
-  //
-  // A non-zero actual_amount is NOT proof on its own. scripts/import-cashflow*
-  // loaded the owner cash-flow spreadsheet into actual_amount for months that
-  // were only ever projections - Sweet Springs carries $160,381 / $80,000 /
-  // $40,000 on 2026-06 with status 'forecast' and no AFP, for civil work that
-  // had not happened (the first field report on the job is dated 2026-08-04).
-  // Treating those as previous billings would report $120,000 of civil already
-  // paid and suppress the first legitimate civil billing.
-  const BILLED_STATUSES = new Set([
-    "on_pay_app",
-    "submitted",
-    "approved",
-    "paid",
-  ]);
-  const hasBillingEvidence = (e: {
-    pay_application_id?: string | null;
-    afp_number?: string | null;
-    status?: string | null;
-  }) =>
-    !!e.pay_application_id ||
-    !!e.afp_number ||
-    BILLED_STATUSES.has(e.status ?? "");
-  const stalePriorForecasts: StalePriorForecast[] = [];
-  const lineById = new Map((lines ?? []).map((l) => [l.id, l]));
-
-  for (const e of entries ?? []) {
-    const b = buckets.get(e.billing_line_id);
-    if (!b) continue;
-    const actual = Number(e.actual_amount ?? 0);
-    const planned = Number(e.planned_amount ?? 0);
-
-    const inWindow =
-      e.period_month >= input.periodStart && e.period_month <= input.periodEnd;
-    const selectedForThisApp =
-      inWindow && !e.pay_application_id && (!filterSet || filterSet.has(e.id));
-
-    if (selectedForThisApp) {
-      const amount = actual > 0 ? actual : planned;
-      if (amount > 0) {
-        b.thisPeriodIds.push(e.id);
-        b.thisPeriodAmount += amount;
-      }
-      continue;
-    }
-
-    // Not on this app. Previously billed if stamped onto another pay
-    // application, or if it sits in a month before this application's period.
-    const isPrior =
-      !!e.pay_application_id || e.period_month < input.periodStart;
-    if (!isPrior) continue;
-
-    const amount = actual > 0 ? actual : planned;
-    if (amount <= 0) continue;
-    if (hasBillingEvidence(e)) {
-      b.previous += amount;
-    } else {
-      stalePriorForecasts.push({
-        itemNumber: lineById.get(e.billing_line_id)?.item_number ?? "",
-        periodMonth: e.period_month,
-        plannedAmount: amount,
-        status: e.status ?? "forecast",
-      });
-    }
+  // A missing 0054 is tolerated on the billing PAGE, where the worst case is
+  // pre-amendment percentages on a screen. It is not tolerated here. Without
+  // the allocations, CO-02's $709,976.60 is invisible and the G703 prints
+  // Mobilization at $100,000 against $320,762.92 of billing - a document the
+  // owner cannot tie out, issued in the contractor's name.
+  const { rows: amendments, missing: amendmentsMissing } = await readAmendments(
+    auth.supabase,
+    input.projectId,
+  );
+  if (amendmentsMissing) {
+    await auth.supabase.from("pay_applications").delete().eq("id", app.id);
+    return {
+      ok: false,
+      error:
+        "Change order allocations are unavailable (migration 0054_billing_line_amendments.sql is not applied). " +
+        "An application built without them would misstate every contract line a change order raised.",
+    };
   }
 
   const retPct = Number.isFinite(input.retainagePct) ? input.retainagePct : 10;
-  const lineInserts = (lines ?? []).map((l, i) => {
-    const b = buckets.get(l.id) ?? {
-      previous: 0,
-      thisPeriodIds: [],
-      thisPeriodAmount: 0,
-    };
-    const sched = Number(l.scheduled_value ?? 0);
-    const completed = b.previous + b.thisPeriodAmount;
-    const pct = sched > 0 ? Math.min(100, (completed / sched) * 100) : 0;
-    const retainage = b.thisPeriodAmount * (retPct / 100);
-    return {
-      pay_application_id: app.id,
-      billing_line_id: l.id,
-      item_number: l.item_number,
-      description: l.description,
-      scheduled_value: sched,
-      work_completed_previous: Math.round(b.previous * 100) / 100,
-      work_completed_this_period: Math.round(b.thisPeriodAmount * 100) / 100,
-      materials_stored: 0,
-      total_completed_and_stored: Math.round(completed * 100) / 100,
-      pct_complete: Math.round(pct * 100) / 100,
-      balance_to_finish: Math.round((sched - completed) * 100) / 100,
-      retainage_amount: Math.round(retainage * 100) / 100,
-      sort_order: l.sort_order ?? i,
-    };
+  const built = buildPayAppLines({
+    lines: lines ?? [],
+    entries: (entries ?? []) as PayAppEntry[],
+    amendments,
+    periodStart: input.periodStart,
+    periodEnd: input.periodEnd,
+    retainagePct: retPct,
+    onlyEntryIds: input.onlyEntryIds ?? null,
   });
+  if (!built.ok) {
+    await auth.supabase.from("pay_applications").delete().eq("id", app.id);
+    return { ok: false, error: built.error };
+  }
+
+  // The schedule of values has to total the contract. Allocations move scope
+  // between lines and never change the sum, so a total that has drifted means
+  // a line's value is wrong rather than merely allocated - the failure this
+  // whole exercise started from. A dollar of latitude covers the cent-level
+  // rounding between a change order's markup and the executed figure.
+  const { data: contractRow } = await auth.supabase
+    .from("projects")
+    .select("contract_value")
+    .eq("id", input.projectId)
+    .maybeSingle();
+  const contractValue = Number(contractRow?.contract_value ?? 0);
+  if (contractValue > 0 && Math.abs(built.totals.scheduled_value - contractValue) > 1) {
+    await auth.supabase.from("pay_applications").delete().eq("id", app.id);
+    return {
+      ok: false,
+      error:
+        `The schedule of values totals ${built.totals.scheduled_value.toFixed(2)} but the contract is ` +
+        `${contractValue.toFixed(2)}. Fix the SOV before issuing an application.`,
+    };
+  }
+
+  const stalePriorForecasts = built.stalePriorForecasts;
+  const lineInserts = built.lines.map((l) => ({
+    pay_application_id: app.id,
+    ...l,
+  }));
 
   if (lineInserts.length > 0) {
     const { error: liErr } = await auth.supabase
@@ -254,25 +204,13 @@ export async function createPayApplication(
     if (liErr) return { ok: false, error: liErr.message };
   }
 
-  // Compute roll-up totals for the pay_application
-  const totalCompleted = lineInserts.reduce(
-    (s, l) => s + (l.work_completed_this_period ?? 0),
-    0,
-  );
-  const totalRetainage = lineInserts.reduce(
-    (s, l) => s + (l.retainage_amount ?? 0),
-    0,
-  );
-  const previousBillings = lineInserts.reduce(
-    (s, l) => s + (l.work_completed_previous ?? 0),
-    0,
-  );
-  const amountDue = totalCompleted - totalRetainage;
+  // Roll-up totals come from the builder rather than being re-summed here, so
+  // the header and the lines cannot disagree about the same application.
   const rollup = {
-    total_completed: Math.round(totalCompleted * 100) / 100,
-    total_retainage: Math.round(totalRetainage * 100) / 100,
-    previous_billings: Math.round(previousBillings * 100) / 100,
-    amount_due: Math.round(amountDue * 100) / 100,
+    total_completed: built.totals.total_completed,
+    total_retainage: built.totals.total_retainage,
+    previous_billings: built.totals.previous_billings,
+    amount_due: built.totals.amount_due,
   };
 
   // The rate is stored on the application, not just applied and discarded, so
@@ -299,9 +237,7 @@ export async function createPayApplication(
   // promote the value used (actual or planned-fallback) into actual_amount
   // so the dashboard's Billing timeline reflects what is being billed.
   const entryById = new Map((entries ?? []).map((e) => [e.id, e]));
-  const stampIds: string[] = [];
-  buckets.forEach((b) => stampIds.push(...b.thisPeriodIds));
-  for (const id of stampIds) {
+  for (const id of built.thisPeriodEntryIds) {
     const e = entryById.get(id);
     if (!e) continue;
     const actual = Number(e.actual_amount ?? 0);

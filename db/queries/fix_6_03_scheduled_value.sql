@@ -1,3 +1,30 @@
+-- ANSWERED 2026-09-29. DO NOT RUN STEP 3.
+--
+-- Step 1 asks where the missing $78,842 sits. It sits on line 17.00, CO-02
+-- "Construction Delay Cost", together with the other $631,140.81 of that change
+-- order. CO-02 is the one change order on this contract the owner's SOV does
+-- not carry as its own line: it was spread across the nine work lines it
+-- delayed, and the executed G703 shows those raised values with no CO-02 row.
+--
+-- So this is step 1's second branch, not its first. The SOV total already
+-- balances - $3,787,185.94 against a contract of $3,787,185.91 - which means
+-- $78,841.68 is NOT missing from the sheet and setting 6.03 alone would push
+-- the SOV $78,841.68 over the contract.
+--
+-- The spread is now recorded in billing_line_amendments, which is what the
+-- schema has for a change order that raises scope the SOV already carries
+-- (see 0054). 6.03 reads $203,835.79 of scope with scheduled_value left at the
+-- contract figure, and every other line CO-02 touched reconciles to the
+-- executed G703 the same way. scripts/sov-amendments/apply-co02-allocations.ts
+-- wrote them; scripts/pay-app/replay-afp.ts proves AFP 9 through 12 still
+-- rebuild to the penny.
+--
+-- Running step 3 on top of that allocation makes 6.03 read $282,671.58.
+--
+-- Steps 1 and 2 are still worth reading. They are read only.
+--
+-- ---------------------------------------------------------------------------
+
 -- 6.03 Fencing/SWPPP is $203,835.79, not what the SOV says.
 --
 -- Zarina, on the gap between the SOV and the cash-flow spreadsheet:

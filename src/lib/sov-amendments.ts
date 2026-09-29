@@ -419,3 +419,39 @@ export function effectiveLineProgress(
   });
   return out;
 }
+
+/**
+ * Current scope per line id, keyed the way the billing queries already select.
+ *
+ * A contract line's scope is its own scheduled value plus what change orders
+ * added to it, less anything spread out to other lines. Percent complete,
+ * remaining-to-bill and every suggested billing amount belong against this.
+ * `billing_lines.scheduled_value` is the pre-change-order figure and
+ * `v_billing_line_totals.remaining_to_bill` is computed from it, so both
+ * understate a line a change order raised - on Sweet Springs that is
+ * Fencing/SWPPP reading $125,000 when the executed contract says $203,835.79.
+ */
+export function scopeByLine(
+  lines: {
+    id: string;
+    item_number: string;
+    description: string;
+    scheduled_value: number | null;
+    change_order_id?: string | null;
+  }[],
+  amendments: AmendmentRow[],
+): Map<string, number> {
+  const rollups = effectiveLineProgress(
+    lines.map((l) => ({
+      id: l.id,
+      itemNumber: l.item_number,
+      description: l.description,
+      scheduledValue: Number(l.scheduled_value ?? 0),
+      changeOrderId: l.change_order_id ?? null,
+    })),
+    amendments,
+  );
+  const out = new Map<string, number>();
+  rollups.forEach((r, id) => out.set(id, r.scope));
+  return out;
+}
