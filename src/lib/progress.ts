@@ -261,6 +261,8 @@ export type ProcurementMilestone = {
 };
 
 export type LinkedPo = {
+  /** So evidence can be filtered to the POs a typed figure is actually for. */
+  id?: string | null;
   po_number?: string | null;
   vendor_name?: string | null;
   total_value?: number | null;
@@ -452,36 +454,78 @@ export function milestoneTriggered(
  * A PO with no milestones recorded contributes nothing and says so, rather than
  * silently falling back to its full value.
  */
+/**
+ * One payment milestone on one PO, as evidence.
+ *
+ * Zarina, on SOV 5.05: "The 5.05 right now is confusing. it should be
+ * referencing one PO."
+ *
+ * The detail used to be a sentence per milestone, `"PO-017 Deposit: EARNED
+ * $23,982.50 (already paid)"`, which the panel then split on ": " and put
+ * through a regex that strips the first word. That regex was written for WBS
+ * codes, where the leading job number is the same on every row. On a PO it
+ * removes the PO number, which is the one thing identifying the row - and on a
+ * PO with no po_number it removed the vendor name instead, leaving rows
+ * reading just "Deposit" with no source at all.
+ *
+ * Structured, so nothing has to be parsed back out of a sentence.
+ */
+export type ProcurementMilestoneEvidence = {
+  /** The PO's id, for filtering to what a typed figure covers. */
+  poId: string | null;
+  /** PO number, or the vendor when a PO has no number. */
+  poLabel: string;
+  /** Empty on the "no milestones recorded" row, which is about the PO. */
+  milestoneName: string;
+  amount: number;
+  earned: boolean;
+  why: string;
+};
+
 export function estimateProcurementProgress(
   line: { scheduled_value?: number | null },
   linkedPos: LinkedPo[],
-): ProgressEstimate & { earnedValue: number; detail: string[] } {
+): ProgressEstimate & {
+  earnedValue: number;
+  detail: string[];
+  milestoneDetail: ProcurementMilestoneEvidence[];
+} {
   const scheduledValue = Number(line.scheduled_value ?? 0);
   const live = linkedPos.filter((p) => p.status !== "cancelled");
 
   if (live.length === 0) {
     return {
-      pct: 0, confidence: "high", source: "no_signal", earnedValue: 0, detail: [],
+      pct: 0, confidence: "high", source: "no_signal", earnedValue: 0, detail: [], milestoneDetail: [],
       reason: "No procurement order linked - link and sign a PO to bill this scope",
     };
   }
   if (scheduledValue <= 0) {
     return {
-      pct: 0, confidence: "low", source: "no_signal", earnedValue: 0, detail: [],
+      pct: 0, confidence: "low", source: "no_signal", earnedValue: 0, detail: [], milestoneDetail: [],
       reason: "Billing line has no scheduled value",
     };
   }
 
   let earned = 0;
   const detail: string[] = [];
+  const milestoneDetail: ProcurementMilestoneEvidence[] = [];
   let missingTerms = 0;
 
   for (const po of live) {
     const label = po.po_number ?? po.vendor_name ?? "PO";
+    const poId = po.id ?? null;
     const ms = po.milestones ?? [];
     if (ms.length === 0) {
       missingTerms++;
       detail.push(`${label}: no payment milestones recorded - contributes $0`);
+      milestoneDetail.push({
+        poId,
+        poLabel: label,
+        milestoneName: "",
+        amount: 0,
+        earned: false,
+        why: "no payment milestones recorded",
+      });
       continue;
     }
     for (const m of ms) {
@@ -494,12 +538,20 @@ export function estimateProcurementProgress(
       detail.push(
         `${label} ${m.milestone_name ?? "milestone"}: ${fired ? "EARNED" : "not earned"} ${formatCurrency(amount)} (${why})`,
       );
+      milestoneDetail.push({
+        poId,
+        poLabel: label,
+        milestoneName: m.milestone_name ?? "milestone",
+        amount,
+        earned: fired,
+        why,
+      });
     }
   }
 
   if (earned <= 0) {
     return {
-      pct: 0, confidence: "high", source: "no_signal", earnedValue: 0, detail,
+      pct: 0, confidence: "high", source: "no_signal", earnedValue: 0, detail, milestoneDetail,
       reason:
         missingTerms === live.length
           ? `${live.length} PO(s) linked but none has payment milestones recorded - add the payment terms to bill this scope`
@@ -514,6 +566,7 @@ export function estimateProcurementProgress(
     source: "pct_complete",
     earnedValue: earned,
     detail,
+    milestoneDetail,
     reason: `${formatCurrency(earned)} of triggered payment milestones against scope ${formatCurrency(scheduledValue)} = ${Math.round(pct * 100)}%`,
   };
 }

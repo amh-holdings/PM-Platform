@@ -90,6 +90,32 @@ export function BillThisPeriodClient({
   const [showUnsupported, setShowUnsupported] = useState(false);
   const visibleRows = showUnsupported ? [...proposing, ...unsupported] : proposing;
 
+  /**
+   * The evidence a row should actually show.
+   *
+   * Zarina, on SOV 5.05: "The 5.05 right now is confusing. it should be
+   * referencing one PO." Five POs are linked to that line, the typed figure
+   * was against one of them, and the panel listed ten milestones from all
+   * five - including a PO with no milestones at all, contributing nothing.
+   *
+   * When a figure is typed against specific POs, only those POs' milestones
+   * are what it is made of. The rest belong to the line, not to this number,
+   * and reading them here is how somebody talks themselves out of a figure
+   * that was right.
+   *
+   * Everything else is untouched: schedule rows, and a procurement row the app
+   * valued itself, still show all of it.
+   */
+  const evidenceFor = (r: BillableRow) => {
+    const all = r.evidence ?? [];
+    if (r.kind !== "forecast" || !r.typedPoIds?.length) return all;
+    const wanted = new Set(r.typedPoIds);
+    const mine = all.filter((e) => e.poId && wanted.has(e.poId));
+    // Never hide everything. If the ids do not line up the full list is a
+    // worse answer than an empty one is.
+    return mine.length > 0 ? mine : all;
+  };
+
   const [openEvidence, setOpenEvidence] = useState<Set<string>>(new Set());
   function toggleEvidence(key: string) {
     setOpenEvidence((prev) => {
@@ -415,11 +441,12 @@ export function BillThisPeriodClient({
                               const isProcurement = r.evidence.some(
                                 (e) => e.source === "payment milestone",
                               );
+                              const shown = evidenceFor(r);
                               const noun = isProcurement
-                                ? `payment milestone${r.evidence.length === 1 ? "" : "s"}`
-                                : `task${r.evidence.length === 1 ? "" : "s"}`;
+                                ? `payment milestone${shown.length === 1 ? "" : "s"}`
+                                : `task${shown.length === 1 ? "" : "s"}`;
                               const verb = openEvidence.has(r.key) ? "Hide" : "Show";
-                              return `${verb} the ${r.evidence.length} ${noun} behind this`;
+                              return `${verb} the ${shown.length} ${noun} behind this`;
                             })()}
                           </button>
                           {openEvidence.has(r.key) &&
@@ -436,7 +463,7 @@ export function BillThisPeriodClient({
                               return (
                             <table className="mt-1 w-full text-[10px]">
                               <tbody>
-                                {r.evidence!
+                                {evidenceFor(r)
                                   .slice()
                                   .sort((a, b) => b.pct * b.weight - a.pct * a.weight)
                                   .map((e) => (
@@ -447,14 +474,40 @@ export function BillThisPeriodClient({
                                       )}
                                     >
                                       <td className="pr-2 font-mono">
-                                        {/* The job number is the same on every
-                                            row and never the thing being read. */}
+                                        {/* On a schedule row the leading job
+                                            number is the same every time and
+                                            never the thing being read. On a
+                                            milestone row the leading token is
+                                            the PO, which is the only thing
+                                            identifying it, so it stays. */}
                                         {milestones
-                                          ? e.wbsCode.replace(/^\S*\s+/, "")
+                                          ? (e.poLabel ?? e.wbsCode)
                                           : e.wbsCode}
                                       </td>
                                       <td className="pr-2">
-                                        {e.taskName}
+                                        {milestones ? (
+                                          <>
+                                            <span className="font-medium">{e.taskName}</span>
+                                            <span
+                                              className={cn(
+                                                "ml-2",
+                                                e.pct > 0
+                                                  ? "text-emerald-700"
+                                                  : "text-muted-foreground",
+                                              )}
+                                            >
+                                              {e.pct > 0 ? "earned" : "not earned"}{" "}
+                                              {formatCurrency(Number(e.amount ?? 0))}
+                                            </span>
+                                            {e.note && (
+                                              <span className="ml-1 text-muted-foreground">
+                                                ({e.note})
+                                              </span>
+                                            )}
+                                          </>
+                                        ) : (
+                                          e.taskName
+                                        )}
                                         {/* Which scope claimed it, so the
                                             weight column can be read against
                                             the rule of credit above rather

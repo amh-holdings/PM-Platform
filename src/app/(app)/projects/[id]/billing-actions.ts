@@ -11,6 +11,7 @@ import {
   durationWeightedPct,
   type LinkedPo,
   type ProcurementMilestone,
+  type ProcurementMilestoneEvidence,
   type Confidence,
   type ProgressEstimate,
   resolveMilestoneTask,
@@ -168,6 +169,17 @@ export type BillingEvidenceItem = {
   taskName: string;
   /** Which scope of the rule of credit claimed this task, when there is one. */
   scope?: string | null;
+  /**
+   * On a payment-milestone row, the PO this belongs to. Its own field rather
+   * than packed into wbsCode: the panel used to split a sentence on ": " and
+   * strip the first word, which removed the PO number - the one thing
+   * identifying the row. Zarina, on 5.05: "it should be referencing one PO."
+   */
+  poId?: string | null;
+  poLabel?: string | null;
+  /** The milestone's dollars, and why it did or did not fire. */
+  amount?: number | null;
+  note?: string | null;
   pct: number;
   durationDays: number | null;
   /** Share of the SOV line this task carries, 0-1. */
@@ -329,6 +341,7 @@ export async function computeBillingSuggestions(
   const poById = new Map<string, LinkedPo>();
   for (const p of pos ?? []) {
     poById.set(p.id, {
+      id: p.id,
       po_number: p.po_number,
       vendor_name: p.vendor_name,
       total_value: p.total_value,
@@ -350,7 +363,7 @@ export async function computeBillingSuggestions(
     // estimate, used to weight the roll-up. See durationWeightedPct().
     let estimateWeights: Array<number | null> = [];
     let evidenceCodes: string[] = [];
-    let procurementDetail: string[] = [];
+    let milestoneDetail: ProcurementMilestoneEvidence[] = [];
     let resolvedDetail: string[] = [];
     let linkedCount = 0;
     // Carried out of the procurement branch because the "nothing to bill"
@@ -372,7 +385,7 @@ export async function computeBillingSuggestions(
       estimateRecords = [procEst];
       estimateWeights = [null]; // single estimate - weighting is a no-op
       evidenceCodes = [line.item_number];
-      procurementDetail = (procEst as { detail?: string[] }).detail ?? [];
+      milestoneDetail = procEst.milestoneDetail ?? [];
       linkedCount = linkedPos.length;
       linkedPoTotal = linkedPos
         .filter((p) => p.status !== "cancelled")
@@ -494,18 +507,22 @@ export async function computeBillingSuggestions(
       (s2: number, d) => s2 + (d != null && d > 0 ? d : fallbackDur),
       0,
     );
-    const evidence: BillingEvidenceItem[] = procurementDetail.length
-      ? procurementDetail.map((d) => {
-          const [who, rest] = d.split(": ");
-          return {
-            wbsCode: who,
-            taskName: rest ?? d,
-            pct: /EARNED/.test(d) ? 100 : 0,
-            durationDays: null,
-            weight: 0,
-            source: "payment milestone",
-          };
-        })
+    const evidence: BillingEvidenceItem[] = milestoneDetail.length
+      ? milestoneDetail.map((d) => ({
+          // wbsCode is the row key and the PO label is what identifies a
+          // milestone row, so they are the same thing here. poId is what lets
+          // the panel show only the POs a typed figure is actually for.
+          wbsCode: `${d.poLabel} ${d.milestoneName}`.trim(),
+          taskName: d.milestoneName || "no payment milestones recorded",
+          poId: d.poId,
+          poLabel: d.poLabel,
+          pct: d.earned ? 100 : 0,
+          durationDays: null,
+          weight: 0,
+          source: "payment milestone",
+          amount: d.amount,
+          note: d.why,
+        }))
       : estimateRecords.map((e, i) => {
       const d = estimateWeights[i];
       const w = d != null && d > 0 ? d : fallbackDur;
@@ -719,6 +736,15 @@ export type BillableRow =
        * still bills, it just cannot name what it is made of.
        */
       manualBreakdown?: string | null;
+      /**
+       * The POs the typed figure is actually for.
+       *
+       * 5.05 has five POs linked and the typed figure was against one of
+       * them, so the evidence panel was listing ten milestones from four POs
+       * the number has nothing to do with. Zarina: "The 5.05 right now is
+       * confusing. it should be referencing one PO."
+       */
+      typedPoIds?: string[];
       /** The scope split behind the recommendation. See BillingSuggestion. */
       ruleOfCredit?: BillingSuggestion["ruleOfCredit"];
     }
@@ -1082,6 +1108,7 @@ export async function getBillThisPeriodRows(
           (id) => poLabelById.get(id) ?? "a PO",
           formatCurrency,
         ),
+        typedPoIds: (contributionsByEntry.get(x.e.id) ?? []).map((c) => c.poId),
       } as BillableRow);
       continue;
     }
