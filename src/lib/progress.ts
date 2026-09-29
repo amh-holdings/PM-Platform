@@ -404,11 +404,37 @@ export function isRecognisedTrigger(trigger: string | null | undefined): boolean
 export function milestoneTriggered(
   m: ProcurementMilestone,
   po: LinkedPo,
+  /**
+   * The day the billing period closed. A milestone fires on this application
+   * only if the event that earns it had happened by then.
+   *
+   * Sweet Springs bills to the 20th. GroundWork's weather station was typed
+   * onto September's AFP on the 20th and delivered on the 24th, so "Net 30
+   * upon delivery" had not earned when the period closed, and Dimension asked
+   * why the line read 66%. Without this the app answers as of whenever someone
+   * happens to open the page, which drifts later every day and is never the
+   * question being asked.
+   *
+   * Omitted means no boundary, which is every caller that is asking about
+   * today rather than about a period.
+   */
+  asOf?: string | null,
 ): { fired: boolean; why: string } {
-  if (m.paid_at) return { fired: true, why: "already paid" };
+  // A date is only evidence if it had happened by the cutoff. An empty asOf
+  // lets everything through, which is the old behaviour exactly.
+  const by = (d: string | null | undefined): string | null => {
+    if (!d) return null;
+    const day = String(d).slice(0, 10);
+    if (asOf && day > String(asOf).slice(0, 10)) return null;
+    return day;
+  };
+  const paidAt = by(m.paid_at);
+  if (paidAt) return { fired: true, why: "already paid" };
   const t = (m.trigger_event ?? m.milestone_name ?? "").toLowerCase();
-  const signed = !!po.signed_at && po.status !== "cancelled";
-  const delivered = !!po.actual_delivery_date;
+  const signedAt = by(po.signed_at);
+  const deliveredAt = by(po.actual_delivery_date);
+  const signed = !!signedAt && po.status !== "cancelled";
+  const delivered = !!deliveredAt;
 
   if (/commission/.test(t)) {
     return { fired: false, why: "awaiting commissioning" };
@@ -420,9 +446,13 @@ export function milestoneTriggered(
   if (/engineer/.test(t)) return { fired: false, why: "awaiting engineering" };
   if (/progress/.test(t)) return { fired: false, why: "awaiting progress" };
   if (/deliver/.test(t)) {
-    return delivered
-      ? { fired: true, why: `delivered ${po.actual_delivery_date}` }
-      : { fired: false, why: "awaiting delivery to site" };
+    if (delivered) return { fired: true, why: `delivered ${deliveredAt}` };
+    return {
+      fired: false,
+      why: po.actual_delivery_date
+        ? `delivered ${String(po.actual_delivery_date).slice(0, 10)}, after this period closed`
+        : "awaiting delivery to site",
+    };
   }
   // "signed" is here because the form this replaced carried the placeholder
   // "PO signed / Delivered". It told people to type the one wording the
@@ -430,9 +460,13 @@ export function milestoneTriggered(
   // after deliver and commission, so "delivery signed off" still reads as a
   // delivery.
   if (/signed|po release|deposit|down|mob/.test(t)) {
-    return signed
-      ? { fired: true, why: `PO signed ${po.signed_at?.slice(0, 10)}` }
-      : { fired: false, why: "PO not signed" };
+    if (signed) return { fired: true, why: `PO signed ${signedAt}` };
+    return {
+      fired: false,
+      why: po.signed_at
+        ? `signed ${String(po.signed_at).slice(0, 10)}, after this period closed`
+        : "PO not signed",
+    };
   }
   return { fired: false, why: `trigger "${m.trigger_event ?? "unset"}" not recognised` };
 }
@@ -485,6 +519,8 @@ export type ProcurementMilestoneEvidence = {
 export function estimateProcurementProgress(
   line: { scheduled_value?: number | null },
   linkedPos: LinkedPo[],
+  /** The day the billing period closed. See milestoneTriggered. */
+  asOf?: string | null,
 ): ProgressEstimate & {
   earnedValue: number;
   detail: string[];
@@ -533,7 +569,7 @@ export function estimateProcurementProgress(
         Number(m.amount ?? 0) > 0
           ? Number(m.amount)
           : (Number(m.pct_of_total ?? 0) / 100) * Number(po.total_value ?? 0);
-      const { fired, why } = milestoneTriggered(m, po);
+      const { fired, why } = milestoneTriggered(m, po, asOf);
       if (fired) earned += amount;
       detail.push(
         `${label} ${m.milestone_name ?? "milestone"}: ${fired ? "EARNED" : "not earned"} ${formatCurrency(amount)} (${why})`,

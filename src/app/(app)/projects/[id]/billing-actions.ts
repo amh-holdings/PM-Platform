@@ -277,7 +277,21 @@ export async function computeBillingSuggestions(
   // would let date interpolation bill work that has not happened.
   const period = periodMonth ?? (await resolveBillingPeriod(auth.supabase, projectId));
   const nextMonthIso = period;
-  const todayIso = progressAsOf(period);
+  // The contract's billing cutoff, where there is one. Sweet Springs bills to
+  // the 20th, so evidence for September's application stops on the 20th
+  // however late in the month the page is opened. Read with "*" because
+  // billing_cutoff_day arrives in 0067 and a named select on a column the
+  // database does not have errors the whole request; absent reads as null,
+  // which is the calendar month end and the old behaviour.
+  const { data: projectRow } = await auth.supabase
+    .from("projects")
+    .select("*")
+    .eq("id", projectId)
+    .maybeSingle();
+  const cutoffDay =
+    (projectRow as { billing_cutoff_day?: number | null } | null)
+      ?.billing_cutoff_day ?? null;
+  const todayIso = progressAsOf(period, new Date(), cutoffDay);
 
   const [{ data: lines }, { data: tasks }, { data: totals }, { data: pos }] = await Promise.all([
     auth.supabase
@@ -375,6 +389,8 @@ export async function computeBillingSuggestions(
     const tally = new Map<string, { qty: number; last: string | null }>();
     for (const r of production ?? []) {
       if (!r.confirmed_at) continue;
+      // Production after the period closed belongs to the next application.
+      if (r.production_date > todayIso) continue;
       const cur = tally.get(r.commodity_id) ?? { qty: 0, last: null };
       cur.qty += Number(r.quantity ?? 0);
       if (!cur.last || r.production_date > cur.last) cur.last = r.production_date;
@@ -460,6 +476,7 @@ export async function computeBillingSuggestions(
       const procEst = estimateProcurementProgress(
         { scheduled_value: scheduledValue },
         linkedPos,
+        todayIso,
       );
       estimateRecords = [procEst];
       estimateWeights = [null]; // single estimate - weighting is a no-op
@@ -986,7 +1003,20 @@ export async function getBillThisPeriodRows(
   const period = periodMonth ?? (await resolveBillingPeriod(auth.supabase, projectId));
   const thisMonthIso = period;
   const nextMonthIsoLocal = period;
-  const todayIso = progressAsOf(period);
+  // Same cutoff as computeBillingSuggestions. Two functions measuring the same
+  // period as of two different dates is how the panel and the suggestion beside
+  // it end up disagreeing about the same line.
+  const { data: billProjectRow } = await auth.supabase
+    .from("projects")
+    .select("*")
+    .eq("id", projectId)
+    .maybeSingle();
+  const todayIso = progressAsOf(
+    period,
+    new Date(),
+    (billProjectRow as { billing_cutoff_day?: number | null } | null)
+      ?.billing_cutoff_day ?? null,
+  );
 
   // Pull forecast entries within the billing window only.
   //
@@ -1256,6 +1286,7 @@ export async function getBillThisPeriodRows(
       const est = estimateProcurementProgress(
         { scheduled_value: scheduledValue },
         linked,
+        todayIso,
       );
       const alreadyBilled = billedByLine.get(x.row.billingLineId) ?? 0;
       // manualAmount is null here by construction - a typed figure returned
