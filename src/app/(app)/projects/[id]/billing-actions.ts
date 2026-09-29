@@ -166,6 +166,8 @@ export type BillingSuggestion = {
 export type BillingEvidenceItem = {
   wbsCode: string;
   taskName: string;
+  /** Which scope of the rule of credit claimed this task, when there is one. */
+  scope?: string | null;
   pct: number;
   durationDays: number | null;
   /** Share of the SOV line this task carries, 0-1. */
@@ -508,13 +510,25 @@ export async function computeBillingSuggestions(
       const d = estimateWeights[i];
       const w = d != null && d > 0 ? d : fallbackDur;
       const code = evidenceCodes[i] ?? "";
+      // Under a rule of credit the weight is the task's share of the LINE,
+      // which is its scope's weight times its share within that scope. The
+      // duration share is the wrong number to print next to a percent the
+      // rule computed: on 6.03 it read the 4-day fencing task as 5.8% of the
+      // line when the rule makes it 70%, and 70% not started is the entire
+      // reason the line cannot earn.
+      const ruleWeight = ruleResult?.taskWeights.find((t) => t.wbsCode === code);
       return {
         wbsCode: code,
         taskName: taskNameByCode.get(code) ?? "",
         pct: Math.round(e.pct * 1000) / 10,
         durationDays: d ?? null,
-        weight: totalWeight > 0 ? w / totalWeight : 0,
+        weight: ruleWeight
+          ? ruleWeight.weight
+          : totalWeight > 0
+            ? w / totalWeight
+            : 0,
         source: e.source,
+        scope: ruleWeight?.component ?? null,
       };
     });
     const confidence: Confidence = aggregateConfidence(

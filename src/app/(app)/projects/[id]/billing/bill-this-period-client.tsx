@@ -453,7 +453,18 @@ export function BillThisPeriodClient({
                                           ? e.wbsCode.replace(/^\S*\s+/, "")
                                           : e.wbsCode}
                                       </td>
-                                      <td className="pr-2">{e.taskName}</td>
+                                      <td className="pr-2">
+                                        {e.taskName}
+                                        {/* Which scope claimed it, so the
+                                            weight column can be read against
+                                            the rule of credit above rather
+                                            than looking arbitrary. */}
+                                        {e.scope && (
+                                          <span className="ml-1 rounded bg-muted px-1 text-[9px] uppercase tracking-wide text-muted-foreground">
+                                            {e.scope}
+                                          </span>
+                                        )}
+                                      </td>
                                       {!milestones && (
                                         <>
                                       <td className="pr-2 text-right tabular-nums">
