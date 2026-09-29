@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import {
   addProjectEquipment,
+  retireProjectEquipment,
   type EquipmentCatalogEntry,
 } from "../../equipment-actions";
 import { BASEMAPS, type BasemapKey, type NormalizedPin } from "@/lib/inspection-map";
@@ -246,7 +247,9 @@ export function DprForm({
   // Catalog options held in state, not read straight from props, so a machine
   // added inline mid-report joins the dropdown without a page reload.
   const [catalog, setCatalog] = useState<EquipmentCatalogEntry[]>(equipmentCatalog);
-  const [addingEquipment, setAddingEquipment] = useState<string | null>(null);
+  // Row currently waiting on the catalog (adding or retiring). One at a time,
+  // so the row that fired it is the row that gets disabled.
+  const [equipmentBusyRow, setEquipmentBusyRow] = useState<string | null>(null);
   const [sheet, setSheet] = useState<BasemapKey>(
     (initialDraft?.sheet as BasemapKey) || "C2-01",
   );
@@ -429,6 +432,25 @@ export function DprForm({
   const subEquipment = catalog.filter(
     (c) => c.subcontractorId === reportSubId,
   );
+  // A row that already names a machine keeps showing it even when the catalog
+  // no longer carries it - retired by someone else, or a draft picked up after
+  // the machine left site. Dropping it silently would blank the row and lose
+  // what the foreman recorded.
+  function equipmentOptions(row: EquipmentRow): EquipmentCatalogEntry[] {
+    if (!row.equipmentId) return subEquipment;
+    if (subEquipment.some((c) => c.id === row.equipmentId)) return subEquipment;
+    return [
+      ...subEquipment,
+      {
+        id: row.equipmentId,
+        subcontractorId: reportSubId,
+        name: row.equipmentName || "(removed from list)",
+        category: null,
+        rentalCompany: row.rentalCompany || null,
+        onRent: row.onRent,
+      },
+    ];
+  }
   // The dropdown replaces the free-text field only when there is a catalog to
   // pick from AND a crew to scope it to. Otherwise the old text input stands,
   // so an unapplied migration or an unpicked sub never blocks a report.
@@ -443,13 +465,13 @@ export function DprForm({
     );
     const name = typed?.trim();
     if (!name) return;
-    setAddingEquipment(rowId);
+    setEquipmentBusyRow(rowId);
     const res = await addProjectEquipment({
       projectId,
       subcontractorId: reportSubId,
       name,
     });
-    setAddingEquipment(null);
+    setEquipmentBusyRow(null);
     if (!res.ok) {
       setError(res.error);
       return;
@@ -460,6 +482,37 @@ export function DprForm({
     patchEquipment(rowId, {
       equipmentId: res.entry.id,
       equipmentName: res.entry.name,
+    });
+  }
+
+  // Inline "remove": the machine left site, so take it off the crew's list.
+  // It is retired, not deleted - every report already filed points at this id
+  // and has to keep resolving - so the confirm says so plainly rather than
+  // promising a delete the app is not doing.
+  async function onRetireEquipment(rowId: string, entry: EquipmentCatalogEntry) {
+    const ok = window.confirm(
+      `Remove "${entry.name}" from your crew's equipment list?\n\n` +
+        "It stops showing up on new reports. Reports already filed keep it.",
+    );
+    if (!ok) return;
+    setEquipmentBusyRow(rowId);
+    const res = await retireProjectEquipment({
+      projectId,
+      equipmentId: entry.id,
+    });
+    setEquipmentBusyRow(null);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    setCatalog((prev) => prev.filter((c) => c.id !== entry.id));
+    // Clear it off this row too. The name it was copied into stays on any row
+    // that is already saved; this row is still being typed.
+    patchEquipment(rowId, {
+      equipmentId: "",
+      equipmentName: "",
+      rentalCompany: "",
+      onRent: false,
     });
   }
 
@@ -1510,13 +1563,20 @@ export function DprForm({
                 {useEquipmentPicker ? (
                   <select
                     value={e.equipmentId}
-                    disabled={addingEquipment === e.rowId}
+                    disabled={equipmentBusyRow === e.rowId}
                     onChange={(ev) => {
                       if (ev.target.value === "__add__") {
                         void onAddEquipment(e.rowId);
                         return;
                       }
-                      const picked = subEquipment.find(
+                      if (ev.target.value === "__retire__") {
+                        const selected = equipmentOptions(e).find(
+                          (c) => c.id === e.equipmentId,
+                        );
+                        if (selected) void onRetireEquipment(e.rowId, selected);
+                        return;
+                      }
+                      const picked = equipmentOptions(e).find(
                         (c) => c.id === ev.target.value,
                       );
                       patchEquipment(e.rowId, {
@@ -1532,12 +1592,17 @@ export function DprForm({
                     className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                   >
                     <option value="">- Select equipment -</option>
-                    {subEquipment.map((c) => (
+                    {equipmentOptions(e).map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
                       </option>
                     ))}
                     <option value="__add__">+ Add new equipment...</option>
+                    {e.equipmentId && (
+                      <option value="__retire__">
+                        - Remove from list (left site)
+                      </option>
+                    )}
                   </select>
                 ) : (
                   <Input
