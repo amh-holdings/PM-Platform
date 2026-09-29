@@ -46,6 +46,7 @@ import {
   forecastMilestoneDate,
   type PoForecastLine,
 } from "@/lib/po-payment-forecast";
+import { hasBillingEvidence } from "@/lib/billing-progress";
 import {
   aggregateConfidence,
   estimateTaskProgress,
@@ -122,7 +123,9 @@ export type ProjectionNote = {
     | "po_payment_from_schedule"
     | "owner_cash_from_payment"
     | "pipeline_co_cost"
-    | "sov_date_from_mapping";
+    | "sov_date_from_mapping"
+    // Imported cash-flow plan that the schedule now dates instead.
+    | "planned_billing_reforecast";
   ref: string;
   message: string;
 };
@@ -374,9 +377,35 @@ export async function buildProjection(
   const payAppById = new Map((payAppsRes.data ?? []).map((a) => [a.id, a]));
   const ownerMoves = new Map<string, { label: string; at: ReturnType<typeof ownerCashMonth> }>();
 
+  // A forecast entry with nothing behind it is the spreadsheet, not the job.
+  //
+  // Zarina: "Only forecast cashflow based on everything the app has been doing
+  // when it comes to billing, PO's, change orders, schedules."
+  //
+  // billing_entries holds two different things under one shape. Rows tied to a
+  // pay application, or carrying an AFP number, or past 'forecast' status, are
+  // money that was actually billed. The rest were loaded from the owner
+  // cash-flow spreadsheet and say what somebody PLANNED to bill in a month
+  // chosen before the work was scheduled - Sweet Springs still carries
+  // $160,381, $80,000 and $40,000 on 2026-06 for civil work that had not
+  // happened.
+  //
+  // Those are skipped here AND left out of billedByLine below, so the money is
+  // not lost: the schedule-driven pass picks up the line's whole unbilled
+  // remainder and dates it from the milestone task's planned finish. The total
+  // is identical. What changes is the month, which now moves when the schedule
+  // moves instead of sitting where a spreadsheet put it.
+  let plannedOnly = 0;
+  const plannedOnlyLines = new Set<string>();
   for (const e of entriesRes.data ?? []) {
     const gross = effectiveAmount(e.actual_amount, e.planned_amount);
     if (gross <= 0) continue;
+    if (!hasBillingEvidence(e)) {
+      plannedOnly += gross;
+      const id = (e as { billing_line_id?: string | null }).billing_line_id;
+      if (id) plannedOnlyLines.add(id);
+      continue;
+    }
     const accrualMonth = e.period_month;
 
     const payApp = e.pay_application_id ? payAppById.get(e.pay_application_id) : null;
@@ -465,10 +494,26 @@ export async function buildProjection(
   for (const e of entriesRes.data ?? []) {
     const id = (e as { billing_line_id?: string | null }).billing_line_id;
     if (!id) continue;
+    // Same rule as the loop above, and it has to be: counting a planned-only
+    // entry as billed here would shrink the remainder the schedule pass
+    // forecasts, and the money would vanish from the curve entirely rather
+    // than move to its scheduled month.
+    if (!hasBillingEvidence(e)) continue;
     billedByLine.set(
       id,
       (billedByLine.get(id) ?? 0) + effectiveAmount(e.actual_amount, e.planned_amount),
     );
+  }
+
+  // Said out loud. A curve that quietly re-dates a quarter of a million
+  // dollars is one nobody can reconcile against the spreadsheet they still
+  // have open.
+  if (plannedOnly > 0.005) {
+    notes.push({
+      kind: "planned_billing_reforecast",
+      ref: `${plannedOnlyLines.size} SOV line${plannedOnlyLines.size === 1 ? "" : "s"}`,
+      message: `$${Math.round(plannedOnly).toLocaleString()} of imported cash-flow plan is not in the curve at the month the spreadsheet put it. Those lines are forecast from the schedule instead, on the planned finish of the work they are linked to.`,
+    });
   }
 
   let forecastRetainage = 0;

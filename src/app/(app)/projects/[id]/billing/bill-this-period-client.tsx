@@ -8,6 +8,7 @@ import { MoneyInput } from "@/components/ui/money-input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { describeTypedVsEvidence } from "@/lib/afp-po-staging";
+import { evidenceBackedAmount, planVsEvidenceGap } from "@/lib/billing-progress";
 import { formatCurrency } from "@/lib/format";
 import { shortMonthLabel } from "@/lib/cashflow";
 
@@ -56,20 +57,23 @@ export function BillThisPeriodClient({
       .map((r) => r.key),
   );
   const [selected, setSelected] = useState<Set<string>>(initialSelected);
-  // The recommendation wins by default. r.amount on a forecast row is the
-  // imported cash-flow plan; recommendedAmount is what the approved field
-  // reports and the schedule support. Defaulting to the plan meant Create AFP
-  // was pre-loaded with a number nobody had verified.
+  // The evidence decides, and when there is none the box reads zero.
+  //
+  // r.amount on a forecast row is the figure imported from the owner
+  // cash-flow spreadsheet. It used to be the fallback whenever the evidence
+  // produced nothing, which is how 6.03 arrived ticked at $61,150.73 with
+  // nothing behind it. See evidenceBackedAmount.
   const [amounts, setAmounts] = useState<Record<string, number>>(
-    Object.fromEntries(
-      rows.map((r) => [
-        r.key,
-        r.kind === "forecast" && r.recommendedAmount != null
-          ? r.recommendedAmount
-          : r.amount,
-      ]),
-    ),
+    Object.fromEntries(rows.map((r) => [r.key, evidenceBackedAmount(r)])),
   );
+  /**
+   * What this row is currently billing, typed or defaulted.
+   *
+   * The fallback is the evidence rule, never `r.amount`. A bare `?? r.amount`
+   * put the imported cash-flow plan back on any row whose key was missing,
+   * which is the same failure one layer down.
+   */
+  const amountFor = (r: BillableRow) => amounts[r.key] ?? evidenceBackedAmount(r);
   // A row proposing nothing is not a projection for this period. It is a note
   // about why a line cannot bill yet, and it belongs behind a disclosure -
   // nine SOV lines with one real number and eight zeroes reads as "everything
@@ -79,9 +83,7 @@ export function BillThisPeriodClient({
   // line is linked to a summary row. Dropping it silently is how it stays
   // broken until somebody reconciles the AFP.
   const isProposing = (r: BillableRow) =>
-    r.kind === "suggestion"
-      ? r.amount > 0
-      : !r.blockedReason && (r.recommendedAmount ?? r.amount) > 0;
+    !r.blockedReason && evidenceBackedAmount(r) > 0;
 
   const proposing = rows.filter(isProposing);
   const unsupported = rows.filter((r) => !isProposing(r));
@@ -116,7 +118,9 @@ export function BillThisPeriodClient({
     for (const r of rows) {
       if (selected.has(r.key)) {
         c++;
-        g += Number(amounts[r.key] ?? r.amount);
+        // Inlined rather than calling amountFor, so this memo depends on the
+        // state it reads and nothing else. Same rule, same fallback.
+        g += Number(amounts[r.key] ?? evidenceBackedAmount(r));
       }
     }
     return { count: c, gross: g };
@@ -169,7 +173,7 @@ export function BillThisPeriodClient({
                 <input
                   type="hidden"
                   name="forecastAmounts"
-                  value={amounts[r.key] ?? r.amount}
+                  value={amountFor(r)}
                 />
               </div>
             ) : (
@@ -182,7 +186,7 @@ export function BillThisPeriodClient({
                 <input
                   type="hidden"
                   name="suggestionAmounts"
-                  value={amounts[r.key] ?? r.amount}
+                  value={amountFor(r)}
                 />
                 <input
                   type="hidden"
@@ -340,13 +344,19 @@ export function BillThisPeriodClient({
                           ⚠ {r.blockedReason}
                         </div>
                       )}
+                      {/* The imported plan, as a comparison and never as the
+                          number in the box. It shows on every forecast row
+                          now, not only the ones the evidence matched: a row
+                          with no recommendation is exactly where the plan used
+                          to be presented as the answer. */}
                       {r.kind === "forecast" &&
-                        r.recommendedAmount != null &&
+                        !typedFromPo &&
+                        r.amount > 0 &&
                         (() => {
-                          const rec = r.recommendedAmount ?? 0;
-                          const fcst = r.amount;
-                          const ratio = rec > 0 ? fcst / rec : Infinity;
-                          const bigMismatch = ratio >= 1.5 || ratio <= 0.5;
+                          const bigMismatch = planVsEvidenceGap({
+                            planned: r.amount,
+                            evidence: amountFor(r),
+                          });
                           return (
                             <div className="mt-0.5 text-[10px] text-muted-foreground">
                               <span
@@ -355,10 +365,11 @@ export function BillThisPeriodClient({
                                 )}
                               >
                                 {bigMismatch && "⚠ "}
-                                Cash-flow forecast was {formatCurrency(fcst)}
+                                Cash-flow forecast was {formatCurrency(r.amount)}
                               </span>
-                              {" - "}
-                              {r.scheduleConfidence} confidence
+                              {r.scheduleConfidence
+                                ? ` - ${r.scheduleConfidence} confidence`
+                                : ", not used - the box is what the evidence supports"}
                             </div>
                           );
                         })()}
@@ -480,7 +491,7 @@ export function BillThisPeriodClient({
                     </td>
                     <td className="py-1.5 pr-2 text-right">
                       <MoneyInput
-                        value={amounts[r.key] ?? r.amount}
+                        value={amountFor(r)}
                         onValueChange={(v) =>
                           setAmounts((prev) => ({ ...prev, [r.key]: v ?? 0 }))
                         }
