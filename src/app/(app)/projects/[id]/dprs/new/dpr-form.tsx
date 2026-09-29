@@ -12,6 +12,7 @@ import {
   retireProjectEquipment,
   type EquipmentCatalogEntry,
 } from "../../equipment-actions";
+import { EquipmentCombobox } from "./equipment-combobox";
 import { BASEMAPS, type BasemapKey, type NormalizedPin } from "@/lib/inspection-map";
 import { submitDpr } from "../../dpr-actions";
 import {
@@ -462,11 +463,8 @@ export function DprForm({
 
   // Inline "add new": a foreman who turns up with an unlisted machine names it
   // once, and it is both saved to their crew's list and selected on this row.
-  async function onAddEquipment(rowId: string) {
-    const typed = window.prompt(
-      "Add equipment to your crew's list (e.g. 40-ton crane)",
-    );
-    const name = typed?.trim();
+  async function onAddEquipment(rowId: string, typed: string) {
+    const name = typed.trim();
     if (!name) return;
     setEquipmentBusyRow(rowId);
     const res = await addProjectEquipment({
@@ -509,14 +507,16 @@ export function DprForm({
       return;
     }
     setCatalog((prev) => prev.filter((c) => c.id !== entry.id));
-    // Clear it off this row too. The name it was copied into stays on any row
-    // that is already saved; this row is still being typed.
-    patchEquipment(rowId, {
-      equipmentId: "",
-      equipmentName: "",
-      rentalCompany: "",
-      onRent: false,
-    });
+    // Only the row that was actually pointing at it gets cleared. The X now
+    // removes any line in the list, not just the selected one, so blanking the
+    // row unconditionally would wipe a pick the foreman had already made.
+    setEquipment((prev) =>
+      prev.map((r) =>
+        r.equipmentId === entry.id
+          ? { ...r, equipmentId: "", equipmentName: "", rentalCompany: "", onRent: false }
+          : r,
+      ),
+    );
   }
 
   function patchEquipment(rowId: string, patch: Partial<EquipmentRow>) {
@@ -1549,24 +1549,12 @@ export function DprForm({
                 )}
               >
                 {useEquipmentPicker ? (
-                  <select
+                  <EquipmentCombobox
                     value={e.equipmentId}
-                    disabled={equipmentBusyRow === e.rowId}
-                    onChange={(ev) => {
-                      if (ev.target.value === "__add__") {
-                        void onAddEquipment(e.rowId);
-                        return;
-                      }
-                      if (ev.target.value === "__retire__") {
-                        const selected = equipmentOptions(e).find(
-                          (c) => c.id === e.equipmentId,
-                        );
-                        if (selected) void onRetireEquipment(e.rowId, selected);
-                        return;
-                      }
-                      const picked = equipmentOptions(e).find(
-                        (c) => c.id === ev.target.value,
-                      );
+                    valueName={e.equipmentName}
+                    options={equipmentOptions(e)}
+                    busy={equipmentBusyRow === e.rowId}
+                    onPick={(picked) =>
                       patchEquipment(e.rowId, {
                         equipmentId: picked?.id ?? "",
                         // Copied, not referenced: this is what the filed report
@@ -1575,23 +1563,11 @@ export function DprForm({
                         equipmentName: picked?.name ?? "",
                         rentalCompany: picked?.rentalCompany ?? "",
                         onRent: picked?.onRent ?? false,
-                      });
-                    }}
-                    className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-                  >
-                    <option value="">- Select equipment -</option>
-                    {equipmentOptions(e).map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                    <option value="__add__">+ Add new equipment...</option>
-                    {e.equipmentId && (
-                      <option value="__retire__">
-                        - Remove from list (left site)
-                      </option>
-                    )}
-                  </select>
+                      })
+                    }
+                    onAdd={(name) => void onAddEquipment(e.rowId, name)}
+                    onRemove={(entry) => void onRetireEquipment(e.rowId, entry)}
+                  />
                 ) : (
                   <Input
                     value={e.equipmentName}
