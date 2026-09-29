@@ -11,9 +11,13 @@
  * the commodity tracker's own confirmed production. That is the point - a
  * figure we can show the working for is the only kind worth arguing about.
  *
+ * Evidence stops at the project's billing cutoff, so running this on the 29th
+ * answers the same question it would have answered on the 20th. Sweet Springs
+ * bills to the 20th; see db/migrations/0067.
+ *
  * Read only.
  *
- * Run: npx tsx scripts/pay-app/afp13-positions.ts
+ * Run: npx tsx scripts/pay-app/afp13-positions.ts [2026-09-01]
  */
 import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
@@ -21,6 +25,7 @@ import { createClient } from "@supabase/supabase-js";
 import { applyRuleOfCredit, parseRuleOfCredit } from "@/lib/rule-of-credit";
 import { estimateProcurementProgress } from "@/lib/progress";
 import { scopeByLine } from "@/lib/sov-amendments";
+import { progressAsOf } from "@/lib/billing-period";
 
 const PID = "53cff193-21e4-45ff-833d-43813e8578a0";
 const raw = readFileSync(".env.local", "utf8");
@@ -39,6 +44,20 @@ const usd = (n: number) =>
 const pc = (n: number) => `${(n * 100).toFixed(2)}%`;
 
 async function main() {
+  // Sweet Springs bills to the 20th. Evidence stops there however late in the
+  // month this is run, or the figures quietly include the next application's
+  // work. See db/migrations/0067.
+  const { data: project } = await sb.from("projects").select("*").eq("id", PID).maybeSingle();
+  const cutoffDay =
+    (project as { billing_cutoff_day?: number | null } | null)?.billing_cutoff_day ?? null;
+  const PERIOD = process.argv[2] ?? "2026-09-01";
+  const asOf = progressAsOf(PERIOD, new Date(), cutoffDay);
+  console.log(
+    `Period ${PERIOD}  |  evidence as of ${asOf}` +
+      (cutoffDay ? `  (cutoff day ${cutoffDay})` : "  (no cutoff set - month end)") +
+      "\n",
+  );
+
   const { data: lines } = await sb.from("billing_lines").select("*").eq("project_id", PID);
   const { data: amendments } = await sb
     .from("billing_line_amendments")
@@ -102,6 +121,7 @@ async function main() {
   const byC = new Map<string, { qty: number; last: string }>();
   for (const p of prod ?? []) {
     if (!p.confirmed_at) continue;
+    if (p.production_date > asOf) continue;
     const b = byC.get(p.commodity_id) ?? { qty: 0, last: "" };
     b.qty += Number(p.quantity ?? 0);
     if (p.production_date > b.last) b.last = p.production_date;
@@ -146,7 +166,7 @@ async function main() {
   for (const p of linked) {
     console.log(`  ${String(p.po_number).padEnd(20)} ${String(p.vendor_name).slice(0, 24).padEnd(24)} ${usd(Number(p.total_value)).padStart(13)}  signed ${p.signed_at?.slice(0, 10) ?? "-"}  delivered ${p.actual_delivery_date?.slice(0, 10) ?? "-"}  ${(p.milestones ?? []).length} milestone(s)`);
   }
-  const est = estimateProcurementProgress({ scheduled_value: sc505 }, linked as never);
+  const est = estimateProcurementProgress({ scheduled_value: sc505 }, linked as never, asOf);
   console.log(`\n  earned by milestone: ${usd(est.earnedValue)}  = ${pc(est.earnedValue / sc505)} of the line`);
   for (const d of est.detail ?? []) console.log(`    ${d}`);
   console.log(`  this period = earned - billed = ${usd(est.earnedValue - b505)}`);
