@@ -363,3 +363,59 @@ export function unsupportedForecastReason(input: {
   const head = trimmed.endsWith(".") ? trimmed : `${trimmed}.`;
   return `${head} The ${formatCurrency(forecastAmount)} in the box is the imported cash-flow forecast, not what the evidence supports.`;
 }
+
+/**
+ * What belongs in the amount box on the Bill this period panel.
+ *
+ * Zarina: "Make sure it is based on field evidence. Only forecast cashflow
+ * based on everything the app has been doing when it comes to billing, PO's,
+ * change orders, schedules."
+ *
+ * A forecast row's own `amount` is the figure somebody typed into the owner
+ * cash-flow spreadsheet months ago. It was the fallback whenever the evidence
+ * produced nothing, which is how 6.03 arrived ticked at $61,150.73 with
+ * nothing behind it. That number is exactly 30% of the line, the same figure
+ * as the SWPPP weight, so it read as though the rule of credit had computed
+ * it. It had not. Nothing had.
+ *
+ * So the plan never reaches the box. Either the evidence supports a number or
+ * the number is zero, and the plan is shown beside it as a comparison. Three
+ * sources count as evidence:
+ *
+ *   a schedule and field-report recommendation   recommendedAmount
+ *   PO payment milestones                        recommendedAmount
+ *   a figure typed against a PO this period      amount, typedFromPo
+ *
+ * The third is evidence because a person put their name to it against a
+ * specific purchase order. The imported spreadsheet is not, and neither is
+ * anybody's memory of what was meant to be billed in September.
+ */
+export function evidenceBackedAmount(row: {
+  kind: "forecast" | "suggestion";
+  amount: number;
+  recommendedAmount?: number | null;
+  typedFromPo?: boolean;
+}): number {
+  // A suggestion only exists because the evidence produced it.
+  if (row.kind === "suggestion") return row.amount;
+  if (row.recommendedAmount != null) return row.recommendedAmount;
+  if (row.typedFromPo) return row.amount;
+  return 0;
+}
+
+/**
+ * Whether the plan and the evidence disagree enough to say so out loud.
+ *
+ * Half or double is the threshold the panel already used for a matched row.
+ * It applies to an unmatched one too, where the gap is the whole figure.
+ */
+export function planVsEvidenceGap(input: {
+  planned: number;
+  evidence: number;
+}): boolean {
+  const { planned, evidence } = input;
+  if (planned <= 0) return false;
+  if (evidence <= 0) return true;
+  const ratio = planned / evidence;
+  return ratio >= 1.5 || ratio <= 0.5;
+}

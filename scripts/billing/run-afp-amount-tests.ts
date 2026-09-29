@@ -14,6 +14,8 @@ import {
   resolveProcurementAmount,
   typedAmount,
   unsupportedForecastReason,
+  evidenceBackedAmount,
+  planVsEvidenceGap,
 } from "../../src/lib/billing-progress";
 import {
   applyPoContribution,
@@ -832,6 +834,74 @@ eq(
   unsupportedForecastReason({ reason: "Nothing earned yet.", forecastAmount: 0 }),
   "Nothing earned yet. The $0.00 in the box is the imported cash-flow forecast, not what the evidence supports.",
 );
+
+// ---------------------------------------------------------------------------
+// What goes in the amount box.
+//
+// Zarina: "Make sure it is based on field evidence. Only forecast cashflow
+// based on everything the app has been doing when it comes to billing, PO's,
+// change orders, schedules."
+//
+// The figures are 6.03's: a $203,835.79 line whose imported plan for September
+// is $61,150.73, which is exactly 30% of the line and therefore reads like the
+// SWPPP weight computed it. Nothing computed it.
+// ---------------------------------------------------------------------------
+
+console.log("\nThe amount box is evidence or zero\n");
+
+eq(
+  "a forecast with no evidence bills nothing, not the imported plan",
+  evidenceBackedAmount({ kind: "forecast", amount: 61150.73 }),
+  0,
+);
+eq(
+  "a forecast the evidence priced uses the evidence",
+  evidenceBackedAmount({ kind: "forecast", amount: 61150.73, recommendedAmount: 33021.4 }),
+  33021.4,
+);
+// Zero is a real recommendation: the evidence looked and found nothing new.
+// It must not fall through to the plan.
+eq(
+  "a recommendation of zero stays zero",
+  evidenceBackedAmount({ kind: "forecast", amount: 61150.73, recommendedAmount: 0 }),
+  0,
+);
+// Somebody put their name to this against a specific PO this period. That is
+// evidence; the spreadsheet is not.
+eq(
+  "a figure typed against a PO stands",
+  evidenceBackedAmount({ kind: "forecast", amount: 23982.5, typedFromPo: true }),
+  23982.5,
+);
+eq(
+  "and a recommendation still wins over a typed PO figure when both exist",
+  evidenceBackedAmount({
+    kind: "forecast",
+    amount: 23982.5,
+    typedFromPo: true,
+    recommendedAmount: 8095.95,
+  }),
+  8095.95,
+);
+// A suggestion only exists because the evidence produced it.
+eq(
+  "a suggestion is its own amount",
+  evidenceBackedAmount({ kind: "suggestion", amount: 106416.26 }),
+  106416.26,
+);
+
+console.log("\nWhen the plan and the evidence disagree\n");
+
+eq(
+  "a plan with no evidence behind it is always flagged",
+  planVsEvidenceGap({ planned: 61150.73, evidence: 0 }),
+  true,
+);
+eq("double is flagged", planVsEvidenceGap({ planned: 200, evidence: 100 }), true);
+eq("half is flagged", planVsEvidenceGap({ planned: 50, evidence: 100 }), true);
+eq("close enough is not", planVsEvidenceGap({ planned: 110, evidence: 100 }), false);
+// No plan is not a disagreement, it is silence.
+eq("no plan is not a gap", planVsEvidenceGap({ planned: 0, evidence: 100 }), false);
 
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);
