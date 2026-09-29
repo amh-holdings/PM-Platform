@@ -24,6 +24,7 @@ import {
   needsADecision,
   resolveProcurementAmount,
   typedAmount,
+  unsupportedForecastReason,
 } from "@/lib/billing-progress";
 import { progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
@@ -226,6 +227,9 @@ export type NotBillableLine = {
   procurement: boolean;
   /** Total value of the POs linked to the line, when it is a procurement one. */
   linkedPoTotal: number | null;
+  /** The scope split behind `earned`, when the line carries a rule of credit. */
+  ruleOfCredit?: BillingSuggestion["ruleOfCredit"];
+  confidence?: Confidence;
 };
 
 export async function computeBillingSuggestions(
@@ -545,6 +549,21 @@ export async function computeBillingSuggestions(
           evidence,
           procurement,
           linkedPoTotal: procurement ? linkedPoTotal : null,
+          ruleOfCredit:
+            rule && ruleResult
+              ? {
+                  label: describeRuleOfCredit(rule),
+                  note: rule.note ?? null,
+                  components: ruleResult.components.map((c) => ({
+                    name: c.name,
+                    weightPct: c.weightPct,
+                    pct: Math.round(c.pct * 1000) / 10,
+                    taskCount: c.tasks.length,
+                  })),
+                  emptyComponents: ruleResult.emptyComponents,
+                }
+              : undefined,
+          confidence,
         });
       }
       continue;
@@ -1152,6 +1171,25 @@ export async function getBillThisPeriodRows(
   const suggestionByLineId = new Map(
     suggestions.map((s) => [s.billingLineId, s]),
   );
+  /**
+   * The lines the evidence cannot support, by id.
+   *
+   * A line with nothing new to bill produces no suggestion, so a forecast row
+   * for it matched nothing and kept the figure imported from the cash-flow
+   * spreadsheet, labelled "Forecast", checked, with no reason anywhere on it.
+   * Zarina, on 6.03: "The 6.03 still shows previous forecast."
+   *
+   * She is reading the row correctly and the row is lying by omission. The
+   * panel's own heading says anything the evidence does not support arrives
+   * unchecked with the reason; this arrived checked at $61,150.73 on a line
+   * Dimension had already rejected once over how it is measured. The
+   * explanation existed the whole time and was thrown away one step later,
+   * because a line billable through its forecast row is excluded from the
+   * "nothing to bill" list.
+   */
+  const notBillableByLineId = new Map(
+    (suggResult.ok ? suggResult.notBillable : []).map((n) => [n.billingLineId, n]),
+  );
   // Track which suggestions get consumed by a forecast match so we don't
   // double-render.
   const consumedLineIds = new Set<string>();
@@ -1163,7 +1201,29 @@ export async function getBillThisPeriodRows(
     if (r.kind !== "forecast") return r;
     if (r.periodMonth !== nextMonthIso) return r;
     const match = suggestionByLineId.get(r.billingLineId);
-    if (!match) return r;
+    if (!match) {
+      // No suggestion, but there may be a reason. Attach it, so the row says
+      // what the evidence supports instead of presenting a spreadsheet figure
+      // as though nothing were wrong with it. A typed PO figure keeps its own
+      // treatment: somebody stood behind that number this morning.
+      const why = notBillableByLineId.get(r.billingLineId);
+      if (!why || r.typedFromPo) return r;
+      return {
+        ...r,
+        evidence: why.evidence,
+        ruleOfCredit: why.ruleOfCredit,
+        scheduleSuggestedAmount: 0,
+        scheduleConfidence: why.confidence,
+        // Not "blocked" in the sense of broken. The amount stays editable,
+        // because the netting cannot tell whether the earlier AFPs covered
+        // this scope and a person can. What changes is that the row arrives
+        // unchecked and says the figure in the box is the old forecast.
+        blockedReason: unsupportedForecastReason({
+          reason: why.reason,
+          forecastAmount: r.amount,
+        }),
+      };
+    }
     consumedLineIds.add(r.billingLineId);
     // A TYPED FIGURE IS NOT A RECOMMENDATION TO BE OVERRIDDEN.
     //
