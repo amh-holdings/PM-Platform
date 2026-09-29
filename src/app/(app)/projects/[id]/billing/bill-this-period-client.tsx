@@ -362,6 +362,32 @@ export function BillThisPeriodClient({
                             </div>
                           );
                         })()}
+                      {/* The scope split behind the number, on the row
+                          rather than folded into the evidence table. On a line
+                          that bundles two scopes the split IS the reason, and
+                          it is the sentence that goes back to Dimension.
+                          Zarina: "Recommended rules of credit: SWPPP at 30%,
+                          rest is fence." */}
+                      {r.ruleOfCredit && (
+                        <div className="mt-0.5 text-[10px] text-muted-foreground">
+                          Rule of credit:{" "}
+                          {r.ruleOfCredit.components.map((c, i) => (
+                            <span key={c.name}>
+                              {i > 0 && ", "}
+                              <span className="font-medium text-foreground">
+                                {c.name}
+                              </span>{" "}
+                              {c.weightPct}% of the line, {c.pct}% done
+                            </span>
+                          ))}
+                          {r.ruleOfCredit.emptyComponents.length > 0 && (
+                            <span className="ml-1 font-medium text-amber-700">
+                              ⚠ {r.ruleOfCredit.emptyComponents.join(" and ")} matched no
+                              task, so it earns nothing
+                            </span>
+                          )}
+                        </div>
+                      )}
                       {r.evidence && r.evidence.length > 0 && (
                         <>
                           <button

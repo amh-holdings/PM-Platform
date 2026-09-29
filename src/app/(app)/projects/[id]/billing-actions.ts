@@ -16,6 +16,11 @@ import {
   resolveMilestoneTask,
 } from "@/lib/progress";
 import {
+  applyRuleOfCredit,
+  describeRuleOfCredit,
+  parseRuleOfCredit,
+} from "@/lib/rule-of-credit";
+import {
   needsADecision,
   resolveProcurementAmount,
   typedAmount,
@@ -138,6 +143,18 @@ export type BillingSuggestion = {
   /** The plain mean, so the UI can show what the weighting changed. */
   unweightedPct: number;
   /**
+   * The scope split behind targetPct, when this line carries a rule of credit.
+   *
+   * Present instead of duration weighting, not alongside it. Zarina, on 6.03
+   * Fencing/SWPPP: "Recommended rules of credit: SWPPP at 30%, rest is fence."
+   */
+  ruleOfCredit?: {
+    label: string;
+    note: string | null;
+    components: { name: string; weightPct: number; pct: number; taskCount: number }[];
+    emptyComponents: string[];
+  };
+  /**
    * The per-task working behind suggestedAmount, so the PM can see WHY the
    * number is what it is before putting it on an owner-facing G702 rather than
    * taking it on faith.
@@ -228,7 +245,11 @@ export async function computeBillingSuggestions(
   const [{ data: lines }, { data: tasks }, { data: totals }, { data: pos }] = await Promise.all([
     auth.supabase
       .from("billing_lines")
-      .select("id, item_number, description, type, scheduled_value, linked_task_wbs_codes, linked_procurement_order_ids")
+      // "*" rather than a named list: rule_of_credit arrives with migration
+      // 0065 and a named select on a column the database does not have errors
+      // the whole request. Absent reads as null, which is duration weighting,
+      // which is what every line did before.
+      .select("*")
       .eq("project_id", projectId),
     auth.supabase
       .from("schedule_tasks")
@@ -430,7 +451,31 @@ export async function computeBillingSuggestions(
         durationDays: estimateWeights[i] ?? null,
       })),
     );
-    const avgPct = rollup.pct;
+
+    // A rule of credit replaces duration weighting on the lines that carry
+    // one. Duration says how long a task takes, not what it is worth, which is
+    // a fair default for one scope split across tasks and wrong for a line
+    // like 6.03 Fencing/SWPPP that bundles two. Procurement lines are measured
+    // by payment milestones and have no tasks to split, so they are left
+    // alone. See src/lib/rule-of-credit.ts.
+    const rule = isProcurementLine(line)
+      ? null
+      : parseRuleOfCredit(
+          (line as { rule_of_credit?: unknown }).rule_of_credit,
+        );
+    const ruleResult = rule
+      ? applyRuleOfCredit({
+          rule,
+          tasks: estimateRecords.map((e, i) => ({
+            wbsCode: evidenceCodes[i] ?? "",
+            taskName: taskNameByCode.get(evidenceCodes[i] ?? "") ?? "",
+            pct: e.pct,
+            durationDays: estimateWeights[i] ?? null,
+          })),
+        })
+      : null;
+
+    const avgPct = ruleResult ? ruleResult.pct : rollup.pct;
 
     const knownDur = estimateWeights.filter(
       (d): d is number => d != null && d > 0,
@@ -517,10 +562,31 @@ export async function computeBillingSuggestions(
       confidence,
       // The resolution first: a reader who linked the package needs to see
       // which task the number actually came from before the percentages.
-      reasons: [...resolvedDetail, ...estimateRecords.map((e) => e.reason)],
+      reasons: [
+        ...resolvedDetail,
+        ...(ruleResult ? [ruleResult.reason] : []),
+        ...estimateRecords.map((e) => e.reason),
+      ],
       sourcesSummary,
-      weightedByDuration: rollup.weightedByDuration,
+      // A line under a rule of credit is not duration-weighted, whatever the
+      // fallback computed. Saying both would put two different bases on one
+      // number.
+      weightedByDuration: ruleResult ? false : rollup.weightedByDuration,
       unweightedPct: rollup.unweightedPct,
+      ruleOfCredit:
+        rule && ruleResult
+          ? {
+              label: describeRuleOfCredit(rule),
+              note: rule.note ?? null,
+              components: ruleResult.components.map((c) => ({
+                name: c.name,
+                weightPct: c.weightPct,
+                pct: Math.round(c.pct * 1000) / 10,
+                taskCount: c.tasks.length,
+              })),
+              emptyComponents: ruleResult.emptyComponents,
+            }
+          : undefined,
       evidence,
     });
   }
@@ -620,6 +686,8 @@ export type BillableRow =
        * still bills, it just cannot name what it is made of.
        */
       manualBreakdown?: string | null;
+      /** The scope split behind the recommendation. See BillingSuggestion. */
+      ruleOfCredit?: BillingSuggestion["ruleOfCredit"];
     }
   | {
       kind: "suggestion";
@@ -643,6 +711,8 @@ export type BillableRow =
        * person can.
        */
       blockedReason?: string;
+      /** The scope split behind the amount. See BillingSuggestion. */
+      ruleOfCredit?: BillingSuggestion["ruleOfCredit"];
     };
 
 // Which AFP, if any, swallowed this period. Looks at the entries rather than at
@@ -1113,6 +1183,7 @@ export async function getBillThisPeriodRows(
       scheduleConfidence: match.confidence,
       scheduleSourcesSummary: match.sourcesSummary,
       evidence: match.evidence,
+      ruleOfCredit: match.ruleOfCredit,
     };
     if (r.typedFromPo) return enriched;
     return { ...enriched, recommendedAmount: match.suggestedAmount };
@@ -1134,6 +1205,7 @@ export async function getBillThisPeriodRows(
       reasons: s.reasons,
       alreadyBilled: s.alreadyBilled,
       targetPct: s.targetPct,
+      ruleOfCredit: s.ruleOfCredit,
     }));
 
   // Sort: by period, then forecast before suggestion within a period
