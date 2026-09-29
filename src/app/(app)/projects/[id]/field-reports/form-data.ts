@@ -24,7 +24,7 @@ export async function loadFieldReportFormData(projectId: string) {
     supabase
       .from("schedule_tasks")
       .select(
-        "id, wbs_code, task_name, phase, status, pct_complete, start_date, end_date, parent_wbs_code",
+        "id, wbs_code, task_name, phase, status, pct_complete, start_date, end_date, parent_wbs_code, sort_order",
       )
       .eq("project_id", projectId)
       .order("sort_order", { ascending: true, nullsFirst: false })
@@ -73,6 +73,7 @@ export async function loadFieldReportFormData(projectId: string) {
       startDate: t.start_date,
       endDate: t.end_date,
       parentWbsCode: t.parent_wbs_code,
+      sortOrder: t.sort_order,
     })),
     summaryCodes,
     todayIso(),
