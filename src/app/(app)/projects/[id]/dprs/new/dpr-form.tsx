@@ -30,10 +30,11 @@ import {
 
 import { DprPhotoUploader, type StagedPhoto } from "./dpr-photo-uploader";
 import {
-  PICKER_GROUP_LABEL,
+  pickerHeadingLabel,
   pickerLeafLabel,
   pickerOptionLabel,
-  withParentHeadings,
+  withOutlineHeadings,
+  type PickerAncestor,
   type PickerGroup,
 } from "@/lib/schedule-picker";
 import { UNIT_OPTIONS, WORK_STATUS_OPTIONS } from "@/lib/work-pin-options";
@@ -96,6 +97,8 @@ type Task = {
   group?: PickerGroup;
   /** Immediate parent's name, so "Embankment" says which basin it belongs to. */
   parentName?: string | null;
+  /** Every summary row above this leaf, shallowest first, for the outline. */
+  ancestors?: PickerAncestor[];
   /** Another pinnable leaf shares this task name. */
   nameIsAmbiguous?: boolean;
   /** Immediate parent's WBS code, used to group the options under it. */
@@ -1235,40 +1238,25 @@ export function DprForm({
                               className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
                             >
                               <option value="">- Select the work item -</option>
-                              {(["open", "soon", "other"] as PickerGroup[]).map(
-                                (g) => {
-                                  const inGroup = tasks.filter(
-                                    (t) => (t.group ?? "other") === g,
-                                  );
-                                  if (inGroup.length === 0) return null;
-                                  return (
-                                    <optgroup
-                                      key={g}
-                                      label={PICKER_GROUP_LABEL[g]}
-                                    >
-                                      {withParentHeadings(inGroup).map((row) =>
-                                        row.kind === "heading" ? (
-                                          <option
-                                            key={row.key}
-                                            value=""
-                                            disabled
-                                          >
-                                            {row.name}
-                                          </option>
-                                        ) : (
-                                          <option
-                                            key={row.key}
-                                            value={row.task.id}
-                                          >
-                                            {row.task.parentName
-                                              ? pickerLeafLabel(row.task)
-                                              : pickerOptionLabel(row.task)}
-                                          </option>
-                                        ),
-                                      )}
-                                    </optgroup>
-                                  );
-                                },
+                              {/* Schedule order, under the schedule's own
+                                  outline headings. A foreman who has the
+                                  schedule open is scrolling the same list in
+                                  the same shape. */}
+                              {withOutlineHeadings(tasks).map((row) =>
+                                row.kind === "heading" ? (
+                                  <option key={row.key} value="" disabled>
+                                    {pickerHeadingLabel(row)}
+                                  </option>
+                                ) : (
+                                  <option key={row.key} value={row.task.id}>
+                                    {row.task.ancestors?.length
+                                      ? pickerLeafLabel({
+                                          ...row.task,
+                                          depth: row.depth,
+                                        })
+                                      : pickerOptionLabel(row.task)}
+                                  </option>
+                                ),
                               )}
                             </select>
                           </div>

@@ -73,7 +73,7 @@ export default async function FieldReportDetailPage({
     supabase
       .from("schedule_tasks")
       .select(
-        "id, wbs_code, task_name, phase, status, pct_complete, start_date, end_date, parent_wbs_code, predecessors",
+        "id, wbs_code, task_name, phase, status, pct_complete, start_date, end_date, parent_wbs_code, predecessors, sort_order",
       )
       .eq("project_id", params.id)
       .order("sort_order", { ascending: true, nullsFirst: false })
@@ -132,6 +132,7 @@ export default async function FieldReportDetailPage({
       startDate: t.start_date,
       endDate: t.end_date,
       parentWbsCode: t.parent_wbs_code,
+      sortOrder: t.sort_order,
     })),
     summaryCodes,
     dpr.report_date,

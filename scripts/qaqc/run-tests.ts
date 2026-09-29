@@ -37,7 +37,14 @@ import {
 } from "@/lib/inspection-map";
 import { isLinkUsable, generateInspectionToken } from "@/lib/inspection-token";
 import { splitPinNotes, joinPinNotes } from "@/lib/pin-notes";
-import { withParentHeadings } from "@/lib/schedule-picker";
+import {
+  buildTaskPicker,
+  compareScheduleOrder,
+  pickerHeadingLabel,
+  pickerLeafLabel,
+  summaryCodesOf,
+  withOutlineHeadings,
+} from "@/lib/schedule-picker";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATION = join(__dirname, "..", "..", "db", "migrations", "0021_qaqc_inspections.sql");
@@ -417,29 +424,71 @@ async function main() {
   check("U-32 empty body + empty trail -> null, not a blank string", joinPinNotes("", []) === null);
   check("U-33 splitPinNotes tolerates null", splitPinNotes(null).body === "" && splitPinNotes(null).trail.length === 0);
 
-  // -- unit: work-pin picker headings --
+  // -- unit: work-pin picker outline --
   // A summary row is not pinnable, but the crew calls the scope by its name, so
   // it has to be visible above the leaves it owns. Basin 1 and Basin 2 are the
   // live case: same leaf names, different parents.
-  console.log("\n  -- unit: picker parent headings --");
+  console.log("\n  -- unit: picker outline headings --");
   const basins = [
-    { id: "a", wbsCode: "5.1.1.6.1", taskName: "Culvert outflow", currentPct: 90, parentName: "Construct Basin 1 ESC", parentWbsCode: "5.1.1.6" },
-    { id: "b", wbsCode: "5.1.1.6.5", taskName: "Embankment", currentPct: 25, parentName: "Construct Basin 1 ESC", parentWbsCode: "5.1.1.6" },
-    { id: "c", wbsCode: "5.1.1.7.5", taskName: "Embankment", currentPct: 0, parentName: "Construct Basin 2 ESC", parentWbsCode: "5.1.1.7" },
+    { id: "a", wbsCode: "5.1.1.6.1", taskName: "Culvert outflow", currentPct: 90, ancestors: [{ wbsCode: "5.1.1.6", name: "Construct Basin 1 ESC" }] },
+    { id: "b", wbsCode: "5.1.1.6.5", taskName: "Embankment", currentPct: 25, ancestors: [{ wbsCode: "5.1.1.6", name: "Construct Basin 1 ESC" }] },
+    { id: "c", wbsCode: "5.1.1.7.5", taskName: "Embankment", currentPct: 0, ancestors: [{ wbsCode: "5.1.1.7", name: "Construct Basin 2 ESC" }] },
   ];
-  const rows = withParentHeadings(basins);
+  const rows = withOutlineHeadings(basins);
   check("U-34 each parent gets one heading above its leaves", rows.length === 5 && rows[0].kind === "heading" && rows[3].kind === "heading", JSON.stringify(rows.map((r) => r.kind)));
   check("U-35 the heading names the summary row the crew looks for", rows[0].kind === "heading" && rows[0].name === "Construct Basin 1 ESC");
   check("U-36 a second parent does not absorb the first one's leaves", rows[3].kind === "heading" && rows[3].name === "Construct Basin 2 ESC" && rows[4].kind === "task" && rows[4].task.id === "c");
-  const sameName = withParentHeadings([
-    { id: "x", wbsCode: "5.1.1", taskName: "Grading", currentPct: 0, parentName: "Sitework", parentWbsCode: "5.1" },
-    { id: "y", wbsCode: "5.2.1", taskName: "Grading", currentPct: 0, parentName: "Sitework", parentWbsCode: "5.2" },
+  const sameName = withOutlineHeadings([
+    { id: "x", wbsCode: "5.1.1", taskName: "Grading", ancestors: [{ wbsCode: "5.1", name: "Sitework" }] },
+    { id: "y", wbsCode: "5.2.1", taskName: "Grading", ancestors: [{ wbsCode: "5.2", name: "Sitework" }] },
   ]);
   check("U-37 two summaries sharing a name stay two headings", sameName.filter((r) => r.kind === "heading").length === 2, JSON.stringify(sameName.map((r) => r.kind)));
-  const orphan = withParentHeadings([
-    { id: "z", wbsCode: "6", taskName: "Commissioning", currentPct: 0, parentName: null, parentWbsCode: null },
+  const orphan = withOutlineHeadings([
+    { id: "z", wbsCode: "6", taskName: "Commissioning", ancestors: [] },
   ]);
   check("U-38 a top-level leaf gets no heading", orphan.length === 1 && orphan[0].kind === "task");
+
+  // The whole path, not just the immediate parent. Zarina's screenshot: 5.1.2,
+  // 5.1.3.1, 5.1.5 and 5.1.6 all sit under Civil Construction, with Phase 2 in
+  // between, and the one-level version printed "Civil Construction" twice in
+  // eight rows. Carrying the path means it is printed once and Phase 2 nests
+  // inside it, which is what the schedule page shows.
+  const civil = { wbsCode: "5.1", name: "Civil Construction" };
+  const deep = withOutlineHeadings([
+    { id: "p", wbsCode: "5.1.2", taskName: "Fencing Installation", ancestors: [civil] },
+    { id: "q", wbsCode: "5.1.3.1", taskName: "Full Site Clearing", ancestors: [civil, { wbsCode: "5.1.3", name: "Phase 2" }] },
+    { id: "r", wbsCode: "5.1.5", taskName: "DEQ Inspection", ancestors: [civil] },
+    { id: "s", wbsCode: "5.1.6", taskName: "DEQ Corrections", ancestors: [civil] },
+  ]);
+  const headingNames = deep.filter((r) => r.kind === "heading").map((r) => (r.kind === "heading" ? r.name : ""));
+  check("U-39 a parent is not re-announced when the list steps back up to it", headingNames.length === 2 && headingNames[0] === "Civil Construction" && headingNames[1] === "Phase 2", JSON.stringify(headingNames));
+  check("U-40 a nested heading is indented one level deeper than its parent", deep[0].kind === "heading" && deep[0].depth === 0 && deep[2].kind === "heading" && deep[2].depth === 1, JSON.stringify(deep.map((r) => r.depth)));
+  check("U-41 a leaf sits one level inside its deepest heading", deep[3].kind === "task" && deep[3].depth === 2 && deep[4].kind === "task" && deep[4].depth === 1, JSON.stringify(deep.map((r) => r.depth)));
+  check("U-42 heading labels carry the WBS code the schedule page shows", pickerHeadingLabel({ name: "Phase 2", wbsCode: "5.1.3", depth: 1 }).trim() === "Phase 2 - 5.1.3");
+  check("U-43 an open task is marked rather than moved", pickerLeafLabel({ wbsCode: "5.1.2", taskName: "Fencing Installation", currentPct: 0, group: "open", depth: 1 }).includes("open now"));
+  check("U-44 a task that is not in play carries no marker", !pickerLeafLabel({ wbsCode: "5.1.2", taskName: "Fencing Installation", currentPct: 0, group: "other", depth: 1 }).includes("\u2022"));
+
+  // -- unit: picker order matches the schedule grid --
+  console.log("\n  -- unit: picker order --");
+  check("U-45 sort_order wins over WBS, the way the grid orders rows", compareScheduleOrder({ sortOrder: 1, wbsCode: "5.9" }, { sortOrder: 2, wbsCode: "5.1" }) < 0);
+  check("U-46 rows without sort_order fall back to natural WBS order", compareScheduleOrder({ sortOrder: null, wbsCode: "5.1.1.2" }, { sortOrder: null, wbsCode: "5.1.1.10" }) < 0);
+  check("U-47 a row with sort_order sorts above one without", compareScheduleOrder({ sortOrder: 3, wbsCode: "9.9" }, { sortOrder: null, wbsCode: "1.1" }) < 0);
+
+  // The regression itself: an in-progress task deep in the outline used to jump
+  // to the top of the list. It now stays where the schedule puts it and says it
+  // is open instead.
+  const scheduleRows = [
+    { id: "1", wbsCode: "5.1", taskName: "Civil Construction", phase: null, currentStatus: null, currentPct: null, startDate: null, endDate: null, parentWbsCode: null, sortOrder: 1, parent_wbs_code: null },
+    { id: "2", wbsCode: "5.1.2", taskName: "Fencing Installation", phase: null, currentStatus: null, currentPct: 0, startDate: null, endDate: null, parentWbsCode: "5.1", sortOrder: 2, parent_wbs_code: "5.1" },
+    { id: "3", wbsCode: "5.1.3", taskName: "Phase 2", phase: null, currentStatus: null, currentPct: null, startDate: null, endDate: null, parentWbsCode: "5.1", sortOrder: 3, parent_wbs_code: "5.1" },
+    { id: "4", wbsCode: "5.1.3.1", taskName: "Full Site Clearing", phase: null, currentStatus: "In Progress", currentPct: 40, startDate: null, endDate: null, parentWbsCode: "5.1.3", sortOrder: 4, parent_wbs_code: "5.1.3" },
+    { id: "5", wbsCode: "5.1.5", taskName: "DEQ Inspection", phase: null, currentStatus: null, currentPct: 100, startDate: null, endDate: null, parentWbsCode: "5.1", sortOrder: 5, parent_wbs_code: "5.1" },
+  ];
+  const picked = buildTaskPicker(scheduleRows, summaryCodesOf(scheduleRows), "2026-09-29");
+  check("U-48 summary rows are still not offered", picked.every((t) => t.wbsCode !== "5.1" && t.wbsCode !== "5.1.3"), JSON.stringify(picked.map((t) => t.wbsCode)));
+  check("U-49 an in-progress task keeps its place in the schedule order", picked.map((t) => t.wbsCode).join(",") === "5.1.2,5.1.3.1,5.1.5", JSON.stringify(picked.map((t) => t.wbsCode)));
+  check("U-50 it is still flagged as open", picked.find((t) => t.wbsCode === "5.1.3.1")?.group === "open");
+  check("U-51 a leaf carries its whole ancestor path", JSON.stringify(picked.find((t) => t.wbsCode === "5.1.3.1")?.ancestors) === JSON.stringify([{ wbsCode: "5.1", name: "Civil Construction" }, { wbsCode: "5.1.3", name: "Phase 2" }]), JSON.stringify(picked.find((t) => t.wbsCode === "5.1.3.1")?.ancestors));
 
   await db.close();
 

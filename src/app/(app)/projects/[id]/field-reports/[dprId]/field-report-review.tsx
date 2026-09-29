@@ -14,10 +14,11 @@ import {
   type NormalizedPin,
 } from "@/lib/inspection-map";
 import {
-  PICKER_GROUP_LABEL,
+  pickerHeadingLabel,
   pickerLeafLabel,
   pickerOptionLabel,
-  withParentHeadings,
+  withOutlineHeadings,
+  type PickerAncestor,
   type PickerGroup,
 } from "@/lib/schedule-picker";
 import { checkPinSanity, type SanityTask } from "@/lib/pin-sanity";
@@ -86,6 +87,8 @@ export type PickerOption = {
   group?: PickerGroup;
   /** Immediate parent's name, so "Embankment" says which basin it belongs to. */
   parentName?: string | null;
+  /** Every summary row above this leaf, shallowest first, for the outline. */
+  ancestors?: PickerAncestor[];
   /** Another pinnable leaf shares this task name. */
   nameIsAmbiguous?: boolean;
   /** Immediate parent's WBS code, used to group the options under it. */
@@ -636,27 +639,22 @@ function PinReview({
               className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
             >
               <option value="">- Select the work item -</option>
-              {(["open", "soon", "other"] as PickerGroup[]).map((g) => {
-                const inGroup = tasks.filter((t) => (t.group ?? "other") === g);
-                if (inGroup.length === 0) return null;
-                return (
-                  <optgroup key={g} label={PICKER_GROUP_LABEL[g]}>
-                    {withParentHeadings(inGroup).map((row) =>
-                      row.kind === "heading" ? (
-                        <option key={row.key} value="" disabled>
-                          {row.name}
-                        </option>
-                      ) : (
-                        <option key={row.key} value={row.task.id}>
-                          {row.task.parentName
-                            ? pickerLeafLabel(row.task)
-                            : pickerOptionLabel(row.task)}
-                        </option>
-                      ),
-                    )}
-                  </optgroup>
-                );
-              })}
+              {/* Schedule order, under the schedule's own outline headings, so
+                  the CM re-pinning a rejected row is reading the same list in
+                  the same shape the schedule page shows. */}
+              {withOutlineHeadings(tasks).map((row) =>
+                row.kind === "heading" ? (
+                  <option key={row.key} value="" disabled>
+                    {pickerHeadingLabel(row)}
+                  </option>
+                ) : (
+                  <option key={row.key} value={row.task.id}>
+                    {row.task.ancestors?.length
+                      ? pickerLeafLabel({ ...row.task, depth: row.depth })
+                      : pickerOptionLabel(row.task)}
+                  </option>
+                ),
+              )}
             </select>
             {filedTaskUnpinnable && (
               <p className="mt-1 text-[10px] text-amber-700">
