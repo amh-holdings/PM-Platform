@@ -115,9 +115,18 @@ export type RetireEquipmentResult =
  * orphan those references or cascade the machine out of reports already
  * submitted to the owner. Migration 0047 put `active` here for exactly this.
  *
- * The effect is the one asked for: it stops appearing in the dropdown for new
- * reports. It stays readable on every report that already named it, and it can
- * be brought back by setting active true if a machine returns to site.
+ * Goes through the retire_project_equipment function (0066) rather than
+ * updating the table directly. 0047 gave subs INSERT and nothing else, so a
+ * foreman's UPDATE matched zero rows under RLS - and a zero-row UPDATE is not
+ * an error to PostgREST. The machine disappeared from the screen, the write
+ * never happened, and it was back on the next load. Zarina: "It does it for
+ * one pin. As soon as you set another pin it populates back what you have
+ * deleted from the first pin."
+ *
+ * The function is a narrow grant: it sets active=false, it checks the caller
+ * owns the crew, and it can do nothing else. Until it is applied, the fallback
+ * below keeps AHC working and - unlike before - says plainly when a write
+ * reached nothing instead of reporting success.
  */
 export async function retireProjectEquipment(input: {
   projectId: string;
@@ -131,14 +140,56 @@ export async function retireProjectEquipment(input: {
   if (!user) return { ok: false, error: "Not signed in" };
   if (!input.equipmentId) return { ok: false, error: "No equipment selected" };
 
-  const { error } = await supabase
+  // Cast because db/types.ts is generated from the applied schema and 0066 is
+  // not in it yet. Narrowed to what this call actually needs rather than any.
+  const callRpc = supabase.rpc as unknown as (
+    fn: string,
+    args: Record<string, unknown>,
+  ) => Promise<{ error: { code?: string; message: string } | null }>;
+
+  const rpc = await callRpc("retire_project_equipment", {
+    p_equipment_id: input.equipmentId,
+  });
+
+  if (!rpc.error) {
+    // false = already retired by someone else. Same outcome either way.
+    return { ok: true };
+  }
+
+  // PGRST202 (no such function) / 42883 (undefined_function) mean 0066 has not
+  // been applied yet. Anything else is a real refusal and belongs on screen.
+  const missing = rpc.error.code === "PGRST202" || rpc.error.code === "42883";
+  if (!missing) {
+    if (rpc.error.code === "42501") {
+      return {
+        ok: false,
+        error:
+          "Your sign-in cannot change this crew's equipment list. Ask AHC to remove it.",
+      };
+    }
+    return { ok: false, error: `Could not remove equipment: ${rpc.error.message}` };
+  }
+
+  const { data, error } = await supabase
     .from("project_equipment")
     .update({ active: false })
     .eq("id", input.equipmentId)
-    .eq("project_id", input.projectId);
+    .eq("project_id", input.projectId)
+    .select("id");
 
   if (error) {
     return { ok: false, error: `Could not remove equipment: ${error.message}` };
+  }
+  // The silent case. An empty result means RLS let the statement run and it
+  // matched nothing - the row is another project's, or the caller is a sub and
+  // 0066 is not applied. Saying so beats removing it from the screen and
+  // letting it reappear.
+  if (!data || data.length === 0) {
+    return {
+      ok: false,
+      error:
+        "That equipment was not removed - your sign-in cannot change the crew's list. Ask AHC to remove it, or apply migration 0066.",
+    };
   }
   return { ok: true };
 }
