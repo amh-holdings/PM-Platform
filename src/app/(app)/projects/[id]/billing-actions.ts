@@ -30,6 +30,11 @@ import {
 import { progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import { scopeByLine } from "@/lib/sov-amendments";
+import { COMMODITIES } from "@/lib/commodities";
+import {
+  measureFromCommodities,
+  type CommodityReading,
+} from "@/lib/commodity-progress";
 import { readAmendments } from "@/lib/sov-amendments-db";
 import { canUndoPayApplication } from "@/lib/pay-app-undo";
 import { formatCurrency } from "@/lib/format";
@@ -157,6 +162,18 @@ export type BillingSuggestion = {
     note: string | null;
     components: { name: string; weightPct: number; pct: number; taskCount: number }[];
     emptyComponents: string[];
+  };
+  /**
+   * The tracker reading behind targetPct, when the line is measured that way.
+   *
+   * Dimension on 6.02: "Invoice percentage billed needs to match commodity
+   * tracker." Present instead of duration weighting, and never alongside a
+   * rule of credit - see src/lib/commodity-progress.ts for the precedence.
+   */
+  commodityBasis?: {
+    summary: string;
+    used: { key: string; label: string; pct: number; note: string }[];
+    ignored: { key: string; label: string; reason: string }[];
   };
   /**
    * The per-task working behind suggestedAmount, so the PM can see WHY the
@@ -338,6 +355,54 @@ export async function computeBillingSuggestions(
   // what the contract actually carries.
   const { rows: amendments } = await readAmendments(auth.supabase, projectId);
   const scopeById = scopeByLine(lines ?? [], amendments);
+
+  // The commodity tracker, keyed by the SOV item on the EXECUTED CONTRACT.
+  // Not by commodities.sov_item: the client's roll-up maps fencing to 6.02 and
+  // road install to 6.03, and the contract has those the other way round.
+  // src/lib/commodities.ts carries both and only contractSovItem may drive
+  // money. Only CONFIRMED production counts - an unconfirmed row is a proposal
+  // waiting on a person, and proposals do not bill.
+  const readingsByItem = new Map<string, CommodityReading[]>();
+  {
+    const { data: commodityRows } = await auth.supabase
+      .from("commodities")
+      .select("id, key, label, uom, total_quantity, total_verified")
+      .eq("project_id", projectId);
+    const { data: production } = await auth.supabase
+      .from("daily_production")
+      .select("commodity_id, quantity, production_date, confirmed_at")
+      .eq("project_id", projectId);
+    const tally = new Map<string, { qty: number; last: string | null }>();
+    for (const r of production ?? []) {
+      if (!r.confirmed_at) continue;
+      const cur = tally.get(r.commodity_id) ?? { qty: 0, last: null };
+      cur.qty += Number(r.quantity ?? 0);
+      if (!cur.last || r.production_date > cur.last) cur.last = r.production_date;
+      tally.set(r.commodity_id, cur);
+    }
+    const contractItemByKey = new Map(
+      COMMODITIES.map((c) => [c.key, c.contractSovItem]),
+    );
+    for (const c of commodityRows ?? []) {
+      const item = contractItemByKey.get(c.key) ?? null;
+      // Null means the commodity spans more than one contract line - Site Prep
+      // covers timbering on 6.02 and silt fence on 6.03 - and must never
+      // measure either of them on its own.
+      if (!item) continue;
+      const t = tally.get(c.id) ?? { qty: 0, last: null };
+      const list = readingsByItem.get(item) ?? [];
+      list.push({
+        key: c.key,
+        label: c.label,
+        uom: c.uom,
+        totalQuantity: c.total_quantity,
+        totalVerified: c.total_verified,
+        toDate: t.qty,
+        lastDate: t.last,
+      });
+      readingsByItem.set(item, list);
+    }
+  }
   const totalsById = new Map<string, { billed: number; remaining: number }>();
   for (const t of totals ?? []) {
     if (!t.billing_line_id) continue;
@@ -508,7 +573,17 @@ export async function computeBillingSuggestions(
         })
       : null;
 
-    const avgPct = ruleResult ? ruleResult.pct : rollup.pct;
+    // Precedence: an agreed rule of credit, then the tracker both parties
+    // read, then duration. See src/lib/commodity-progress.ts.
+    const commodityMeasure =
+      rule || isProcurementLine(line)
+        ? null
+        : measureFromCommodities(readingsByItem.get(line.item_number) ?? []);
+    const avgPct = ruleResult
+      ? ruleResult.pct
+      : commodityMeasure
+        ? commodityMeasure.pct
+        : rollup.pct;
 
     const knownDur = estimateWeights.filter(
       (d): d is number => d != null && d > 0,
@@ -629,13 +704,18 @@ export async function computeBillingSuggestions(
       reasons: [
         ...resolvedDetail,
         ...(ruleResult ? [ruleResult.reason] : []),
+        ...(commodityMeasure ? [commodityMeasure.summary] : []),
+        ...(commodityMeasure?.ignored ?? []).map(
+          (i) => `${i.label} not counted: ${i.reason}`,
+        ),
         ...estimateRecords.map((e) => e.reason),
       ],
       sourcesSummary,
       // A line under a rule of credit is not duration-weighted, whatever the
       // fallback computed. Saying both would put two different bases on one
       // number.
-      weightedByDuration: ruleResult ? false : rollup.weightedByDuration,
+      weightedByDuration:
+        ruleResult || commodityMeasure ? false : rollup.weightedByDuration,
       unweightedPct: rollup.unweightedPct,
       ruleOfCredit:
         rule && ruleResult
@@ -651,6 +731,13 @@ export async function computeBillingSuggestions(
               emptyComponents: ruleResult.emptyComponents,
             }
           : undefined,
+      commodityBasis: commodityMeasure
+        ? {
+            summary: commodityMeasure.summary,
+            used: commodityMeasure.used,
+            ignored: commodityMeasure.ignored,
+          }
+        : undefined,
       evidence,
     });
   }
