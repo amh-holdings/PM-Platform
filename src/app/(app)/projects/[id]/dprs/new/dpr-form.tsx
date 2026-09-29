@@ -254,6 +254,10 @@ export function DprForm({
   // Row currently waiting on the catalog (adding or retiring). One at a time,
   // so the row that fired it is the row that gets disabled.
   const [equipmentBusyRow, setEquipmentBusyRow] = useState<string | null>(null);
+  // Shown inside the equipment section, not with the form's main error at the
+  // foot of the page. A refusal to remove a machine has to land where the
+  // click happened, or it reads as the click having done nothing.
+  const [equipmentError, setEquipmentError] = useState<string | null>(null);
   const [sheet, setSheet] = useState<BasemapKey>(
     (initialDraft?.sheet as BasemapKey) || "C2-01",
   );
@@ -467,6 +471,7 @@ export function DprForm({
     const name = typed.trim();
     if (!name) return;
     setEquipmentBusyRow(rowId);
+    setEquipmentError(null);
     const res = await addProjectEquipment({
       projectId,
       subcontractorId: reportSubId,
@@ -474,7 +479,7 @@ export function DprForm({
     });
     setEquipmentBusyRow(null);
     if (!res.ok) {
-      setError(res.error);
+      setEquipmentError(res.error);
       return;
     }
     setCatalog((prev) =>
@@ -497,13 +502,16 @@ export function DprForm({
     );
     if (!ok) return;
     setEquipmentBusyRow(rowId);
+    setEquipmentError(null);
     const res = await retireProjectEquipment({
       projectId,
       equipmentId: entry.id,
     });
     setEquipmentBusyRow(null);
     if (!res.ok) {
-      setError(res.error);
+      // The list is NOT touched on a refusal. Removing it here and letting the
+      // next load put it back is exactly the bug this reports.
+      setEquipmentError(res.error);
       return;
     }
     setCatalog((prev) => prev.filter((c) => c.id !== entry.id));
@@ -1536,6 +1544,11 @@ export function DprForm({
             Add row
           </Button>
         </div>
+        {equipmentError && (
+          <p className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+            {equipmentError}
+          </p>
+        )}
         {equipment.length > 0 && (
           <div className="mt-3 space-y-2">
             {equipment.map((e) => (
