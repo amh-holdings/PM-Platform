@@ -60,12 +60,19 @@ export function EquipmentCombobox({
     return options.filter((o) => o.name.toLowerCase().includes(q));
   }, [options, typed]);
 
-  // Offered only when nothing on the list already carries that exact name.
-  // Without the check, a foreman who types a machine that IS on the list gets
-  // "Add 620 skidder" under the 620 skidder it duplicates.
-  const canAdd =
+  // Typing a name the list already carries is the one case where adding makes
+  // no sense: without the check, a foreman who types a machine that IS on the
+  // list gets "Add 620 skidder" under the 620 skidder it duplicates.
+  const exactMatch =
     typed.length > 0 &&
-    !options.some((o) => o.name.trim().toLowerCase() === typed.toLowerCase());
+    options.some((o) => o.name.trim().toLowerCase() === typed.toLowerCase());
+  // Otherwise the add row is ALWAYS there, typed name or not. Showing it only
+  // once something was typed is what broke adding: opening the list showed no
+  // way to add at all, and the only way to find out there still was one was to
+  // type the name of a machine that did not exist yet. Zarina: "But adding new
+  // equipments are now gone."
+  const showAddRow = !exactMatch;
+  const canAddTyped = typed.length > 0 && !exactMatch;
 
   useEffect(() => {
     setActive(0);
@@ -91,7 +98,14 @@ export function EquipmentCombobox({
   }
 
   function add() {
-    onAdd(typed);
+    // Nothing typed means they came to the add row straight off opening the
+    // list, so ask for the name the way the old select did. One click either
+    // way; a row that only focused the input would read as a dead click.
+    const name = canAddTyped
+      ? typed
+      : (window.prompt("Add equipment to your crew's list (e.g. 40-ton crane)") ?? "").trim();
+    if (!name) return;
+    onAdd(name);
     setOpen(false);
     setQuery(null);
   }
@@ -103,7 +117,7 @@ export function EquipmentCombobox({
         setOpen(true);
         return;
       }
-      const count = matches.length + (canAdd ? 1 : 0);
+      const count = matches.length + (showAddRow ? 1 : 0);
       if (count === 0) return;
       setActive((i) => {
         const next = e.key === "ArrowDown" ? i + 1 : i - 1;
@@ -116,7 +130,7 @@ export function EquipmentCombobox({
       e.preventDefault();
       if (!open) return;
       if (active < matches.length) choose(matches[active]);
-      else if (canAdd) add();
+      else if (showAddRow) add();
       return;
     }
     if (e.key === "Escape") {
@@ -155,9 +169,11 @@ export function EquipmentCombobox({
           role="listbox"
           className="absolute left-0 right-0 z-20 mt-1 max-h-64 overflow-y-auto rounded-md border bg-background shadow-lg"
         >
-          {matches.length === 0 && !canAdd && (
+          {matches.length === 0 && (
             <p className="px-2 py-2 text-xs text-muted-foreground">
-              Nothing on your crew&apos;s list matches that.
+              {options.length === 0
+                ? "Your crew has no equipment on the list yet."
+                : "Nothing on your crew's list matches that."}
             </p>
           )}
 
@@ -225,7 +241,10 @@ export function EquipmentCombobox({
             </div>
           ))}
 
-          {canAdd && (
+          {/* Sticky so it stays reachable on a list this long. A foreman
+              scrolling past 40 machines should not have to reach the bottom to
+              find out he can add the one he is standing next to. */}
+          {showAddRow && (
             <button
               type="button"
               onMouseDown={(e) => {
@@ -234,12 +253,19 @@ export function EquipmentCombobox({
               }}
               onMouseEnter={() => setActive(matches.length)}
               className={cn(
-                "block w-full border-t px-2 py-1.5 text-left text-xs",
+                "sticky bottom-0 block w-full border-t bg-background px-2 py-1.5 text-left text-xs",
                 active === matches.length ? "bg-accent" : "",
               )}
             >
-              + Add &quot;{typed}&quot; to your crew&apos;s list
+              {canAddTyped
+                ? `+ Add "${typed}" to your crew's list`
+                : "+ Add new equipment..."}
             </button>
+          )}
+          {exactMatch && (
+            <p className="sticky bottom-0 border-t bg-background px-2 py-1.5 text-xs text-muted-foreground">
+              &quot;{typed}&quot; is already on the list.
+            </p>
           )}
         </div>
       )}
