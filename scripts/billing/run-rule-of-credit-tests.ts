@@ -239,6 +239,65 @@ const upper = applyRuleOfCredit({
 });
 close("matching ignores case", upper.pct, 0.7);
 
+// ---------------------------------------------------------------------------
+// What each task is worth as a share of the LINE.
+//
+// Zarina, reading 6.03's evidence table: "Where are you pulling the numbers
+// from?" The weight column was still duration weighting - 14 days out of 69
+// reads as 20.3% - while the headline percent came from the rule. The one
+// that decides the money was the one not shown.
+// ---------------------------------------------------------------------------
+
+console.log("\nPer-task weight under the rule\n");
+
+const real = applyRuleOfCredit({ rule, tasks: tasks(0.6508, 0) });
+const wOf = (code: string) =>
+  Math.round((real.taskWeights.find((t) => t.wbsCode === code)?.weight ?? 0) * 1000) / 10;
+
+// The whole point, in one number. Four days of fencing out of 69 is 5.8% by
+// duration. Under the rule it is 70% of the line, and 70% not started is why
+// 6.03 cannot earn.
+eq("the fencing task is 70% of the line, not its 4 days of 69", wOf("5.1.2"), 70);
+// 14 days of the 65 in SWPPP, times SWPPP's 30%.
+eq("a 14-day basin task is 30% x 14/65", wOf("5.1.1.6"), Math.round(30 * (7 / 29) * 10) / 10);
+eq("every task carries a scope label", real.taskWeights.every((t) => t.component !== ""), true);
+eq("every linked task gets a weight", real.taskWeights.length, tasks(0, 0).length);
+
+// Weights are a decomposition of the line, so they sum to 100 and each scope
+// sums to its own weight. If they did not, the evidence table would not add
+// up to the percent printed above it.
+const sum = real.taskWeights.reduce((s, t) => s + t.weight, 0);
+close("all weights sum to the whole line", sum, 1, 1e-9);
+close(
+  "the SWPPP tasks sum to 30%",
+  real.taskWeights.filter((t) => t.component === "SWPPP").reduce((s, t) => s + t.weight, 0),
+  0.3,
+  1e-9,
+);
+close(
+  "and the fence tasks to 70%",
+  real.taskWeights.filter((t) => t.component === "Fence").reduce((s, t) => s + t.weight, 0),
+  0.7,
+  1e-9,
+);
+
+// The line percent must equal sum(weight x pct), or the table and the headline
+// are telling two different stories.
+const fromWeights = real.taskWeights.reduce((s, t) => {
+  const task = tasks(0.6508, 0).find((x) => x.wbsCode === t.wbsCode)!;
+  return s + t.weight * task.pct;
+}, 0);
+close("the weights reproduce the line percent exactly", fromWeights, real.pct, 1e-9);
+
+// A scope that claimed nothing contributes no weights at all rather than a
+// zero-weight ghost row.
+const noFenceWeights = applyRuleOfCredit({
+  rule,
+  tasks: tasks(1, 1).filter((t) => t.wbsCode !== "5.1.2"),
+});
+eq("an empty scope contributes no task weights", noFenceWeights.taskWeights.some((t) => t.component === "Fence"), false);
+close("and the remaining scope still sums to its own weight", noFenceWeights.taskWeights.reduce((s, t) => s + t.weight, 0), 0.3, 1e-9);
+
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);
 if (failures.length) {

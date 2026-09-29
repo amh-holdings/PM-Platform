@@ -64,12 +64,35 @@ export type RuleOfCreditComponentResult = {
   empty: boolean;
 };
 
+/**
+ * What one task is worth as a share of the WHOLE line, 0 to 1.
+ *
+ * Zarina, reading 6.03's evidence table under the new rule: "Where are you
+ * pulling the numbers from?" Fair question, because the table's weight column
+ * was still duration weighting - 14 days out of 69 reads as 20.3% - while the
+ * headline percent came from the rule of credit. Two bases on one screen, and
+ * the one that decides the money was the one not shown.
+ *
+ * Under the rule a task's weight is its component's share of the line times
+ * its own share within that component. On 6.03 that turns the 4-day fencing
+ * task from 5.8% into 70%, which is the whole reason the line cannot earn.
+ */
+export type RuleOfCreditTaskWeight = {
+  wbsCode: string;
+  /** The scope this task was claimed by. */
+  component: string;
+  /** Share of the whole line, 0 to 1. Components sum to their own weight. */
+  weight: number;
+};
+
 export type RuleOfCreditResult = {
   /** 0 to 1, the whole line. */
   pct: number;
   components: RuleOfCreditComponentResult[];
   /** Components that claimed no task at all. Earning zero at full weight. */
   emptyComponents: string[];
+  /** Each task's share of the whole line, so the evidence table can show it. */
+  taskWeights: RuleOfCreditTaskWeight[];
   reason: string;
 };
 
@@ -204,6 +227,33 @@ export function applyRuleOfCredit(input: {
 
   const pct = components.reduce((s, c) => s + (c.weightPct / 100) * c.pct, 0);
 
+  // A task's share of the line: its component's weight, split across that
+  // component's tasks the same way the component's own percent is computed.
+  // Duration decides the split inside a scope, and nothing across scopes.
+  const taskWeights: RuleOfCreditTaskWeight[] = [];
+  rule.components.forEach((c, i) => {
+    const own = buckets[i];
+    if (own.length === 0) return;
+    const known = own
+      .map((t) => t.durationDays)
+      .filter((d): d is number => d != null && Number.isFinite(d) && d > 0);
+    const fallback =
+      known.length > 0 ? known.reduce((s, d) => s + d, 0) / known.length : 1;
+    const dur = own.map((t) =>
+      t.durationDays != null && Number.isFinite(t.durationDays) && t.durationDays > 0
+        ? t.durationDays
+        : fallback,
+    );
+    const total = dur.reduce((s, d) => s + d, 0);
+    own.forEach((t, j) => {
+      taskWeights.push({
+        wbsCode: t.wbsCode,
+        component: c.name,
+        weight: total > 0 ? (c.weightPct / 100) * (dur[j] / total) : 0,
+      });
+    });
+  });
+
   const parts = components.map(
     (c) =>
       `${c.name} ${c.empty ? "has no linked task" : `is ${pctText(c.pct)} done`} and carries ${c.weightPct}%`,
@@ -216,6 +266,7 @@ export function applyRuleOfCredit(input: {
     pct: Math.min(1, Math.max(0, pct)),
     components,
     emptyComponents: components.filter((c) => c.empty).map((c) => c.name),
+    taskWeights,
     reason: `Rule of credit: ${parts.join(", ")}, so the line has earned ${pctText(pct)}${tail}`,
   };
 }
