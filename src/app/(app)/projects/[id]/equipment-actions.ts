@@ -5,12 +5,15 @@ import { createClient } from "@/lib/supabase/server";
 // The per-subcontractor equipment catalog behind the Field Report's equipment
 // dropdown (migration 0047).
 //
-// Only adding is exposed to the form. A foreman who turns up with a machine
-// that is not on the list adds it in one step and carries on filing; renaming
-// and retiring stay with AHC, so nobody can change an entry out from under the
-// rest of their crew mid-report. RLS enforces both halves of that - this
-// action does not re-check the caller's role, it lets the insert policy
-// decide, which keeps one source of truth for who may write.
+// Adding and retiring are both exposed to the form. A foreman who turns up
+// with a machine that is not on the list adds it in one step, and takes it off
+// the list the day it leaves site. Zarina: "we just need to be able to delete
+// equipment as it leaves site."
+//
+// Renaming stays with AHC, so nobody can change an entry out from under the
+// rest of their crew mid-report. RLS enforces that - these actions do not
+// re-check the caller's role, they let the policy decide, which keeps one
+// source of truth for who may write.
 
 export type EquipmentCatalogEntry = {
   id: string;
@@ -97,4 +100,45 @@ export async function addProjectEquipment(input: {
       onRent: data.on_rent,
     },
   };
+}
+
+export type RetireEquipmentResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+/**
+ * Take a machine off the list the day it leaves site.
+ *
+ * Retires rather than deletes, and that is not a hedge. Every dpr_equipment
+ * row on a filed report points at this id, and a filed report is a record of
+ * what was on site on a day that happened. Deleting the row would either
+ * orphan those references or cascade the machine out of reports already
+ * submitted to the owner. Migration 0047 put `active` here for exactly this.
+ *
+ * The effect is the one asked for: it stops appearing in the dropdown for new
+ * reports. It stays readable on every report that already named it, and it can
+ * be brought back by setting active true if a machine returns to site.
+ */
+export async function retireProjectEquipment(input: {
+  projectId: string;
+  equipmentId: string;
+}): Promise<RetireEquipmentResult> {
+  const supabase = createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not signed in" };
+  if (!input.equipmentId) return { ok: false, error: "No equipment selected" };
+
+  const { error } = await supabase
+    .from("project_equipment")
+    .update({ active: false })
+    .eq("id", input.equipmentId)
+    .eq("project_id", input.projectId);
+
+  if (error) {
+    return { ok: false, error: `Could not remove equipment: ${error.message}` };
+  }
+  return { ok: true };
 }
