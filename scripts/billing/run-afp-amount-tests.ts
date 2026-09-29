@@ -13,6 +13,7 @@ import {
   pickAfpTargetLine,
   resolveProcurementAmount,
   typedAmount,
+  unsupportedForecastReason,
 } from "../../src/lib/billing-progress";
 import {
   applyPoContribution,
@@ -787,6 +788,49 @@ eq(
     recommendedAmount: null,
   }),
   28462.75,
+);
+
+// ---------------------------------------------------------------------------
+// A forecast row the evidence cannot support.
+//
+// Zarina, on SOV 6.03: "The 6.03 still shows previous forecast."
+//
+// A line with nothing new to bill produces no suggestion, so its forecast row
+// matched nothing and kept the figure imported from the owner cash-flow
+// spreadsheet - labelled "Forecast", ticked, with no reason on the row. The
+// panel's heading promises the opposite.
+// ---------------------------------------------------------------------------
+
+console.log("\nA forecast the evidence does not support\n");
+
+eq(
+  "the reason leads and the forecast figure is named",
+  unsupportedForecastReason({
+    reason:
+      "Already billed $88,953.94 against $33,021.40 the schedule supports. Nothing further until more progress is recorded.",
+    forecastAmount: 61150.73,
+  }),
+  "Already billed $88,953.94 against $33,021.40 the schedule supports. Nothing further until more progress is recorded. The $61,150.73 in the box is the imported cash-flow forecast, not what the evidence supports.",
+);
+
+// The reasons are written elsewhere and not all of them end in a full stop.
+// Two sentences running together is how a warning stops being read.
+eq(
+  "a reason with no full stop gets one",
+  unsupportedForecastReason({ reason: "Nothing earned yet", forecastAmount: 1000 }),
+  "Nothing earned yet. The $1,000.00 in the box is the imported cash-flow forecast, not what the evidence supports.",
+);
+eq(
+  "and one with a trailing space is not double-punctuated",
+  unsupportedForecastReason({ reason: "Nothing earned yet.  ", forecastAmount: 1000 }),
+  "Nothing earned yet. The $1,000.00 in the box is the imported cash-flow forecast, not what the evidence supports.",
+);
+// Zero is a real forecast figure, not a missing one, and it still has to say
+// that the box is the spreadsheet rather than a reading.
+eq(
+  "a zero forecast still names itself",
+  unsupportedForecastReason({ reason: "Nothing earned yet.", forecastAmount: 0 }),
+  "Nothing earned yet. The $0.00 in the box is the imported cash-flow forecast, not what the evidence supports.",
 );
 
 console.log(`\n${"=".repeat(60)}`);

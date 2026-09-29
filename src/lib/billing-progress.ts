@@ -6,6 +6,8 @@
 // SOV 6.02 is 40% complete and the other prints 55% on the G702, the owner
 // gets two different stories about the same money.
 
+import { formatCurrency } from "@/lib/format";
+
 /** Statuses past 'forecast' - the row represents money that actually went out. */
 export const BILLED_STATUSES = new Set([
   "on_pay_app",
@@ -332,4 +334,32 @@ export function pickAfpTargetLine(opts: {
 export function typedAmount(manualAmount: number | null | undefined): number | null {
   const n = Number(manualAmount ?? 0);
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * What a forecast row says when the evidence supports nothing new.
+ *
+ * Zarina, on SOV 6.03: "The 6.03 still shows previous forecast."
+ *
+ * A line with nothing new to bill produces no suggestion, so the forecast row
+ * for it matches nothing and keeps the figure imported from the owner
+ * cash-flow spreadsheet months ago. It arrived labelled "Forecast", ticked,
+ * at $61,150.73, with no reason anywhere on the row - on a line Dimension had
+ * already rejected once over how it is measured.
+ *
+ * The panel's own heading promises that anything the evidence does not support
+ * arrives unchecked with the reason. This is the sentence that keeps that
+ * promise. The amount stays editable on purpose: netting earned against billed
+ * cannot tell whether the earlier AFPs covered this scope, and a person can.
+ */
+export function unsupportedForecastReason(input: {
+  /** The notBillable reason, already written for this line. */
+  reason: string;
+  /** What is sitting in the amount box, from the imported forecast. */
+  forecastAmount: number;
+}): string {
+  const { reason, forecastAmount } = input;
+  const trimmed = reason.trim();
+  const head = trimmed.endsWith(".") ? trimmed : `${trimmed}.`;
+  return `${head} The ${formatCurrency(forecastAmount)} in the box is the imported cash-flow forecast, not what the evidence supports.`;
 }
