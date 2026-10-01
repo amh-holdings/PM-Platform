@@ -36,6 +36,12 @@ import {
   ownerCashMonth,
 } from "@/lib/billing-cash-date";
 import {
+  describeRelease,
+  fallbackReleaseMonth,
+  ownerReleaseMonth,
+  resolveRetainageRelease,
+} from "@/lib/retainage-release";
+import {
   describeSovDateGap,
   describeSovDateSource,
   resolveSovMonth,
@@ -104,7 +110,10 @@ export type ProjectionWarning = {
     | "overbilled"
     | "pipeline_change_order"
     | "pipeline_co_no_cost"
-    | "sub_sov_no_date";
+    | "sub_sov_no_date"
+    // Retainage is in the curve, but at the month the series happens to end
+    // rather than at a contractual release event.
+    | "retainage_release_no_event";
   ref: string;
   message: string;
 };
@@ -125,7 +134,9 @@ export type ProjectionNote = {
     | "pipeline_co_cost"
     | "sov_date_from_mapping"
     // Imported cash-flow plan that the schedule now dates instead.
-    | "planned_billing_reforecast";
+    | "planned_billing_reforecast"
+    // Retainage dated from the contract's release event.
+    | "retainage_release_from_event";
   ref: string;
   message: string;
 };
@@ -187,7 +198,9 @@ export async function buildProjection(
     await Promise.all([
       supabase
         .from("projects")
-        .select("owner_payment_terms_days, retainage_pct_default")
+        .select(
+          "owner_payment_terms_days, retainage_pct_default, retainage_release_event, cod_date, guaranteed_substantial_completion_date",
+        )
         .eq("id", projectId)
         .maybeSingle(),
       supabase
@@ -914,17 +927,57 @@ export async function buildProjection(
     totalSubRetainage += gross * retPct;
   }
   if (totalOwnerRetainage > 0 || totalSubRetainage > 0) {
+    // The contract's release event, not "wherever the curve happens to end".
+    // Sweet Springs releases at Final Completion, 2027-06-02 on the schedule;
+    // the old rule put a $146,687 receipt in Apr 2027, three months early on
+    // the largest receipt left in the job. See retainage-release.ts.
+    const at = resolveRetainageRelease({
+      event: projectRes.data?.retainage_release_event,
+      tasks: (tasksRes.data ?? []).map((t) => ({
+        task_name: t.task_name,
+        end_date: t.end_date,
+      })),
+      codDate: projectRes.data?.cod_date,
+      guaranteedSubstantialCompletion:
+        projectRes.data?.guaranteed_substantial_completion_date,
+    });
+
     const allMonths = Array.from(buckets.keys()).sort();
     const lastMonth = allMonths[allMonths.length - 1];
-    if (lastMonth) {
-      const release = addMonthsIso(lastMonth, 1);
-      const bucket = get(release);
-      bucket.cashIn += totalOwnerRetainage;
-      bucket.subCashOut += totalSubRetainage;
+    // No resolvable event keeps the old behaviour rather than dropping the
+    // money: retainage missing from the curve is worse than retainage in an
+    // approximate month, and the note below says which one you are looking at.
+    const releaseMonth =
+      at.month ?? (lastMonth ? fallbackReleaseMonth(lastMonth) : null);
+
+    if (releaseMonth) {
+      // Subs are released at the event. The owner's share arrives on terms
+      // after it, because Net 30 applies to the retainage invoice like any
+      // other - which is what makes the tail of the job a real squeeze: you
+      // let go of sub retainage before the owner's reaches you.
+      const ownerMonth = ownerReleaseMonth(releaseMonth, ownerTermsDays);
+      get(ownerMonth).cashIn += totalOwnerRetainage;
+
+      const subBucket = get(releaseMonth);
+      subBucket.subCashOut += totalSubRetainage;
       // The release is money moving, so it belongs in the actual/forecast split
       // as well. Leaving it out made the Cash Out timeline read $86,490 against
       // a $96,100 total - short by exactly the sub retainage.
-      bucket.cashOutForecast += totalSubRetainage;
+      subBucket.cashOutForecast += totalSubRetainage;
+
+      if (at.month) {
+        notes.push({
+          kind: "retainage_release_from_event",
+          ref: `${Math.round(totalOwnerRetainage).toLocaleString()} owner / ${Math.round(totalSubRetainage).toLocaleString()} sub`,
+          message: describeRelease(at, ownerTermsDays),
+        });
+      } else {
+        warnings.push({
+          kind: "retainage_release_no_event",
+          ref: `$${Math.round(totalOwnerRetainage + totalSubRetainage).toLocaleString()}`,
+          message: `Retainage is drawn one month after the last other movement because it ${at.why}. $${Math.round(totalOwnerRetainage).toLocaleString()} owner and $${Math.round(totalSubRetainage).toLocaleString()} sub retainage are in the curve at a month nobody chose.`,
+        });
+      }
     }
   }
 

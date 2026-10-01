@@ -73,6 +73,12 @@ const GROUPS: {
     effect:
       "In the forecast on an assumption about approval, not on an approval. If the owner says no, the month loses it.",
   },
+  {
+    kind: "retainage_release_no_event",
+    title: "Retainage with no contractual release date",
+    effect:
+      "It is drawn one month after the last other movement, which is a month nobody chose.",
+  },
   { kind: "underbilled", title: "Billed less than earned", effect: "Revenue is later than the work." },
   { kind: "overbilled", title: "Billed more than earned", effect: "Revenue is ahead of the work." },
 ];
@@ -137,6 +143,10 @@ const NOTE_GROUPS: { kind: ProjectionNote["kind"]; title: string }[] = [
   {
     kind: "sov_date_from_mapping",
     title: "Subcontractor lines dated through their commodity or mobilization",
+  },
+  {
+    kind: "retainage_release_from_event",
+    title: "Retainage dated from the contract's release event",
   },
 ];
 
