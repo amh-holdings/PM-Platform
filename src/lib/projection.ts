@@ -146,6 +146,26 @@ export type ProjectionResult = {
 
 const DEFAULT_MONTHS = 12;
 
+/**
+ * Whether a commitment already carries this cost code's scope into the forecast,
+ * so counting the buildup line as well would be the same money twice.
+ *
+ * Two ways that is true:
+ *   procurement_order_id - the code IS one purchase order, one to one.
+ *   commitment_covered   - the scope is bought out across several commitments,
+ *                          which a single FK cannot express. SSC S is the budget
+ *                          line for all electrical, which is two subcontracts;
+ *                          SSC T is one line against sixteen POs. See 0068.
+ *
+ * Reads undefined on a database where 0068 has not run, which is false, which
+ * is the behaviour from before the flag existed.
+ */
+function isCommitmentCovered(
+  code: { procurement_order_id?: string | null; commitment_covered?: boolean | null } | null,
+): boolean {
+  return !!code?.procurement_order_id || code?.commitment_covered === true;
+}
+
 type Options = { monthsAhead?: number; today?: Date };
 
 export async function buildProjection(
@@ -176,10 +196,14 @@ export async function buildProjection(
           "billing_line_id, period_month, cash_in_month, paid_at, pay_application_id, planned_amount, actual_amount, retainage_amount, status, billing_lines!inner(project_id)",
         )
         .eq("billing_lines.project_id", projectId),
+      // cost_codes is selected with * rather than by name because
+      // commitment_covered does not exist until 0068 runs, and a named select
+      // on a missing column errors the whole request and takes the cash flow
+      // down with it. Same reason the procurement selects below use *.
       supabase
         .from("cost_forecasts")
         .select(
-          "period_month, planned_amount, actual_amount, cost_codes!inner(project_id, subcontractor_id, procurement_order_id, subcontractors(payment_terms_days, retainage_pct))",
+          "period_month, planned_amount, actual_amount, cost_codes!inner(*, subcontractors(payment_terms_days, retainage_pct))",
         )
         .eq("cost_codes.project_id", projectId),
       // Cash OUT, so vendor rows only. Since 0055 a PO also carries owner
@@ -755,9 +779,10 @@ export async function buildProjection(
     const code = f.cost_codes as unknown as {
       subcontractor_id: string | null;
       procurement_order_id: string | null;
+      commitment_covered?: boolean | null;
       subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
     } | null;
-    if (code?.procurement_order_id) continue;
+    if (isCommitmentCovered(code)) continue;
     const gross = effectiveAmount(f.actual_amount, f.planned_amount);
     if (gross <= 0) continue;
     const subDays = Number(code?.subcontractors?.payment_terms_days ?? 0);
@@ -877,9 +902,13 @@ export async function buildProjection(
   for (const f of forecastsRes.data ?? []) {
     const code = f.cost_codes as unknown as {
       procurement_order_id: string | null;
+      commitment_covered?: boolean | null;
       subcontractors: { retainage_pct: number | null } | null;
     } | null;
-    if (code?.procurement_order_id) continue;
+    // Same exclusion as the cost loop above, and it has to be: retainage held
+    // on a code whose cost is not in the forecast is retainage on nothing, and
+    // it would be released into cash in the final month out of thin air.
+    if (isCommitmentCovered(code)) continue;
     const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
     const gross = effectiveAmount(f.actual_amount, f.planned_amount);
     totalSubRetainage += gross * retPct;
