@@ -16,6 +16,7 @@ import {
 } from "@/lib/schedule-po-delivery";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import { captureScheduleSnapshot } from "@/lib/schedule-sync-server";
+import { syncSummaryStatuses } from "./schedule-summary-sync";
 import {
   TASK_TYPES,
   progressCanBeSetByHand,
@@ -82,6 +83,33 @@ function getInt(value: FormDataEntryValue | null): number | null {
   return Number.isFinite(num) ? num : null;
 }
 
+/**
+ * Does this task have anything underneath it in the outline?
+ *
+ * Asked by WBS prefix rather than by parent_wbs_code, for the reason
+ * schedule-tree.ts gives: the dots ARE the structure and parent_wbs_code can
+ * drift after an import, while the code cannot.
+ */
+async function hasChildTasks(
+  supabase: ReturnType<typeof createClient>,
+  projectId: string,
+  taskId: string,
+): Promise<boolean> {
+  const { data: row } = await supabase
+    .from("schedule_tasks")
+    .select("wbs_code")
+    .eq("id", taskId)
+    .maybeSingle();
+  const code = (row as { wbs_code?: string } | null)?.wbs_code;
+  if (!code) return false;
+  const { count } = await supabase
+    .from("schedule_tasks")
+    .select("id", { count: "exact", head: true })
+    .eq("project_id", projectId)
+    .like("wbs_code", `${code}.%`);
+  return (count ?? 0) > 0;
+}
+
 export async function updateScheduleTask(
   taskId: string,
   projectId: string,
@@ -124,6 +152,12 @@ export async function updateScheduleTask(
   // otherwise keeps the update from naming a column that does not exist.
   if (formData.has("task_type")) update.task_type = parseTaskType(formData.get("task_type"));
 
+  // A summary's status is its children's. The dialog shows it read-only, and
+  // this drops it if anything posts one anyway - syncSummaryStatuses below
+  // would overwrite it on the same request, which reads as the edit being lost
+  // rather than refused.
+  if (await hasChildTasks(auth.supabase, projectId, taskId)) delete update.status;
+
   // Same rule as the grid: on a deliverable or a procurement row the status
   // decides the percent, because there is no field report to take one from.
   // See progressFromStatus.
@@ -161,6 +195,11 @@ export async function updateScheduleTask(
           },
         ])
       : null;
+
+  // A summary's status is its children's. Rolled up here rather than left to
+  // whoever happens to open the grid next, so every reader of schedule_tasks
+  // sees the same answer the grid shows.
+  await syncSummaryStatuses(auth.supabase, projectId);
 
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
@@ -404,6 +443,9 @@ export async function deleteScheduleTask(
     .eq("id", taskId);
   if (error) return { ok: false, error: error.message };
 
+  // Summary statuses follow the work underneath: a delete can empty a branch or leave its parent on a stale status.
+  await syncSummaryStatuses(auth.supabase, projectId);
+
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
   return { ok: true };
@@ -606,6 +648,9 @@ export async function createScheduleTask(
     return { ok: false, error: error.message };
   }
 
+  // Summary statuses follow the work underneath: a new row can turn a leaf into a summary.
+  await syncSummaryStatuses(auth.supabase, projectId);
+
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
   return { ok: true, id: (data as { id: string }).id, wbs };
@@ -714,6 +759,9 @@ export async function deleteScheduleTasks(
     .eq("project_id", projectId)
     .in("id", taskIds);
   if (error) return { ok: false, error: error.message };
+
+  // Summary statuses follow the work underneath: a delete can empty a branch or leave its parent on a stale status.
+  await syncSummaryStatuses(auth.supabase, projectId);
 
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
@@ -830,6 +878,8 @@ export async function bulkUpdateScheduleTasks(
     completed.filter((c) => c.wbs_code),
   );
 
+  await syncSummaryStatuses(auth.supabase, projectId);
+
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
   return { ok: true, count, inverse, deliveryNote };
@@ -904,6 +954,9 @@ export async function applyStructurePlan(
       .eq("project_id", projectId);
     if (error) return { ok: false, error: error.message };
   }
+
+  // Summary statuses follow the work underneath: an indent or a move hands a task to a different parent.
+  await syncSummaryStatuses(auth.supabase, projectId);
 
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
@@ -1021,6 +1074,9 @@ export async function applyScheduleImport(
     if (!res.ok) return res;
     deleted = res.count;
   }
+
+  // Summary statuses follow the work underneath: an import rewrites both the outline and the statuses in it.
+  await syncSummaryStatuses(auth.supabase, projectId);
 
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);
@@ -1163,6 +1219,9 @@ export async function setTaskProgressByHand(
     } as TablesUpdate<"schedule_tasks">)
     .eq("id", taskId);
   if (error) return { ok: false, error: error.message };
+
+  // Summary statuses follow the work underneath: a hand-set percent carries a status with it on a deliverable row.
+  await syncSummaryStatuses(auth.supabase, projectId);
 
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/schedule`);

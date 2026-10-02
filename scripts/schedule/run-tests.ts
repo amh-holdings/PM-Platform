@@ -27,6 +27,12 @@ import {
   taskDisplayLabel,
 } from "../../src/lib/schedule-task-search";
 import {
+  buildSummaryStatus,
+  leafStateOf,
+  rollUpStatus,
+  summaryStatusChanges,
+} from "../../src/lib/schedule-summary-status";
+import {
   completionNeedsAType,
   finishIsACommitment,
   progressCanBeSetByHand,
@@ -3650,6 +3656,120 @@ section("Dragging a branch above the first row of the sheet");
     "a task with no branch reads as it always did",
     taskDisplayLabel("5", { name: "Commissioning", row: 90, parentName: null }),
     "90 - Commissioning",
+  );
+}
+
+// ============================================================================
+// Summary status rolls up from the work underneath
+// ============================================================================
+//
+// Zarina: "if a children task has been completed, the parent row is dependent
+// to all task under it and should be completed as well automatically. Not set
+// it as separate task."
+{
+  console.log("\n-- summary status rollup --");
+
+  eq("Complete reads as complete", leafStateOf("Complete"), "complete");
+  eq("an imported Completed reads the same", leafStateOf("COMPLETED"), "complete");
+  eq("Not Started reads as not started", leafStateOf("Not Started"), "notStarted");
+  eq("blank says nothing at all", leafStateOf(""), "silent");
+  eq("null says nothing at all", leafStateOf(null), "silent");
+  // On Hold is work that started and has not finished, whatever else it is.
+  eq("anything else counts as in progress", leafStateOf("On Hold"), "inProgress");
+
+  eq(
+    "every leaf complete makes the parent complete",
+    rollUpStatus(["Complete", "Complete", "Complete"]),
+    "Complete",
+  );
+  eq(
+    "one leaf short of done is in progress",
+    rollUpStatus(["Complete", "Complete", "In Progress"]),
+    "In Progress",
+  );
+  // The rule that stops a branch reading Complete on half a report: a leaf
+  // nobody has reported on is not a finished leaf.
+  eq(
+    "an unreported leaf keeps the parent off Complete",
+    rollUpStatus(["Complete", "Complete", null]),
+    "In Progress",
+  );
+  eq(
+    "nothing started reads Not Started",
+    rollUpStatus(["Not Started", "Not Started"]),
+    "Not Started",
+  );
+  eq(
+    "not started plus unreported still reads Not Started",
+    rollUpStatus(["Not Started", null]),
+    "Not Started",
+  );
+  // Saying nothing beats asserting Not Started over a branch nobody has
+  // touched - the same rule buildProgress follows with "no report".
+  eq("a wholly unreported branch says nothing", rollUpStatus([null, "", null]), null);
+  eq("a branch with no leaves says nothing", rollUpStatus([]), null);
+
+  // A three-level outline. 5.1.1 finishes; 5.1 must not, because 5.1.2 is open.
+  const OUTLINE = [
+    { wbs_code: "5.1", status: "Not Started" },
+    { wbs_code: "5.1.1", status: "In Progress" },
+    { wbs_code: "5.1.1.1", status: "Complete" },
+    { wbs_code: "5.1.1.2", status: "Complete" },
+    { wbs_code: "5.1.2", status: "Not Started" },
+  ];
+  const rolled = buildSummaryStatus(OUTLINE);
+  eq("a branch whose leaves are all done reads Complete", rolled.get("5.1.1"), "Complete");
+  eq("its parent does not, while a sibling is open", rolled.get("5.1"), "In Progress");
+  eq("a leaf is absent from the map", rolled.has("5.1.1.1"), false);
+  eq("a childless row at depth is absent too", rolled.has("5.1.2"), false);
+
+  // A grandparent counts leaves, not intermediate summaries, so an untouched
+  // middle row cannot hold the whole branch open.
+  const STALE_MIDDLE = [
+    { wbs_code: "6", status: "Not Started" },
+    { wbs_code: "6.1", status: "Not Started" },
+    { wbs_code: "6.1.1", status: "Complete" },
+    { wbs_code: "6.1.2", status: "Complete" },
+  ];
+  eq(
+    "a stale middle summary does not hold the top open",
+    buildSummaryStatus(STALE_MIDDLE).get("6"),
+    "Complete",
+  );
+
+  const changes = summaryStatusChanges(OUTLINE);
+  eq("only the rows that disagree are rewritten", changes.length, 2);
+  eq(
+    "the finished branch is one of them",
+    changes.some((c) => c.wbs_code === "5.1.1" && c.to === "Complete"),
+    true,
+  );
+  eq(
+    "its parent is the other",
+    changes.some((c) => c.wbs_code === "5.1" && c.to === "In Progress"),
+    true,
+  );
+  eq(
+    "a leaf is never rewritten",
+    changes.some((c) => c.wbs_code.startsWith("5.1.1.")),
+    false,
+  );
+  // Running it twice writes nothing the second time, which is what makes it
+  // safe to call after every save.
+  const settled = OUTLINE.map((t) => {
+    const want = buildSummaryStatus(OUTLINE).get(t.wbs_code);
+    return want ? { ...t, status: want } : t;
+  });
+  eq("a second pass has nothing to do", summaryStatusChanges(settled).length, 0);
+
+  // Case and padding come out of imports; they are the same status.
+  eq(
+    "a differently cased stored status is not a change",
+    summaryStatusChanges([
+      { wbs_code: "7", status: "complete" },
+      { wbs_code: "7.1", status: "Complete" },
+    ]).length,
+    0,
   );
 }
 

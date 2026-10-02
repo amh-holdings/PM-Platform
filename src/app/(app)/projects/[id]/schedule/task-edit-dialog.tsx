@@ -34,6 +34,7 @@ import {
   type LinkTask,
 } from "./predecessor-editor";
 import { TASK_TYPES, TASK_TYPE_HELP, TASK_TYPE_LABELS } from "@/lib/schedule-task-type";
+import { hasChildren } from "@/lib/schedule-tree";
 import { PoDeliveryLink } from "./po-delivery-link";
 
 export type TaskFormValues = {
@@ -145,6 +146,12 @@ export function TaskEditDialog({
   // exclude it from its own options and check for cycles. When creating, that
   // identity is whatever is currently typed in the WBS box.
   const [wbs, setWbs] = useState(values.wbs_code);
+
+  // A summary's status belongs to the work underneath it, the same way its
+  // percent does. Shown here, never set here - the server recomputes it on
+  // every save anyway, so an editable box would just lose the edit silently.
+  const isSummary =
+    !creating && Boolean(values.wbs_code) && hasChildren(values.wbs_code, allTasks);
   // The branch above this row, named. While creating it follows the WBS box as
   // it is typed, which is the only feedback that a code like 4.4.7.9 is going
   // to land where its author thinks it will.
@@ -332,20 +339,32 @@ export function TaskEditDialog({
 
                 <div className="space-y-2">
                   <Label htmlFor="status">Status</Label>
-                  <select
-                    id="status"
-                    name="status"
-                    defaultValue={values.status ?? ""}
-                    className={cn(
-                      "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm",
-                      "ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                    )}
-                  >
-                    <option value="">-</option>
-                    {statusOptions.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
+                  {isSummary ? (
+                    <>
+                      <p className="flex h-10 items-center rounded-md border border-input bg-muted px-3 text-sm">
+                        {values.status || "-"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Rolled up from the tasks underneath. Complete once they
+                        all are.
+                      </p>
+                    </>
+                  ) : (
+                    <select
+                      id="status"
+                      name="status"
+                      defaultValue={values.status ?? ""}
+                      className={cn(
+                        "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm",
+                        "ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                      )}
+                    >
+                      <option value="">-</option>
+                      {statusOptions.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
 
                 <div className="space-y-2">

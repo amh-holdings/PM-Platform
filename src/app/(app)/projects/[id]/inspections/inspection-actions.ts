@@ -10,6 +10,7 @@ import type { TablesUpdate } from "@/lib/database.types";
 import { makeCalendar } from "@/lib/schedule-calendar";
 import { actualFinishFromReport, actualStartFromReport } from "@/lib/schedule-edit";
 import { syncScheduleDates } from "@/lib/schedule-sync-server";
+import { syncSummaryStatuses } from "../schedule-summary-sync";
 import { generateInspectionToken, isLinkUsable } from "@/lib/inspection-token";
 import { proposeProductionForReport } from "@/lib/production-proposal-run";
 import { INSPECTION_BUCKET, sanitizeFileName } from "./inspection-constants";
@@ -654,6 +655,11 @@ async function applyPinProgressToSchedule(
     .from("schedule_tasks")
     .update(patch)
     .eq("id", taskId);
+
+  // The branch this leaf sits in may have just finished. A summary's status is
+  // its children's, so roll it up rather than leaving a parent on In Progress
+  // with nothing open underneath it.
+  if (task) await syncSummaryStatuses(auth.supabase, task.project_id);
 
   // The report may have moved everything downstream of this task. Start and
   // Finish are the live forecast, so bring the rest of the schedule with it.

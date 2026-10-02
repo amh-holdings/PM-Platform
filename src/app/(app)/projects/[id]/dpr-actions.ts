@@ -10,6 +10,7 @@ import type { Database, TablesUpdate } from "@/lib/database.types";
 import { makeCalendar } from "@/lib/schedule-calendar";
 import { actualFinishFromReport, actualStartFromReport } from "@/lib/schedule-edit";
 import { syncScheduleDates } from "@/lib/schedule-sync-server";
+import { syncSummaryStatuses } from "./schedule-summary-sync";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -483,6 +484,10 @@ export async function approveDpr(
     })
     .eq("id", dprId);
   if (stampErr) return { ok: false, error: stampErr.message };
+
+  // A branch whose last open leaf just closed is finished. A summary's status
+  // is its children's, so roll it up rather than leaving the parent behind.
+  if (applied > 0) await syncSummaryStatuses(auth.supabase, projectId);
 
   // Start and Finish are the live forecast; this report may have moved it.
   if (applied > 0) await syncScheduleDates(auth.supabase, projectId);
