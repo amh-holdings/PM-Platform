@@ -82,6 +82,7 @@ import {
   type TaskDraft,
 } from "@/lib/schedule-edit";
 import { buildProgress, type Progress } from "@/lib/schedule-rollup";
+import { buildSummaryStatus } from "@/lib/schedule-summary-status";
 import {
   collapseToLevel,
   outlineDepth,
@@ -585,6 +586,17 @@ export function ScheduleSplitView({
     (t: ScheduleTaskRow, f: Field) =>
       draft[t.id]?.[f] !== undefined && draft[t.id]?.[f] !== raw(t, f),
     [draft],
+  );
+
+  // Built from the DRAFT statuses, not the saved ones, so a parent follows the
+  // children as they are being typed rather than only after a save. The server
+  // writes the same answer when the save lands - see schedule-summary-sync.
+  const summaryStatus = useMemo(
+    () =>
+      buildSummaryStatus(
+        tasks.map((t) => ({ wbs_code: t.wbs_code, status: valueOf(t, "status") })),
+      ),
+    [tasks, valueOf],
   );
 
   // A row counts as changed only when a cell actually differs from the
@@ -1162,14 +1174,35 @@ export function ScheduleSplitView({
   // ---- bulk edits ---------------------------------------------------------
   function bulkSet(f: Field, v: string) {
     if (!selected.size) return;
+    // A summary's status is not its own to set, so "Set status" on a selection
+    // that includes branches touches the work rows and leaves the branches to
+    // follow. Silently writing it would be overwritten by the next save
+    // anyway, which reads as the grid losing the edit.
+    const ids = Array.from(selected).filter((id) => {
+      if (f !== "status") return true;
+      const t = byId.get(id);
+      return !t || !summaries.has(t.wbs_code);
+    });
+    const skipped = selected.size - ids.length;
+    if (!ids.length) {
+      setMsg({
+        tone: "warn",
+        text: "Summary rows take their status from the tasks underneath. Nothing to set.",
+      });
+      return;
+    }
     setDraft((prev) => {
       const next = { ...prev };
-      for (const id of Array.from(selected)) next[id] = { ...(next[id] ?? {}), [f]: v };
+      for (const id of ids) next[id] = { ...(next[id] ?? {}), [f]: v };
       return next;
     });
     setMsg({
       tone: "warn",
-      text: `${selected.size} row${selected.size === 1 ? "" : "s"} changed but not yet saved.`,
+      text:
+        `${ids.length} row${ids.length === 1 ? "" : "s"} changed but not yet saved.` +
+        (skipped
+          ? ` ${skipped} summary row${skipped === 1 ? "" : "s"} skipped - they follow their children.`
+          : ""),
     });
   }
 
@@ -2156,6 +2189,7 @@ export function ScheduleSplitView({
                     cpm={previewCpm.byWbs.get(t.wbs_code)}
                     progress={progress.get(t.wbs_code) ?? { kind: "none" }}
                     isSummary={summaries.has(t.wbs_code)}
+                    rolledStatus={summaryStatus.get(t.wbs_code) ?? null}
                     collapsed={collapsed.has(t.wbs_code)}
                     onToggleCollapse={() =>
                       setCollapsed((prev) => toggleBranch(prev, t.wbs_code, allRows))
@@ -2431,6 +2465,8 @@ type GridRowProps = {
   cpm: ReturnType<CpmOutput["byWbs"]["get"]>;
   progress: Progress;
   isSummary: boolean;
+  /** For a summary row, the status its children add up to. Null on a leaf. */
+  rolledStatus: string | null;
   collapsed: boolean;
   onToggleCollapse: () => void;
   focused: boolean;
@@ -2461,7 +2497,8 @@ type GridRowProps = {
 };
 
 function GridRow({
-  t, r, columns, cpm: c, progress: p, isSummary, collapsed, onToggleCollapse,
+  t, r, columns, cpm: c, progress: p, isSummary, rolledStatus,
+  collapsed, onToggleCollapse,
   focused, onFocusRow, selected, onSelect, valueOf, isDirty, setCell, onCellKeyDown, setCellRef,
   statusOptions, calendar, constraint, dragging, dropAt,
   onDragStart, onDragEnd, onDragOver, onDrop,
@@ -2650,6 +2687,27 @@ function GridRow({
               );
 
             case "status":
+              // A summary's status is its children's, the same way its percent
+              // already is. Read-only rather than a dropdown that agrees with
+              // the work underneath only until somebody changes one of them.
+              if (isSummary) {
+                return (
+                  <div
+                    className={cn(
+                      "flex h-full w-full items-center px-1 text-xs",
+                      STATUS_TONE[rolledStatus ?? ""] ?? "",
+                      !rolledStatus && "text-muted-foreground",
+                    )}
+                    title={
+                      rolledStatus
+                        ? "Rolled up from the tasks underneath. Complete once they all are."
+                        : "Nothing underneath this has been reported on yet."
+                    }
+                  >
+                    {rolledStatus ?? "-"}
+                  </div>
+                );
+              }
               return (
                 <select
                   className={cn(
