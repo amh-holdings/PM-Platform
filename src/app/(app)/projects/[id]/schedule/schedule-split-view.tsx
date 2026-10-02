@@ -548,7 +548,11 @@ export function ScheduleSplitView({
     [predAsRows, rowIndex],
   );
 
-  const summaries = useMemo(() => new Set(summaryCodes(allRows)), [allRows]);
+  // Measured against the whole project, not the rows on screen. A scope filter
+  // can show a parent without the work underneath it, and a branch that looks
+  // childless here would hand someone an editable status the server then drops
+  // - an edit refused invisibly, which is worse than one refused out loud.
+  const summaries = useMemo(() => new Set(summaryCodes(allTasks)), [allTasks]);
   const progress = useMemo(() => buildProgress(tasks), [tasks]);
 
   /**
@@ -594,9 +598,9 @@ export function ScheduleSplitView({
   const summaryStatus = useMemo(
     () =>
       buildSummaryStatus(
-        tasks.map((t) => ({ wbs_code: t.wbs_code, status: valueOf(t, "status") })),
+        allTasks.map((t) => ({ wbs_code: t.wbs_code, status: valueOf(t, "status") })),
       ),
-    [tasks, valueOf],
+    [allTasks, valueOf],
   );
 
   // A row counts as changed only when a cell actually differs from the
@@ -2534,7 +2538,13 @@ function GridRow({
         !selected &&
           !rowDirty &&
           rowTone({
-            status: valueOf(t, "status"),
+            // A summary's status is its children's, so the tint has to come
+            // from the same place the cell does. Reading the stored value left
+            // a branch whose every task was Complete sitting plain white next
+            // to its own green children until somebody saved the schedule.
+            // Zarina: "the child task is complete, the parent task is complete
+            // as well but not higlight as green. It might be confusing."
+            status: isSummary ? rolledStatus : valueOf(t, "status"),
             critical: !!c?.critical,
             nearCritical: !!c?.nearCritical,
           }),
