@@ -29,6 +29,13 @@ import {
 } from "@/lib/billing-progress";
 import { progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
+import { scopeByLine } from "@/lib/sov-amendments";
+import { COMMODITIES } from "@/lib/commodities";
+import {
+  measureFromCommodities,
+  type CommodityReading,
+} from "@/lib/commodity-progress";
+import { readAmendments } from "@/lib/sov-amendments-db";
 import { canUndoPayApplication } from "@/lib/pay-app-undo";
 import { formatCurrency } from "@/lib/format";
 import {
@@ -157,6 +164,18 @@ export type BillingSuggestion = {
     emptyComponents: string[];
   };
   /**
+   * The tracker reading behind targetPct, when the line is measured that way.
+   *
+   * Dimension on 6.02: "Invoice percentage billed needs to match commodity
+   * tracker." Present instead of duration weighting, and never alongside a
+   * rule of credit - see src/lib/commodity-progress.ts for the precedence.
+   */
+  commodityBasis?: {
+    summary: string;
+    used: { key: string; label: string; pct: number; note: string }[];
+    ignored: { key: string; label: string; reason: string }[];
+  };
+  /**
    * The per-task working behind suggestedAmount, so the PM can see WHY the
    * number is what it is before putting it on an owner-facing G702 rather than
    * taking it on faith.
@@ -258,7 +277,21 @@ export async function computeBillingSuggestions(
   // would let date interpolation bill work that has not happened.
   const period = periodMonth ?? (await resolveBillingPeriod(auth.supabase, projectId));
   const nextMonthIso = period;
-  const todayIso = progressAsOf(period);
+  // The contract's billing cutoff, where there is one. Sweet Springs bills to
+  // the 20th, so evidence for September's application stops on the 20th
+  // however late in the month the page is opened. Read with "*" because
+  // billing_cutoff_day arrives in 0067 and a named select on a column the
+  // database does not have errors the whole request; absent reads as null,
+  // which is the calendar month end and the old behaviour.
+  const { data: projectRow } = await auth.supabase
+    .from("projects")
+    .select("*")
+    .eq("id", projectId)
+    .maybeSingle();
+  const cutoffDay =
+    (projectRow as { billing_cutoff_day?: number | null } | null)
+      ?.billing_cutoff_day ?? null;
+  const todayIso = progressAsOf(period, new Date(), cutoffDay);
 
   const [{ data: lines }, { data: tasks }, { data: totals }, { data: pos }] = await Promise.all([
     auth.supabase
@@ -266,7 +299,8 @@ export async function computeBillingSuggestions(
       // "*" rather than a named list: rule_of_credit arrives with migration
       // 0065 and a named select on a column the database does not have errors
       // the whole request. Absent reads as null, which is duration weighting,
-      // which is what every line did before.
+      // which is what every line did before. It also carries scheduled_value
+      // and change_order_id, which scopeByLine needs.
       .select("*")
       .eq("project_id", projectId),
     auth.supabase
@@ -329,12 +363,73 @@ export async function computeBillingSuggestions(
       (t as { duration_days?: number | null }).duration_days ?? null,
     );
   }
+  // Scope, not scheduled_value. v_billing_line_totals.remaining_to_bill is
+  // computed in the database from scheduled_value, which is the figure before
+  // any change order that raised the line, so it is recomputed here against
+  // what the contract actually carries.
+  const { rows: amendments } = await readAmendments(auth.supabase, projectId);
+  const scopeById = scopeByLine(lines ?? [], amendments);
+
+  // The commodity tracker, keyed by the SOV item on the EXECUTED CONTRACT.
+  // Not by commodities.sov_item: the client's roll-up maps fencing to 6.02 and
+  // road install to 6.03, and the contract has those the other way round.
+  // src/lib/commodities.ts carries both and only contractSovItem may drive
+  // money. Only CONFIRMED production counts - an unconfirmed row is a proposal
+  // waiting on a person, and proposals do not bill.
+  const readingsByItem = new Map<string, CommodityReading[]>();
+  {
+    const { data: commodityRows } = await auth.supabase
+      .from("commodities")
+      .select("id, key, label, uom, total_quantity, total_verified")
+      .eq("project_id", projectId);
+    const { data: production } = await auth.supabase
+      .from("daily_production")
+      .select("commodity_id, quantity, production_date, confirmed_at")
+      .eq("project_id", projectId);
+    const tally = new Map<string, { qty: number; last: string | null }>();
+    for (const r of production ?? []) {
+      if (!r.confirmed_at) continue;
+      // Production after the period closed belongs to the next application.
+      if (r.production_date > todayIso) continue;
+      const cur = tally.get(r.commodity_id) ?? { qty: 0, last: null };
+      cur.qty += Number(r.quantity ?? 0);
+      if (!cur.last || r.production_date > cur.last) cur.last = r.production_date;
+      tally.set(r.commodity_id, cur);
+    }
+    const contractItemByKey = new Map(
+      COMMODITIES.map((c) => [c.key, c.contractSovItem]),
+    );
+    for (const c of commodityRows ?? []) {
+      const item = contractItemByKey.get(c.key) ?? null;
+      // Null means the commodity spans more than one contract line - Site Prep
+      // covers timbering on 6.02 and silt fence on 6.03 - and must never
+      // measure either of them on its own.
+      if (!item) continue;
+      const t = tally.get(c.id) ?? { qty: 0, last: null };
+      const list = readingsByItem.get(item) ?? [];
+      list.push({
+        key: c.key,
+        label: c.label,
+        uom: c.uom,
+        totalQuantity: c.total_quantity,
+        totalVerified: c.total_verified,
+        toDate: t.qty,
+        lastDate: t.last,
+      });
+      readingsByItem.set(item, list);
+    }
+  }
   const totalsById = new Map<string, { billed: number; remaining: number }>();
   for (const t of totals ?? []) {
     if (!t.billing_line_id) continue;
+    const billed = Number(t.total_billed ?? 0);
+    const scope = scopeById.get(t.billing_line_id);
     totalsById.set(t.billing_line_id, {
-      billed: Number(t.total_billed ?? 0),
-      remaining: Number(t.remaining_to_bill ?? 0),
+      billed,
+      remaining:
+        scope === undefined
+          ? Number(t.remaining_to_bill ?? 0)
+          : Math.max(0, Math.round((scope - billed) * 100) / 100),
     });
   }
   // Index POs by id so we can resolve linked_procurement_order_ids quickly.
@@ -355,7 +450,7 @@ export async function computeBillingSuggestions(
   const suggestions: BillingSuggestion[] = [];
   const notBillable: NotBillableLine[] = [];
   for (const line of lines ?? []) {
-    const scheduledValue = Number(line.scheduled_value ?? 0);
+    const scheduledValue = scopeById.get(line.id) ?? Number(line.scheduled_value ?? 0);
     const t = totalsById.get(line.id) ?? { billed: 0, remaining: scheduledValue };
 
     let estimateRecords: ProgressEstimate[] = [];
@@ -381,6 +476,7 @@ export async function computeBillingSuggestions(
       const procEst = estimateProcurementProgress(
         { scheduled_value: scheduledValue },
         linkedPos,
+        todayIso,
       );
       estimateRecords = [procEst];
       estimateWeights = [null]; // single estimate - weighting is a no-op
@@ -494,7 +590,17 @@ export async function computeBillingSuggestions(
         })
       : null;
 
-    const avgPct = ruleResult ? ruleResult.pct : rollup.pct;
+    // Precedence: an agreed rule of credit, then the tracker both parties
+    // read, then duration. See src/lib/commodity-progress.ts.
+    const commodityMeasure =
+      rule || isProcurementLine(line)
+        ? null
+        : measureFromCommodities(readingsByItem.get(line.item_number) ?? []);
+    const avgPct = ruleResult
+      ? ruleResult.pct
+      : commodityMeasure
+        ? commodityMeasure.pct
+        : rollup.pct;
 
     const knownDur = estimateWeights.filter(
       (d): d is number => d != null && d > 0,
@@ -615,13 +721,18 @@ export async function computeBillingSuggestions(
       reasons: [
         ...resolvedDetail,
         ...(ruleResult ? [ruleResult.reason] : []),
+        ...(commodityMeasure ? [commodityMeasure.summary] : []),
+        ...(commodityMeasure?.ignored ?? []).map(
+          (i) => `${i.label} not counted: ${i.reason}`,
+        ),
         ...estimateRecords.map((e) => e.reason),
       ],
       sourcesSummary,
       // A line under a rule of credit is not duration-weighted, whatever the
       // fallback computed. Saying both would put two different bases on one
       // number.
-      weightedByDuration: ruleResult ? false : rollup.weightedByDuration,
+      weightedByDuration:
+        ruleResult || commodityMeasure ? false : rollup.weightedByDuration,
       unweightedPct: rollup.unweightedPct,
       ruleOfCredit:
         rule && ruleResult
@@ -637,6 +748,13 @@ export async function computeBillingSuggestions(
               emptyComponents: ruleResult.emptyComponents,
             }
           : undefined,
+      commodityBasis: commodityMeasure
+        ? {
+            summary: commodityMeasure.summary,
+            used: commodityMeasure.used,
+            ignored: commodityMeasure.ignored,
+          }
+        : undefined,
       evidence,
     });
   }
@@ -885,7 +1003,20 @@ export async function getBillThisPeriodRows(
   const period = periodMonth ?? (await resolveBillingPeriod(auth.supabase, projectId));
   const thisMonthIso = period;
   const nextMonthIsoLocal = period;
-  const todayIso = progressAsOf(period);
+  // Same cutoff as computeBillingSuggestions. Two functions measuring the same
+  // period as of two different dates is how the panel and the suggestion beside
+  // it end up disagreeing about the same line.
+  const { data: billProjectRow } = await auth.supabase
+    .from("projects")
+    .select("*")
+    .eq("id", projectId)
+    .maybeSingle();
+  const todayIso = progressAsOf(
+    period,
+    new Date(),
+    (billProjectRow as { billing_cutoff_day?: number | null } | null)
+      ?.billing_cutoff_day ?? null,
+  );
 
   // Pull forecast entries within the billing window only.
   //
@@ -953,7 +1084,9 @@ export async function getBillThisPeriodRows(
   // schedule (or for procurement lines, the PO state) supports billing.
   const { data: lineInfo } = await auth.supabase
     .from("billing_lines")
-    .select("id, type, description, scheduled_value, linked_task_wbs_codes, linked_procurement_order_ids")
+    // "*" for the same reason as the sibling query above: a named list breaks
+    // the moment a migration adds a column this reads.
+    .select("*")
     .eq("project_id", projectId);
   const { data: taskInfo } = await auth.supabase
     .from("schedule_tasks")
@@ -1002,6 +1135,12 @@ export async function getBillThisPeriodRows(
       billedByLine.set(t.billing_line_id, Number(t.total_billed ?? 0));
     }
   }
+
+  // Same rule as computeBillingSuggestions: a procurement line's cap is its
+  // current scope, which for a line a change order raised is not its
+  // scheduled_value. POI 5.05 is the live example - CO-04 raised it.
+  const { rows: billAmendments } = await readAmendments(auth.supabase, projectId);
+  const billScopeById = scopeByLine(lineInfo ?? [], billAmendments);
 
   const lineById = new Map<string, {
     type: string | null;
@@ -1142,10 +1281,12 @@ export async function getBillThisPeriodRows(
       const linked = poIds
         .map((id) => poStateById.get(id))
         .filter((p): p is LinkedPo => !!p);
-      const scheduledValue = Number(lineMeta.scheduled_value ?? 0);
+      const scheduledValue =
+        billScopeById.get(x.row.billingLineId) ?? Number(lineMeta.scheduled_value ?? 0);
       const est = estimateProcurementProgress(
         { scheduled_value: scheduledValue },
         linked,
+        todayIso,
       );
       const alreadyBilled = billedByLine.get(x.row.billingLineId) ?? 0;
       // manualAmount is null here by construction - a typed figure returned

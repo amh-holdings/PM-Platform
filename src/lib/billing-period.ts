@@ -39,11 +39,28 @@ export function monthsBetween(from: string, to: string): number {
   return (ty - fy) * 12 + (tm - fm);
 }
 
-/** Last calendar day of the month a YYYY-MM-01 string names. */
-export function periodEndOf(periodMonth: string): string {
+/**
+ * Last day of the period a YYYY-MM-01 string names.
+ *
+ * The calendar month by default. Where a contract sets a billing cutoff, that
+ * day instead: Sweet Springs bills to the 20th, so September's application
+ * covers work through 2026-09-20 and the 21st onward belongs to October's.
+ *
+ * `cutoffDay` is only ever the EVIDENCE boundary. The period a billing entry
+ * sits in is still a whole month - entries are keyed by period_month and the
+ * G703 names a month - so the callers that bucket money leave it unset and the
+ * ones that measure progress pass it. Mixing those up would move money between
+ * applications rather than deciding what had happened by the time one closed.
+ */
+export function periodEndOf(
+  periodMonth: string,
+  cutoffDay?: number | null,
+): string {
   const [y, m] = periodMonth.split("-").map(Number);
   const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  return `${y}-${String(m).padStart(2, "0")}-${String(last).padStart(2, "0")}`;
+  const cut = Number(cutoffDay ?? 0);
+  const day = Number.isFinite(cut) && cut >= 1 && cut < last ? Math.floor(cut) : last;
+  return `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 /** "Aug 2026" for a YYYY-MM-01 string. */
@@ -70,9 +87,18 @@ export function periodLabel(periodMonth: string): string {
  * August on 20 August would measure the schedule as of 31 August and bill for
  * eleven days of work nobody has done yet. Rules 3 and 4 in estimateTaskProgress
  * (past-due fallback and linear interpolation) both key off this date.
+ *
+ * With a cutoff day the clamp still applies, so assembling September's
+ * application on the 29th measures the schedule as of the 20th - the day the
+ * period actually closed - rather than crediting nine days of work that belong
+ * to October.
  */
-export function progressAsOf(periodMonth: string, today: Date = new Date()): string {
-  const end = periodEndOf(periodMonth);
+export function progressAsOf(
+  periodMonth: string,
+  today: Date = new Date(),
+  cutoffDay?: number | null,
+): string {
+  const end = periodEndOf(periodMonth, cutoffDay);
   const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
   return todayIso < end ? todayIso : end;
 }

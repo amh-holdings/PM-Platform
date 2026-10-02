@@ -36,6 +36,12 @@ import {
   ownerCashMonth,
 } from "@/lib/billing-cash-date";
 import {
+  describeRelease,
+  fallbackReleaseMonth,
+  ownerReleaseMonth,
+  resolveRetainageRelease,
+} from "@/lib/retainage-release";
+import {
   describeSovDateGap,
   describeSovDateSource,
   resolveSovMonth,
@@ -104,7 +110,10 @@ export type ProjectionWarning = {
     | "overbilled"
     | "pipeline_change_order"
     | "pipeline_co_no_cost"
-    | "sub_sov_no_date";
+    | "sub_sov_no_date"
+    // Retainage is in the curve, but at the month the series happens to end
+    // rather than at a contractual release event.
+    | "retainage_release_no_event";
   ref: string;
   message: string;
 };
@@ -125,7 +134,9 @@ export type ProjectionNote = {
     | "pipeline_co_cost"
     | "sov_date_from_mapping"
     // Imported cash-flow plan that the schedule now dates instead.
-    | "planned_billing_reforecast";
+    | "planned_billing_reforecast"
+    // Retainage dated from the contract's release event.
+    | "retainage_release_from_event";
   ref: string;
   message: string;
 };
@@ -145,6 +156,26 @@ export type ProjectionResult = {
 };
 
 const DEFAULT_MONTHS = 12;
+
+/**
+ * Whether a commitment already carries this cost code's scope into the forecast,
+ * so counting the buildup line as well would be the same money twice.
+ *
+ * Two ways that is true:
+ *   procurement_order_id - the code IS one purchase order, one to one.
+ *   commitment_covered   - the scope is bought out across several commitments,
+ *                          which a single FK cannot express. SSC S is the budget
+ *                          line for all electrical, which is two subcontracts;
+ *                          SSC T is one line against sixteen POs. See 0068.
+ *
+ * Reads undefined on a database where 0068 has not run, which is false, which
+ * is the behaviour from before the flag existed.
+ */
+function isCommitmentCovered(
+  code: { procurement_order_id?: string | null; commitment_covered?: boolean | null } | null,
+): boolean {
+  return !!code?.procurement_order_id || code?.commitment_covered === true;
+}
 
 type Options = { monthsAhead?: number; today?: Date };
 
@@ -167,7 +198,9 @@ export async function buildProjection(
     await Promise.all([
       supabase
         .from("projects")
-        .select("owner_payment_terms_days, retainage_pct_default")
+        .select(
+          "owner_payment_terms_days, retainage_pct_default, retainage_release_event, cod_date, guaranteed_substantial_completion_date",
+        )
         .eq("id", projectId)
         .maybeSingle(),
       supabase
@@ -176,10 +209,14 @@ export async function buildProjection(
           "billing_line_id, period_month, cash_in_month, paid_at, pay_application_id, planned_amount, actual_amount, retainage_amount, status, billing_lines!inner(project_id)",
         )
         .eq("billing_lines.project_id", projectId),
+      // cost_codes is selected with * rather than by name because
+      // commitment_covered does not exist until 0068 runs, and a named select
+      // on a missing column errors the whole request and takes the cash flow
+      // down with it. Same reason the procurement selects below use *.
       supabase
         .from("cost_forecasts")
         .select(
-          "period_month, planned_amount, actual_amount, cost_codes!inner(project_id, subcontractor_id, procurement_order_id, subcontractors(payment_terms_days, retainage_pct))",
+          "period_month, planned_amount, actual_amount, cost_codes!inner(*, subcontractors(payment_terms_days, retainage_pct))",
         )
         .eq("cost_codes.project_id", projectId),
       // Cash OUT, so vendor rows only. Since 0055 a PO also carries owner
@@ -755,9 +792,10 @@ export async function buildProjection(
     const code = f.cost_codes as unknown as {
       subcontractor_id: string | null;
       procurement_order_id: string | null;
+      commitment_covered?: boolean | null;
       subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
     } | null;
-    if (code?.procurement_order_id) continue;
+    if (isCommitmentCovered(code)) continue;
     const gross = effectiveAmount(f.actual_amount, f.planned_amount);
     if (gross <= 0) continue;
     const subDays = Number(code?.subcontractors?.payment_terms_days ?? 0);
@@ -877,25 +915,69 @@ export async function buildProjection(
   for (const f of forecastsRes.data ?? []) {
     const code = f.cost_codes as unknown as {
       procurement_order_id: string | null;
+      commitment_covered?: boolean | null;
       subcontractors: { retainage_pct: number | null } | null;
     } | null;
-    if (code?.procurement_order_id) continue;
+    // Same exclusion as the cost loop above, and it has to be: retainage held
+    // on a code whose cost is not in the forecast is retainage on nothing, and
+    // it would be released into cash in the final month out of thin air.
+    if (isCommitmentCovered(code)) continue;
     const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
     const gross = effectiveAmount(f.actual_amount, f.planned_amount);
     totalSubRetainage += gross * retPct;
   }
   if (totalOwnerRetainage > 0 || totalSubRetainage > 0) {
+    // The contract's release event, not "wherever the curve happens to end".
+    // Sweet Springs releases at Final Completion, 2027-06-02 on the schedule;
+    // the old rule put a $146,687 receipt in Apr 2027, three months early on
+    // the largest receipt left in the job. See retainage-release.ts.
+    const at = resolveRetainageRelease({
+      event: projectRes.data?.retainage_release_event,
+      tasks: (tasksRes.data ?? []).map((t) => ({
+        task_name: t.task_name,
+        end_date: t.end_date,
+      })),
+      codDate: projectRes.data?.cod_date,
+      guaranteedSubstantialCompletion:
+        projectRes.data?.guaranteed_substantial_completion_date,
+    });
+
     const allMonths = Array.from(buckets.keys()).sort();
     const lastMonth = allMonths[allMonths.length - 1];
-    if (lastMonth) {
-      const release = addMonthsIso(lastMonth, 1);
-      const bucket = get(release);
-      bucket.cashIn += totalOwnerRetainage;
-      bucket.subCashOut += totalSubRetainage;
+    // No resolvable event keeps the old behaviour rather than dropping the
+    // money: retainage missing from the curve is worse than retainage in an
+    // approximate month, and the note below says which one you are looking at.
+    const releaseMonth =
+      at.month ?? (lastMonth ? fallbackReleaseMonth(lastMonth) : null);
+
+    if (releaseMonth) {
+      // Subs are released at the event. The owner's share arrives on terms
+      // after it, because Net 30 applies to the retainage invoice like any
+      // other - which is what makes the tail of the job a real squeeze: you
+      // let go of sub retainage before the owner's reaches you.
+      const ownerMonth = ownerReleaseMonth(releaseMonth, ownerTermsDays);
+      get(ownerMonth).cashIn += totalOwnerRetainage;
+
+      const subBucket = get(releaseMonth);
+      subBucket.subCashOut += totalSubRetainage;
       // The release is money moving, so it belongs in the actual/forecast split
       // as well. Leaving it out made the Cash Out timeline read $86,490 against
       // a $96,100 total - short by exactly the sub retainage.
-      bucket.cashOutForecast += totalSubRetainage;
+      subBucket.cashOutForecast += totalSubRetainage;
+
+      if (at.month) {
+        notes.push({
+          kind: "retainage_release_from_event",
+          ref: `${Math.round(totalOwnerRetainage).toLocaleString()} owner / ${Math.round(totalSubRetainage).toLocaleString()} sub`,
+          message: describeRelease(at, ownerTermsDays),
+        });
+      } else {
+        warnings.push({
+          kind: "retainage_release_no_event",
+          ref: `$${Math.round(totalOwnerRetainage + totalSubRetainage).toLocaleString()}`,
+          message: `Retainage is drawn one month after the last other movement because it ${at.why}. $${Math.round(totalOwnerRetainage).toLocaleString()} owner and $${Math.round(totalSubRetainage).toLocaleString()} sub retainage are in the curve at a month nobody chose.`,
+        });
+      }
     }
   }
 
