@@ -26,8 +26,13 @@ export type SummaryStatusTask = {
  * Matched loosely on purpose. The dropdown offers Not Started / In Progress /
  * Complete, but the column is free text underneath and imports have put
  * "Completed" and "COMPLETE" in it. Anything else that carries meaning - "On
- * Hold", "Delayed" - is work that has started and has not finished, which is
- * exactly what in-progress means to a parent.
+ * Hold", "Delayed", "Rejected" - is work that has started and has not
+ * finished, which is exactly what in-progress means to a parent.
+ *
+ * Approved counts as finished alongside Complete, because that is already the
+ * call schedule-status-tone.ts makes: statusTintBeatsCriticality groups the
+ * two as done. A submittal branch whose every row is Approved is a branch with
+ * no work left in it, and it should read the same as any other finished one.
  */
 export type LeafState = "complete" | "notStarted" | "inProgress" | "silent";
 
@@ -35,6 +40,7 @@ export function leafStateOf(status: string | null | undefined): LeafState {
   const s = (status ?? "").trim().toLowerCase();
   if (!s) return "silent";
   if (s.startsWith("complete")) return "complete";
+  if (s.startsWith("approved")) return "complete";
   if (s.startsWith("not started")) return "notStarted";
   return "inProgress";
 }

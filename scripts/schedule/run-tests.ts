@@ -3676,6 +3676,20 @@ section("Dragging a branch above the first row of the sheet");
   eq("null says nothing at all", leafStateOf(null), "silent");
   // On Hold is work that started and has not finished, whatever else it is.
   eq("anything else counts as in progress", leafStateOf("On Hold"), "inProgress");
+  // Approved is finished too - the same call schedule-status-tone.ts makes
+  // when it lets Approved cover the critical-path red.
+  eq("Approved counts as finished", leafStateOf("Approved"), "complete");
+  eq("Rejected does not", leafStateOf("Rejected"), "inProgress");
+  eq(
+    "a branch of approved submittals reads Complete",
+    rollUpStatus(["Approved", "Approved"]),
+    "Complete",
+  );
+  eq(
+    "Approved and Complete together still read Complete",
+    rollUpStatus(["Approved", "Complete"]),
+    "Complete",
+  );
 
   eq(
     "every leaf complete makes the parent complete",
