@@ -316,12 +316,11 @@ export default async function WeeklyProgressPrintPage({
                 <thead>
                   <tr className="bg-[#1f4e79] text-white [print-color-adjust:exact]">
                     <Th className="w-14">WBS</Th>
+                    <Th className="w-[30%]">Parent</Th>
                     <Th>Activity</Th>
                     <Th className="w-28">Responsible</Th>
                     <Th className="w-20">Start</Th>
                     <Th className="w-20">Finish</Th>
-                    <Th className="w-16">% Comp</Th>
-                    <Th className="w-24">Status</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -329,7 +328,7 @@ export default async function WeeklyProgressPrintPage({
                     <Fragment key={w.weekStart}>
                       <tr className="bg-[#bdd7ee] [print-color-adjust:exact]">
                         <td
-                          colSpan={7}
+                          colSpan={6}
                           className="border border-neutral-500 px-1 py-0.5 font-bold uppercase tracking-wide"
                         >
                           {w.label}
@@ -338,7 +337,7 @@ export default async function WeeklyProgressPrintPage({
                       {w.tasks.length === 0 ? (
                         <tr>
                           <td
-                            colSpan={7}
+                            colSpan={6}
                             className="border border-neutral-500 px-1 py-0.5 italic"
                           >
                             No scheduled work.
@@ -348,20 +347,14 @@ export default async function WeeklyProgressPrintPage({
                         w.tasks.map((t) => (
                           <tr key={t.wbs} className="align-top">
                             <Td>{t.wbs}</Td>
+                            {/* Which branch the task sits under. Week three
+                                read "Delivery" with nothing to say delivery
+                                of what - the parent is what names it. */}
+                            <Td className="text-left">{t.parent ?? "-"}</Td>
                             <Td className="text-left">{t.name}</Td>
                             <Td className="text-left">{t.assignedTo ?? "-"}</Td>
                             <Td>{dimensionDate(t.start)}</Td>
                             <Td>{dimensionDate(t.end)}</Td>
-                            <Td>{t.pctComplete != null ? `${t.pctComplete}%` : "-"}</Td>
-                            <Td className={t.critical ? "font-bold" : undefined}>
-                              {[
-                                t.critical ? "Critical" : null,
-                                t.finishing ? "Completes" : null,
-                                t.continuing ? "Continuing" : null,
-                              ]
-                                .filter(Boolean)
-                                .join(", ") || "Scheduled"}
-                            </Td>
                           </tr>
                         ))
                       )}
@@ -369,10 +362,6 @@ export default async function WeeklyProgressPrintPage({
                   ))}
                 </tbody>
               </table>
-              <p className="mt-0.5 text-[8.5px] text-neutral-600">
-                Critical = on the schedule&apos;s critical path. Completes = the
-                activity finishes within that week.
-              </p>
             </div>
           )}
         </div>
