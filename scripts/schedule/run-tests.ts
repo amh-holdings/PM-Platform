@@ -45,6 +45,16 @@ import {
 } from "../../src/lib/schedule-status-tone";
 import { parentLabel } from "@/lib/schedule-lookahead";
 import {
+  daysSinceReport,
+  describeRecordCounts,
+  emptyEvidenceReason,
+  hasRecords,
+  markMovement,
+  predecessorsOf,
+  successorsOf,
+  taskRecordsAlert,
+} from "@/lib/schedule-task-records";
+import {
   datesTheForecastWillReplace,
   describeForecastOverwrite,
 } from "@/lib/schedule-sync";
@@ -3656,6 +3666,240 @@ section("Dragging a branch above the first row of the sheet");
     "a task with no branch reads as it always did",
     taskDisplayLabel("5", { name: "Commissioning", row: 90, parentName: null }),
     "90 - Commissioning",
+  );
+}
+
+
+// ============================================================================
+section("Task records - what a schedule row can show about itself");
+{
+  // The civil shape this has to work on: Build Basin 1 follows the grubbing
+  // and is followed by two tasks, neither of which it names.
+  const civil = [
+    { wbs_code: "5.1.1.5", task_name: "Initial clearing for Perimeter ESC", predecessors: null },
+    { wbs_code: "5.1.2.1", task_name: "Basin 1 Clearing and grubbing", predecessors: "5.1.1.5SS" },
+    { wbs_code: "5.1.2.2", task_name: "Build Basin 1", predecessors: "5.1.2.1SS+2" },
+    { wbs_code: "5.1.2.5", task_name: "Full Site Clearing", predecessors: "5.1.2.2, 5.1.2.4, 5.1.1.11" },
+    { wbs_code: "5.1.2.7", task_name: "Basin 1 Final Grading", predecessors: "5.1.2.2FF" },
+    { wbs_code: "5.1.2.10", task_name: "Timber processing", predecessors: "5.1.1.5SS" },
+    { wbs_code: "5.1.1.6", task_name: "Fencing Installation", predecessors: null },
+  ];
+
+  // ---- successors, the half the grid has never been able to show ----
+  same(
+    "a task's successors are derived from everyone else's predecessors",
+    successorsOf("5.1.2.2", civil).map((l) => `${l.wbsCode}${l.type}`),
+    ["5.1.2.5FS", "5.1.2.7FF"],
+  );
+
+  eq(
+    "the relationship type and lag survive the derivation",
+    successorsOf("5.1.2.1", civil)[0].type + String(successorsOf("5.1.2.1", civil)[0].lag),
+    "SS2",
+  );
+
+  same(
+    "two tasks can both wait on the same predecessor",
+    successorsOf("5.1.1.5", civil).map((l) => l.wbsCode),
+    ["5.1.2.1", "5.1.2.10"],
+  );
+
+  same(
+    "a task nothing waits on has no successors",
+    successorsOf("5.1.1.6", civil),
+    [],
+  );
+
+  // Sweet Springs has 5.1.2.10 and 5.1.2.2. String sort puts .10 first, which
+  // reads as though timber processing comes before the basin it follows.
+  eq("WBS ordering is numeric per segment, not lexical", compareWbs("5.1.2.2", "5.1.2.10") < 0, true);
+  eq("a deeper code sorts after its own parent", compareWbs("5.1.2", "5.1.2.1") < 0, true);
+
+  // ---- predecessors, with the dangling ones named rather than dropped ----
+  same(
+    "predecessors resolve to names",
+    predecessorsOf("5.1.2.1SS+2", civil).map((l) => l.taskName),
+    ["Basin 1 Clearing and grubbing"],
+  );
+
+  eq(
+    "a predecessor that is not a task on the project is reported, not dropped",
+    predecessorsOf("5.1.2.2, 9.9.9", civil).filter((l) => l.dangling).length,
+    1,
+  );
+
+  eq(
+    "and the resolving one beside it is untouched",
+    predecessorsOf("5.1.2.2, 9.9.9", civil).filter((l) => !l.dangling)[0].taskName,
+    "Build Basin 1",
+  );
+
+  // The engine silently discards an unresolvable link, which frees the
+  // successor to start on day one. The popup is the one place that can say so.
+  eq(
+    "a lowercase link still resolves",
+    predecessorsOf("5.1.2.2ff", civil)[0].dangling,
+    false,
+  );
+
+  // ---- movement, which is the quiet half of the billing problem ----
+  // Debris Removal was reported almost daily from 20 Aug to 16 Sep and read
+  // 10% every time. Reported is not progressing.
+  same(
+    "only the reports that raised the percent count as movement",
+    markMovement([
+      { reportDate: "2026-08-20", newPct: 10 },
+      { reportDate: "2026-08-27", newPct: 10 },
+      { reportDate: "2026-09-16", newPct: 10 },
+    ]),
+    [true, false, false],
+  );
+
+  same(
+    "movement is measured against the high-water mark, so a typo is not progress",
+    markMovement([
+      { reportDate: "2026-09-01", newPct: 95 },
+      { reportDate: "2026-09-02", newPct: 25 },
+      { reportDate: "2026-09-03", newPct: 95 },
+    ]),
+    [true, false, false],
+  );
+
+  same(
+    "out-of-order rows are judged by report date, not array order",
+    markMovement([
+      { reportDate: "2026-09-19", newPct: 65 },
+      { reportDate: "2026-08-19", newPct: 30 },
+      { reportDate: "2026-09-05", newPct: 45 },
+    ]),
+    [true, true, true],
+  );
+
+  // ---- staleness, as of the data date rather than the wall clock ----
+  eq(
+    "staleness is counted to the data date, not to today",
+    daysSinceReport("2026-09-19", "2026-09-28"),
+    9,
+  );
+  eq("a task never reported has no staleness figure", daysSinceReport(null, "2026-09-28"), null);
+
+  // ---- the one line at the top of the popup ----
+  const baseAlert = {
+    taskType: "construction",
+    status: "In Progress",
+    isSummary: false,
+    predecessorCount: 1,
+    successorCount: 1,
+    lastReportDate: "2026-09-19",
+    dataDate: "2026-09-28",
+    openConstraints: 0,
+    critical: true,
+  };
+
+  eq(
+    "a stale construction task in progress says how many days and that it is critical",
+    taskRecordsAlert(baseAlert)?.text.includes("9 days") &&
+      taskRecordsAlert(baseAlert)?.text.includes("critical path"),
+    true,
+  );
+
+  eq(
+    "a freshly reported task raises nothing",
+    taskRecordsAlert({ ...baseAlert, lastReportDate: "2026-09-25" }),
+    null,
+  );
+
+  // Fencing Installation and Permit Closeout, both of which read as critical
+  // before the engine learned about isolated tasks.
+  eq(
+    "a task outside the network outranks a stale report",
+    taskRecordsAlert({
+      ...baseAlert,
+      predecessorCount: 0,
+      successorCount: 0,
+      lastReportDate: null,
+    })?.tone,
+    "bad",
+  );
+
+  eq(
+    "an open constraint outranks a stale report",
+    taskRecordsAlert({ ...baseAlert, openConstraints: 2 })?.text.includes("2 open constraint"),
+    true,
+  );
+
+  // The AFP 12 shape: work under way, no approved report, billing $0.
+  eq(
+    "under way with no report at all is its own warning, not a staleness figure",
+    taskRecordsAlert({ ...baseAlert, lastReportDate: null })?.text.includes(
+      "contributing nothing to a pay application",
+    ),
+    true,
+  );
+
+  eq(
+    "a deliverable is never nagged about field reports",
+    taskRecordsAlert({ ...baseAlert, taskType: "deliverable", lastReportDate: null }),
+    null,
+  );
+
+  eq(
+    "a summary row is never nagged either",
+    taskRecordsAlert({ ...baseAlert, isSummary: true, predecessorCount: 0, successorCount: 0 }),
+    null,
+  );
+
+  // ---- empty states say which rule made them empty ----
+  eq(
+    "construction with no evidence is waiting for an approved report",
+    emptyEvidenceReason({ evidenceCount: 0, taskType: "construction", isSummary: false })?.includes(
+      "approved field report",
+    ),
+    true,
+  );
+  eq(
+    "procurement with no evidence points at the purchase order",
+    emptyEvidenceReason({ evidenceCount: 0, taskType: "procurement", isSummary: false })?.includes(
+      "purchase order",
+    ),
+    true,
+  );
+  eq(
+    "a summary row explains that its percent is rolled up",
+    emptyEvidenceReason({ evidenceCount: 0, taskType: null, isSummary: true })?.includes(
+      "rolled up",
+    ),
+    true,
+  );
+  eq(
+    "an unclassified row says the Type is what is missing",
+    emptyEvidenceReason({ evidenceCount: 0, taskType: null, isSummary: false })?.includes("no Type set"),
+    true,
+  );
+  eq(
+    "a task that HAS evidence gets no empty-state copy",
+    emptyEvidenceReason({ evidenceCount: 3, taskType: "construction", isSummary: false }),
+    null,
+  );
+
+  // ---- the row badge ----
+  eq("a row with nothing on it has no badge", hasRecords({ photos: 0, documents: 0, evidence: 0 }), false);
+  eq("a row with only a document still has a badge", hasRecords({ photos: 0, documents: 1, evidence: 0 }), true);
+  eq("an absent count is not a badge", hasRecords(undefined), false);
+  eq(
+    "the badge tooltip names what is there",
+    describeRecordCounts({ photos: 7, documents: 2, evidence: 3 }),
+    "7 photos, 2 documents, 3 approved inspections",
+  );
+  eq(
+    "and singulars read correctly",
+    describeRecordCounts({ photos: 1, documents: 1, evidence: 1 }),
+    "1 photo, 1 document, 1 approved inspection",
+  );
+  eq(
+    "an empty row's tooltip says so rather than reading as a broken label",
+    describeRecordCounts(undefined),
+    "No photos or documents on this task",
   );
 }
 

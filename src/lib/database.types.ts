@@ -2455,6 +2455,65 @@ export type Database = {
           },
         ]
       }
+      schedule_task_documents: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          document_id: string
+          id: string
+          note: string | null
+          project_id: string
+          schedule_task_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          document_id: string
+          id?: string
+          note?: string | null
+          project_id: string
+          schedule_task_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          document_id?: string
+          id?: string
+          note?: string | null
+          project_id?: string
+          schedule_task_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "schedule_task_documents_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "schedule_task_documents_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "project_documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "schedule_task_documents_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "schedule_task_documents_schedule_task_id_fkey"
+            columns: ["schedule_task_id"]
+            isOneToOne: false
+            referencedRelation: "schedule_tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       schedule_tasks: {
         Row: {
           assigned_to: string | null

@@ -51,6 +51,9 @@ const PROBES = [
   ["0047_project_equipment", "project_equipment", null],
   ["0047_project_equipment (dpr link)", "dpr_equipment", "equipment_id"],
   ["0048_subcontractor_document", "subcontractors", "document_id"],
+  // 0049 through 0068 are not probed here yet. The list stops where it stops
+  // because nobody extended it, not because those migrations are verified.
+  ["0069_schedule_task_documents", "schedule_task_documents", null],
 ];
 
 // 0029 (RLS policies) and 0044 (a data update plus a dropped index) leave no
