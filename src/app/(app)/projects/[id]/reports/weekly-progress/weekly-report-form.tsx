@@ -357,7 +357,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
       {/* ---- Site resources ---- */}
       <Section
         title="Site resources"
-        note="Headcount and last-date-onsite are read off the field reports. Equipment is one row per machine - the field spellings folded into each row are listed under its name, so check the merges. End date is the one column the platform cannot know: it is a commercial date, so type it once and it carries."
+        note="Headcount and last-date-onsite are read off the field reports. Equipment is one row per machine - the field spellings folded into each row are listed under its name, so check the merges. End date is the last finish of the sub's tasks on the schedule, so it moves with the forecast; it shows red only when no task is assigned to the sub, or when it has been typed over."
       >
         <ContractorTable
           rows={contractors}
@@ -878,9 +878,7 @@ function ContractorTable({
               <th className="px-2 py-1.5 text-left font-medium">Scope</th>
               <th className="px-2 py-1.5 text-left font-medium">Headcount</th>
               <th className="px-2 py-1.5 text-left font-medium">Last Date Onsite</th>
-              <th className={cn("px-2 py-1.5 text-left font-medium", MINE_LABEL)}>
-                End date
-              </th>
+              <th className="px-2 py-1.5 text-left font-medium">End date</th>
               <th className="w-8" />
             </tr>
           </thead>
@@ -941,7 +939,15 @@ function ContractorTable({
                     value={row.endDate ?? ""}
                     onChange={(e) => set(i, { endDate: e.target.value || null })}
                     disabled={disabled}
-                    className={cn("h-8", MINE_FIELD)}
+                    // Red when it is ours: typed over the schedule, or empty
+                    // because no schedule task is assigned to this sub.
+                    className={cn(
+                      "h-8",
+                      (row.key.startsWith("manual:") ||
+                        !row.endDate ||
+                        row.endDate !== row.scheduleEnd) &&
+                        MINE_FIELD,
+                    )}
                   />
                 </td>
                 <td className="px-2 py-1.5">

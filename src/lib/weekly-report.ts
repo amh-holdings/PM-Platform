@@ -201,6 +201,13 @@ export type ContractorRow = {
   headcount: number | null;
   lastOnsite: string | null;
   endDate: string | null;
+  /**
+   * The schedule's answer for endDate - the last finish of any task assigned
+   * to this sub - kept beside the resolved value so the form and the print
+   * sheet can tell a date the schedule supplied from one somebody typed.
+   * Optional: issued payloads and hand-added rows predate or lack it.
+   */
+  scheduleEnd?: string | null;
   /** Which of the four cells the human changed, so the form can show it. */
   overridden: string[];
   /** How headcount was arrived at. Empty for manually added rows. */
@@ -382,8 +389,9 @@ export function deriveContractors(
     if (!prev || row.report_date > prev) lastSeen.set(row.subcontractor_id, row.report_date);
   }
 
-  // A sub's end date, where the schedule has an opinion: the last day of any
-  // task assigned to them. Weak evidence, so it is offered rather than filled.
+  // A sub's end date: the last finish of any task assigned to them. Their
+  // scope ends on the schedule, so this is the answer, not a guess - and it
+  // moves with the forecast. Matched on the exact company name.
   const lastTaskEnd = new Map<string, string>();
   for (const t of tasks) {
     if (!t.assigned_to || !t.end_date) continue;
@@ -437,6 +445,7 @@ export function deriveContractors(
       headcount: o.headcount ?? peak,
       lastOnsite: o.lastOnsite ?? lastSeen.get(sub.id) ?? null,
       endDate: o.endDate ?? scheduleEnd,
+      scheduleEnd,
       overridden,
       basis,
     });

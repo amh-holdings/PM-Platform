@@ -264,6 +264,15 @@ function unit() {
   check("CON-04 end date is blank when nothing knows it", pyramid.endDate === null);
   check("CON-05 the basis explains the number", pyramid.basis.includes("Peak of 8"), pyramid.basis);
 
+  // Their scope ends on the schedule: the last finish of any task assigned to
+  // them, matched on the company name without regard to case.
+  const scheduled = deriveContractors(subs, dprs, manpower, onsite, [
+    { wbs_code: "5.1.3.7", task_name: "Convert basins", assigned_to: "Pyramid Excavation LLC", status: null, pct_complete: null, end_date: "2026-11-23" },
+    { wbs_code: "5.1.3.8", task_name: "Permanent Seeding", assigned_to: "pyramid excavation llc ", status: null, pct_complete: null, end_date: "2026-11-25" },
+    { wbs_code: "5.1.2", task_name: "Fence", assigned_to: "Hercules Fence", status: null, pct_complete: null, end_date: "2026-12-30" },
+  ], {}, []).find((r) => r.name === "Pyramid Excavation LLC")!;
+  check("CON-05b end date is the last finish of the sub's schedule tasks", scheduled.endDate === "2026-11-25" && scheduled.scheduleEnd === "2026-11-25", JSON.stringify(scheduled));
+
   // A sub under contract who has never been on site is not a site resource.
   // Sweet Springs carries ten active subs and one crew actually working; listing
   // all ten with blank cells buries the one that matters.
@@ -1126,10 +1135,29 @@ function unit() {
       ],
     } as unknown as WeeklyReportView);
     check(
-      "PROV-05 End Date is Phil's on every row - the platform cannot know a commercial date",
+      "PROV-05 an End Date typed over the schedule, or on a hand-added row, is marked",
       cells.contractors["sub-1"].includes("endDate") &&
         cells.contractors["manual:typed"].includes("endDate"),
       JSON.stringify(cells.contractors),
+    );
+    // Pyramid's End Date came off the schedule and printed red as if typed.
+    // Their scope ends on the schedule, so a schedule date is the platform's.
+    const sched = weeklyProvenance({
+      ...baseView(null),
+      contractors: [
+        { key: "sub-p", name: "Pyramid", scope: "", headcount: 8, lastOnsite: null, endDate: "2026-11-25", scheduleEnd: "2026-11-25", overridden: [], basis: "" },
+        { key: "sub-x", name: "No Tasks", scope: "", headcount: 3, lastOnsite: null, endDate: null, scheduleEnd: null, overridden: [], basis: "" },
+      ],
+    } as unknown as WeeklyReportView);
+    check(
+      "PROV-05b an End Date read off the schedule is not marked",
+      !sched.contractors["sub-p"].includes("endDate"),
+      JSON.stringify(sched.contractors),
+    );
+    check(
+      "PROV-05c an End Date the schedule cannot answer is marked as waiting on a person",
+      sched.contractors["sub-x"].includes("endDate"),
+      JSON.stringify(sched.contractors),
     );
     check(
       "PROV-06 a headcount read off the field reports is not marked with it",

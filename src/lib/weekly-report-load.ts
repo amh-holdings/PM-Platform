@@ -956,15 +956,18 @@ export function weeklyProvenance(view: WeeklyReportView): WeeklyProvenance {
   // must not be counted in the legend.
   const frozen = view.status === "issued" ? view.saved?.issued_payload : null;
 
-  // End Date is the one column on this table the platform cannot derive: it is
-  // a commercial date. Headcount and last-onsite are read off the field
-  // reports, so they stay black unless somebody corrected them.
+  // Headcount and last-onsite are read off the field reports and End Date off
+  // the schedule (the last finish of the sub's tasks), so all three stay black
+  // unless somebody typed over them. End Date is red only when the schedule
+  // has no task for the sub - then it is a box waiting on a person. It was
+  // once red on every row, from when the end date was treated as a
+  // commercial date; that left a schedule-derived date looking hand-typed.
   const contractors: Record<string, string[]> = {};
   for (const c of frozen?.contractors ?? view.contractors) {
     const cells = new Set<string>(c.key.startsWith("manual:")
       ? ["name", "scope", "headcount", "lastOnsite", "endDate"]
       : c.overridden);
-    cells.add("endDate");
+    if (!c.endDate) cells.add("endDate");
     contractors[c.key] = Array.from(cells);
   }
   const equipment: Record<string, string[]> = {};
