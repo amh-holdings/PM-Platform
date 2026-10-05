@@ -29,7 +29,6 @@ import {
   deriveSwppp,
   deriveWeather,
   deriveWorkThisWeek,
-  isSwppp,
   positionSentence,
   selectPhotoKeys,
   type ContractorRow,
@@ -338,7 +337,7 @@ export async function loadWeeklyReport(
       .in("status", ["open", "in_progress"]),
     supabase
       .from("inspections")
-      .select("inspection_type, title, inspector_name, status, submitted_at, decided_at, created_at")
+      .select("origin, inspection_type, title, inspector_name, status, submitted_at, decided_at, created_at")
       .eq("project_id", projectId),
     supabase
       .from("daily_production")
@@ -620,7 +619,6 @@ export async function loadWeeklyReport(
 
   const typedTasks = tasks as never as Parameters<typeof deriveMilestones>[0];
 
-  const swpppInspections = (inspectionRes.data ?? []).filter(isSwppp);
 
   // Evidence is for the person WRITING the report, so it deliberately includes
   // the unapproved reports the derivations refuse to read. They are tagged with
@@ -741,7 +739,7 @@ export async function loadWeeklyReport(
     photoSelection,
     photoAuto,
     weather: deriveWeather(dprs as never, logs as never, (delayRes.data ?? []) as never),
-    swppp: deriveSwppp(swpppInspections as never, period.end),
+    swppp: deriveSwppp((inspectionRes.data ?? []) as never, period.end),
     workThisWeek: deriveWorkThisWeek(
       dprs as never,
       logs as never,

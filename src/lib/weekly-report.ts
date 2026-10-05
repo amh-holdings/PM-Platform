@@ -128,6 +128,12 @@ export type WeeklyTask = {
 };
 
 export type WeeklyInspection = {
+  /**
+   * 'sub' is a field-report progress pin, 'cm' is an inspection the CM ran.
+   * Optional because issued payloads and older callers predate it; a row
+   * without it is treated as a pin, never as an inspection.
+   */
+  origin?: string | null;
   inspection_type: string | null;
   title?: string | null;
   inspector_name: string | null;
@@ -1170,24 +1176,35 @@ export function deriveEnvironment(
     if (dpr) sources.push(dpr.report_date);
   }
 
-  // An ESC inspection that did not pass is an environmental finding whether or
-  // not anybody wrote a note about it.
+  // An erosion-control inspection the CM FAILED is an environmental finding
+  // whether or not anybody wrote a note about it. Nothing else is.
+  //
+  // This box once printed "Erosion-control inspection not passed" for every
+  // inspection row that was not approved. Every row on Sweet Springs was a
+  // sub's field-report progress pin, and most were simply awaiting review -
+  // so Pyramid's matting-and-seeding photos went on the owner's draft as four
+  // failed ESC inspections. A failed ESC inspection is a permit matter; the
+  // report states one only when the CM ran the inspection and rejected it.
+  //   - origin 'sub' is a progress pin. Rejecting one means the claimed
+  //     percent was not accepted, not that erosion control failed.
+  //   - submitted / under review is undecided, and undecided is not failed.
   let failedInspections = 0;
   let passedInspections = 0;
   for (const insp of inspections) {
-    const when = (insp.decided_at ?? insp.submitted_at ?? insp.created_at ?? "").slice(0, 10);
+    if (insp.origin !== "cm" || !isSwppp(insp)) continue;
+    const when = (insp.decided_at ?? "").slice(0, 10);
     if (!when || when < period.start || when > period.end) continue;
     if (insp.status === "approved") {
       passedInspections++;
-      continue;
+    } else if (insp.status === "rejected") {
+      failedInspections++;
+      lines.push(
+        `${shortDay(when)} - Erosion-control inspection failed by the CM${
+          insp.title ? `: ${insp.title}` : ""
+        }.`,
+      );
+      sources.push(when);
     }
-    failedInspections++;
-    lines.push(
-      `${shortDay(when)} - Erosion-control inspection not passed${
-        insp.title ? `: ${insp.title}` : ""
-      } (${insp.status}).`,
-    );
-    sources.push(when);
   }
 
   if (lines.length) {
@@ -1334,7 +1351,18 @@ export function deriveSwppp(
   inspections: WeeklyInspection[],
   periodEnd: string,
 ): Derived<string | null> {
+  // A SWPPP inspection is a permit record, so only an erosion-control
+  // inspection the CM ran and decided can date it. Sweet Springs filled this
+  // box from Pyramid's progress pins - photos of basin ESC work titled
+  // "Construct Basin 1 ESC" - and printed 23-Sept-26 as an inspection that
+  // never happened. A pin is not an inspection, and undecided is not done.
   const dated = inspections
+    .filter(
+      (i) =>
+        i.origin === "cm" &&
+        isSwppp(i) &&
+        (i.status === "approved" || i.status === "rejected"),
+    )
     .map((i) => ({
       i,
       when: (i.decided_at ?? i.submitted_at ?? i.created_at ?? "").slice(0, 10),
@@ -1344,7 +1372,12 @@ export function deriveSwppp(
 
   const latest = dated[0];
   if (!latest) {
-    return derive(null, "No inspection on this project is typed or titled as SWPPP.");
+    return derive(
+      null,
+      "No CM erosion-control inspection is on record, so the platform cannot date one. Type the date of the last SWPPP inspection.",
+      [],
+      "none",
+    );
   }
   const inside = latest.when >= addDays(periodEnd, -6);
   return derive(

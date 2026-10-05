@@ -246,7 +246,9 @@ export default async function WeeklyProgressPrintPage({
         <Row label="Safety" value={r.safety || "N/A"} wide multiline against={derived.safety} />
         <Row
           label="Date of Most Recent SWPPP Inspection"
-          value={r.swppp ? dimensionDate(r.swppp) : "N/A"}
+          // Never "N/A": on a permit inspection that reads as "not required",
+          // and a blank that slipped through should say what it is.
+          value={r.swppp ? dimensionDate(r.swppp) : "Date not entered"}
           boxed
           manual={prov.swppp}
         >
