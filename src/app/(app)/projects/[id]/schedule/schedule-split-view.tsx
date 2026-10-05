@@ -297,6 +297,38 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
 const MIN_COL_W = 44;
 const MAX_COL_W = 620;
 
+/**
+ * How wide the grid pane opens, so the default columns actually fit in it.
+ *
+ * Derived rather than typed, because a hardcoded number here silently hides
+ * columns. It was 1009 with a comment carrying the arithmetic by hand, and that
+ * arithmetic had gone stale twice over: it never counted GUTTER_W or ACTION_W,
+ * which are 124px between them, so the default set was already overflowing by
+ * 21px before Records was added and by 107px after. The pane scrolls
+ * horizontally, so nothing looked broken - the Records badge simply rendered
+ * off the right edge where nobody would find it, and the only visible symptom
+ * was a Float column cut slightly short.
+ *
+ * Deriving it means adding a default column can no longer hide one.
+ */
+const DEFAULT_GRID_WIDTH =
+  ALL_COLUMNS.filter((c) => DEFAULT_COLUMNS.includes(c.key)).reduce(
+    (n, c) => n + c.width,
+    0,
+  ) +
+  GUTTER_W +
+  ACTION_W;
+
+/**
+ * The widest the splitter can be dragged.
+ *
+ * Floored at the default width for the same reason. This was a flat 1100,
+ * which is BELOW the 1116 the default columns need - so once Records landed,
+ * dragging the splitter as far as it would go still could not reveal it. A cap
+ * that cannot reach the default layout is not a cap, it is a bug.
+ */
+const MAX_GRID_WIDTH = Math.max(1200, DEFAULT_GRID_WIDTH);
+
 function widthStorageKey(projectId: string): string {
   return `schedule-col-widths:${projectId}`;
 }
@@ -415,10 +447,9 @@ export function ScheduleSplitView({
   const [undoPatch, setUndoPatch] = useState<{ patches: TaskPatch[]; what: string } | null>(null);
   const [zoom, setZoom] = useState(2);
   // Wide enough that the default columns all fit without horizontal scrolling.
-  // A finish date you have to scroll to is the problem this view exists to fix,
-  // and that now includes the PROJECTED finish: 44+70+232+96+44+120+120+104+72,
-  // plus Type (104) since 0051.
-  const [gridWidth, setGridWidth] = useState(1009);
+  // A finish date you have to scroll to is the problem this view exists to fix.
+  // See DEFAULT_GRID_WIDTH for why this is derived and not a number.
+  const [gridWidth, setGridWidth] = useState(DEFAULT_GRID_WIDTH);
   const [query, setQuery] = useState("");
   const [columns, setColumns] = useState<ColumnKey[]>(DEFAULT_COLUMNS);
   // Arrows default to the focused task's own logic rather than all of it.
@@ -1581,7 +1612,7 @@ export function ScheduleSplitView({
     const onMove = (e: MouseEvent) => {
       if (!splitDrag.current) return;
       const w = splitDrag.current.startW + (e.clientX - splitDrag.current.startX);
-      setGridWidth(Math.max(240, Math.min(1100, w)));
+      setGridWidth(Math.max(240, Math.min(MAX_GRID_WIDTH, w)));
     };
     const onUp = () => { splitDrag.current = null; };
     window.addEventListener("mousemove", onMove);
