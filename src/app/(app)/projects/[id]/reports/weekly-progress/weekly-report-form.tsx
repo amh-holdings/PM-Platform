@@ -16,7 +16,7 @@ import {
   type EquipmentRow,
 } from "@/lib/weekly-report";
 import type { WeeklyReportView } from "@/lib/weekly-report-load";
-import { describeBasis } from "@/lib/weekly-lookahead-basis";
+import { describeBasis } from "@/lib/weekly-schedule-basis";
 
 import { HighlightedTextarea } from "./highlighted-textarea";
 import {
@@ -469,6 +469,11 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
 
       {/* ---- Progress ---- */}
       <Section title="Progress">
+        {/* Which schedule every box in this section was read from. It sits at
+            the top of Progress rather than on one box because percent
+            complete, the projected finish, the milestone table, the at-risk
+            list and the look-ahead all come from the same rows. */}
+        <ScheduleBasisLine basis={view.scheduleBasis} />
         <DerivedBox
           label="Project position"
           derived={{ value: view.positionText, basis: view.position.basis, sources: [] }}
@@ -1156,28 +1161,35 @@ function PositionPanel({ view }: { view: WeeklyReportView }) {
   );
 }
 
+/**
+ * Says which copy of the schedule the Progress section was read from.
+ *
+ * Silent for a week that is still open, where the live schedule IS the answer.
+ * Said plainly for a closed one, where it decides whether these numbers are a
+ * record of that week or a restatement of today.
+ */
+function ScheduleBasisLine({ basis }: { basis: WeeklyReportView["scheduleBasis"] }) {
+  const text = describeBasis(basis);
+  if (!text) return null;
+  return (
+    <p
+      className={cn(
+        "rounded-md border px-2 py-1.5 text-xs",
+        basis.kind === "stale"
+          ? "border-amber-300 bg-amber-50 text-amber-800"
+          : "border-muted bg-muted/40 text-muted-foreground",
+      )}
+    >
+      {text}
+    </p>
+  );
+}
+
 function LookaheadPreview({ view }: { view: WeeklyReportView }) {
   const total = useMemo(
     () => view.lookahead.reduce((n, w) => n + w.tasks.length, 0),
     [view.lookahead],
   );
-  // Which schedule this was built from. Silent for the current week, where the
-  // live schedule is the answer; said plainly for a past one, where it decides
-  // whether the box is a record or a guess.
-  const basis = describeBasis(view.lookaheadBasis);
-  const basisLine = basis ? (
-    <p
-      className={cn(
-        "mt-2 text-xs",
-        view.lookaheadBasis.kind === "stale"
-          ? "text-amber-700"
-          : "text-muted-foreground",
-      )}
-    >
-      {basis}
-    </p>
-  ) : null;
-
   if (!total) {
     return (
       <>
@@ -1185,13 +1197,11 @@ function LookaheadPreview({ view }: { view: WeeklyReportView }) {
           The schedule has no work projected in the three weeks after this period.
           Nothing will print on the look-ahead page.
         </p>
-        {basisLine}
       </>
     );
   }
   return (
     <>
-      {basisLine}
       <div className="mt-2 grid gap-2 sm:grid-cols-3">
       {view.lookahead.map((w) => (
         <div key={w.weekStart} className="rounded-md border bg-muted/30 p-2">

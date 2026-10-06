@@ -53,7 +53,7 @@ import {
   describeBasis,
   describeBasisShort,
   pickSnapshotFor,
-} from "@/lib/weekly-lookahead-basis";
+} from "@/lib/weekly-schedule-basis";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATION = join(__dirname, "..", "..", "db", "migrations", "0041_weekly_progress_reports.sql");
@@ -282,6 +282,18 @@ function unit() {
   check(
     "LA-13 a stale week warns rather than reassures",
     (describeBasis({ kind: "stale" }) ?? "").toLowerCase().includes("today"),
+  );
+  // The warning covers the whole Progress section now, not just the
+  // look-ahead, so it has to name the headline number as well.
+  check(
+    "LA-13a and names percent complete, not just the look-ahead",
+    (describeBasis({ kind: "stale" }) ?? "").toLowerCase().includes("percent complete"),
+  );
+  check(
+    "LA-13b a rebuilt week says the schedule figures, not just one box",
+    (describeBasis({ kind: "snapshot", dataDate: "2026-09-21" }) ?? "")
+      .toLowerCase()
+      .includes("schedule figures"),
   );
   // The owner's sheet gets the provenance without the lecture.
   check(
