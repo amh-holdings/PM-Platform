@@ -15,8 +15,8 @@ import { buildLookahead, type LookaheadWeek } from "@/lib/schedule-lookahead";
 import {
   basisFor,
   pickSnapshotFor,
-  type LookaheadBasis,
-} from "@/lib/weekly-lookahead-basis";
+  type ScheduleBasis,
+} from "@/lib/weekly-schedule-basis";
 import {
   MILESTONE_FIELDS,
   addDays,
@@ -133,7 +133,7 @@ export type WeeklyReportView = {
   milestones: Record<MilestoneKey, Derived<string | null>>;
   lookahead: LookaheadWeek[];
   /** Which copy of the schedule the look-ahead above was built from. */
-  lookaheadBasis: LookaheadBasis;
+  scheduleBasis: ScheduleBasis;
   lookaheadNote: string | null;
 
   /** Raw evidence, kept beside the edit boxes so a rewrite never has to hunt. */
@@ -615,11 +615,11 @@ export async function loadWeeklyReport(
   // is asking what is coming next, not what just happened.
   const lookaheadFrom = addDays(period.end, 1);
 
-  // The position, milestones and at-risk boxes read the live schedule. The
-  // look-ahead does not: for a week that has closed it is rebuilt from the
-  // schedule as it stood then, so the box says what was ahead of the crew that
-  // Monday instead of what today's forecast makes of those dates. See
-  // weekly-lookahead-basis.ts for why the live rows cannot answer it.
+  // For a week that has closed, the whole schedule half of the report is read
+  // from the copy saved at the time rather than from the live rows. The chosen
+  // snapshot is the newest taken on or before this date, which is the schedule
+  // that was on the desk when that week's report was due. See
+  // weekly-schedule-basis.ts for what the live rows get wrong.
   const todayIsoNow = new Date().toISOString().slice(0, 10);
   let snapshotRows: Record<string, unknown>[] | null = null;
   let snapshotMeta: { dataDate: string } | null = null;
@@ -645,35 +645,36 @@ export async function loadWeeklyReport(
     }
   }
 
-  const lookaheadBasis: LookaheadBasis = basisFor({
+  const scheduleBasis: ScheduleBasis = basisFor({
     periodEnd: period.end,
     today: todayIsoNow,
     snapshot: snapshotMeta,
   });
 
-  const cpm = computeCpm(tasks as never, {
+  // Every schedule-derived box reads these rows: percent complete, the
+  // activity count, the projected finish, the milestone table, the at-risk
+  // list and the look-ahead. On a closed week they are the snapshot's rows,
+  // so the Progress block answers for that week rather than for today.
+  const scheduleRows = snapshotRows ?? tasks;
+
+  // CPM is re-run over whichever rows won, at their own data date. The
+  // projected dates are the thing that moved, so running the old task list
+  // through today's forecast would be the same bug wearing a different hat.
+  const cpm = computeCpm(scheduleRows as never, {
     calendar,
-    dataDate: project?.schedule_data_date ?? lookaheadFrom,
+    dataDate:
+      snapshotMeta?.dataDate ?? project?.schedule_data_date ?? lookaheadFrom,
   });
 
-  // CPM is re-run over the snapshot's own rows at its own data date, because
-  // the projected dates are what moved. Reusing the live CPM would put the
-  // old task list back on today's forecast, which is the bug wearing a
-  // different hat.
-  const lookaheadSource = snapshotRows ?? tasks;
-  const lookaheadCpm = snapshotRows
-    ? computeCpm(snapshotRows as never, {
-        calendar,
-        dataDate: snapshotMeta?.dataDate ?? lookaheadFrom,
-      })
-    : cpm;
-  const lookahead = buildLookahead(lookaheadSource as never, lookaheadCpm, {
+  // The window stays anchored to the reported week either way - the box asks
+  // what was coming next, not what is coming now.
+  const lookahead = buildLookahead(scheduleRows as never, cpm, {
     weeks: 3,
     calendar,
     dataDate: lookaheadFrom,
   });
 
-  const typedTasks = tasks as never as Parameters<typeof deriveMilestones>[0];
+  const typedTasks = scheduleRows as never as Parameters<typeof deriveMilestones>[0];
 
 
   // Evidence is for the person WRITING the report, so it deliberately includes
@@ -812,7 +813,7 @@ export async function loadWeeklyReport(
     ),
     milestones: deriveMilestones(typedTasks, prev?.milestones ?? {}, o.milestones),
     lookahead,
-    lookaheadBasis,
+    scheduleBasis,
     lookaheadNote: o.lookahead_note,
 
     evidence,
@@ -876,7 +877,7 @@ export function weeklySheet(view: WeeklyReportView) {
         MILESTONE_FIELDS.map((f) => [f.key, view.milestones[f.key]?.value ?? null]),
       ) as Record<string, string | null>,
       lookahead: view.lookahead,
-      lookaheadBasis: view.lookaheadBasis,
+      scheduleBasis: view.scheduleBasis,
       manHours: view.manHours.value,
       ...live,
     };
@@ -893,12 +894,15 @@ export function weeklySheet(view: WeeklyReportView) {
         MILESTONE_FIELDS.map((f) => [f.key, view.milestones[f.key]?.value ?? null]),
       ) as Record<string, string | null>),
     lookahead: frozen.lookahead ?? view.lookahead,
-    // An issued report's look-ahead was built from the live schedule at the
-    // moment it was issued, which is correct by construction. Carrying today's
-    // basis across would label a sent document a reconstruction.
-    lookaheadBasis: frozen.lookahead
-      ? ({ kind: "live" } as LookaheadBasis)
-      : view.lookaheadBasis,
+    // An issued report's figures were read from the live schedule at the
+    // moment it was issued, which is correct by construction: that WAS the
+    // schedule that week. A basis recorded in the payload wins; otherwise the
+    // report predates this field and was issued in its own week, so it is
+    // live. Carrying today's basis across would label a sent document a
+    // reconstruction it never was.
+    scheduleBasis:
+      (frozen as { scheduleBasis?: ScheduleBasis }).scheduleBasis ??
+      (frozen.lookahead ? ({ kind: "live" } as ScheduleBasis) : view.scheduleBasis),
     environment: frozen.environment ?? live.environment,
     security: frozen.security ?? live.security,
     safety: frozen.safety ?? live.safety,

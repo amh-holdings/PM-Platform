@@ -1,28 +1,30 @@
-// Which copy of the schedule a weekly report's look-ahead is built from.
+// Which copy of the schedule a weekly report reads.
 //
-// The look-ahead window has always been anchored to the week being reported -
-// the three weeks starting the Monday after the period ends. What was NOT
-// anchored is the schedule it reads. buildLookahead ran over the live rows, so
-// a report pulled up for a week in August answered "which tasks, on today's
-// forecast, fall in those three August weeks". Three things make that the
-// wrong answer:
+// The report has two halves. The field record - approved daily reports, crews,
+// man-hours, equipment, delays, photos, inspections, production - was always
+// scoped to the reported week by date. The schedule half was not: it read the
+// live rows, so a report pulled up for a week in September answered every
+// schedule question with October's answer.
 //
-//   1. buildLookahead skips anything with status Complete, so every task that
-//      was ahead of us in August and has since finished vanishes. The box
-//      comes out near-empty for any week far enough back.
-//   2. Projected dates are today's. A task due that August week that has since
-//      slipped to November now sits in November and fails the overlap test;
-//      one pulled forward appears in a week nobody planned it for.
-//   3. Each card carries today's percent, so a surviving card can read 100%
-//      inside a look-ahead, which is a contradiction in terms.
+// That is wrong in the direction that flatters us. Percent complete counts
+// work finished after the period as if it were done inside it, the activity
+// count moves, and the projected finish is the current plan rather than the
+// one in force that week.
 //
-// Zarina: "can it show the look ahead based on the past?"
+// The look-ahead had the same disease with a sharper edge. Its window was
+// always anchored to the reported week, but buildLookahead skips anything with
+// status Complete, so every task that was ahead of us then and has since
+// finished vanished and the box came out near-empty. Projected dates were
+// today's, so work due that week but since slipped to November sat in November
+// and fell outside the window.
+//
+// Zarina: "can it show the look ahead based on the past?" and then, on the
+// Progress block: "Can this result back to week of 09/14".
 //
 // It can, because schedule_updates already holds a full frozen copy of every
-// task row once a week with the data date it was taken on (0033, taken by
-// ensureWeeklySnapshot on the first project open of each week). Rebuilding the
-// look-ahead from the snapshot that was current when the report was written
-// gives what was actually ahead of the crew that Monday.
+// task row once a week with the data date it was taken on (0033, written by
+// ensureWeeklySnapshot on the first project open of each week). A closed week
+// reads that copy instead of the live rows.
 //
 // Pure, so the choice of snapshot is testable without a database.
 
@@ -31,7 +33,7 @@ export type ScheduleSnapshotMeta = {
   dataDate: string;
 };
 
-export type LookaheadBasis =
+export type ScheduleBasis =
   /** The week being reported is the current one, so the live schedule IS the answer. */
   | { kind: "live" }
   /** A past week, rebuilt from the schedule as it stood then. */
@@ -74,21 +76,21 @@ export function basisFor(input: {
   periodEnd: string;
   today: string;
   snapshot: ScheduleSnapshotMeta | null;
-}): LookaheadBasis {
+}): ScheduleBasis {
   if (input.periodEnd >= input.today) return { kind: "live" };
   if (input.snapshot) return { kind: "snapshot", dataDate: input.snapshot.dataDate };
   return { kind: "stale" };
 }
 
-/** One line for the editor and the print sheet, or null when nothing needs saying. */
-export function describeBasis(basis: LookaheadBasis): string | null {
+/** One line for the editor, or null when nothing needs saying. */
+export function describeBasis(basis: ScheduleBasis): string | null {
   switch (basis.kind) {
     case "live":
       return null;
     case "snapshot":
-      return `Built from the schedule as it stood on ${basis.dataDate}, not today's.`;
+      return `Schedule figures are as they stood on ${basis.dataDate}, not today's.`;
     case "stale":
-      return "No saved copy of the schedule exists for this week, so this is today's schedule. Work finished since is missing and dates have moved.";
+      return "No saved copy of the schedule exists for this week, so the schedule figures are today's. Percent complete counts work finished since the period, and the look-ahead is missing anything completed since.";
   }
 }
 
@@ -100,7 +102,7 @@ export function describeBasis(basis: LookaheadBasis): string | null {
  * still prints on a stale week rather than passing off today's schedule as
  * that week's without saying so.
  */
-export function describeBasisShort(basis: LookaheadBasis): string | null {
+export function describeBasisShort(basis: ScheduleBasis): string | null {
   switch (basis.kind) {
     case "live":
       return null;
