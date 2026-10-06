@@ -16,6 +16,7 @@ import {
   type EquipmentRow,
 } from "@/lib/weekly-report";
 import type { WeeklyReportView } from "@/lib/weekly-report-load";
+import { describeBasis } from "@/lib/weekly-lookahead-basis";
 
 import { HighlightedTextarea } from "./highlighted-textarea";
 import {
@@ -1160,16 +1161,38 @@ function LookaheadPreview({ view }: { view: WeeklyReportView }) {
     () => view.lookahead.reduce((n, w) => n + w.tasks.length, 0),
     [view.lookahead],
   );
+  // Which schedule this was built from. Silent for the current week, where the
+  // live schedule is the answer; said plainly for a past one, where it decides
+  // whether the box is a record or a guess.
+  const basis = describeBasis(view.lookaheadBasis);
+  const basisLine = basis ? (
+    <p
+      className={cn(
+        "mt-2 text-xs",
+        view.lookaheadBasis.kind === "stale"
+          ? "text-amber-700"
+          : "text-muted-foreground",
+      )}
+    >
+      {basis}
+    </p>
+  ) : null;
+
   if (!total) {
     return (
-      <p className="mt-2 text-xs text-muted-foreground">
-        The schedule has no work projected in the three weeks after this period.
-        Nothing will print on the look-ahead page.
-      </p>
+      <>
+        <p className="mt-2 text-xs text-muted-foreground">
+          The schedule has no work projected in the three weeks after this period.
+          Nothing will print on the look-ahead page.
+        </p>
+        {basisLine}
+      </>
     );
   }
   return (
-    <div className="mt-2 grid gap-2 sm:grid-cols-3">
+    <>
+      {basisLine}
+      <div className="mt-2 grid gap-2 sm:grid-cols-3">
       {view.lookahead.map((w) => (
         <div key={w.weekStart} className="rounded-md border bg-muted/30 p-2">
           <p className="text-xs font-medium">{w.label}</p>
@@ -1191,6 +1214,7 @@ function LookaheadPreview({ view }: { view: WeeklyReportView }) {
           </ul>
         </div>
       ))}
-    </div>
+      </div>
+    </>
   );
 }

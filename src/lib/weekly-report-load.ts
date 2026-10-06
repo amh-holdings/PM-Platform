@@ -13,6 +13,11 @@ import { computeCpm } from "@/lib/schedule-cpm";
 import { makeCalendar, type CalendarException } from "@/lib/schedule-calendar";
 import { buildLookahead, type LookaheadWeek } from "@/lib/schedule-lookahead";
 import {
+  basisFor,
+  pickSnapshotFor,
+  type LookaheadBasis,
+} from "@/lib/weekly-lookahead-basis";
+import {
   MILESTONE_FIELDS,
   addDays,
   coverageGaps,
@@ -127,6 +132,8 @@ export type WeeklyReportView = {
   risks: Derived<string>;
   milestones: Record<MilestoneKey, Derived<string | null>>;
   lookahead: LookaheadWeek[];
+  /** Which copy of the schedule the look-ahead above was built from. */
+  lookaheadBasis: LookaheadBasis;
   lookaheadNote: string | null;
 
   /** Raw evidence, kept beside the edit boxes so a rewrite never has to hunt. */
@@ -607,11 +614,60 @@ export async function loadWeeklyReport(
   // The look-ahead starts the Monday AFTER the reported week, because the box
   // is asking what is coming next, not what just happened.
   const lookaheadFrom = addDays(period.end, 1);
+
+  // The position, milestones and at-risk boxes read the live schedule. The
+  // look-ahead does not: for a week that has closed it is rebuilt from the
+  // schedule as it stood then, so the box says what was ahead of the crew that
+  // Monday instead of what today's forecast makes of those dates. See
+  // weekly-lookahead-basis.ts for why the live rows cannot answer it.
+  const todayIsoNow = new Date().toISOString().slice(0, 10);
+  let snapshotRows: Record<string, unknown>[] | null = null;
+  let snapshotMeta: { dataDate: string } | null = null;
+  if (period.end < todayIsoNow) {
+    const { data: snaps } = await supabase
+      .from("schedule_updates")
+      .select("data_date, tasks")
+      .eq("project_id", projectId)
+      .lte("data_date", lookaheadFrom)
+      .order("data_date", { ascending: false })
+      .limit(1);
+    const row = (snaps ?? [])[0] as { data_date: string; tasks: unknown } | undefined;
+    const picked = row
+      ? pickSnapshotFor([{ dataDate: row.data_date }], lookaheadFrom)
+      : null;
+    // The stored copy is an array of schedule_tasks rows. An empty or
+    // malformed one is treated as no snapshot rather than as an empty
+    // schedule, which would print a look-ahead with nothing in it and no
+    // explanation.
+    if (picked && Array.isArray(row?.tasks) && row.tasks.length) {
+      snapshotRows = row.tasks as Record<string, unknown>[];
+      snapshotMeta = picked;
+    }
+  }
+
+  const lookaheadBasis: LookaheadBasis = basisFor({
+    periodEnd: period.end,
+    today: todayIsoNow,
+    snapshot: snapshotMeta,
+  });
+
   const cpm = computeCpm(tasks as never, {
     calendar,
     dataDate: project?.schedule_data_date ?? lookaheadFrom,
   });
-  const lookahead = buildLookahead(tasks as never, cpm, {
+
+  // CPM is re-run over the snapshot's own rows at its own data date, because
+  // the projected dates are what moved. Reusing the live CPM would put the
+  // old task list back on today's forecast, which is the bug wearing a
+  // different hat.
+  const lookaheadSource = snapshotRows ?? tasks;
+  const lookaheadCpm = snapshotRows
+    ? computeCpm(snapshotRows as never, {
+        calendar,
+        dataDate: snapshotMeta?.dataDate ?? lookaheadFrom,
+      })
+    : cpm;
+  const lookahead = buildLookahead(lookaheadSource as never, lookaheadCpm, {
     weeks: 3,
     calendar,
     dataDate: lookaheadFrom,
@@ -756,6 +812,7 @@ export async function loadWeeklyReport(
     ),
     milestones: deriveMilestones(typedTasks, prev?.milestones ?? {}, o.milestones),
     lookahead,
+    lookaheadBasis,
     lookaheadNote: o.lookahead_note,
 
     evidence,
@@ -819,6 +876,7 @@ export function weeklySheet(view: WeeklyReportView) {
         MILESTONE_FIELDS.map((f) => [f.key, view.milestones[f.key]?.value ?? null]),
       ) as Record<string, string | null>,
       lookahead: view.lookahead,
+      lookaheadBasis: view.lookaheadBasis,
       manHours: view.manHours.value,
       ...live,
     };
@@ -835,6 +893,12 @@ export function weeklySheet(view: WeeklyReportView) {
         MILESTONE_FIELDS.map((f) => [f.key, view.milestones[f.key]?.value ?? null]),
       ) as Record<string, string | null>),
     lookahead: frozen.lookahead ?? view.lookahead,
+    // An issued report's look-ahead was built from the live schedule at the
+    // moment it was issued, which is correct by construction. Carrying today's
+    // basis across would label a sent document a reconstruction.
+    lookaheadBasis: frozen.lookahead
+      ? ({ kind: "live" } as LookaheadBasis)
+      : view.lookaheadBasis,
     environment: frozen.environment ?? live.environment,
     security: frozen.security ?? live.security,
     safety: frozen.safety ?? live.safety,

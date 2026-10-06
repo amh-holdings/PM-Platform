@@ -8,6 +8,7 @@ import {
   weeklyProvenance,
   weeklySheet,
 } from "@/lib/weekly-report-load";
+import { describeBasisShort } from "@/lib/weekly-lookahead-basis";
 import {
   MILESTONE_FIELDS,
   compareWbs,
@@ -304,6 +305,15 @@ export default async function WeeklyProgressPrintPage({
                 <p className="text-neutral-600">
                   Activities scheduled for the three weeks following this
                   reporting period, from the project schedule.
+                </p>
+              )}
+              {/* Provenance, on a backdated report only. A look-ahead
+                  reconstructed from the schedule as it stood that week is a
+                  different claim from one written that week, and the sheet
+                  should say which it is. */}
+              {describeBasisShort(r.lookaheadBasis) && (
+                <p className="text-[9px] text-neutral-600">
+                  {describeBasisShort(r.lookaheadBasis)}
                 </p>
               )}
             </div>
