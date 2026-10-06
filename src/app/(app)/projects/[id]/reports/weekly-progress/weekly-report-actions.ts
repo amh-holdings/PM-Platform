@@ -215,6 +215,7 @@ export async function issueWeeklyReport(input: {
       Object.entries(view.milestones).map(([k, v]) => [k, v.value]),
     ),
     lookahead: view.lookahead,
+    lookaheadBasis: view.lookaheadBasis,
     ...resolved,
   };
 

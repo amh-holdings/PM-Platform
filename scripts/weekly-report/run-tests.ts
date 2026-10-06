@@ -48,6 +48,12 @@ import {
   diffWords,
 } from "@/lib/weekly-report";
 import { weeklyProvenance, type WeeklyReportView } from "@/lib/weekly-report-load";
+import {
+  basisFor,
+  describeBasis,
+  describeBasisShort,
+  pickSnapshotFor,
+} from "@/lib/weekly-lookahead-basis";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATION = join(__dirname, "..", "..", "db", "migrations", "0041_weekly_progress_reports.sql");
@@ -214,6 +220,79 @@ async function integration() {
 
 function unit() {
   console.log("\nUnit - the derivation logic");
+
+  // ---- look-ahead basis ----
+  // Zarina: "can it show the look ahead based on the past?" The window was
+  // always anchored to the reported week; the schedule it read was not.
+  console.log("\n  -- look-ahead basis --");
+  const SNAPS = [
+    { dataDate: "2026-09-21" },
+    { dataDate: "2026-09-28" },
+    { dataDate: "2026-10-05" },
+  ];
+  check(
+    "LA-01 the newest snapshot on or before the look-ahead start wins",
+    pickSnapshotFor(SNAPS, "2026-09-28")?.dataDate === "2026-09-28",
+    JSON.stringify(pickSnapshotFor(SNAPS, "2026-09-28")),
+  );
+  // A later snapshot already carries work the crew had not done yet. Using it
+  // would put the hindsight straight back in.
+  check(
+    "LA-02 a snapshot taken after the period is never used",
+    pickSnapshotFor(SNAPS, "2026-09-25")?.dataDate === "2026-09-21",
+    JSON.stringify(pickSnapshotFor(SNAPS, "2026-09-25")),
+  );
+  check(
+    "LA-03 a week before any snapshot has none",
+    pickSnapshotFor(SNAPS, "2026-08-10") === null,
+  );
+  check("LA-04 no snapshots at all is not an error", pickSnapshotFor([], "2026-09-28") === null);
+  check(
+    "LA-05 order of the rows does not decide the winner",
+    pickSnapshotFor([...SNAPS].reverse(), "2026-09-28")?.dataDate === "2026-09-28",
+  );
+
+  // The current week needs no reconstruction: the live schedule IS what is
+  // coming, and a snapshot taken on Monday would be staler than the truth.
+  check(
+    "LA-06 an open week stays live even with a snapshot available",
+    basisFor({ periodEnd: "2026-10-11", today: "2026-10-06", snapshot: SNAPS[2] }).kind ===
+      "live",
+  );
+  check(
+    "LA-07 a week ending today is still live",
+    basisFor({ periodEnd: "2026-10-06", today: "2026-10-06", snapshot: null }).kind === "live",
+  );
+  const past = basisFor({ periodEnd: "2026-09-27", today: "2026-10-06", snapshot: SNAPS[0] });
+  check("LA-08 a closed week with a snapshot is rebuilt", past.kind === "snapshot");
+  check(
+    "LA-09 and it names the date it was rebuilt from",
+    past.kind === "snapshot" && past.dataDate === "2026-09-21",
+  );
+  check(
+    "LA-10 a closed week with no snapshot is flagged stale, not silently live",
+    basisFor({ periodEnd: "2026-08-16", today: "2026-10-06", snapshot: null }).kind === "stale",
+  );
+
+  check("LA-11 a live week says nothing on the page", describeBasis({ kind: "live" }) === null);
+  check(
+    "LA-12 a rebuilt week names its date",
+    (describeBasis({ kind: "snapshot", dataDate: "2026-09-21" }) ?? "").includes("2026-09-21"),
+  );
+  check(
+    "LA-13 a stale week warns rather than reassures",
+    (describeBasis({ kind: "stale" }) ?? "").toLowerCase().includes("today"),
+  );
+  // The owner's sheet gets the provenance without the lecture.
+  check(
+    "LA-14 the printed line is short and factual",
+    describeBasisShort({ kind: "snapshot", dataDate: "2026-09-21" }) ===
+      "Schedule as of 2026-09-21.",
+  );
+  check(
+    "LA-15 nothing prints on an ordinary current-week report",
+    describeBasisShort({ kind: "live" }) === null,
+  );
 
   // ---- dates ----
   // The case that motivated storing the period separately: Sweet Springs files
