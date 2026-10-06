@@ -43,9 +43,10 @@ import {
   type AttachableDocument,
 } from "../schedule-task-records-actions";
 
-type TabKey = "evidence" | "photos" | "reports" | "logic" | "documents";
+type TabKey = "details" | "evidence" | "photos" | "reports" | "logic" | "documents";
 
 const TABS: { key: TabKey; label: string }[] = [
+  { key: "details", label: "Details" },
   { key: "evidence", label: "Evidence" },
   { key: "photos", label: "Photos" },
   { key: "reports", label: "Reports" },
@@ -86,8 +87,23 @@ type Props = {
   /** Null at the ends of the list, which disables the arrow. */
   onPrev: (() => void) | null;
   onNext: (() => void) | null;
-  /** Opens the existing edit dialog on this row. */
-  editTrigger?: React.ReactNode;
+  /**
+   * The edit form, rendered as the Details tab.
+   *
+   * Passed in as a node rather than threaded through as a dozen props. The row
+   * used to carry this as a separate "Open" button beside the Records badge,
+   * which meant two controls a hand's width apart, neither label saying which
+   * one had the photographs behind it. One control, one surface.
+   */
+  details: React.ReactNode;
+  /**
+   * Whether the grid's badge said this task has anything, known before the
+   * records finish loading. It picks the opening tab: a row with evidence
+   * opens on it, a row with none opens on Details, because landing on an empty
+   * Evidence pane to be told there is nothing is a wasted click on the 130 of
+   * 152 Sweet Springs rows that have no photographs yet.
+   */
+  hasAnyRecords?: boolean;
 };
 
 export function TaskRecordsDialog({
@@ -98,9 +114,11 @@ export function TaskRecordsDialog({
   onClose,
   onPrev,
   onNext,
-  editTrigger,
+  details,
+  hasAnyRecords = false,
 }: Props) {
-  const [tab, setTab] = useState<TabKey>("evidence");
+  const openingTab: TabKey = hasAnyRecords ? "evidence" : "details";
+  const [tab, setTab] = useState<TabKey>(openingTab);
   const [records, setRecords] = useState<TaskRecords | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -129,9 +147,9 @@ export function TaskRecordsDialog({
   // shows four empty panels in a row and reads as though nothing is attached
   // anywhere.
   useEffect(() => {
-    setTab("evidence");
+    setTab(openingTab);
     panelRef.current?.scrollTo({ top: 0 });
-  }, [task.id]);
+  }, [task.id, openingTab]);
 
   // Escape closes, arrows walk the scope. Arrows are ignored while focus is in
   // a text box, or filtering the document picker would jump to another task on
@@ -169,6 +187,7 @@ export function TaskRecordsDialog({
   }, [onClose, onNext, onPrev]);
 
   const counts: Record<TabKey, number> = {
+    details: 0,
     evidence: records?.evidence.length ?? 0,
     photos: records?.photos.length ?? 0,
     reports: records?.pins.length ?? 0,
@@ -260,7 +279,6 @@ export function TaskRecordsDialog({
               >
                 ↓
               </button>
-              {editTrigger}
               <button
                 onClick={onClose}
                 className="h-7 w-7 rounded border text-sm text-muted-foreground hover:bg-muted"
@@ -363,15 +381,21 @@ export function TaskRecordsDialog({
 
         {/* ---- body, which does ---- */}
         <div ref={panelRef} className="min-h-0 flex-1 overflow-y-auto bg-muted/30 p-4">
-          {loading && <p className="text-sm text-muted-foreground">Loading records...</p>}
+          {loading && tab !== "details" && (
+            <p className="text-sm text-muted-foreground">Loading records...</p>
+          )}
 
-          {error && (
+          {error && tab !== "details" && (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
               {error}
               <button onClick={() => void load()} className="ml-2 underline">
                 Try again
               </button>
             </div>
+          )}
+
+          {tab === "details" && (
+            <div className="rounded-lg border bg-background p-4 shadow-sm">{details}</div>
           )}
 
           {!loading && !error && records && (

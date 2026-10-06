@@ -105,7 +105,6 @@ import {
   DAY_MS,
   HEADER_H,
   Legend,
-  ACTION_W,
   GUTTER_W,
   ROW_H,
   TimelineGrid,
@@ -125,7 +124,7 @@ import {
   hasRecords,
   type TaskRecordCounts,
 } from "@/lib/schedule-task-records";
-import { TaskEditDialog } from "./task-edit-dialog";
+import { TaskEditDialog, TaskEditForm } from "./task-edit-dialog";
 import { hasLinkErrors } from "./predecessor-editor";
 import type { ScheduleTaskRow } from "./schedule-types";
 import {
@@ -302,12 +301,11 @@ const MAX_COL_W = 620;
  *
  * Derived rather than typed, because a hardcoded number here silently hides
  * columns. It was 1009 with a comment carrying the arithmetic by hand, and that
- * arithmetic had gone stale twice over: it never counted GUTTER_W or ACTION_W,
- * which are 124px between them, so the default set was already overflowing by
- * 21px before Records was added and by 107px after. The pane scrolls
- * horizontally, so nothing looked broken - the Records badge simply rendered
- * off the right edge where nobody would find it, and the only visible symptom
- * was a Float column cut slightly short.
+ * arithmetic had gone stale: it never counted the gutter or the action column,
+ * so the default set was already overflowing before Records was added and by
+ * 107px after. The pane scrolls horizontally, so nothing looked broken - the
+ * Records badge simply rendered off the right edge where nobody would find it,
+ * and the only visible symptom was a Float column cut slightly short.
  *
  * Deriving it means adding a default column can no longer hide one.
  */
@@ -315,9 +313,7 @@ const DEFAULT_GRID_WIDTH =
   ALL_COLUMNS.filter((c) => DEFAULT_COLUMNS.includes(c.key)).reduce(
     (n, c) => n + c.width,
     0,
-  ) +
-  GUTTER_W +
-  ACTION_W;
+  ) + GUTTER_W;
 
 /**
  * The widest the splitter can be dragged.
@@ -540,7 +536,7 @@ export function ScheduleSplitView({
     [shownColumns, widthOf, showChart],
   );
   const gridInnerWidth =
-    resolvedColumns.reduce((n, c) => n + c.width, 0) + GUTTER_W + ACTION_W;
+    resolvedColumns.reduce((n, c) => n + c.width, 0) + GUTTER_W;
 
   // Filters, carried over from the old Table view.
   const [phaseFilter, setPhaseFilter] = useState("");
@@ -2222,8 +2218,9 @@ export function ScheduleSplitView({
               ? () => setRecordsFor(rows[recordsPopup.index + 1].id)
               : null
           }
-          editTrigger={
-            <TaskEditDialog
+          hasAnyRecords={hasRecords(recordCounts?.get(recordsPopup.row.id))}
+          details={
+            <TaskEditForm
               projectId={projectId}
               task={recordsPopup.row}
               phaseOptions={phaseOptions}
@@ -2233,15 +2230,11 @@ export function ScheduleSplitView({
               typeAvailable={typeAvailable}
               calendar={calendar}
               rowIndex={rowIndex}
+              variant="embedded"
               onDone={() => onDialogSaved(recordsPopup.row.id)}
-              trigger={
-                <button
-                  className="h-7 rounded border px-2 text-xs font-medium hover:bg-muted"
-                  title="Edit this task"
-                >
-                  Edit
-                </button>
-              }
+              // Saving or deleting closes the whole popup: the row it was
+              // describing has either moved or gone.
+              onClose={() => setRecordsFor(null)}
             />
           }
         />
@@ -2319,12 +2312,6 @@ export function ScheduleSplitView({
                     />
                   </div>
                 ))}
-                {/* Stands in for the Open button on every row. Without it the
-                    header is one cell short, and with the chart hidden the Task
-                    column flexes to a different width above than below - which
-                    slides every heading off its column and puts the resize
-                    handles over the wrong edges. */}
-                <div className="shrink-0" style={{ width: ACTION_W }} />
               </div>
 
               {rows.length === 0 ? (
@@ -3069,21 +3056,6 @@ function GridRow({
         }
       })}
 
-      <div className="shrink-0 px-1" style={{ width: ACTION_W }}>
-        <TaskEditDialog
-          projectId={projectId}
-          task={t}
-          phaseOptions={phaseOptions}
-          statusOptions={statusOptions}
-          allTasks={allTasks}
-          phase1Available={phase1Available}
-          typeAvailable={typeAvailable}
-          calendar={calendar}
-          rowIndex={rowIndex}
-          onDone={() => onDialogSaved(t.id)}
-          trigger={<Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]">Open</Button>}
-        />
-      </div>
     </div>
   );
 }
