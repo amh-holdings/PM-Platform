@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { ensureWeeklySnapshot, syncScheduleDates } from "@/lib/schedule-sync-server";
 import { loadProgressHistory, withProgressHistory } from "@/lib/schedule-progress-history";
+import { loadTaskRecordCounts } from "@/lib/schedule-task-records-load";
 
 import { ScheduleWorkspace } from "./schedule-workspace";
 
@@ -130,6 +131,13 @@ export default async function ProjectSchedulePage({ params }: { params: Params }
   // Merged here so the page's forecast matches the dates the sync just wrote.
   const history = await loadProgressHistory(supabase, params.id);
 
+  // Photo and document counts for the Records badge. Four queries for the
+  // whole project rather than a count per row, which on a 288-task import
+  // would be 288 round trips for a badge. Selects ids only - no captions and
+  // no storage paths, so nothing here is signed; the photos themselves are
+  // loaded and signed when a row's popup is actually opened.
+  const { counts: recordCounts } = await loadTaskRecordCounts(supabase, params.id);
+
   return (
     <ScheduleWorkspace
       projectId={params.id}
@@ -146,6 +154,7 @@ export default async function ProjectSchedulePage({ params }: { params: Params }
       constraintsAvailable={!constraintsQuery.error}
       updates={(updatesQuery.data ?? []) as never}
       updatesAvailable={!updatesQuery.error}
+      recordCounts={recordCounts}
     />
   );
 }

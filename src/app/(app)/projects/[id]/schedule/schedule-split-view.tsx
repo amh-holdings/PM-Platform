@@ -119,6 +119,12 @@ import {
   describeForecastOverwrite,
 } from "@/lib/schedule-sync";
 import { InsertRowMenu } from "./insert-row-menu";
+import { TaskRecordsDialog } from "./task-records-dialog";
+import {
+  describeRecordCounts,
+  hasRecords,
+  type TaskRecordCounts,
+} from "@/lib/schedule-task-records";
 import { TaskEditDialog } from "./task-edit-dialog";
 import { hasLinkErrors } from "./predecessor-editor";
 import type { ScheduleTaskRow } from "./schedule-types";
@@ -172,7 +178,8 @@ type ColumnKey =
   | "projected"
   | "float"
   | "variance"
-  | "predecessors";
+  | "predecessors"
+  | "records";
 
 type Column = {
   key: ColumnKey;
@@ -249,6 +256,14 @@ const ALL_COLUMNS: Column[] = [
   },
   { key: "variance", label: "vs Base", width: 72, derived: true, align: "right" },
   { key: "predecessors", label: "Predecessors", width: 170 },
+  {
+    key: "records",
+    label: "Records",
+    width: 86,
+    derived: true,
+    align: "right",
+    title: "Photos and documents on this task. Click to open everything the platform knows about the row - approved inspections and their pictures, the report history, logic both ways, constraints and attachments.",
+  },
 ];
 
 // The point of sourcing progress from daily reports is a schedule that answers
@@ -268,8 +283,12 @@ const ALL_COLUMNS: Column[] = [
 // ARE the live forecast (schedule-sync.ts), so a Projected column beside them
 // repeated Finish. It stays in the picker: while an edit is unsaved it is the
 // one column that shows what the edit would do.
+// Records is a default column, for the same reason Progress is. The evidence
+// behind a billed percent has always existed and has never been visible from
+// here; a badge nobody turns on would leave it exactly as unfindable as it was.
 const DEFAULT_COLUMNS: ColumnKey[] = [
   "row", "code", "task", "type", "progress", "dur", "start", "finish", "float",
+  "records",
 ];
 
 // Below this a header label is unreadable and a date input collapses to its
@@ -277,6 +296,38 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
 // it - the Columns menu is how you hide one.
 const MIN_COL_W = 44;
 const MAX_COL_W = 620;
+
+/**
+ * How wide the grid pane opens, so the default columns actually fit in it.
+ *
+ * Derived rather than typed, because a hardcoded number here silently hides
+ * columns. It was 1009 with a comment carrying the arithmetic by hand, and that
+ * arithmetic had gone stale twice over: it never counted GUTTER_W or ACTION_W,
+ * which are 124px between them, so the default set was already overflowing by
+ * 21px before Records was added and by 107px after. The pane scrolls
+ * horizontally, so nothing looked broken - the Records badge simply rendered
+ * off the right edge where nobody would find it, and the only visible symptom
+ * was a Float column cut slightly short.
+ *
+ * Deriving it means adding a default column can no longer hide one.
+ */
+const DEFAULT_GRID_WIDTH =
+  ALL_COLUMNS.filter((c) => DEFAULT_COLUMNS.includes(c.key)).reduce(
+    (n, c) => n + c.width,
+    0,
+  ) +
+  GUTTER_W +
+  ACTION_W;
+
+/**
+ * The widest the splitter can be dragged.
+ *
+ * Floored at the default width for the same reason. This was a flat 1100,
+ * which is BELOW the 1116 the default columns need - so once Records landed,
+ * dragging the splitter as far as it would go still could not reveal it. A cap
+ * that cannot reach the default layout is not a cap, it is a bug.
+ */
+const MAX_GRID_WIDTH = Math.max(1200, DEFAULT_GRID_WIDTH);
 
 function widthStorageKey(projectId: string): string {
   return `schedule-col-widths:${projectId}`;
@@ -345,6 +396,11 @@ type Props = {
    * view sees it, so without being told, the grid cannot say why it is short.
    */
   scopeFilter?: string | null;
+  /**
+   * Photo and document counts per task id, loaded once for the whole project.
+   * Absent for a task with nothing on it, which is most of them.
+   */
+  recordCounts?: Map<string, TaskRecordCounts>;
   draft: TaskDraft;
   setDraft: React.Dispatch<React.SetStateAction<TaskDraft>>;
 };
@@ -372,11 +428,15 @@ export function ScheduleSplitView({
   typeAvailable,
   constraintState,
   scopeFilter = null,
+  recordCounts,
   draft,
   setDraft,
 }: Props) {
   const router = useRouter();
   const [, startTransition] = useTransition();
+
+  // Which row's records popup is open, by task id. Null is closed.
+  const [recordsFor, setRecordsFor] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
@@ -387,10 +447,9 @@ export function ScheduleSplitView({
   const [undoPatch, setUndoPatch] = useState<{ patches: TaskPatch[]; what: string } | null>(null);
   const [zoom, setZoom] = useState(2);
   // Wide enough that the default columns all fit without horizontal scrolling.
-  // A finish date you have to scroll to is the problem this view exists to fix,
-  // and that now includes the PROJECTED finish: 44+70+232+96+44+120+120+104+72,
-  // plus Type (104) since 0051.
-  const [gridWidth, setGridWidth] = useState(1009);
+  // A finish date you have to scroll to is the problem this view exists to fix.
+  // See DEFAULT_GRID_WIDTH for why this is derived and not a number.
+  const [gridWidth, setGridWidth] = useState(DEFAULT_GRID_WIDTH);
   const [query, setQuery] = useState("");
   const [columns, setColumns] = useState<ColumnKey[]>(DEFAULT_COLUMNS);
   // Arrows default to the focused task's own logic rather than all of it.
@@ -698,6 +757,51 @@ export function ScheduleSplitView({
     rows.forEach((t, i) => m.set(t.wbs_code, i));
     return m;
   }, [rows]);
+
+  // The open popup's row, its position in what is on screen, and the CPM
+  // results for it. Resolved here rather than held in state so that a row
+  // edited or re-filtered underneath the popup updates it, instead of the
+  // popup showing a stale copy of a task the grid has already changed.
+  //
+  // Reads the COMMITTED cpm, not previewCpm. An unsaved draft is a proposal;
+  // the records popup is a record of what happened, and float figures drawn
+  // from a pending edit would not match the evidence beside them.
+  const recordsPopup = useMemo(() => {
+    if (!recordsFor) return null;
+    const index = rows.findIndex((r) => r.id === recordsFor);
+    // The row left the view - a filter changed, or its branch collapsed. The
+    // popup closes on the next interaction rather than stranding arrows that
+    // point nowhere.
+    if (index < 0) return null;
+    const row = rows[index];
+    const c = cpm.byWbs.get(row.wbs_code);
+    return {
+      index,
+      row,
+      task: {
+        id: row.id,
+        wbs_code: row.wbs_code,
+        task_name: row.task_name,
+        task_type: row.task_type ?? null,
+        status: valueOf(row, "status") || row.status,
+        assigned_to: row.assigned_to,
+        phase: row.phase,
+        duration_days: row.duration_days,
+        start_date: row.start_date,
+        end_date: row.end_date,
+        baseline_end: row.baseline_end ?? null,
+        pct_complete: row.pct_complete,
+        status_source: row.status_source,
+        last_report_date: row.last_report_date ?? row.last_dpr_at ?? null,
+        is_milestone: row.is_milestone,
+        isSummary: summaries.has(row.wbs_code),
+        critical: !!c?.critical,
+        totalFloat: c?.totalFloat ?? null,
+        freeFloat: c?.freeFloat ?? null,
+        isolated: !!c?.isolated,
+      },
+    };
+  }, [recordsFor, rows, cpm, summaries, valueOf]);
 
   // ---- geometry -----------------------------------------------------------
   const barDatesOf = useCallback(
@@ -1508,7 +1612,7 @@ export function ScheduleSplitView({
     const onMove = (e: MouseEvent) => {
       if (!splitDrag.current) return;
       const w = splitDrag.current.startW + (e.clientX - splitDrag.current.startX);
-      setGridWidth(Math.max(240, Math.min(1100, w)));
+      setGridWidth(Math.max(240, Math.min(MAX_GRID_WIDTH, w)));
     };
     const onUp = () => { splitDrag.current = null; };
     window.addEventListener("mousemove", onMove);
@@ -2096,6 +2200,53 @@ export function ScheduleSplitView({
         </div>
       )}
 
+      {/* ---- the records popup ---------------------------------------------
+          Walks `rows`, the list as filtered and collapsed on screen, so the
+          arrows follow what you are actually looking at rather than the whole
+          project. Filtering to Blocked and arrowing down should visit the
+          blocked rows, not every row between them. */}
+      {recordsPopup && (
+        <TaskRecordsDialog
+          projectId={projectId}
+          dataDate={dataDate}
+          task={recordsPopup.task}
+          position={{ index: recordsPopup.index, total: rows.length }}
+          onClose={() => setRecordsFor(null)}
+          onPrev={
+            recordsPopup.index > 0
+              ? () => setRecordsFor(rows[recordsPopup.index - 1].id)
+              : null
+          }
+          onNext={
+            recordsPopup.index < rows.length - 1
+              ? () => setRecordsFor(rows[recordsPopup.index + 1].id)
+              : null
+          }
+          editTrigger={
+            <TaskEditDialog
+              projectId={projectId}
+              task={recordsPopup.row}
+              phaseOptions={phaseOptions}
+              statusOptions={statusOptions}
+              allTasks={allTasks}
+              phase1Available={phase1Available}
+              typeAvailable={typeAvailable}
+              calendar={calendar}
+              rowIndex={rowIndex}
+              onDone={() => onDialogSaved(recordsPopup.row.id)}
+              trigger={
+                <button
+                  className="h-7 rounded border px-2 text-xs font-medium hover:bg-muted"
+                  title="Edit this task"
+                >
+                  Edit
+                </button>
+              }
+            />
+          }
+        />
+      )}
+
       {/* ---- the split ----------------------------------------------------- */}
       <div className="overflow-hidden rounded-lg border bg-card shadow-sm">
         <div
@@ -2224,6 +2375,8 @@ export function ScheduleSplitView({
                     onDrop={onDropRow}
                     rowIndex={rowIndex}
                     predAsRows={predAsRows}
+                    counts={recordCounts?.get(t.id)}
+                    onOpenRecords={() => setRecordsFor(t.id)}
                     projectId={projectId}
                     phaseOptions={phaseOptions}
                     allTasks={allTasks}
@@ -2498,6 +2651,10 @@ type GridRowProps = {
   typeAvailable: boolean;
   rowIndex: RowIndex;
   predAsRows: boolean;
+  /** Photo and document counts, or undefined for a row with neither. */
+  counts: TaskRecordCounts | undefined;
+  /** Opens the records popup on this row. */
+  onOpenRecords: () => void;
 };
 
 function GridRow({
@@ -2507,7 +2664,7 @@ function GridRow({
   statusOptions, calendar, constraint, dragging, dropAt,
   onDragStart, onDragEnd, onDragOver, onDrop,
   projectId, phaseOptions, allTasks, phase1Available, typeAvailable, rowIndex, predAsRows,
-  onDialogSaved, editTasks,
+  onDialogSaved, editTasks, counts, onOpenRecords,
 }: GridRowProps) {
   const indent = Math.max(0, (t.level_code ?? 1) - 1) * 10;
   const rowDirty = columns.some((col) => {
@@ -2572,6 +2729,16 @@ function GridRow({
           ⠿
         </span>
         <input type="checkbox" checked={selected} onChange={(e) => onSelect(e.target.checked)} />
+        {/* The third way into the records popup, for anyone who does not think
+            to click the row number or the Records badge. Hover-revealed, in the
+            gutter where the eye already is. */}
+        <button
+          onClick={onOpenRecords}
+          className="shrink-0 text-[10px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 focus:opacity-100"
+          title="Open this task's records"
+        >
+          ❯
+        </button>
         {/* Hover to reveal. Next to the handle and the tick box, where the eye
             already is, rather than at the far right of a grid this wide. */}
         <InsertRowMenu
@@ -2619,13 +2786,51 @@ function GridRow({
         function renderCell(k: ColumnKey) {
           switch (k) {
             case "row":
+              // One of the two ways into the records popup. This column is
+              // derived and read-only, so turning it into a button costs
+              // nothing - unlike the row body, where a click belongs to
+              // inline editing and the drag handle.
               return (
-                <span
-                  className="block w-full truncate text-right text-[11px] tabular-nums text-muted-foreground"
-                  title={`Row ${rowIndex.byWbs.get(t.wbs_code) ?? "-"} - ${t.wbs_code}`}
+                <button
+                  onClick={onOpenRecords}
+                  className="block w-full truncate text-right text-[11px] tabular-nums text-muted-foreground hover:font-medium hover:text-foreground"
+                  title={`Row ${rowIndex.byWbs.get(t.wbs_code) ?? "-"} - ${t.wbs_code}. Click to open this task's records.`}
                 >
                   {rowIndex.byWbs.get(t.wbs_code) ?? "-"}
-                </span>
+                </button>
+              );
+
+            case "records":
+              return (
+                <button
+                  onClick={onOpenRecords}
+                  className={cn(
+                    "flex w-full items-center justify-end gap-1 text-[10px] tabular-nums",
+                    hasRecords(counts)
+                      ? "text-muted-foreground hover:text-foreground"
+                      : "text-muted-foreground/40 hover:text-foreground",
+                  )}
+                  title={`${describeRecordCounts(counts)}. Click to open everything on this task.`}
+                >
+                  {hasRecords(counts) ? (
+                    <>
+                      {!!counts?.photos && (
+                        <span className="rounded-full border bg-muted px-1.5">
+                          {/* A glyph rather than an icon import: the grid draws
+                              288 of these and the row height is 30px. */}
+                          ▣ {counts.photos}
+                        </span>
+                      )}
+                      {!!counts?.documents && (
+                        <span className="rounded-full border bg-muted px-1.5">
+                          ▤ {counts.documents}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="px-1.5">-</span>
+                  )}
+                </button>
               );
 
             case "code":

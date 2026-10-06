@@ -10,6 +10,7 @@ import {
 } from "@/lib/weekly-report-load";
 import {
   MILESTONE_FIELDS,
+  compareWbs,
   defaultWeekEnding,
   diffWords,
   dimensionDate,
@@ -245,7 +246,9 @@ export default async function WeeklyProgressPrintPage({
         <Row label="Safety" value={r.safety || "N/A"} wide multiline against={derived.safety} />
         <Row
           label="Date of Most Recent SWPPP Inspection"
-          value={r.swppp ? dimensionDate(r.swppp) : "N/A"}
+          // Never "N/A": on a permit inspection that reads as "not required",
+          // and a blank that slipped through should say what it is.
+          value={r.swppp ? dimensionDate(r.swppp) : "Date not entered"}
           boxed
           manual={prov.swppp}
         >
@@ -317,11 +320,9 @@ export default async function WeeklyProgressPrintPage({
                   <tr className="bg-[#1f4e79] text-white [print-color-adjust:exact]">
                     <Th className="w-14">WBS</Th>
                     <Th>Activity</Th>
-                    <Th className="w-28">Responsible</Th>
+                    <Th className="w-40">Responsible</Th>
                     <Th className="w-20">Start</Th>
                     <Th className="w-20">Finish</Th>
-                    <Th className="w-16">% Comp</Th>
-                    <Th className="w-24">Status</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -329,7 +330,7 @@ export default async function WeeklyProgressPrintPage({
                     <Fragment key={w.weekStart}>
                       <tr className="bg-[#bdd7ee] [print-color-adjust:exact]">
                         <td
-                          colSpan={7}
+                          colSpan={5}
                           className="border border-neutral-500 px-1 py-0.5 font-bold uppercase tracking-wide"
                         >
                           {w.label}
@@ -338,41 +339,46 @@ export default async function WeeklyProgressPrintPage({
                       {w.tasks.length === 0 ? (
                         <tr>
                           <td
-                            colSpan={7}
+                            colSpan={5}
                             className="border border-neutral-500 px-1 py-0.5 italic"
                           >
                             No scheduled work.
                           </td>
                         </tr>
                       ) : (
-                        w.tasks.map((t) => (
-                          <tr key={t.wbs} className="align-top">
-                            <Td>{t.wbs}</Td>
-                            <Td className="text-left">{t.name}</Td>
-                            <Td className="text-left">{t.assignedTo ?? "-"}</Td>
-                            <Td>{dimensionDate(t.start)}</Td>
-                            <Td>{dimensionDate(t.end)}</Td>
-                            <Td>{t.pctComplete != null ? `${t.pctComplete}%` : "-"}</Td>
-                            <Td className={t.critical ? "font-bold" : undefined}>
-                              {[
-                                t.critical ? "Critical" : null,
-                                t.finishing ? "Completes" : null,
-                                t.continuing ? "Continuing" : null,
-                              ]
-                                .filter(Boolean)
-                                .join(", ") || "Scheduled"}
-                            </Td>
-                          </tr>
+                        groupByParent(w.tasks).map((g) => (
+                          <Fragment key={g.parent ?? `-${g.tasks[0].wbs}`}>
+                            {/* The parent as a summary row, the way the
+                                schedule reads. Week three said "Delivery"
+                                with nothing to say delivery of what - the
+                                branch above it is what names it. */}
+                            {g.parent && (
+                              <tr className="bg-neutral-100 [print-color-adjust:exact]">
+                                <Td className="font-bold">{g.parentWbs}</Td>
+                                <td
+                                  colSpan={4}
+                                  className="border border-neutral-500 px-1 py-0.5 text-left font-bold"
+                                >
+                                  {g.parentName}
+                                </td>
+                              </tr>
+                            )}
+                            {g.tasks.map((t) => (
+                              <tr key={t.wbs} className="align-top">
+                                <Td>{t.wbs}</Td>
+                                <Td className={`text-left ${g.parent ? "pl-4" : ""}`}>{t.name}</Td>
+                                <Td className="text-left">{t.assignedTo ?? "-"}</Td>
+                                <Td>{dimensionDate(t.start)}</Td>
+                                <Td>{dimensionDate(t.end)}</Td>
+                              </tr>
+                            ))}
+                          </Fragment>
                         ))
                       )}
                     </Fragment>
                   ))}
                 </tbody>
               </table>
-              <p className="mt-0.5 text-[8.5px] text-neutral-600">
-                Critical = on the schedule&apos;s critical path. Completes = the
-                activity finishes within that week.
-              </p>
             </div>
           )}
         </div>
@@ -516,6 +522,37 @@ function Row({
   );
 }
 
+// A look-ahead week in schedule order: activities sorted by WBS and gathered
+// under the branch they sit in, so the owner reads it the way the schedule
+// reads rather than as a flat list of "Delivery" and "Lead Time" rows.
+// `parent` arrives as "<wbs> <name>" from parentLabel.
+type LookaheadRow = { wbs: string; parent?: string | null };
+function groupByParent<T extends LookaheadRow>(tasks: T[]) {
+  const groups: {
+    parent: string | null;
+    parentWbs: string;
+    parentName: string;
+    tasks: T[];
+  }[] = [];
+  const sorted = [...tasks].sort((a, b) => compareWbs(a.wbs, b.wbs));
+  for (const t of sorted) {
+    const parent = t.parent ?? null;
+    const last = groups[groups.length - 1];
+    if (last && last.parent === parent) {
+      last.tasks.push(t);
+      continue;
+    }
+    const space = parent ? parent.indexOf(" ") : -1;
+    groups.push({
+      parent,
+      parentWbs: parent && space > 0 ? parent.slice(0, space) : "",
+      parentName: parent && space > 0 ? parent.slice(space + 1) : (parent ?? ""),
+      tasks: [t],
+    });
+  }
+  return groups;
+}
+
 function Th({
   children,
   className,
@@ -540,7 +577,15 @@ function Td({
   className?: string;
 }) {
   return (
-    <td className={`border border-neutral-500 px-1 py-0.5 text-center ${className ?? ""}`}>
+    // Centred by default. A caller asking for text-left or its own left
+    // padding gets it - with both classes on the cell, Tailwind's stylesheet
+    // order decided, and text-center won, so every "text-left" here was
+    // silently ignored.
+    <td
+      className={`border border-neutral-500 py-0.5 ${
+        /\btext-left\b/.test(className ?? "") ? "" : "text-center"
+      } ${/\bpl-/.test(className ?? "") ? "pr-1" : "px-1"} ${className ?? ""}`}
+    >
       {children}
     </td>
   );

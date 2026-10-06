@@ -264,6 +264,15 @@ function unit() {
   check("CON-04 end date is blank when nothing knows it", pyramid.endDate === null);
   check("CON-05 the basis explains the number", pyramid.basis.includes("Peak of 8"), pyramid.basis);
 
+  // Their scope ends on the schedule: the last finish of any task assigned to
+  // them, matched on the company name without regard to case.
+  const scheduled = deriveContractors(subs, dprs, manpower, onsite, [
+    { wbs_code: "5.1.3.7", task_name: "Convert basins", assigned_to: "Pyramid Excavation LLC", status: null, pct_complete: null, end_date: "2026-11-23" },
+    { wbs_code: "5.1.3.8", task_name: "Permanent Seeding", assigned_to: "pyramid excavation llc ", status: null, pct_complete: null, end_date: "2026-11-25" },
+    { wbs_code: "5.1.2", task_name: "Fence", assigned_to: "Hercules Fence", status: null, pct_complete: null, end_date: "2026-12-30" },
+  ], {}, []).find((r) => r.name === "Pyramid Excavation LLC")!;
+  check("CON-05b end date is the last finish of the sub's schedule tasks", scheduled.endDate === "2026-11-25" && scheduled.scheduleEnd === "2026-11-25", JSON.stringify(scheduled));
+
   // A sub under contract who has never been on site is not a site resource.
   // Sweet Springs carries ten active subs and one crew actually working; listing
   // all ten with blank cells buries the one that matters.
@@ -371,12 +380,22 @@ function unit() {
   check("SWP-01 a stormwater inspection is recognised by title", isSwppp({ inspection_type: null, title: "Storm Water walk" }));
   check("SWP-02 an unrelated inspection is not", !isSwppp({ inspection_type: "Rebar", title: "Pier 4" }));
   const stale = deriveSwppp(
-    [{ inspection_type: "SWPPP", inspector_name: "Timmons", status: "approved", submitted_at: "2026-07-30T00:00:00Z", decided_at: null, created_at: null }],
+    [{ origin: "cm", inspection_type: "SWPPP", inspector_name: "Timmons", status: "approved", submitted_at: "2026-07-30T00:00:00Z", decided_at: null, created_at: null }],
     "2026-08-23",
   );
   check("SWP-03 the most recent inspection shows even when it predates the week", stale.value === "2026-07-30");
   // An overdue inspection reported as a bare date reads as compliant. It is not.
   check("SWP-04 an out-of-period inspection is flagged as possibly overdue", stale.basis.includes("BEFORE"), stale.basis);
+  // Sweet Springs printed 23-Sept-26 off Pyramid's ESC progress pins. A pin is
+  // not a SWPPP inspection, and neither is a CM inspection nobody has decided.
+  const escPin = { origin: "sub", inspection_type: null, title: "5.1.1.6 Construct Basin 1 ESC", inspector_name: null, status: "approved", submitted_at: "2026-08-20T00:00:00Z", decided_at: "2026-08-21T00:00:00Z", created_at: null };
+  const fromPin = deriveSwppp([escPin], "2026-08-23");
+  check("SWP-09 a progress pin never dates a SWPPP inspection", fromPin.value === null, String(fromPin.value));
+  check("SWP-09b with no CM inspection the basis asks for the date to be typed", fromPin.basis.includes("Type the date"), fromPin.basis);
+  const undecided = deriveSwppp([{ ...escPin, origin: "cm", status: "submitted", decided_at: null }], "2026-08-23");
+  check("SWP-10 an undecided CM inspection does not date one either", undecided.value === null, String(undecided.value));
+  const noOrigin = deriveSwppp([{ ...escPin, origin: undefined }], "2026-08-23");
+  check("SWP-11 a row that does not say where it came from is not trusted", noOrigin.value === null, String(noOrigin.value));
 
   // ---- work this week ----
   const work = deriveWorkThisWeek(
@@ -643,14 +662,32 @@ function unit() {
     check("ENV-05 a silt fence that failed is a concern", failed.value.includes("washed out"), failed.value);
 
     const badInsp = deriveEnvironment([], [], [], [
-      { inspection_type: null, title: "5.1.1.6 Construct Basin 1 ESC", inspector_name: null, status: "rejected", submitted_at: null, decided_at: "2026-08-19T12:00:00Z", created_at: null },
+      { origin: "cm", inspection_type: null, title: "5.1.1.6 Construct Basin 1 ESC", inspector_name: null, status: "rejected", submitted_at: null, decided_at: "2026-08-19T12:00:00Z", created_at: null },
     ], period);
-    check("ENV-06 an ESC inspection that did not pass is a concern", badInsp.value.includes("Basin 1 ESC"), badInsp.value);
+    check("ENV-06 an ESC inspection the CM failed is a concern", badInsp.value.includes("Basin 1 ESC") && badInsp.value.includes("failed by the CM"), badInsp.value);
     const goodInsp = deriveEnvironment([], [], [], [
-      { inspection_type: null, title: "5.1.1.6 Construct Basin 1 ESC", inspector_name: null, status: "approved", submitted_at: null, decided_at: "2026-08-19T12:00:00Z", created_at: null },
+      { origin: "cm", inspection_type: null, title: "5.1.1.6 Construct Basin 1 ESC", inspector_name: null, status: "approved", submitted_at: null, decided_at: "2026-08-19T12:00:00Z", created_at: null },
     ], period);
     check("ENV-07 an ESC inspection that passed is not a concern", !goodInsp.value.includes("not passed"), goodInsp.value);
     check("ENV-07b a passed inspection is counted as evidence of the clean week", goodInsp.value.includes("The erosion and sediment control inspection carried out during the period passed."), goodInsp.value);
+
+    // The Oct 2026 draft: Pyramid's matting-and-seeding progress pins, still
+    // awaiting review, printed as four failed ESC inspections. A pin is not an
+    // inspection and undecided is not failed - neither may ever reach the box.
+    const pin = (status: string, title = "5.1.1.6.7 Matting and seeding") => ({
+      origin: "sub", inspection_type: null, title, inspector_name: null, status,
+      submitted_at: "2026-08-19T12:00:00Z", decided_at: status === "submitted" ? null : "2026-08-19T12:00:00Z", created_at: null,
+    });
+    const pending = deriveEnvironment([], [], [], [pin("submitted"), pin("submitted", "5.1.1.6 Construct Basin 1 ESC")], period);
+    check("ENV-08 a progress pin awaiting review is never an inspection failure", !/inspection (not passed|failed)/i.test(pending.value), pending.value);
+    const rejectedPin = deriveEnvironment([], [], [], [pin("rejected", "5.1.1.6 Construct Basin 1 ESC")], period);
+    check("ENV-09 a rejected progress pin is not an ESC failure", !/inspection (not passed|failed)/i.test(rejectedPin.value), rejectedPin.value);
+    const approvedPin = deriveEnvironment([], [], [], [pin("approved", "5.1.1.6 Construct Basin 1 ESC")], period);
+    check("ENV-10 an approved progress pin is not claimed as a passed ESC inspection", !/control inspections? (carried out during the period )?passed|inspections carried out/i.test(approvedPin.value), approvedPin.value);
+    const cmPending = deriveEnvironment([], [], [], [{ ...pin("submitted", "5.1.1.6 Construct Basin 1 ESC"), origin: "cm" }], period);
+    check("ENV-11 a CM ESC inspection not yet decided is not a failure", !/inspection (not passed|failed)/i.test(cmPending.value), cmPending.value);
+    const noOrigin = deriveEnvironment([], [], [], [{ inspection_type: null, title: "5.1.1.6 Construct Basin 1 ESC", inspector_name: null, status: "rejected", submitted_at: null, decided_at: "2026-08-19T12:00:00Z", created_at: null }], period);
+    check("ENV-12 a row that does not say where it came from is not trusted as an inspection", !/inspection (not passed|failed)/i.test(noOrigin.value), noOrigin.value);
   }
 
   // Weather delay hours have to land somewhere now that Environment does not
@@ -1098,10 +1135,29 @@ function unit() {
       ],
     } as unknown as WeeklyReportView);
     check(
-      "PROV-05 End Date is Phil's on every row - the platform cannot know a commercial date",
+      "PROV-05 an End Date typed over the schedule, or on a hand-added row, is marked",
       cells.contractors["sub-1"].includes("endDate") &&
         cells.contractors["manual:typed"].includes("endDate"),
       JSON.stringify(cells.contractors),
+    );
+    // Pyramid's End Date came off the schedule and printed red as if typed.
+    // Their scope ends on the schedule, so a schedule date is the platform's.
+    const sched = weeklyProvenance({
+      ...baseView(null),
+      contractors: [
+        { key: "sub-p", name: "Pyramid", scope: "", headcount: 8, lastOnsite: null, endDate: "2026-11-25", scheduleEnd: "2026-11-25", overridden: [], basis: "" },
+        { key: "sub-x", name: "No Tasks", scope: "", headcount: 3, lastOnsite: null, endDate: null, scheduleEnd: null, overridden: [], basis: "" },
+      ],
+    } as unknown as WeeklyReportView);
+    check(
+      "PROV-05b an End Date read off the schedule is not marked",
+      !sched.contractors["sub-p"].includes("endDate"),
+      JSON.stringify(sched.contractors),
+    );
+    check(
+      "PROV-05c an End Date the schedule cannot answer is marked as waiting on a person",
+      sched.contractors["sub-x"].includes("endDate"),
+      JSON.stringify(sched.contractors),
     );
     check(
       "PROV-06 a headcount read off the field reports is not marked with it",

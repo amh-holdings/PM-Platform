@@ -35,6 +35,7 @@ import { ScheduleLookaheadView } from "./schedule-lookahead-view";
 import { ScheduleHealthView, type ScheduleUpdateRow } from "./schedule-health-view";
 import { ScheduleConstraintsView } from "./schedule-constraints-view";
 import { CalendarDialog, type CalendarExceptionRow } from "./calendar-dialog";
+import type { TaskRecordCounts } from "@/lib/schedule-task-records";
 
 type Props = {
   projectId: string;
@@ -52,6 +53,12 @@ type Props = {
   constraintsAvailable: boolean;
   updates: ScheduleUpdateRow[];
   updatesAvailable: boolean;
+  /**
+   * Photo and document counts per task id, for the Records badge on each row.
+   * One aggregate pass at page load - see loadTaskRecordCounts for why this is
+   * not a count per row.
+   */
+  recordCounts: Map<string, TaskRecordCounts>;
 };
 
 type View = "schedule" | "lookahead" | "health" | "constraints";
@@ -82,6 +89,7 @@ export function ScheduleWorkspace({
   constraintsAvailable,
   updates,
   updatesAvailable,
+  recordCounts,
 }: Props) {
   const [view, setView] = useState<View>("schedule");
   const router = useRouter();
@@ -618,6 +626,7 @@ export function ScheduleWorkspace({
           typeAvailable={typeAvailable}
           constraintState={constraintState}
           scopeFilter={scopeFilter || null}
+          recordCounts={recordCounts}
           draft={draft}
           setDraft={setDraft}
         />
