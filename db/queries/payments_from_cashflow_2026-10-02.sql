@@ -62,7 +62,16 @@ select
   pa.status                      as status_now,
   pa.paid_at                     as paid_at_now,
   pa.amount_due                  as amount_due_in_app,
-  round(s.amount_paid - coalesce(pa.amount_due, 0), 2) as difference
+  round(s.amount_paid - coalesce(pa.amount_due, 0), 2) as difference,
+  -- The one thing that would make step 2 land and the cash flow not move.
+  -- billing_entries.cash_in_month is a hand-typed override and it beats
+  -- paid_at in ownerCashMonth (src/lib/billing-cash-date.ts). Any count above
+  -- zero here means those entries are pinned to a month somebody chose, and
+  -- the override has to be cleared before the real payment date takes effect.
+  (select count(*)
+     from public.billing_entries be
+    where be.pay_application_id = pa.id
+      and be.cash_in_month is not null) as entries_pinned_by_override
 from sheet s
 left join public.pay_applications pa
   on pa.project_id = (select id from project)
@@ -118,6 +127,41 @@ order by po.vendor_name, pp.sort_order nulls last, pp.expected_date;
 --   2026-08-17    $1,000.00   Maddox - storage
 --   2026-09-23   $47,584.51   Elevated Steel, invoice 26.0339
 --   2026-09-23      $300.75   Gridpower Solutions, S103199493.001 and two others
+
+-- ===========================================================================
+-- WHAT THIS DOES TO THE CASH FLOW
+-- ===========================================================================
+--
+--   pay_applications.paid_at       MOVES THE CURVE. ownerCashMonth puts the
+--                                  cash in the month the owner actually paid
+--                                  instead of the month terms predicted, and
+--                                  the dashboard prints a line saying it moved.
+--                                  Unless an entry carries cash_in_month - see
+--                                  entries_pinned_by_override in step 1a.
+--
+--   procurement_payments.paid_at   MOVES THE CURVE. forecastMilestoneDate
+--   and paid_amount                takes paid_at over every other date, the
+--                                  paid amount is used over the planned one,
+--                                  and the month flips from forecast to actual
+--                                  cash out.
+--
+--   sub_pay_apps.paid_at           CHANGES NOTHING on the curve today. The
+--                                  projection never reads it: sub cash out is
+--                                  forecast from what is left on the sub SOV,
+--                                  scheduled off the schedule. Recording the
+--                                  payment is still right - it is the record
+--                                  of what was paid - but it will not move a
+--                                  dollar until the projection learns to read
+--                                  a sub payment date.
+--
+--   status = 'paid' on an AFP      Does not flip revenue from forecast to
+--                                  actual. That split reads the billing
+--                                  ENTRY's own status and actual_amount, not
+--                                  the pay application's.
+--
+-- The 17 operating costs are in no table at all, so they are in no month of
+-- the curve either. That is the largest remaining gap between this workbook
+-- and the app's cash flow: $67,264.25 of real spend the projection cannot see.
 
 -- ===========================================================================
 -- STEP 2 - the writes
