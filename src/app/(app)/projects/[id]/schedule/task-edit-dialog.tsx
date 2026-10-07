@@ -114,14 +114,38 @@ type Props = {
   onDone?: () => void;
 };
 
-export function TaskEditDialog({
+/**
+ * The form on its own, without a modal around it.
+ *
+ * Split out so the task records popup can show it as a tab rather than opening
+ * a second window on top of itself. The row used to carry two controls - a
+ * Records badge that read the task and an "Open" button that edited it - and
+ * the one named "Open" was the one that did not show you the photographs.
+ * Two buttons on one row, neither of which says which is which, is a worse
+ * answer than one surface with the editing in it.
+ *
+ * The dialog below is now a thin shell around this, kept because Add task and
+ * the Insert row menu still need a standalone window: there is no task to open
+ * a records popup for until the row exists.
+ */
+type FormProps = Omit<Props, "trigger"> & {
+  /** Closes whatever is hosting the form - the modal, or the popup's tab. */
+  onClose: () => void;
+  /**
+   * "dialog" draws its own title, branch trail and Close. "embedded" leaves
+   * them off, because the records popup already names the task above the tabs
+   * and repeating it costs a third of the panel.
+   */
+  variant?: "dialog" | "embedded";
+};
+
+export function TaskEditForm({
   projectId,
   task,
   mode = "edit",
   suggestedWbs,
   phaseOptions,
   statusOptions,
-  trigger,
   allTasks,
   phase1Available,
   typeAvailable = false,
@@ -129,12 +153,13 @@ export function TaskEditDialog({
   rowIndex,
   insertAt,
   onDone,
-}: Props) {
+  onClose,
+  variant = "dialog",
+}: FormProps) {
   const creating = mode === "create";
   const values = task ?? { ...BLANK, wbs_code: suggestedWbs ?? "" };
 
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [, startTransition] = useTransition();
@@ -221,7 +246,7 @@ export function TaskEditDialog({
       setError(result.error);
       return;
     }
-    setOpen(false);
+    onClose();
     onDone?.();
     startTransition(() => router.refresh());
   };
@@ -242,7 +267,7 @@ export function TaskEditDialog({
       setError(res.error);
       return;
     }
-    setOpen(false);
+    onClose();
     setConfirmingDelete(false);
     onDone?.();
     startTransition(() => router.refresh());
@@ -250,45 +275,47 @@ export function TaskEditDialog({
 
   return (
     <>
-      <span onClick={() => setOpen(true)} className="inline-block">{trigger}</span>
-      {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setOpen(false);
-          }}
-        >
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <h3 className="text-lg font-semibold">
-                  {creating ? "Add task" : "Edit task"}
-                </h3>
-                {/* Which branch this row sits in. "Delivery" repeats down four
-                    branches, so the code on its own does not tell you whether
-                    you opened the right one. */}
-                {creating && insertAt?.note && (
-                  <p className="text-xs text-muted-foreground">{insertAt.note}</p>
-                )}
-                {trail && (
-                  <p className="truncate text-xs text-muted-foreground" title={trail}>
-                    {trail}
-                  </p>
-                )}
-                <p className="text-xs text-muted-foreground font-mono">
-                  {creating ? "New row" : values.wbs_code}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="text-sm text-muted-foreground hover:text-foreground"
-              >
-                Close
-              </button>
-            </div>
+      {variant === "dialog" ? (
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold">
+              {creating ? "Add task" : "Edit task"}
+            </h3>
+            {/* Which branch this row sits in. "Delivery" repeats down four
+                branches, so the code on its own does not tell you whether
+                you opened the right one. */}
+            {creating && insertAt?.note && (
+              <p className="text-xs text-muted-foreground">{insertAt.note}</p>
+            )}
+            {trail && (
+              <p className="truncate text-xs text-muted-foreground" title={trail}>
+                {trail}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground font-mono">
+              {creating ? "New row" : values.wbs_code}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-sm text-muted-foreground hover:text-foreground"
+          >
+            Close
+          </button>
+        </div>
+      ) : (
+        // Embedded, the popup header already carries the code, the name and the
+        // chips. Only the branch trail is worth repeating, because a Delivery
+        // row tells you nothing about which equipment it belongs to.
+        trail && (
+          <p className="mb-3 truncate text-xs text-muted-foreground" title={trail}>
+            {trail}
+          </p>
+        )
+      )}
 
-            <form action={handleSubmit} className="mt-4 space-y-5">
+            <form action={handleSubmit} className={variant === "dialog" ? "mt-4 space-y-5" : "space-y-5"}>
               <div className="grid gap-4 sm:grid-cols-2">
                 {creating && (
                   <div className="space-y-2">
@@ -616,7 +643,7 @@ export function TaskEditDialog({
                     Delete
                   </Button>
                 )}
-                <Button type="button" variant="ghost" onClick={() => setOpen(false)} disabled={submitting}>
+                <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={submitting}>
@@ -626,6 +653,33 @@ export function TaskEditDialog({
                 </Button>
               </div>
             </form>
+    </>
+  );
+}
+
+/**
+ * The form in a window of its own, for the places that have no popup to live
+ * in: Add task, and the Insert row menu. Both are creating a row that does not
+ * exist yet, so there are no records to show beside the fields.
+ *
+ * An existing task does NOT open this from the grid any more. Its row opens the
+ * records popup, and the fields are the Details tab in there.
+ */
+export function TaskEditDialog({ trigger, ...rest }: Props) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <span onClick={() => setOpen(true)} className="inline-block">{trigger}</span>
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setOpen(false);
+          }}
+        >
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
+            <TaskEditForm {...rest} variant="dialog" onClose={() => setOpen(false)} />
           </div>
         </div>
       )}
