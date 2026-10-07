@@ -15,6 +15,8 @@
 //
 // Pure functions, no DB. The caller loads rows and hands them in.
 
+import type { ScheduleBasis } from "@/lib/weekly-schedule-basis";
+
 import { estimateTaskProgress, type Confidence, type TaskLike } from "@/lib/progress";
 import { formatCurrency } from "@/lib/format";
 
@@ -585,6 +587,17 @@ export type Evidence = {
   // site", which is what a mobilization line is earned against.
   subOnSiteDate?: string | null;
   todayIso: string;
+  /**
+   * Which copy of the schedule the task percentages above came from.
+   *
+   * Production is summed to the cut-off, so a commodity-mapped line is exact
+   * as of any date. schedule_tasks.pct_complete is not: the column holds one
+   * number, today's. For a cut-off in the past the rows are read from the
+   * weekly snapshot saved at the time (schedule_updates, 0033) when one
+   * exists, and this says which. Absent means the live rows, which is correct
+   * when the cut-off IS today and a caveat when it is not.
+   */
+  scheduleAsOf?: ScheduleBasis;
 };
 
 export type LineVerification = {

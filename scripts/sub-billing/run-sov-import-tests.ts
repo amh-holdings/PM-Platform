@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { flattenCell, sheetToTsv } from "@/lib/sheet-tsv";
 import type { SheetSummary } from "@/lib/schedule-workbook";
 import { parsePastedSovLines } from "@/lib/sub-sov-import";
+import { cutoffOptions, resolveCutoff } from "@/lib/sub-billing-cutoff";
 
 let passed = 0;
 let failed = 0;
@@ -463,6 +464,48 @@ section("A workbook cell that contains a line break");
   eq("a carriage return too", flattenCell("a\r\nb"), "a b");
   eq("runs collapse", flattenCell("  a \n\n  b  "), "a b");
   eq("an empty cell stays empty", flattenCell(""), "");
+}
+
+// ============================================================================
+// Next-bill cut-off picker
+// ============================================================================
+//
+// Zarina: "can you add function to select period of august, period of
+// september, so I will know if AFP3 matches to that cut off."
+{
+  console.log("\n-- next-bill cut-offs --");
+  const opts = cutoffOptions("2026-10-07");
+  eq("today leads the list", opts[0].value, "2026-10-07");
+  eq("and is labelled as today", opts[0].label, "Today");
+  eq("six past month ends follow", opts.length, 7);
+  eq("the newest past cut-off is last month", opts[1].value, "2026-09-30");
+  eq("and it is named in full", opts[1].label, "Through September 30, 2026");
+  eq("August is the one after it", opts[2].value, "2026-08-31");
+  // 30 vs 31 day months, and the year boundary, come out of Date rather than
+  // out of arithmetic anyone has to maintain.
+  eq("a 30-day month ends on the 30th", opts[3].value, "2026-07-31");
+  eq("six back crosses into April", opts[6].value, "2026-04-30");
+  const acrossNewYear = cutoffOptions("2027-01-15");
+  eq("the year rolls back correctly", acrossNewYear[1].value, "2026-12-31");
+  eq("and keeps going", acrossNewYear[2].value, "2026-11-30");
+  // February, where a hand-rolled month length would show.
+  eq("February 2028 is a leap year", cutoffOptions("2028-03-10")[1].value, "2028-02-29");
+  eq("February 2027 is not", cutoffOptions("2027-03-10")[1].value, "2027-02-28");
+
+  // On the last day of a month, that month end IS today and must not appear
+  // twice.
+  const lastDay = cutoffOptions("2026-09-30");
+  eq("the last day of a month lists today once", lastDay[0].value, "2026-09-30");
+  eq("and does not repeat it as a past cut-off", lastDay.filter((o) => o.value === "2026-09-30").length, 1);
+
+  eq("nothing requested means today", resolveCutoff(undefined, "2026-10-07", opts), "2026-10-07");
+  eq("an offered cut-off is taken", resolveCutoff("2026-08-31", "2026-10-07", opts), "2026-08-31");
+  // A hand-typed date would produce a figure nobody can reproduce from the
+  // picker, so it falls back rather than being honoured.
+  eq("a date not on the list falls back", resolveCutoff("2026-08-15", "2026-10-07", opts), "2026-10-07");
+  eq("a future date falls back", resolveCutoff("2027-01-31", "2026-10-07", opts), "2026-10-07");
+  eq("junk falls back", resolveCutoff("last-august", "2026-10-07", opts), "2026-10-07");
+  eq("an empty string falls back", resolveCutoff("", "2026-10-07", opts), "2026-10-07");
 }
 
 console.log(`\n${"=".repeat(60)}`);
