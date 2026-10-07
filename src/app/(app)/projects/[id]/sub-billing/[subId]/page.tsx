@@ -145,6 +145,29 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
           <span className="text-xs text-muted-foreground">Evidence as of {formatDate(todayIso)}</span>
         </div>
 
+        {/* Two halves of this table age differently and only one of them said
+            so. Earned % is recomputed from the field record on every load, so
+            it is always current. Already billed is read from the newest bill
+            RECORDED HERE, and a bill the sub has sent that nobody has entered
+            makes every Expect to bill figure too high by the amount of it.
+            Zarina, looking at the panel: "Is this up to date?" - which the
+            page should answer without anyone reading the code. */}
+        {latest ? (
+          <p className="text-xs text-muted-foreground">
+            Already billed is read from app {latest.app_number}
+            {latest.period_end ? `, period ending ${formatDate(latest.period_end)}` : ""}
+            {latest.invoice_number ? `, invoice ${latest.invoice_number}` : ""}. If{" "}
+            {sub.company_name} has billed since, record it first - until then
+            Expect to bill counts that work again.
+          </p>
+        ) : (
+          <p className="text-xs text-amber-800">
+            No bill has been recorded for {sub.company_name}, so Already billed
+            reads zero on every line and Expect to bill is the whole of what the
+            field record says is earned.
+          </p>
+        )}
+
         {projectedLines.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             Nothing is projected. {unmapped > 0
@@ -237,7 +260,7 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
               <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2">App</th>
-                  <th className="px-3 py-2">Period end</th>
+                  <th className="px-3 py-2">Period covered</th>
                   <th className="px-3 py-2">Invoice</th>
                   {showDollars && <th className="px-3 py-2 text-right">Billed</th>}
                   {showDollars && <th className="px-3 py-2 text-right">Approved</th>}
@@ -256,7 +279,18 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
                         #{a.app_number}
                       </Link>
                     </td>
-                    <td className="px-3 py-2">{formatDate(a.period_end)}</td>
+                    {/* Both ends, not just the finish. "Period end" alone
+                        cannot answer what a bill covers, which is the first
+                        thing anyone checks before approving one. period_start
+                        is nullable on purpose - these subs bill "through
+                        <date>" as often as they bill a calendar month (0038) -
+                        so a missing start is said as "through" rather than
+                        guessed at. */}
+                    <td className="px-3 py-2">
+                      {a.period_start
+                        ? `${formatDate(a.period_start)} - ${formatDate(a.period_end)}`
+                        : `through ${formatDate(a.period_end)}`}
+                    </td>
                     <td className="px-3 py-2 text-muted-foreground">{a.invoice_number ?? "-"}</td>
                     {showDollars && (
                       <td className="px-3 py-2 text-right tabular-nums">
