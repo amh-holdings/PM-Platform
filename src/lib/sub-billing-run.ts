@@ -19,6 +19,11 @@ import {
   type SubContext,
 } from "@/lib/sub-billing";
 import type { SubBillingClient } from "@/lib/sub-billing.types";
+import {
+  basisFor,
+  pickSnapshotFor,
+  type ScheduleBasis,
+} from "@/lib/weekly-schedule-basis";
 
 export type VerificationRun = {
   ok: boolean;
@@ -32,12 +37,22 @@ export type VerificationRun = {
 // Every evidence source the engine can draw on, as of a given date. Production
 // is summed only up to the period end, so a bill is judged on what had actually
 // been installed by its own cut-off rather than by today.
+//
+// The schedule needed the same treatment and did not have it. pct_complete is
+// one column holding one number - today's - so a bill cut off on 31 August was
+// being judged on schedule percentages that include September's work. For a
+// cut-off in the past the task rows are read from the weekly snapshot saved at
+// the time instead (schedule_updates, 0033), and Evidence.scheduleAsOf says
+// which copy was used so the caller can print the caveat rather than imply a
+// precision that is not there.
 export async function loadEvidence(
   db: SubBillingClient,
   projectId: string,
   asOf: string,
   subcontractorId?: string,
 ): Promise<Evidence> {
+  const todayIso = new Date().toISOString().slice(0, 10);
+
   const [{ data: tasks }, { data: commodities }, { data: production }] = await Promise.all([
     db
       .from("schedule_tasks")
@@ -85,9 +100,49 @@ export async function loadEvidence(
     subOnSiteDate = firstDpr?.[0]?.report_date ?? null;
   }
 
+  // A cut-off in the past asks for the schedule as it stood then. The newest
+  // snapshot on or before that date is the one that was current; a later one
+  // already carries work done after the cut-off, which is the whole thing this
+  // avoids. Best effort: no snapshot means the live rows, said out loud rather
+  // than hidden.
+  type SnapshotTask = {
+    wbs_code: string;
+    task_name?: string | null;
+    status?: string | null;
+    pct_complete?: number | null;
+    start_date?: string | null;
+    end_date?: string | null;
+    duration_days?: number | null;
+  };
+  let scheduleRows = (tasks ?? []) as SnapshotTask[];
+  let picked: { dataDate: string } | null = null;
+  if (asOf < todayIso) {
+    const { data: snaps } = await db
+      .from("schedule_updates")
+      .select("data_date, tasks")
+      .eq("project_id", projectId)
+      .lte("data_date", asOf)
+      .order("data_date", { ascending: false })
+      .limit(1);
+    const row = (snaps ?? [])[0] as { data_date: string; tasks: unknown } | undefined;
+    const hit = row ? pickSnapshotFor([{ dataDate: row.data_date }], asOf) : null;
+    if (hit && Array.isArray(row?.tasks) && row.tasks.length) {
+      scheduleRows = row.tasks as SnapshotTask[];
+      picked = hit;
+    }
+  }
+  const scheduleAsOf: ScheduleBasis = basisFor({
+    periodEnd: asOf,
+    today: todayIso,
+    snapshot: picked,
+  });
+
   return {
+    scheduleAsOf,
     tasks: new Map(
-      (tasks ?? []).map((t) => [t.wbs_code, { ...t, wbs_code: t.wbs_code, task_name: t.task_name }]),
+      scheduleRows
+        .filter((t) => t.wbs_code)
+        .map((t) => [t.wbs_code, { ...t, wbs_code: t.wbs_code, task_name: t.task_name ?? null }]),
     ),
     commodities: new Map(
       (commodities ?? []).map((c) => [

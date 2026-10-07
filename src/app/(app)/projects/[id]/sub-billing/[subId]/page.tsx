@@ -6,6 +6,9 @@ import { formatCurrency, formatDate } from "@/lib/format";
 import { can } from "@/lib/roles";
 import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
 import { projectNextBill, type Evidence, type SovLine } from "@/lib/sub-billing";
+import { loadEvidence } from "@/lib/sub-billing-run";
+import { describeBasis } from "@/lib/weekly-schedule-basis";
+import { cutoffOptions, resolveCutoff } from "@/lib/sub-billing-cutoff";
 import { subBillingClient } from "@/lib/sub-billing-db";
 import { cn } from "@/lib/utils";
 
@@ -15,8 +18,15 @@ import { SovEditor } from "./sov-editor";
 import { SubRetainage } from "./sub-retainage";
 
 type Params = { id: string; subId: string };
+type Search = { through?: string };
 
-export default async function SubBillingDetailPage({ params }: { params: Params }) {
+export default async function SubBillingDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Params;
+  searchParams: Search;
+}) {
   await guardCapability("verifySubBilling");
   const { effective } = await getEffectiveRole();
   const showDollars = can(effective, "viewSubBillingDollars");
@@ -56,40 +66,16 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
     billedByItem = new Map((latestLines ?? []).map((l) => [l.item_number, Number(l.total_completed ?? 0)]));
   }
 
-  // ---- Next-bill projection, as of today ----
-  const [{ data: production }, { data: firstDpr }] = await Promise.all([
-    // All tracker production, matching loadEvidence in sub-billing-run.ts. What
-    // the approved field record says was installed is what the next bill is
-    // projected from.
-    db
-      .from("daily_production")
-      .select("commodity_id, quantity")
-      .eq("project_id", params.id),
-    db
-      .from("dprs")
-      .select("report_date")
-      .eq("project_id", params.id)
-      .eq("subcontractor_id", params.subId)
-      .order("report_date", { ascending: true })
-      .limit(1),
-  ]);
-  const installed = new Map<string, number>();
-  for (const row of production ?? []) {
-    if (!row.commodity_id) continue;
-    installed.set(row.commodity_id, (installed.get(row.commodity_id) ?? 0) + Number(row.quantity ?? 0));
-  }
+  // ---- Next-bill projection, as of the chosen cut-off ----
+  // loadEvidence is the same function that verifies a recorded bill at its own
+  // period end, so what this panel projects and what the review screen checks
+  // are computed one way. It sums production only up to the cut-off and reads
+  // the schedule from the snapshot saved at the time.
   const todayIso = new Date().toISOString().slice(0, 10);
-  const evidence: Evidence = {
-    tasks: new Map(tasks.map((t) => [t.wbs_code, { ...t, wbs_code: t.wbs_code, task_name: t.task_name }])),
-    commodities: new Map(
-      commodities.map((c) => [
-        c.id,
-        { label: c.label ?? "", installed: installed.get(c.id) ?? 0, total: Number(c.total_quantity ?? 0), uom: c.uom ?? null },
-      ]),
-    ),
-    subOnSiteDate: firstDpr?.[0]?.report_date ?? null,
-    todayIso,
-  };
+  const cutoffs = cutoffOptions(todayIso);
+  const through = resolveCutoff(searchParams.through, todayIso, cutoffs);
+
+  const evidence: Evidence = await loadEvidence(db, params.id, through, params.subId);
 
   const projection = projectNextBill({
     sovLines: sovLines as unknown as SovLine[],
@@ -157,8 +143,49 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
       <section className="space-y-2 rounded-md border bg-card p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-sm font-semibold">What we expect on the next bill</h3>
-          <span className="text-xs text-muted-foreground">Evidence as of {formatDate(todayIso)}</span>
+          {/* A plain GET form so the cut-off survives a reload and a shared
+              link, and so this works with no client JavaScript on it. Month
+              ends only - that is how a bill is cut, and a free date picker
+              invites comparing against a cut-off no bill will ever use. */}
+          <form method="get" className="flex items-center gap-2">
+            <label className="text-xs text-muted-foreground" htmlFor="through">
+              Evidence as of
+            </label>
+            <select
+              id="through"
+              name="through"
+              defaultValue={through}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+            >
+              {cutoffs.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <Button type="submit" variant="outline" size="sm" className="h-8">
+              Apply
+            </Button>
+          </form>
         </div>
+
+        {/* Production is summed to the cut-off, so a commodity-mapped line is
+            exact on any date. The schedule is one column holding today's
+            number unless a snapshot was saved, so say which was used rather
+            than imply a precision that is not there. */}
+        {through !== todayIso && describeBasis(evidence.scheduleAsOf ?? { kind: "live" }) && (
+          <p
+            className={cn(
+              "rounded-md border px-2 py-1.5 text-xs",
+              evidence.scheduleAsOf?.kind === "stale"
+                ? "border-amber-300 bg-amber-50 text-amber-800"
+                : "border-muted bg-muted/40 text-muted-foreground",
+            )}
+          >
+            Quantities are summed through {formatDate(through)}.{" "}
+            {describeBasis(evidence.scheduleAsOf ?? { kind: "live" })}
+          </p>
+        )}
 
         {/* Two halves of this table age differently and only one of them said
             so. Earned % is recomputed from the field record on every load, so
