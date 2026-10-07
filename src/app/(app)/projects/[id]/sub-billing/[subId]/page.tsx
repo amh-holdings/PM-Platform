@@ -99,6 +99,21 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
   });
   const projectedLines = projection.lines.filter((l) => l.projectedThisPeriod > 0);
   const unprojectable = projection.lines.filter((l) => l.projectedPctAtPeriodEnd == null);
+  // Why a line cannot be projected decides what to do about it, and the two
+  // causes need opposite actions. "No evidence source mapped" means go and map
+  // it. "CM sign-off" means it is mapped correctly and a person sets the
+  // percent at review - there is nothing to fix. Lumping them together sent
+  // Zarina looking for four missing mappings on an SOV whose own header says
+  // all nineteen lines have a source.
+  const methodByItem = new Map(
+    sovLines.map((l) => [l.item_number, l.verification_method as string]),
+  );
+  const needsMapping = unprojectable.filter(
+    (l) => methodByItem.get(l.itemNumber) === "unmapped",
+  );
+  const needsCmPercent = unprojectable.filter(
+    (l) => methodByItem.get(l.itemNumber) === "manual",
+  );
 
   const sovTotal = sovLines.reduce((s, l) => s + Number(l.scheduled_value ?? 0), 0);
   const unmapped = sovLines.filter((l) => l.verification_method === "unmapped").length;
@@ -237,11 +252,18 @@ export default async function SubBillingDetailPage({ params }: { params: Params 
                 )}
               </table>
             </div>
-            {unprojectable.length > 0 && (
+            {needsMapping.length > 0 && (
               <p className="text-xs text-amber-800">
-                {unprojectable.length} line{unprojectable.length === 1 ? "" : "s"} could not be
+                {needsMapping.length} line{needsMapping.length === 1 ? "" : "s"} could not be
                 projected because no evidence source is mapped. Anything the sub bills on
                 those lines will arrive unverified.
+              </p>
+            )}
+            {needsCmPercent.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {needsCmPercent.length} line{needsCmPercent.length === 1 ? "" : "s"} are set to
+                CM sign-off, so they are not projected here. Nothing to fix - the
+                percent is entered when the bill is reviewed.
               </p>
             )}
           </>
