@@ -8,7 +8,7 @@ import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
 import { projectNextBill, type Evidence, type SovLine } from "@/lib/sub-billing";
 import { loadEvidence } from "@/lib/sub-billing-run";
 import { describeBasis } from "@/lib/weekly-schedule-basis";
-import { cutoffOptions, resolveCutoff } from "@/lib/sub-billing-cutoff";
+import { resolveCutoff } from "@/lib/sub-billing-cutoff";
 import { subBillingClient } from "@/lib/sub-billing-db";
 import { cn } from "@/lib/utils";
 
@@ -72,8 +72,7 @@ export default async function SubBillingDetailPage({
   // are computed one way. It sums production only up to the cut-off and reads
   // the schedule from the snapshot saved at the time.
   const todayIso = new Date().toISOString().slice(0, 10);
-  const cutoffs = cutoffOptions(todayIso);
-  const through = resolveCutoff(searchParams.through, todayIso, cutoffs);
+  const through = resolveCutoff(searchParams.through, todayIso);
 
   const evidence: Evidence = await loadEvidence(db, params.id, through, params.subId);
 
@@ -144,28 +143,37 @@ export default async function SubBillingDetailPage({
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-sm font-semibold">What we expect on the next bill</h3>
           {/* A plain GET form so the cut-off survives a reload and a shared
-              link, and so this works with no client JavaScript on it. Month
-              ends only - that is how a bill is cut, and a free date picker
-              invites comparing against a cut-off no bill will ever use. */}
-          <form method="get" className="flex items-center gap-2">
-            <label className="text-xs text-muted-foreground" htmlFor="through">
-              Evidence as of
-            </label>
-            <select
-              id="through"
-              name="through"
-              defaultValue={through}
-              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-            >
-              {cutoffs.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
+              link, and so this works with no client JavaScript on it. Any
+              date, because a sub bills through whatever date they bill
+              through - Pyramid's app 1 ends on the 13th - and a picker that
+              cannot express that cannot check the bill that was sent. */}
+          <form method="get" className="flex items-end gap-2">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground" htmlFor="through">
+                Evidence as of
+              </label>
+              <input
+                type="date"
+                id="through"
+                name="through"
+                defaultValue={through}
+                // Nothing to show after today, and a future cut-off would read
+                // as a projection of work nobody has reported.
+                max={todayIso}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              />
+            </div>
             <Button type="submit" variant="outline" size="sm" className="h-8">
               Apply
             </Button>
+            {through !== todayIso && (
+              <Link
+                href={`/projects/${params.id}/sub-billing/${params.subId}`}
+                className="h-8 self-end text-xs text-muted-foreground underline-offset-2 hover:underline"
+              >
+                Back to today
+              </Link>
+            )}
           </form>
         </div>
 
