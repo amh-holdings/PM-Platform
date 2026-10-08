@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency } from "@/lib/format";
+import { buildProjection } from "@/lib/projection";
 
 type Props = {
   projectId: string;
@@ -63,8 +64,7 @@ export async function DashboardToday({ projectId }: Props) {
     lastDprRes,
     openRfisRes,
     blockingRfisRes,
-    billingRes,
-    costForecastRes,
+    projection,
     costTotalsRes,
     safetyRes,
   ] = await Promise.all([
@@ -91,23 +91,15 @@ export async function DashboardToday({ projectId }: Props) {
       .neq("status", "closed")
       .not("date_needed", "is", null)
       .lte("date_needed", blockingCutoff),
+    // This month's money from the same engine as the cash flow panel, so the
+    // two agree. Reading billing_entries' planned rows directly showed an old
+    // imported plan the projection no longer uses.
+    buildProjection(supabase, projectId, { monthsAhead: 1 }).catch(() => null),
+    // Incurred cost per code (cost_codes.actual_cost, from the QuickBooks
+    // sync): paid plus owed, the same figure the cost variance panel uses.
     supabase
-      .from("billing_entries")
-      .select(
-        "period_month, planned_amount, actual_amount, billing_lines!inner(project_id)",
-      )
-      .eq("billing_lines.project_id", projectId)
-      .eq("period_month", thisMonthIso),
-    supabase
-      .from("cost_forecasts")
-      .select(
-        "period_month, planned_amount, actual_amount, cost_codes!inner(project_id)",
-      )
-      .eq("cost_codes.project_id", projectId)
-      .eq("period_month", thisMonthIso),
-    supabase
-      .from("v_cost_code_totals")
-      .select("code, estimated_cost, total_actual")
+      .from("cost_codes")
+      .select("code, estimated_cost, actual_cost")
       .eq("project_id", projectId),
     supabase
       .from("dprs")
@@ -147,25 +139,16 @@ export async function DashboardToday({ projectId }: Props) {
   const blockingRfis = blockingRfisRes.count ?? 0;
 
   // ===== This-month cash =====
-  // Prefer actual when present (don't double-count planned + actual for the same entry).
-  let cashInThisMonth = 0;
-  for (const e of billingRes.data ?? []) {
-    const a = Number(e.actual_amount ?? 0);
-    const p = Number(e.planned_amount ?? 0);
-    cashInThisMonth += a > 0 ? a : p;
-  }
-  let cashOutThisMonth = 0;
-  for (const f of costForecastRes.data ?? []) {
-    const a = Number(f.actual_amount ?? 0);
-    const p = Number(f.planned_amount ?? 0);
-    cashOutThisMonth += a > 0 ? a : p;
-  }
+  // Received and expected this month, paid and due this month.
+  const monthRow = projection?.rows.find((r) => r.month === thisMonthIso);
+  const cashInThisMonth = monthRow?.cashIn ?? 0;
+  const cashOutThisMonth = monthRow?.totalCashOut ?? 0;
   const netThisMonth = cashInThisMonth - cashOutThisMonth;
 
   // ===== Top cost overrun =====
   let topOverrun = { code: "", variance: 0, pct: 0 };
   for (const r of costTotalsRes.data ?? []) {
-    const v = Number(r.total_actual ?? 0) - Number(r.estimated_cost ?? 0);
+    const v = Number(r.actual_cost ?? 0) - Number(r.estimated_cost ?? 0);
     if (v > topOverrun.variance) {
       const pct =
         Number(r.estimated_cost ?? 0) > 0

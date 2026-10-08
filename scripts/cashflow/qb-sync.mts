@@ -345,8 +345,8 @@ if (!hasMilestone("P-001", "Partial payment INV-111328")) {
   const m = milestone("P-001", /delivery/i);
   const t = costCash.find((x) => x.Num === "INV-111328")!; routed.add(key(t));
   ops.push({ step: "3 POs", table: "procurement_payments", action: "update", id: m.id, target: `Maddox P-001 "${m.milestone_name}"`,
-    change: `amount ${usd2(n(m.amount))} dated ${m.expected_date} (June 2024, already past) -> ${usd2(63400.14)} due ${PAST_DUE_MONTH.slice(0, 7)} (QB due 2026-08-26, past due)`,
-    source: "QB bill INV-111328 $63,900.14, $500 paid 2026-01-21, $63,400.14 open", set: { amount: 63400.14, expected_date: "2026-10-15" } });
+    change: `amount ${usd2(n(m.amount))} -> ${usd2(63400.14)}, due 30 days after the transformer is delivered (schedule task 4.4.3)`,
+    source: "QB bill INV-111328 $63,900.14, $500 paid 2026-01-21; not due until delivered on site (Nancy, 2026-10-02)", set: { amount: 63400.14, expected_date: null } });
   newMilestone("P-001", { milestone_name: "Partial payment INV-111328", amount: 500, paid_amount: 500, paid_at: "2026-01-21", expected_date: "2026-01-21", trigger_event: "Payment" }, "QB bill INV-111328, $500 paid 2026-01-21");
 }
 // Maddox P-005 ($750, no milestones in the app).

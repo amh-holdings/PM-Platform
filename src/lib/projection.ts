@@ -365,16 +365,6 @@ export async function buildProjection(
     }
   }
 
-  // Lines with no linked tasks: their schedule-driven estimates can't fire.
-  for (const line of linesRes.data ?? []) {
-    if ((line.linked_task_wbs_codes ?? []).length === 0) {
-      warnings.push({
-        kind: "billing_line_no_link",
-        ref: line.item_number,
-        message: `${line.item_number} "${line.description ?? ""}" has no schedule task links - auto-projection skipped`,
-      });
-    }
-  }
 
   // ---- BUCKETS ----
   type Bucket = {
@@ -603,6 +593,15 @@ export async function buildProjection(
           kind: "task_no_dates",
           ref: line.item_number,
           message: `${line.item_number} "${line.description ?? ""}" links to work with no planned finish date - $${Math.round(remaining).toLocaleString()} is missing from the forecast`,
+        });
+      } else {
+        // Only a line with something left to bill. A fully billed line with
+        // no schedule link has nothing to forecast, and warning about it
+        // buried the real gaps under nine lines already at 100%.
+        warnings.push({
+          kind: "billing_line_no_link",
+          ref: line.item_number,
+          message: `${line.item_number} "${line.description ?? ""}" has no schedule task links - $${Math.round(remaining).toLocaleString()} left to bill is missing from the forecast`,
         });
       }
       continue;
