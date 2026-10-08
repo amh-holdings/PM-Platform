@@ -769,4 +769,34 @@ if (APPLY) {
     done++;
   }
   console.log(`applied ${done} ops`);
+
+  // The bills behind every cost number (0070). Replaced wholesale: the pack
+  // is cumulative, so the latest one is the full history.
+  const probe = await sb.from("cost_transactions").select("id").limit(1);
+  if (probe.error) {
+    console.log(`cost_transactions not written (${probe.error.message}) - apply db/migrations/0070_cost_transactions.sql`);
+  } else {
+    const txRow = (t: any, basis: "cash" | "accrual", sourceFile: string) => {
+      const code = appCode(t.Memo);
+      return {
+        project_id: PID, cost_code_id: code ? codeBy.get(code)?.id ?? null : null, basis,
+        txn_date: t.Date, qb_type: t.Type, qb_num: t.Num == null ? null : String(t.Num),
+        vendor: t["Source Name"] ?? null, qb_item: t.Memo ?? null, paid_from: t.Split ?? null,
+        amount: r2(n(t.Debit) - n(t.Credit)), qb_cutoff: CUTOFF, source_file: sourceFile,
+      };
+    };
+    const rows = [
+      ...costCash.map((t) => txRow(t, "cash", "Cost Detail - CASH BASIS")),
+      ...paidSinceCutoff.map((t) => txRow(t, "cash", "Payments since cutoff")),
+      ...costAccrual.map((t) => txRow(t, "accrual", "Cost Detail - ACCRUAL BASIS")),
+    ].filter((r) => r.amount !== 0);
+    const del = await sb.from("cost_transactions").delete().eq("project_id", PID);
+    if (del.error) throw new Error(`cost_transactions: ${del.error.message}`);
+    for (let i = 0; i < rows.length; i += 200) {
+      const ins = await sb.from("cost_transactions").insert(rows.slice(i, i + 200));
+      if (ins.error) throw new Error(`cost_transactions: ${ins.error.message}`);
+    }
+    const sumOf = (b: string) => r2(rows.filter((r) => r.basis === b).reduce((s, r) => s + r.amount, 0));
+    console.log(`cost_transactions: ${rows.length} rows (cash ${usd2(sumOf("cash"))}, accrual ${usd2(sumOf("accrual"))})`);
+  }
 }
