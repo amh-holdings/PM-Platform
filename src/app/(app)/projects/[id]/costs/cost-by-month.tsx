@@ -43,7 +43,8 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export function CostByMonth({ codes, paid, transactions }: Props) {
   const hasTx = transactions !== null && transactions.length > 0;
-  const [basis, setBasis] = useState<Basis>("cash");
+  // Incurred by default, the basis of the cost codes' Actual column.
+  const [basis, setBasis] = useState<Basis>(hasTx ? "accrual" : "cash");
   const [open, setOpen] = useState<{ codeId: string; month: string | null } | null>(null);
 
   // Cell totals. With the transactions loaded, both bases are summed from
@@ -110,45 +111,6 @@ export function CostByMonth({ codes, paid, transactions }: Props) {
       : rowTotals.get(open.codeId) ?? 0
     : 0;
 
-  const downloadCsv = () => {
-    if (!hasTx) return;
-    const codeById = new Map(codes.map((c) => [c.id, c]));
-    const esc = (v: unknown) => {
-      const s = v == null ? "" : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const header = ["Basis", "Month", "Date", "Cost code", "Cost code name", "QB item", "Type", "Number", "Vendor", "Paid from", "Amount", "QB cutoff"];
-    const lines = transactions!
-      .filter((t) => t.basis === basis)
-      .sort((a, b) => a.txn_date.localeCompare(b.txn_date))
-      .map((t) => {
-        const c = t.cost_code_id ? codeById.get(t.cost_code_id) : null;
-        return [
-          t.basis === "cash" ? "Paid" : "Incurred",
-          t.txn_date.slice(0, 7),
-          t.txn_date,
-          c?.code ?? "",
-          c?.name ?? "",
-          t.qb_item,
-          t.qb_type,
-          t.qb_num,
-          t.vendor,
-          t.paid_from,
-          Number(t.amount).toFixed(2),
-          t.qb_cutoff,
-        ]
-          .map(esc)
-          .join(",");
-      });
-    const blob = new Blob([[header.join(","), ...lines].join("\n")], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `cost-transactions-${basis === "cash" ? "paid" : "incurred"}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   if (rows.length === 0) {
     return (
       <div className="rounded-lg border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
@@ -161,7 +123,7 @@ export function CostByMonth({ codes, paid, transactions }: Props) {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="inline-flex rounded-md border p-0.5 text-xs">
-          {(["cash", "accrual"] as const).map((b) => (
+          {(["accrual", "cash"] as const).map((b) => (
             <button
               key={b}
               type="button"
@@ -180,18 +142,17 @@ export function CostByMonth({ codes, paid, transactions }: Props) {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          {hasTx && <span>QuickBooks through {formatDate(transactions![0]?.qb_cutoff)}</span>}
-          <Button size="sm" variant="outline" onClick={downloadCsv} disabled={!hasTx}>
-            Download CSV
-          </Button>
-        </div>
+        {hasTx && (
+          <span className="text-xs text-muted-foreground">
+            QuickBooks through {formatDate(transactions![0]?.qb_cutoff)}
+          </span>
+        )}
       </div>
 
       {!hasTx && (
         <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-          Showing paid cost by month. The bills behind each month, the incurred
-          view and the CSV need migration 0070_cost_transactions.sql applied in
+          Showing paid cost by month. The bills behind each month and the
+          incurred view need migration 0070_cost_transactions.sql applied in
           Supabase, then one run of the QuickBooks sync.
         </p>
       )}

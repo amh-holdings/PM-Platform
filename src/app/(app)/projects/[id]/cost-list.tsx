@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { Fragment, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,8 @@ import {
   type CostCodeFormValues,
 } from "./cost-form-dialog";
 import { CostLinkForm } from "./cost-link-form";
+import { CodeMonths } from "./costs/code-months";
+import type { CostTxn } from "./costs/cost-by-month";
 
 type CostCodeRow = {
   id: string;
@@ -27,9 +29,26 @@ type CostCodeRow = {
 type Props = {
   projectId: string;
   codes: CostCodeRow[];
+  /** QuickBooks cost lines (0070); null when the table is not there yet. */
+  transactions?: CostTxn[] | null;
 };
 
-export function CostCodeList({ projectId, codes }: Props) {
+export function CostCodeList({ projectId, codes, transactions = null }: Props) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const txByCode = new Map<string, CostTxn[]>();
+  for (const t of transactions ?? []) {
+    if (!t.cost_code_id) continue;
+    const list = txByCode.get(t.cost_code_id) ?? [];
+    list.push(t);
+    txByCode.set(t.cost_code_id, list);
+  }
   const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +111,9 @@ export function CostCodeList({ projectId, codes }: Props) {
                 projectId={projectId}
                 pendingId={pendingId}
                 onDelete={handleDelete}
+                transactions={transactions ? (txByCode.get(c.id) ?? []) : null}
+                expanded={expanded.has(c.id)}
+                onToggle={toggle}
               />
             ))}
             {baseCodes.length > 0 && (
@@ -122,6 +144,9 @@ export function CostCodeList({ projectId, codes }: Props) {
                     projectId={projectId}
                     pendingId={pendingId}
                     onDelete={handleDelete}
+                    transactions={transactions ? (txByCode.get(c.id) ?? []) : null}
+                    expanded={expanded.has(c.id)}
+                    onToggle={toggle}
                   />
                 ))}
                 <tr className="bg-muted/20 text-sm font-medium">
@@ -175,16 +200,42 @@ function CostRow({
   projectId,
   pendingId,
   onDelete,
+  transactions,
+  expanded,
+  onToggle,
 }: {
   row: CostCodeRow;
   projectId: string;
   pendingId: string | null;
   onDelete: (id: string, label: string) => void;
+  /** Null when the transactions table is not there; [] when it is but this code has none. */
+  transactions: CostTxn[] | null;
+  expanded: boolean;
+  onToggle: (id: string) => void;
 }) {
   const variance = Number(row.actual_cost ?? 0) - Number(row.estimated_cost ?? 0);
+  const canExpand = transactions !== null && transactions.length > 0;
   return (
-    <tr className="hover:bg-muted/30">
-      <td className="px-3 py-2.5 font-mono text-xs">{row.code}</td>
+    <Fragment>
+    <tr className={cn("hover:bg-muted/30", expanded && "bg-muted/20")}>
+      <td className="px-3 py-2.5 font-mono text-xs">
+        {canExpand ? (
+          <button
+            type="button"
+            onClick={() => onToggle(row.id)}
+            className="inline-flex items-center gap-1 hover:underline"
+            aria-expanded={expanded}
+            title="Month by month, down to the QuickBooks bills"
+          >
+            <span className={cn("inline-block w-3 text-muted-foreground transition-transform", expanded && "rotate-90")}>
+              &#9656;
+            </span>
+            {row.code}
+          </button>
+        ) : (
+          <span className="pl-4">{row.code}</span>
+        )}
+      </td>
       <td className="px-3 py-2.5">
         <div className="font-medium">{row.name}</div>
         {row.description && (
@@ -237,6 +288,14 @@ function CostRow({
         </div>
       </td>
     </tr>
+    {expanded && canExpand && (
+      <tr className="bg-muted/10">
+        <td colSpan={7} className="px-3 py-3 pl-8">
+          <CodeMonths transactions={transactions!} incurredTotal={Number(row.actual_cost ?? 0)} />
+        </td>
+      </tr>
+    )}
+    </Fragment>
   );
 }
 
