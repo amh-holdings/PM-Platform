@@ -1,55 +1,36 @@
-// The cut-offs the next-bill panel offers.
+// The cut-off the next-bill panel projects against.
 //
-// Zarina, checking Pyramid's AFP 3 against the field record: "can you add
-// function to select period of august, period of september, so I will know if
-// AFP3 matches to that cut off."
+// Any date, not a list of month ends. The month-end list was the wrong call:
+// these subs bill "through <date>" at least as often as they bill a calendar
+// month, and Pyramid's own app 1 ends on 13 August. A picker that cannot
+// express 13 August cannot check the bill that was actually sent. Zarina:
+// "Can we make the evidence as of a selection of dates in the calendar so it
+// is accurate."
 //
-// Month ends, not free dates. That is how a bill is cut, and an arbitrary date
-// invites comparing the field record against a cut-off no bill will ever use.
-// Six months back is enough to reach any bill still in dispute without turning
-// the list into a scroll.
+// The only rules left are the two that keep a figure meaningful: a real date,
+// and not one in the future. Evidence after today does not exist, and a
+// cut-off beyond it would read as a projection of work nobody has reported.
 
-export type Cutoff = { value: string; label: string };
-
-/** Last day of the month `back` months before the one containing `todayIso`. */
-function monthEndBefore(todayIso: string, back: number): Date {
-  const [y, m] = todayIso.split("-").map(Number);
-  // Day 0 of a month is the last day of the one before it, so this lands on
-  // the end of the month `back` steps back without any length arithmetic.
-  return new Date(Date.UTC(y, m - back, 0));
-}
-
-export function cutoffOptions(todayIso: string, months = 6): Cutoff[] {
-  const out: Cutoff[] = [{ value: todayIso, label: "Today" }];
-  for (let back = 1; back <= months; back++) {
-    const end = monthEndBefore(todayIso, back);
-    const iso = end.toISOString().slice(0, 10);
-    // A month end on or after today is not a past cut-off. Only reachable on
-    // the last day of a month, where "Today" already covers it.
-    if (iso >= todayIso) continue;
-    out.push({
-      value: iso,
-      label: `Through ${end.toLocaleDateString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-        timeZone: "UTC",
-      })}`,
-    });
-  }
-  return out;
+/**
+ * Is this a real calendar date, not just four-two-two digits?
+ *
+ * The regex alone passes 2026-02-30 and 2026-13-01. Round-tripping through
+ * Date catches both: the parse normalises them to 2 March and January of
+ * 2027, which no longer match what was asked for.
+ */
+export function isRealDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
 
 /** The cut-off to use, given what arrived in the query string. */
-export function resolveCutoff(
-  requested: string | undefined,
-  todayIso: string,
-  options: readonly Cutoff[],
-): string {
+export function resolveCutoff(requested: string | undefined, todayIso: string): string {
   if (!requested) return todayIso;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(requested)) return todayIso;
+  if (!isRealDate(requested)) return todayIso;
+  // A future cut-off is silently pulled back to today rather than refused.
+  // There is no evidence after today, so the two produce the same table, and
+  // an error page for a date nobody can bill against helps nobody.
   if (requested > todayIso) return todayIso;
-  // Only an offered cut-off, so a hand-typed date cannot produce a figure
-  // nobody can reproduce from the picker.
-  return options.some((o) => o.value === requested) ? requested : todayIso;
+  return requested;
 }

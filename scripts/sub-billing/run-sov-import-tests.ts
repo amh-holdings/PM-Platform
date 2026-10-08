@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { flattenCell, sheetToTsv } from "@/lib/sheet-tsv";
 import type { SheetSummary } from "@/lib/schedule-workbook";
 import { parsePastedSovLines } from "@/lib/sub-sov-import";
-import { cutoffOptions, resolveCutoff } from "@/lib/sub-billing-cutoff";
+import { isRealDate, resolveCutoff } from "@/lib/sub-billing-cutoff";
 
 let passed = 0;
 let failed = 0;
@@ -467,45 +467,45 @@ section("A workbook cell that contains a line break");
 }
 
 // ============================================================================
-// Next-bill cut-off picker
+// Next-bill cut-off
 // ============================================================================
 //
-// Zarina: "can you add function to select period of august, period of
-// september, so I will know if AFP3 matches to that cut off."
+// Zarina: "Can we make the evidence as of a selection of dates in the calendar
+// so it is accurate." Any date, because a sub bills through whatever date they
+// bill through - Pyramid's app 1 ends on 13 August, which no month-end list
+// can express.
 {
-  console.log("\n-- next-bill cut-offs --");
-  const opts = cutoffOptions("2026-10-07");
-  eq("today leads the list", opts[0].value, "2026-10-07");
-  eq("and is labelled as today", opts[0].label, "Today");
-  eq("six past month ends follow", opts.length, 7);
-  eq("the newest past cut-off is last month", opts[1].value, "2026-09-30");
-  eq("and it is named in full", opts[1].label, "Through September 30, 2026");
-  eq("August is the one after it", opts[2].value, "2026-08-31");
-  // 30 vs 31 day months, and the year boundary, come out of Date rather than
-  // out of arithmetic anyone has to maintain.
-  eq("a 30-day month ends on the 30th", opts[3].value, "2026-07-31");
-  eq("six back crosses into April", opts[6].value, "2026-04-30");
-  const acrossNewYear = cutoffOptions("2027-01-15");
-  eq("the year rolls back correctly", acrossNewYear[1].value, "2026-12-31");
-  eq("and keeps going", acrossNewYear[2].value, "2026-11-30");
-  // February, where a hand-rolled month length would show.
-  eq("February 2028 is a leap year", cutoffOptions("2028-03-10")[1].value, "2028-02-29");
-  eq("February 2027 is not", cutoffOptions("2027-03-10")[1].value, "2027-02-28");
+  console.log("\n-- next-bill cut-off --");
+  const TODAY = "2026-10-08";
 
-  // On the last day of a month, that month end IS today and must not appear
-  // twice.
-  const lastDay = cutoffOptions("2026-09-30");
-  eq("the last day of a month lists today once", lastDay[0].value, "2026-09-30");
-  eq("and does not repeat it as a past cut-off", lastDay.filter((o) => o.value === "2026-09-30").length, 1);
+  eq("a plain date is real", isRealDate("2026-08-13"), true);
+  eq("the last day of a long month is real", isRealDate("2026-08-31"), true);
+  eq("a leap day in a leap year is real", isRealDate("2028-02-29"), true);
+  // The regex alone passes all three of these. Round-tripping through Date is
+  // what catches them.
+  eq("29 February in a common year is not", isRealDate("2027-02-29"), false);
+  eq("30 February is not", isRealDate("2026-02-30"), false);
+  eq("a thirteenth month is not", isRealDate("2026-13-01"), false);
+  eq("a 31st in a 30-day month is not", isRealDate("2026-09-31"), false);
+  eq("a date with no padding is not", isRealDate("2026-9-1"), false);
+  eq("prose is not", isRealDate("last august"), false);
+  eq("an empty string is not", isRealDate(""), false);
 
-  eq("nothing requested means today", resolveCutoff(undefined, "2026-10-07", opts), "2026-10-07");
-  eq("an offered cut-off is taken", resolveCutoff("2026-08-31", "2026-10-07", opts), "2026-08-31");
-  // A hand-typed date would produce a figure nobody can reproduce from the
-  // picker, so it falls back rather than being honoured.
-  eq("a date not on the list falls back", resolveCutoff("2026-08-15", "2026-10-07", opts), "2026-10-07");
-  eq("a future date falls back", resolveCutoff("2027-01-31", "2026-10-07", opts), "2026-10-07");
-  eq("junk falls back", resolveCutoff("last-august", "2026-10-07", opts), "2026-10-07");
-  eq("an empty string falls back", resolveCutoff("", "2026-10-07", opts), "2026-10-07");
+  eq("nothing requested means today", resolveCutoff(undefined, TODAY), TODAY);
+  eq("an empty string means today", resolveCutoff("", TODAY), TODAY);
+  // The case the month-end list could not express, and the reason this changed.
+  eq("a mid-month date is honoured", resolveCutoff("2026-08-13", TODAY), "2026-08-13");
+  eq("a month end still works", resolveCutoff("2026-09-30", TODAY), "2026-09-30");
+  eq("today itself is honoured", resolveCutoff(TODAY, TODAY), TODAY);
+  // Pulled back rather than refused: there is no evidence after today, so both
+  // produce the same table and an error page would help nobody.
+  eq("a future date falls back to today", resolveCutoff("2027-01-31", TODAY), TODAY);
+  eq("tomorrow falls back to today", resolveCutoff("2026-10-09", TODAY), TODAY);
+  eq("an impossible date falls back", resolveCutoff("2026-02-30", TODAY), TODAY);
+  eq("junk falls back", resolveCutoff("last-august", TODAY), TODAY);
+  // Far enough back that there is no evidence at all. Still honoured - an
+  // empty table is an honest answer, and clamping it would invent a date.
+  eq("a date before the job started is honoured", resolveCutoff("2020-01-01", TODAY), "2020-01-01");
 }
 
 console.log(`\n${"=".repeat(60)}`);
