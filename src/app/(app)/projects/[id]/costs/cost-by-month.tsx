@@ -161,7 +161,7 @@ export function CostByMonth({ codes, paid, transactions }: Props) {
         <table className="w-full text-xs">
           <thead className="border-b bg-muted/40 text-muted-foreground">
             <tr>
-              <th className="sticky left-0 z-10 bg-muted px-3 py-2 text-left font-medium">Cost code</th>
+              <th className="sticky left-0 z-10 min-w-[15rem] bg-muted px-3 py-2 text-left font-medium">Cost code</th>
               {months.map((m) => (
                 <th key={m} className="whitespace-nowrap px-3 py-2 text-right font-medium">
                   {monthLabel(m)}
@@ -173,13 +173,13 @@ export function CostByMonth({ codes, paid, transactions }: Props) {
           <tbody className="divide-y">
             {rows.map((r) => (
               <tr key={r.id} className={cn(open?.codeId === r.id && "bg-muted/30")}>
-                <td className="sticky left-0 z-10 bg-card px-3 py-1.5">
+                <td className="sticky left-0 z-10 max-w-[15rem] bg-card px-3 py-1.5">
                   <button
                     type="button"
-                    className="text-left hover:underline disabled:no-underline"
+                    className="block w-full truncate whitespace-nowrap text-left hover:underline disabled:no-underline"
                     disabled={!hasTx}
                     onClick={() => setOpen({ codeId: r.id, month: null })}
-                    title={hasTx ? "All transactions on this code" : undefined}
+                    title={`${r.code} ${r.name}`}
                   >
                     <span className="font-medium">{r.code}</span>{" "}
                     <span className="text-muted-foreground">{r.name}</span>
