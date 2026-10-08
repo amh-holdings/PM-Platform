@@ -8,7 +8,7 @@ import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
 import { projectNextBill, type Evidence, type SovLine } from "@/lib/sub-billing";
 import { loadEvidence } from "@/lib/sub-billing-run";
 import { describeBasis } from "@/lib/weekly-schedule-basis";
-import { resolveCutoff } from "@/lib/sub-billing-cutoff";
+import { dayBefore, resolveRange } from "@/lib/sub-billing-cutoff";
 import { subBillingClient } from "@/lib/sub-billing-db";
 import { cn } from "@/lib/utils";
 
@@ -18,7 +18,7 @@ import { SovEditor } from "./sov-editor";
 import { SubRetainage } from "./sub-retainage";
 
 type Params = { id: string; subId: string };
-type Search = { through?: string };
+type Search = { from?: string; through?: string };
 
 export default async function SubBillingDetailPage({
   params,
@@ -72,9 +72,25 @@ export default async function SubBillingDetailPage({
   // are computed one way. It sums production only up to the cut-off and reads
   // the schedule from the snapshot saved at the time.
   const todayIso = new Date().toISOString().slice(0, 10);
-  const through = resolveCutoff(searchParams.through, todayIso);
+  const { from, to: through } = resolveRange(
+    searchParams.from,
+    searchParams.through,
+    todayIso,
+  );
 
   const evidence: Evidence = await loadEvidence(db, params.id, through, params.subId);
+
+  // With a window, the table also answers what was earned INSIDE it. That is
+  // the figure a sub's bill for a stated period should match, and it is not
+  // the same as earned-to-date less already-billed: a bill can cover work the
+  // sub has not billed for from an earlier period, and the difference between
+  // the two is exactly what a dispute is about.
+  //
+  // Measured as the day before the window opens, so the first day of the
+  // window counts as inside it.
+  const openingEvidence = from
+    ? await loadEvidence(db, params.id, dayBefore(from), params.subId)
+    : null;
 
   const projection = projectNextBill({
     sovLines: sovLines as unknown as SovLine[],
@@ -82,6 +98,34 @@ export default async function SubBillingDetailPage({
     evidenceAtPeriodEnd: evidence,
     retainagePct: Number(sub.retainage_pct ?? 0),
   });
+
+  // The same projection at the opening of the window. Billed-to-date plays no
+  // part in projectedToDate, so an empty map keeps it clear that only the
+  // evidence date differs between the two runs.
+  const opening = openingEvidence
+    ? projectNextBill({
+        sovLines: sovLines as unknown as SovLine[],
+        billedToDateByItem: new Map<string, number>(),
+        evidenceAtPeriodEnd: openingEvidence,
+        retainagePct: Number(sub.retainage_pct ?? 0),
+      })
+    : null;
+  const openingByItem = new Map(
+    (opening?.lines ?? []).map((l) => [l.itemNumber, l.projectedToDate ?? 0]),
+  );
+  // Floored at zero. Evidence does not go backwards in any honest reading, and
+  // a negative "earned this period" would be a correction to an earlier
+  // figure rather than work done in the window.
+  const earnedInWindow = (itemNumber: string, toDate: number | null) =>
+    Math.max(0, (toDate ?? 0) - (openingByItem.get(itemNumber) ?? 0));
+  const windowTotal = from
+    ? Math.round(
+        projection.lines.reduce(
+          (sum, l) => sum + earnedInWindow(l.itemNumber, l.projectedToDate),
+          0,
+        ) * 100,
+      ) / 100
+    : 0;
   const projectedLines = projection.lines.filter((l) => l.projectedThisPeriod > 0);
   const unprojectable = projection.lines.filter((l) => l.projectedPctAtPeriodEnd == null);
   // Why a line cannot be projected decides what to do about it, and the two
@@ -147,10 +191,28 @@ export default async function SubBillingDetailPage({
               date, because a sub bills through whatever date they bill
               through - Pyramid's app 1 ends on the 13th - and a picker that
               cannot express that cannot check the bill that was sent. */}
-          <form method="get" className="flex items-end gap-2">
+          <form method="get" className="flex flex-wrap items-end gap-2">
+            {/* From is optional and stays optional. Left empty the table reads
+                cumulative to the end date, which is still the right view when
+                the question is what the NEXT bill should come to. Filled in,
+                it also answers what was earned between the two, which is what
+                a bill covering a stated period has to match. */}
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground" htmlFor="from">
+                Period from
+              </label>
+              <input
+                type="date"
+                id="from"
+                name="from"
+                defaultValue={from ?? ""}
+                max={through}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              />
+            </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-muted-foreground" htmlFor="through">
-                Evidence as of
+                {from ? "Period to" : "Evidence as of"}
               </label>
               <input
                 type="date"
@@ -166,7 +228,7 @@ export default async function SubBillingDetailPage({
             <Button type="submit" variant="outline" size="sm" className="h-8">
               Apply
             </Button>
-            {through !== todayIso && (
+            {(through !== todayIso || from) && (
               <Link
                 href={`/projects/${params.id}/sub-billing/${params.subId}`}
                 className="h-8 self-end text-xs text-muted-foreground underline-offset-2 hover:underline"
@@ -181,7 +243,9 @@ export default async function SubBillingDetailPage({
             exact on any date. The schedule is one column holding today's
             number unless a snapshot was saved, so say which was used rather
             than imply a precision that is not there. */}
-        {through !== todayIso && describeBasis(evidence.scheduleAsOf ?? { kind: "live" }) && (
+        {(through !== todayIso || from) && (
+          describeBasis(evidence.scheduleAsOf ?? { kind: "live" }) || from
+        ) && (
           <p
             className={cn(
               "rounded-md border px-2 py-1.5 text-xs",
@@ -190,7 +254,9 @@ export default async function SubBillingDetailPage({
                 : "border-muted bg-muted/40 text-muted-foreground",
             )}
           >
-            Quantities are summed through {formatDate(through)}.{" "}
+            {from
+              ? `Quantities are counted from ${formatDate(from)} to ${formatDate(through)}.`
+              : `Quantities are summed through ${formatDate(through)}.`}{" "}
             {describeBasis(evidence.scheduleAsOf ?? { kind: "live" })}
           </p>
         )}
@@ -233,6 +299,12 @@ export default async function SubBillingDetailPage({
                     <th className="px-3 py-2">Item</th>
                     <th className="px-3 py-2">Description</th>
                     <th className="px-3 py-2 text-right">Earned %</th>
+                    {/* Only with a window, and placed before the cumulative
+                        columns: it is the figure a bill for that period has to
+                        match, so it should be the first number read. */}
+                    {showDollars && from && (
+                      <th className="px-3 py-2 text-right">Earned in period</th>
+                    )}
                     {showDollars && <th className="px-3 py-2 text-right">Already billed</th>}
                     {showDollars && <th className="px-3 py-2 text-right">Expect to bill</th>}
                     <th className="px-3 py-2">Basis</th>
@@ -246,6 +318,11 @@ export default async function SubBillingDetailPage({
                       <td className="px-3 py-2 text-right tabular-nums">
                         {((l.projectedPctAtPeriodEnd ?? 0) * 100).toFixed(1)}%
                       </td>
+                      {showDollars && from && (
+                        <td className="px-3 py-2 text-right font-medium tabular-nums">
+                          {formatCurrency(earnedInWindow(l.itemNumber, l.projectedToDate))}
+                        </td>
+                      )}
                       {showDollars && (
                         <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
                           {formatCurrency(l.billedToDate)}
@@ -262,22 +339,33 @@ export default async function SubBillingDetailPage({
                 </tbody>
                 {showDollars && (
                   <tfoot className="border-t-2 bg-muted/30 font-medium">
+                    {from && (
+                      <tr>
+                        <td className="px-3 py-2" colSpan={from ? 5 : 4}>
+                          Earned {formatDate(from)} to {formatDate(through)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {formatCurrency(windowTotal)}
+                        </td>
+                        <td />
+                      </tr>
+                    )}
                     <tr>
-                      <td className="px-3 py-2" colSpan={4}>
+                      <td className="px-3 py-2" colSpan={from ? 5 : 4}>
                         Projected gross
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(projection.grossTotal)}</td>
                       <td />
                     </tr>
                     <tr>
-                      <td className="px-3 py-2" colSpan={4}>
+                      <td className="px-3 py-2" colSpan={from ? 5 : 4}>
                         Less {sub.retainage_pct}% retainage
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">({formatCurrency(projection.retainage)})</td>
                       <td />
                     </tr>
                     <tr>
-                      <td className="px-3 py-2" colSpan={4}>
+                      <td className="px-3 py-2" colSpan={from ? 5 : 4}>
                         Expected amount due
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(projection.netDue)}</td>
