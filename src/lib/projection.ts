@@ -93,6 +93,8 @@ export type ProjectionRow = {
   retainageForecast: number;
   cashOutActual: number;
   cashOutForecast: number;
+  /** The part of cashIn already received - a paid AFP. The rest is forecast. */
+  cashInActual: number;
   netCash: number;
   cumulativeCash: number;
   // Metadata
@@ -382,6 +384,7 @@ export async function buildProjection(
     retainageForecast: number;
     cashOutActual: number;
     cashOutForecast: number;
+    cashInActual: number;
     revenueRecognized: number;
     subCostIncurred: number;
     vendorCostIncurred: number;
@@ -399,6 +402,7 @@ export async function buildProjection(
     retainageForecast: 0,
     cashOutActual: 0,
     cashOutForecast: 0,
+    cashInActual: 0,
     revenueRecognized: 0,
     subCostIncurred: 0,
     vendorCostIncurred: 0,
@@ -489,6 +493,7 @@ export async function buildProjection(
 
     const cashBucket = get(cashMonth);
     cashBucket.cashIn += Math.max(0, gross - retainage);
+    if (ownerPaid) cashBucket.cashInActual += Math.max(0, gross - retainage);
   }
 
   for (const move of Array.from(ownerMoves.values())) {
@@ -801,6 +806,10 @@ export async function buildProjection(
   // out; approved or in review books at the due date. The SOV loop above
   // already subtracts what these apps billed, so nothing is counted twice.
   for (const a of (subAppsRes.data ?? []) as {
+    approved_this_period: number | null;
+    billed_this_period: number | null;
+    period_end: string | null;
+    app_date: string | null;
     status: string | null;
     amount_due: number | null;
     approved_amount_due: number | null;
@@ -811,6 +820,18 @@ export async function buildProjection(
   }[]) {
     if (a.status === "rejected") continue;
     forecastSubRetainage += Number(a.approved_retainage ?? a.retainage_this_period ?? 0);
+    // The cost side of the same bill, in the month the work was billed. The
+    // SOV loop prices only what is left to bill, so without this a billed
+    // line was cash out with no cost behind it and margin read high by every
+    // dollar a sub had billed.
+    const billedGross = Number(a.approved_this_period ?? a.billed_this_period ?? 0);
+    const workDate = a.period_end ?? a.app_date;
+    if (billedGross > 0 && workDate) {
+      const accrual = get(monthIsoFromDate(String(workDate)));
+      accrual.subCostIncurred += billedGross;
+      accrual.hasActualCost = true;
+      accrual.confidenceSignals.push("high");
+    }
     const amt = Number(a.approved_amount_due ?? a.amount_due ?? 0);
     if (amt <= 0) continue;
     if (a.status === "paid" && a.paid_at) {
@@ -1027,6 +1048,7 @@ export async function buildProjection(
       retainageActual: b.retainageActual,
       retainageForecast: b.retainageForecast,
       cashOutActual: b.cashOutActual,
+      cashInActual: b.cashInActual,
       cashOutForecast: b.cashOutForecast,
       confidence,
       hasActualBilling: b.hasActualBilling,

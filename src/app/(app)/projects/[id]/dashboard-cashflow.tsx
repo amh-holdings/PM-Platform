@@ -79,17 +79,31 @@ export async function DashboardCashflow({ projectId, showCosts = false }: Props)
   const firstActive = projection.rows.find(
     (r) => r.cashIn !== 0 || r.totalCashOut !== 0,
   )?.month;
+  // The low point AHEAD: from this month on, the worst the position gets. The
+  // job's history has its own dips (Sweet Springs paid out before its first
+  // receipt in Jun 24), but a trough that is already behind you cannot warn
+  // you about the one coming, which is what this tile is for.
   let trough = { month: "", label: "", value: Number.POSITIVE_INFINITY };
   for (const r of projection.rows) {
     if (firstActive && r.month < firstActive) continue;
+    if (r.month < thisMonthIso) continue;
     if (r.cumulativeCash < trough.value) {
       trough = { month: r.month, label: r.label, value: r.cumulativeCash };
     }
   }
   if (!Number.isFinite(trough.value)) trough = { month: "", label: "", value: 0 };
+  // Money that has actually moved: every past month, plus what this month has
+  // already received and paid. Not this month's forecast - an AFP due on the
+  // 30th is not in the bank on the 8th.
+  const before = [...projection.rows].filter((r) => r.month < thisMonthIso).pop();
+  const current = projection.rows.find((r) => r.month === thisMonthIso);
   const cashToDate =
-    [...projection.rows].filter((r) => r.month <= thisMonthIso).pop()?.cumulativeCash ?? 0;
-  const retainageHeld = projection.rows.reduce(
+    (before?.cumulativeCash ?? 0) +
+    (current ? current.cashInActual - current.cashOutActual : 0);
+  // Held by the owner today: retainage on what has been billed. The total by
+  // completion includes billing that has not happened yet.
+  const retainageHeld = projection.rows.reduce((s, r) => s + r.retainageActual, 0);
+  const retainageAtCompletion = projection.rows.reduce(
     (s, r) => s + r.retainageActual + r.retainageForecast,
     0,
   );
@@ -122,10 +136,10 @@ export async function DashboardCashflow({ projectId, showCosts = false }: Props)
           label="Cash position today"
           value={formatCurrency(cashToDate)}
           tone={cashToDate >= 0 ? "good" : "bad"}
-          note={`Through ${monthLabel(thisMonthIso)}`}
+          note="Received less paid, to date"
         />
         <Tile
-          label="Low point"
+          label="Low point ahead"
           value={noData ? "-" : formatCurrency(trough.value)}
           tone={trough.value < 0 ? "bad" : "good"}
           note={
@@ -139,7 +153,7 @@ export async function DashboardCashflow({ projectId, showCosts = false }: Props)
         <Tile
           label="Retainage held"
           value={formatCurrency(retainageHeld)}
-          note="Earned, not yet released"
+          note={`On billing to date · ${formatCurrency(retainageAtCompletion)} by completion`}
         />
         <Tile
           label="Margin at completion"
@@ -221,15 +235,6 @@ export async function DashboardCashflow({ projectId, showCosts = false }: Props)
       )}
     </section>
   );
-}
-
-function monthLabel(iso: string): string {
-  const [y, m] = iso.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en-US", {
-    month: "short",
-    year: "2-digit",
-    timeZone: "UTC",
-  });
 }
 
 function Tile({
