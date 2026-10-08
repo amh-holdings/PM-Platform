@@ -33,14 +33,7 @@ import {
   shiftByDaysToMonth,
   shortMonthLabel,
 } from "@/lib/cashflow";
-import {
-  describePipelineCo,
-  describePipelineCoCost,
-  describeUncostedPipelineCo,
-  normalizeCoNumber,
-  planPipelineCoCost,
-  planPipelineCoRevenue,
-} from "@/lib/change-order-projection";
+import { isPipelineCo } from "@/lib/change-order-projection";
 import {
   describeOwnerCashMove,
   ownerCashMonth,
@@ -56,7 +49,6 @@ import {
   describeSovDateSource,
   resolveSovMonth,
 } from "@/lib/sov-forecast-date";
-import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import {
   describeScheduleMove,
   forecastMilestoneDate,
@@ -203,7 +195,7 @@ export async function buildProjection(
 
   const [
     projectRes, entriesRes, forecastsRes, paymentsRes, posRes, linesRes, tasksRes,
-    subSovRes, subBilledRes, changeOrdersRes, payAppsRes, costCodesRes,
+    subSovRes, subBilledRes, changeOrdersRes, payAppsRes,
     poLinesRes, commodityLinksRes, dprsRes, subAppsRes, amendmentsRes,
   ] =
     await Promise.all([
@@ -272,7 +264,7 @@ export async function buildProjection(
         .eq("sub_pay_apps.project_id", projectId),
       // Change orders that are not approved yet. An approved one is already in
       // the forecast through its own SOV line, so only the pipeline is read
-      // here - see planPipelineCoRevenue.
+      // here, to name what is waiting. Pending COs are not in the curve.
       supabase
         .from("change_orders")
         .select("co_number, description, co_value, cost_amount, status")
@@ -282,12 +274,6 @@ export async function buildProjection(
       supabase
         .from("pay_applications")
         .select("id, app_number, paid_at")
-        .eq("project_id", projectId),
-      // CO-numbered cost codes. Where change order costs were entered before
-      // the buildup existed, and still the fallback the CEO report uses.
-      supabase
-        .from("cost_codes")
-        .select("code, is_change_order, estimated_cost")
         .eq("project_id", projectId),
       // Line items, for a PO with more than one delivery. Each item can point
       // at its own schedule row, and a payment milestone can say which item it
@@ -634,86 +620,21 @@ export async function buildProjection(
   // ---- CHANGE ORDERS NOT APPROVED YET ----
   //
   // An approved CO is already above: it has its own SOV line and lands in the
-  // month its work finishes. Everything before approval was in the forecast
-  // nowhere, which on a projection whose job is to say what is coming is a
-  // hole rather than caution. The pipeline is assumed billed one month after
-  // the AFP being assembled now - see planPipelineCoRevenue.
-  const openPeriodMonth = await resolveBillingPeriod(supabase, projectId, today);
-  const coPlan = planPipelineCoRevenue({
-    cos: changeOrdersRes.data ?? [],
-    openPeriodMonth,
-    ownerRetainagePct: ownerRetPct,
-    ownerTermsDays,
-  });
-  if (coPlan.entries.length > 0) {
-    const accrual = get(coPlan.month);
-    accrual.revenueRecognized += coPlan.totalGross;
-    accrual.revenueForecast += coPlan.totalGross;
-    accrual.retainageForecast += coPlan.totalRetainage;
-    // Low, deliberately. This is money resting on an assumption about approval
-    // rather than on an entry, and the confidence badge should say so.
-    accrual.confidenceSignals.push("low");
-    forecastRetainage += coPlan.totalRetainage;
-    get(coPlan.cashMonth).cashIn += coPlan.totalNet;
-
-    // One line per CO, so nobody finds an extra six figures in October and has
-    // to go looking for where it came from.
-    for (const entry of coPlan.entries) {
-      warnings.push({
-        kind: "pipeline_change_order",
-        ref: entry.coNumber,
-        message: describePipelineCo(entry, coPlan.month),
-      });
-    }
-
-    // And what it costs to do the work. Booking the revenue alone made every
-    // pipeline CO pure margin, so Margin at completion read high by exactly
-    // the cost. Same month as the revenue: that revenue already rests on an
-    // assumption about when the CO gets billed, and spreading the cost on a
-    // second assumption on top would be precision the number has not earned.
-    const coCostByNumber = new Map<string, number>();
-    for (const c of costCodesRes.data ?? []) {
-      if (!c.is_change_order || c.estimated_cost == null) continue;
-      coCostByNumber.set(normalizeCoNumber(c.code), Number(c.estimated_cost));
-    }
-    const coStoredCost = new Map<string, number>();
-    for (const c of changeOrdersRes.data ?? []) {
-      const stored = (c as { cost_amount?: number | null }).cost_amount;
-      if (stored == null) continue;
-      coStoredCost.set(normalizeCoNumber(c.co_number ?? ""), Number(stored));
-    }
-
-    const costPlan = planPipelineCoCost({
-      cos: changeOrdersRes.data ?? [],
-      costByCoNumber: coCostByNumber,
-      costAmountByCoNumber: coStoredCost,
-      month: coPlan.month,
+  // month its work finishes. A CO that is still draft, in review or submitted
+  // is NOT in the curve - Phil, 2026-10-08: pending change orders "should not
+  // be added". Assuming them billed put $553k of revenue and $489k of cost on
+  // Sweet Springs that no one had agreed to. Each one is still named, with its
+  // value, so the dashboard says what is waiting rather than hiding it.
+  for (const co of changeOrdersRes.data ?? []) {
+    if (!isPipelineCo(co.status)) continue;
+    const value = Number(co.co_value ?? 0);
+    if (!Number.isFinite(value) || value === 0) continue;
+    const cost = (co as { cost_amount?: number | null }).cost_amount;
+    warnings.push({
+      kind: "pipeline_change_order",
+      ref: co.co_number ?? "CO",
+      message: `${co.co_number ?? "A change order"} (${(co.status ?? "").replace("_", " ")}) is not in the forecast until it is approved - $${Math.round(value).toLocaleString()} billable${cost != null ? `, $${Math.round(Number(cost)).toLocaleString()} cost` : ""}`,
     });
-
-    if (costPlan.totalCost > 0) {
-      const costBucket = get(costPlan.month);
-      costBucket.subCostIncurred += costPlan.totalCost;
-      costBucket.subCashOut += costPlan.totalCost;
-      costBucket.cashOutForecast += costPlan.totalCost;
-      costBucket.confidenceSignals.push("low");
-      for (const entry of costPlan.entries) {
-        notes.push({
-          kind: "pipeline_co_cost",
-          ref: entry.coNumber,
-          message: describePipelineCoCost(entry, costPlan.month),
-        });
-      }
-    }
-
-    // Revenue in the curve with no cost behind it. A guessed cost would be
-    // worse than a named hole, so it is named.
-    for (const entry of costPlan.uncosted) {
-      warnings.push({
-        kind: "pipeline_co_no_cost",
-        ref: entry.coNumber,
-        message: describeUncostedPipelineCo(entry),
-      });
-    }
   }
 
   // The same treatment on the way out, off the subcontractor SOV.
