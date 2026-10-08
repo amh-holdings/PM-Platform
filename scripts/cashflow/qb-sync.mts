@@ -142,6 +142,8 @@ const rillion = (() => {
     return o;
   });
 })();
+// Incurred to date per code (QB "Act. Cost", accrual basis): paid AND owed.
+const qbIncurred = new Map<string, number>();
 const qbEstimate = (() => {
   const est = new Map<string, number>();
   for (const r of sheet(file(/^1\..*Estimates vs Actuals/i))) {
@@ -152,6 +154,7 @@ const qbEstimate = (() => {
     const code = appCode(label);
     if (!code) continue;
     est.set(code, r2((est.get(code) ?? 0) + nums[0]));
+    qbIncurred.set(code, r2((qbIncurred.get(code) ?? 0) + nums[1]));
   }
   return est;
 })();
@@ -239,6 +242,16 @@ for (const c of codes) {
     const scope = n(b.scheduled_value) + amends.filter((a) => a.base_line_id === b.id).reduce((s, a) => s + n(a.amount), 0);
     if (Math.abs(scope - qb) > 0.05) review.push({ item: `Owner SOV ${b.item_number} scope differs from QB`, why: `App ${usd2(scope)} (contract value plus change-order allocations), QB ${usd2(qb)}.`, proposal: "Check against the executed G703." });
   }
+}
+// cost_codes.actual_cost = what QB says each code has incurred - the figure
+// the Costs page and the cost variance chart compare against the budget.
+// Paid-only actuals (cost_forecasts) would hide every overrun still sitting
+// in payables.
+for (const c of codes) {
+  const inc = qbIncurred.get(c.code) ?? 0;
+  if (Math.abs(n(c.actual_cost) - inc) < 0.005) continue;
+  ops.push({ step: "0 Budget", table: "cost_codes", action: "update", id: c.id, target: `${c.code} ${c.name}`,
+    change: `actual_cost ${usd2(n(c.actual_cost))} -> ${usd2(inc)} (incurred)`, source: "Item Estimates vs Actuals 9/30, Act. Cost", set: { actual_cost: inc } });
 }
 if (codeBy.get("SSC T.15")) {
   review.push({ item: "SSC T.15 is named \"CAB Piles\" in the app", why: "QB's T.15 is \"CO5 FTC Piles\" ($100,341 budget). Same number, different scope name.", proposal: "Rename the app code to \"CO5 FTC Piles\" when applying." });
