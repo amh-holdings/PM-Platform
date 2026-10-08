@@ -392,8 +392,8 @@ for (const [s, num, what] of [[sun, "I0002882", "Invoice I0002882"], [lum, "App 
 }
 ops.push({ step: "2 Subs", table: "sub_pay_apps", action: "enter-in-app", target: "Pyramid App 2", change: "new pay app, $113,460.04 billed, due 2026-10-18", source: "QB AP: bill \"AFP 2\" 9/18" });
 ops.push({ step: "2 Subs", table: "sub_pay_apps", action: "enter-in-app", target: "Pyramid App 3", change: "new pay app, $79,085.37, due 2026-10-28", source: "Rillion 1407, pending your approval" });
-ops.push({ step: "2 Subs", table: "sub_pay_apps", action: "enter-in-app", target: "Lumina App 1", change: "new pay app, $163,174.33 billed. $18,579.40 bond increase paid 9/23 (no retainage). $144,594.93 work less 10% retainage ($14,459.49) = $130,135.44 due, past due since 9/1", source: "QB bill \"App 1\" 8/22; Phil 2026-10-08 on retainage" });
-ops.push({ step: "2 Subs", table: "sub_pay_apps", action: "enter-in-app", target: "Sunstall Invoice I0002882", change: "new pay app, $33,293.33, paid 2026-09-08", source: "QB bill I0002882" });
+if (!subApps.some((a) => a.subcontractor_id === lum.id && a.app_number === 1)) ops.push({ step: "2 Subs", table: "sub_pay_apps", action: "enter-in-app", target: "Lumina App 1", change: "new pay app, $163,174.33 billed. $18,579.40 bond increase paid 9/23 (no retainage). $144,594.93 work less 10% retainage ($14,459.49) = $130,135.44 due, past due since 9/1", source: "QB bill \"App 1\" 8/22; Phil 2026-10-08 on retainage" });
+if (!subApps.some((a) => a.subcontractor_id === sun.id && a.app_number === 1)) ops.push({ step: "2 Subs", table: "sub_pay_apps", action: "enter-in-app", target: "Sunstall Invoice I0002882", change: "new pay app, $33,293.33, paid 2026-09-08", source: "QB bill I0002882" });
 
 // Open bills and Rillion invoices on commitments.
 const openRouted = new Set<string>(["Lumina Energy Services|App 1 (", "Pyramid Excavation|AFP 2", "Pyramid Excavation|AFP1 1383",
@@ -485,6 +485,30 @@ const accrued = new Map<string, number>();
 for (const t of costAccrual) { const c = appCode(t.Memo); if (c) accrued.set(c, (accrued.get(c) ?? 0) + n(t.Debit) - n(t.Credit)); }
 const fcRowsAfter: { code: string; period_month: string; planned_amount: number; actual_amount: number }[] = [];
 const etcNotes: string[] = [];
+// Bought-out scope: what QB says was paid on each code, by month, ACTUALS
+// ONLY. Cash out for this scope comes from the sub pay apps and PO
+// milestones, so the projection skips these codes; the rows exist for the
+// cost tiles, which read cost by code. QB codes every bill, so the vendor ->
+// code attribution is the books' own.
+const commitActual = new Map<string, Map<string, number>>();
+for (const t of [...costCash, ...paidSinceCutoff]) {
+  const code = appCode(t.Memo);
+  if (!code || !COMMIT_CODES.has(code) || !codeBy.has(code)) continue;
+  const m = commitActual.get(code) ?? new Map(); m.set(month(t.Date), r2((m.get(month(t.Date)) ?? 0) + n(t.Debit) - n(t.Credit))); commitActual.set(code, m);
+}
+for (const c of codes.filter((c) => COMMIT_CODES.has(c.code))) {
+  if (!c.commitment_covered) ops.push({ step: "4 Cost actuals", table: "cost_codes", action: "update", id: c.id, target: `${c.code} ${c.name}`,
+    change: "commitment_covered false -> true", source: "Bought out on purchase orders, like its parent SSC T; stops its actuals reaching the cash flow twice", set: { commitment_covered: true } });
+  const old = forecasts.filter((f) => f.cost_code_id === c.id);
+  const acts = commitActual.get(c.code) ?? new Map();
+  for (const [m, v] of acts) if (Math.abs(v) > 0.005) fcRowsAfter.push({ code: c.code, period_month: m, planned_amount: 0, actual_amount: v });
+  const same = old.length === acts.size && old.every((f) => Math.abs(n(f.actual_amount) - (acts.get(f.period_month) ?? -1)) < 0.01 && !n(f.planned_amount));
+  if (same || (!old.length && !acts.size)) continue;
+  ops.push({ step: "4 Cost actuals", table: "cost_forecasts", action: "update", id: c.id, target: `${c.code} ${c.name}`,
+    change: `${old.length} rows (actual ${usd(old.reduce((s, f) => s + n(f.actual_amount), 0))}, plan ${usd(old.filter((f) => !n(f.actual_amount)).reduce((s, f) => s + n(f.planned_amount), 0))}) -> ${acts.size} rows (actual ${usd([...acts.values()].reduce((s, v) => s + v, 0))}, no plan)`,
+    source: "QB cash paid by month on this code (bought-out scope: cost tiles only, not the cash flow)" });
+}
+
 for (const c of codes) {
   if (COMMIT_CODES.has(c.code)) continue;
   const old = forecasts.filter((f) => f.cost_code_id === c.id);
@@ -531,6 +555,10 @@ const simApps: SimApp[] = [
   { sub: sun, app_number: 1, gross: 33293.33, retainage: 0, amount_due: 33293.33, status: "paid", paid_at: "2026-09-08", due_date: "2026-09-08", lines: true },
 ];
 review.push({ item: "Pyramid App 3 (Rillion 1407, $79,085.37)", why: "Assumed gross with 5% retainage, like App 1.", proposal: "Confirm from the pay app when entering it." });
+// A pay app already entered through Sub Billing is real and needs no stand-in.
+for (let i = simApps.length - 1; i >= 0; i--) {
+  if (subApps.some((a) => a.subcontractor_id === simApps[i].sub.id && a.app_number === simApps[i].app_number)) simApps.splice(i, 1);
+}
 const cumBySubLine = new Map<string, number>();
 for (const l of realLines) cumBySubLine.set(l.sub_sov_line_id, Math.max(cumBySubLine.get(l.sub_sov_line_id) ?? 0, n(l.total_completed)));
 const simLines: any[] = [];
@@ -560,7 +588,7 @@ for (const o of ops.filter((o) => o.table === "billing_entries" && o.set)) {
 // with the change list applied in memory. Nothing is written.
 // ---------------------------------------------------------------------------
 const byId = new Map<string, Op>(); for (const o of ops) if (o.id && o.set && !o.hold) byId.set(o.id + o.table, { ...(byId.get(o.id + o.table) ?? {}), ...o, set: { ...(byId.get(o.id + o.table)?.set ?? {}), ...o.set } } as Op);
-const codeObj = (code: string) => { const c = codeBy.get(code)!; return { ...c, subcontractors: c.subcontractors ?? null }; };
+const codeObj = (code: string) => { const c = codeBy.get(code)!; return { ...c, commitment_covered: c.commitment_covered || COMMIT_CODES.has(code), subcontractors: c.subcontractors ?? null }; };
 let dropDraftCos = false;
 let skipSimSubs = false;
 function patch(table: string, data: any) {
@@ -573,8 +601,7 @@ function patch(table: string, data: any) {
   if (table === "change_orders" && dropDraftCos) out = out.filter((c: any) => c.status === "approved");
   if (table === "sub_pay_app_lines" && !skipSimSubs) out = out.map((l: any) => ({ ...l, sub_pay_apps: { ...(l.sub_pay_apps ?? {}), app_number: l.sub_pay_apps?.app_number ?? 1 } })).concat(simLines);
   if (table === "cost_forecasts") {
-    const commitIds = new Set(codes.filter((c) => COMMIT_CODES.has(c.code)).map((c) => c.id));
-    out = out.filter((f: any) => commitIds.has(f.cost_codes?.id ?? f.cost_code_id));
+    out = []; // every code's rows are rebuilt from QB below
     for (const f of fcRowsAfter) out.push({ period_month: f.period_month, planned_amount: f.planned_amount, actual_amount: f.actual_amount, cost_codes: codeObj(f.code) });
   }
   if (table === "procurement_payments") {

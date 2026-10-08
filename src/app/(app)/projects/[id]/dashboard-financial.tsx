@@ -22,7 +22,7 @@ export async function DashboardFinancial({ projectId }: Props) {
       .from("v_project_billing_summary")
       // total_scheduled is excluded deliberately: the view fans out over
       // billing_entries and multi-counts it. Summed from the lines below.
-      .select("total_billed, future_planned")
+      .select("total_billed")
       .eq("project_id", projectId)
       .maybeSingle(),
   ]);
@@ -45,7 +45,9 @@ export async function DashboardFinancial({ projectId }: Props) {
     0,
   );
   const totalBilled = Number(summaryRes.data?.total_billed ?? 0);
-  const futurePlanned = Number(summaryRes.data?.future_planned ?? 0);
+  // Left on the contract, not billing_entries' old imported plan (which the
+  // projection no longer reads). Timing lives on the cash flow.
+  const leftToBill = Math.max(0, totalContract - totalBilled);
   const billedPct = totalContract > 0 ? (totalBilled / totalContract) * 100 : 0;
 
   const byType = new Map<string, number>();
@@ -88,9 +90,9 @@ export async function DashboardFinancial({ projectId }: Props) {
             style={{ width: `${Math.min(100, billedPct)}%` }}
           />
         </div>
-        {futurePlanned > 0 && (
+        {leftToBill > 0 && (
           <p className="mt-1 text-xs text-muted-foreground">
-            {formatCurrency(futurePlanned)} planned in upcoming months
+            {formatCurrency(leftToBill)} left to bill
           </p>
         )}
       </div>
