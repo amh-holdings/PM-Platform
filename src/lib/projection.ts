@@ -6,6 +6,16 @@
 //   accrual (revenue when billed, cost when incurred) - drives margin
 //   cash    (when money actually moves) - drives funding decisions
 //
+// Rules for money that has not moved yet:
+//   - Nothing unpaid lands in a month that is over. A forecast whose date has
+//     passed is overdue, so it is drawn in the current month. Past months hold
+//     only money with a record behind it, which is what lets cash-to-date tie
+//     to the books.
+//   - A sub pay app is cash: paid at paid_at, otherwise at its due date.
+//   - A contract line's scope includes what change orders allocated to it
+//     (billing_line_amendments), so CO-02 billed inside Mobilization is not
+//     also forecast as an unbilled CO-02 line.
+//
 // Each row is tagged with a confidence level:
 //   actual    - row has at least one paid/settled entry
 //   forecast  - row has explicit billing_entries / procurement_payments
@@ -53,6 +63,7 @@ import {
   type PoForecastLine,
 } from "@/lib/po-payment-forecast";
 import { hasBillingEvidence } from "@/lib/billing-progress";
+import { effectiveLineProgress, type AmendmentRow } from "@/lib/sov-amendments";
 import {
   aggregateConfidence,
   estimateTaskProgress,
@@ -193,7 +204,7 @@ export async function buildProjection(
   const [
     projectRes, entriesRes, forecastsRes, paymentsRes, posRes, linesRes, tasksRes,
     subSovRes, subBilledRes, changeOrdersRes, payAppsRes, costCodesRes,
-    poLinesRes, commodityLinksRes, dprsRes,
+    poLinesRes, commodityLinksRes, dprsRes, subAppsRes, amendmentsRes,
   ] =
     await Promise.all([
       supabase
@@ -243,7 +254,7 @@ export async function buildProjection(
         .eq("project_id", projectId),
       supabase
         .from("billing_lines")
-        .select("id, item_number, description, type, scheduled_value, linked_task_wbs_codes")
+        .select("*")
         .eq("project_id", projectId),
       supabase
         .from("schedule_tasks")
@@ -257,7 +268,7 @@ export async function buildProjection(
         .eq("project_id", projectId),
       supabase
         .from("sub_pay_app_lines")
-        .select("sub_sov_line_id, total_completed, sub_pay_apps!inner(project_id)")
+        .select("sub_sov_line_id, total_completed, sub_pay_apps!inner(project_id, app_number)")
         .eq("sub_pay_apps.project_id", projectId),
       // Change orders that are not approved yet. An approved one is already in
       // the forecast through its own SOV line, so only the pipeline is read
@@ -299,10 +310,23 @@ export async function buildProjection(
         .select("subcontractor_id, report_date")
         .eq("project_id", projectId)
         .order("report_date", { ascending: true }),
+      // Sub pay apps as cash: what was paid, and what is approved and due.
+      supabase
+        .from("sub_pay_apps")
+        .select("*")
+        .eq("project_id", projectId),
+      // Which contract lines a change order's money belongs to (0054). Errors
+      // on a database without the table, which reads as no allocations.
+      supabase
+        .from("billing_line_amendments")
+        .select("amendment_line_id, base_line_id, amount")
+        .eq("project_id", projectId),
     ]);
 
   const warnings: ProjectionWarning[] = [];
   const notes: ProjectionNote[] = [];
+  // Unpaid money whose date has passed is overdue, not history.
+  const notPast = (m: string) => (m < todayIso ? todayIso : m);
 
   // Vendor rows only, for the reason given at the query above. Applied once
   // here so both places that walk the payments see the same set.
@@ -453,7 +477,8 @@ export async function buildProjection(
       payAppPaidAt: payApp?.paid_at ?? null,
       ownerTermsDays,
     });
-    const cashMonth = at.month;
+    const ownerPaid = at.source === "paid" || e.status === "paid";
+    const cashMonth = ownerPaid ? at.month : notPast(at.month);
     if (at.supersedes) {
       // One line per AFP, not per SOV line. Sixty entries on one pay
       // application would be sixty identical notes saying the same thing.
@@ -556,9 +581,26 @@ export async function buildProjection(
   let forecastRetainage = 0;
   let forecastSubRetainage = 0;
 
+  // Scope and billing after change-order allocations, so a contract line a
+  // change order raised is measured against its current value, and the
+  // change order's own line keeps only the scope it did not hand out.
+  const effective = effectiveLineProgress(
+    (linesRes.data ?? []).map((l) => ({
+      id: l.id,
+      itemNumber: l.item_number,
+      description: l.description ?? "",
+      scheduledValue: Number(l.scheduled_value ?? 0),
+      changeOrderId: (l as { change_order_id?: string | null }).change_order_id ?? null,
+    })),
+    (amendmentsRes.data ?? []) as AmendmentRow[],
+    new Map(Array.from(billedByLine.entries()).map(([id, b]) => [id, { previous: b, current: 0 }])),
+  );
+
   for (const line of linesRes.data ?? []) {
-    const scheduled = Number((line as { scheduled_value?: number | null }).scheduled_value ?? 0);
-    const remaining = scheduled - (billedByLine.get(line.id) ?? 0);
+    const eff = effective.get(line.id);
+    const remaining = eff
+      ? eff.scope - eff.billed
+      : Number(line.scheduled_value ?? 0) - (billedByLine.get(line.id) ?? 0);
     if (remaining <= 0.005) continue;
 
     const at = milestoneMonthOf(line.linked_task_wbs_codes);
@@ -575,7 +617,8 @@ export async function buildProjection(
       continue;
     }
 
-    const accrual = get(at.month);
+    const lineMonth = notPast(at.month);
+    const accrual = get(lineMonth);
     accrual.revenueRecognized += remaining;
     accrual.revenueForecast += remaining;
     accrual.confidenceSignals.push("low"); // estimated from the schedule
@@ -584,7 +627,7 @@ export async function buildProjection(
     accrual.retainageForecast += retainage;
     forecastRetainage += retainage;
     const cashMonth =
-      ownerTermsDays > 0 ? shiftByDaysToMonth(at.month, ownerTermsDays) : at.month;
+      ownerTermsDays > 0 ? shiftByDaysToMonth(lineMonth, ownerTermsDays) : lineMonth;
     get(cashMonth).cashIn += remaining - retainage;
   }
 
@@ -674,15 +717,21 @@ export async function buildProjection(
   }
 
   // The same treatment on the way out, off the subcontractor SOV.
+  // total_completed is the G703's column G - already cumulative - so each
+  // line takes the latest app's figure. Summing would count App 1 again in
+  // every later app.
   const subBilledByLine = new Map<string, number>();
+  const subLatestApp = new Map<string, number>();
   for (const l of subBilledRes.data ?? []) {
     const id = (l as { sub_sov_line_id?: string | null }).sub_sov_line_id;
     if (!id) continue;
-    subBilledByLine.set(
-      id,
-      (subBilledByLine.get(id) ?? 0) +
-        Number((l as { total_completed?: number | null }).total_completed ?? 0),
+    const appNo = Number(
+      (l as { sub_pay_apps?: { app_number?: number | null } | null }).sub_pay_apps?.app_number ?? 0,
     );
+    if (appNo >= (subLatestApp.get(id) ?? -1)) {
+      subLatestApp.set(id, appNo);
+      subBilledByLine.set(id, Number((l as { total_completed?: number | null }).total_completed ?? 0));
+    }
   }
 
   // A sub SOV line reaches the schedule three ways, and only the first was
@@ -770,7 +819,7 @@ export async function buildProjection(
       });
     }
 
-    const at = { month: resolved.month, via: resolved.via ?? "" };
+    const at = { month: notPast(resolved.month), via: resolved.via ?? "" };
 
     const subDays = Number(line.subcontractors?.payment_terms_days ?? 0);
     const retPct = Number(line.subcontractors?.retainage_pct ?? 0) / 100;
@@ -798,12 +847,14 @@ export async function buildProjection(
     if (isCommitmentCovered(code)) continue;
     const gross = effectiveAmount(f.actual_amount, f.planned_amount);
     if (gross <= 0) continue;
+    const isActual = Number(f.actual_amount ?? 0) > 0;
+    const fMonth = isActual ? f.period_month : notPast(f.period_month);
     const subDays = Number(code?.subcontractors?.payment_terms_days ?? 0);
     const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
-    const cashMonth = subDays > 0 ? shiftByDaysToMonth(f.period_month, subDays) : f.period_month;
+    const cashMonth = subDays > 0 ? shiftByDaysToMonth(fMonth, subDays) : fMonth;
     const netCash = gross * (1 - retPct);
 
-    const accrualBucket = get(f.period_month);
+    const accrualBucket = get(fMonth);
     accrualBucket.subCostIncurred += gross;
     if (Number(f.actual_amount ?? 0) > 0) {
       accrualBucket.hasActualCost = true;
@@ -825,6 +876,36 @@ export async function buildProjection(
   // moving that task moves the vendor cash the same way it already moves sub
   // cash - see po-payment-forecast for the three rules. A deposit, a
   // commissioning payment and anything already paid are untouched.
+  // Sub pay apps are cash. Paid books the amount paid in the month it went
+  // out; approved or in review books at the due date. The SOV loop above
+  // already subtracts what these apps billed, so nothing is counted twice.
+  for (const a of (subAppsRes.data ?? []) as {
+    status: string | null;
+    amount_due: number | null;
+    approved_amount_due: number | null;
+    approved_retainage: number | null;
+    retainage_this_period: number | null;
+    paid_at: string | null;
+    due_date: string | null;
+  }[]) {
+    if (a.status === "rejected") continue;
+    forecastSubRetainage += Number(a.approved_retainage ?? a.retainage_this_period ?? 0);
+    const amt = Number(a.approved_amount_due ?? a.amount_due ?? 0);
+    if (amt <= 0) continue;
+    if (a.status === "paid" && a.paid_at) {
+      const b = get(monthIsoFromDate(String(a.paid_at)));
+      b.subCashOut += amt;
+      b.cashOutActual += amt;
+      b.hasActualCost = true;
+      b.confidenceSignals.push("high");
+    } else {
+      const b = get(notPast(a.due_date ? monthIsoFromDate(String(a.due_date)) : todayIso));
+      b.subCashOut += amt;
+      b.cashOutForecast += amt;
+      b.confidenceSignals.push("medium");
+    }
+  }
+
   const poById = new Map((posRes.data ?? []).map((o) => [o.id, o]));
   const taskByWbs = new Map((tasksRes.data ?? []).map((t) => [t.wbs_code, t]));
 
@@ -891,7 +972,9 @@ export async function buildProjection(
       });
     }
 
-    const month = monthIsoFromDate(at.date);
+    const month = p.paid_at
+      ? monthIsoFromDate(at.date)
+      : notPast(monthIsoFromDate(at.date));
 
     const bucket = get(month);
     bucket.vendorCostIncurred += amount;
