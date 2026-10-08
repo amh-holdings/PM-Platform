@@ -1,4 +1,4 @@
-// The cut-off the next-bill panel projects against.
+// The window the next-bill panel projects against.
 //
 // Any date, not a list of month ends. The month-end list was the wrong call:
 // these subs bill "through <date>" at least as often as they bill a calendar
@@ -33,4 +33,52 @@ export function resolveCutoff(requested: string | undefined, todayIso: string): 
   // an error page for a date nobody can bill against helps nobody.
   if (requested > todayIso) return todayIso;
   return requested;
+}
+
+/** The day before an ISO date. */
+export function dayBefore(iso: string): string {
+  return new Date(Date.parse(`${iso}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+}
+
+export type CutoffRange = {
+  /** Null means no window: the table reads cumulative to `to`, as it always did. */
+  from: string | null;
+  to: string;
+};
+
+/**
+ * The window to project against, given what arrived in the query string.
+ *
+ * Zarina: "No, I meant to have an option to select a date range in a
+ * calendar." A cut-off answers "what has been earned by this date". A sub's
+ * bill asks a different question - what was earned BETWEEN two dates - and
+ * that is the one you need to check an AFP covering a stated period.
+ *
+ * `from` is optional and stays optional. Without it the panel does what it has
+ * always done, which is still the right view when the question is what the
+ * next bill should come to rather than what one particular bill covered.
+ */
+export function resolveRange(
+  fromRaw: string | undefined,
+  toRaw: string | undefined,
+  todayIso: string,
+): CutoffRange {
+  const to = resolveCutoff(toRaw, todayIso);
+  const from = fromRaw && isRealDate(fromRaw) ? fromRaw : null;
+
+  if (!from) return { from: null, to };
+
+  // A window that opens in the future has no evidence in it. Dropping it
+  // leaves the cumulative view, which is an answer; clamping it to today
+  // would invent a one-day window nobody asked for.
+  if (from > todayIso) return { from: null, to };
+
+  // A range typed backwards is a slip, not a request for nothing. Both dates
+  // are in the past here, so swapping does what was meant. Refusing would
+  // hand back an empty table with no explanation of why.
+  if (from > to) return { from: to, to: from };
+
+  // A window of one day is legitimate - a sub can bill a single day - so
+  // equal ends are left alone.
+  return { from, to };
 }

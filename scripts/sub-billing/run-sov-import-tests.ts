@@ -13,7 +13,12 @@ import { join } from "node:path";
 import { flattenCell, sheetToTsv } from "@/lib/sheet-tsv";
 import type { SheetSummary } from "@/lib/schedule-workbook";
 import { parsePastedSovLines } from "@/lib/sub-sov-import";
-import { isRealDate, resolveCutoff } from "@/lib/sub-billing-cutoff";
+import {
+  dayBefore,
+  isRealDate,
+  resolveCutoff,
+  resolveRange,
+} from "@/lib/sub-billing-cutoff";
 
 let passed = 0;
 let failed = 0;
@@ -506,6 +511,61 @@ section("A workbook cell that contains a line break");
   // Far enough back that there is no evidence at all. Still honoured - an
   // empty table is an honest answer, and clamping it would invent a date.
   eq("a date before the job started is honoured", resolveCutoff("2020-01-01", TODAY), "2020-01-01");
+}
+
+// ============================================================================
+// Next-bill window
+// ============================================================================
+//
+// Zarina: "No, I meant to have an option to select a date range in a
+// calendar." A cut-off answers what has been earned BY a date; a sub's bill
+// asks what was earned BETWEEN two dates, which is the one you need to check
+// an AFP covering a stated period.
+{
+  console.log("\n-- next-bill window --");
+  const TODAY = "2026-10-08";
+
+  eq("the day before is the day before", dayBefore("2026-09-01"), "2026-08-31");
+  eq("it crosses a month end", dayBefore("2026-10-01"), "2026-09-30");
+  eq("it crosses a year end", dayBefore("2027-01-01"), "2026-12-31");
+  eq("it handles a leap day", dayBefore("2028-03-01"), "2028-02-29");
+
+  // No start means the panel keeps doing what it did: cumulative to the end.
+  const noStart = resolveRange(undefined, "2026-09-30", TODAY);
+  eq("no start leaves the window open", noStart.from, null);
+  eq("and the end still resolves", noStart.to, "2026-09-30");
+  eq("neither given means today", resolveRange(undefined, undefined, TODAY).to, TODAY);
+
+  const sept = resolveRange("2026-09-01", "2026-09-30", TODAY);
+  eq("a stated period is kept whole", sept.from, "2026-09-01");
+  eq("both ends of it", sept.to, "2026-09-30");
+
+  // Pyramid's app 1 runs to the 13th. A window has to be able to say that.
+  const odd = resolveRange("2026-07-14", "2026-08-13", TODAY);
+  eq("a mid-month window is honoured", odd.from, "2026-07-14");
+  eq("to a mid-month end", odd.to, "2026-08-13");
+
+  const oneDay = resolveRange("2026-09-15", "2026-09-15", TODAY);
+  eq("a single day is a legitimate window", oneDay.from, "2026-09-15");
+  eq("and is not collapsed", oneDay.to, "2026-09-15");
+
+  // Typed backwards is a slip. Swapping does what was meant; refusing would
+  // hand back an empty table with no explanation.
+  const backwards = resolveRange("2026-09-30", "2026-09-01", TODAY);
+  eq("a backwards range swaps rather than failing", backwards.from, "2026-09-01");
+  eq("and the later date becomes the end", backwards.to, "2026-09-30");
+
+  eq("a junk start is dropped, not fatal", resolveRange("nonsense", "2026-09-30", TODAY).from, null);
+  eq("and the end survives it", resolveRange("nonsense", "2026-09-30", TODAY).to, "2026-09-30");
+  eq("an impossible start is dropped", resolveRange("2026-02-30", "2026-09-30", TODAY).from, null);
+  // The end is pulled back to today, and a start after today then has no
+  // window left to sit in.
+  const future = resolveRange("2027-01-01", "2027-02-01", TODAY);
+  eq("a wholly future window keeps nothing", future.from, null);
+  eq("and ends today", future.to, TODAY);
+  const straddles = resolveRange("2026-09-01", "2027-02-01", TODAY);
+  eq("a window running past today keeps its start", straddles.from, "2026-09-01");
+  eq("and stops at today", straddles.to, TODAY);
 }
 
 console.log(`\n${"=".repeat(60)}`);
