@@ -7,6 +7,7 @@ import { can } from "@/lib/roles";
 import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
 import { projectNextBill, type Evidence, type SovLine } from "@/lib/sub-billing";
 import { loadEvidence } from "@/lib/sub-billing-run";
+import { sovTotals } from "@/lib/sub-sov-totals";
 import { describeBasis } from "@/lib/weekly-schedule-basis";
 import { dayBefore, resolveRange } from "@/lib/sub-billing-cutoff";
 import { subBillingClient } from "@/lib/sub-billing-db";
@@ -144,13 +145,17 @@ export default async function SubBillingDetailPage({
     (l) => methodByItem.get(l.itemNumber) === "manual",
   );
 
-  const sovTotal = sovLines.reduce((s, l) => s + Number(l.scheduled_value ?? 0), 0);
   const unmapped = sovLines.filter((l) => l.verification_method === "unmapped").length;
   // The SOV is what every percentage is priced against, so a total that does
   // not match the executed contract value is worth saying out loud rather than
   // leaving for someone to notice at approval time.
+  //
+  // Measured against the BASE lines. A change order raises the contract; it
+  // does not break the reconciliation, and before this the first CO line added
+  // to a sub tripped the warning for doing exactly what it is for.
   const contractValue = Number(sub.contract_value ?? 0);
-  const sovVariance = sovTotal - contractValue;
+  const totals = sovTotals(sovLines, contractValue);
+  const sovTotal = totals.revised;
 
   return (
     <div className="space-y-6">
@@ -473,7 +478,11 @@ export default async function SubBillingDetailPage({
           <h3 className="text-sm font-semibold">Executed schedule of values</h3>
           <span className="text-xs text-muted-foreground">
             {sovLines.length} lines
-            {showDollars ? ` \u00b7 ${formatCurrency(sovTotal)}` : ""}
+            {showDollars
+              ? totals.changeOrderCount > 0
+                ? ` \u00b7 ${formatCurrency(totals.base)} base + ${formatCurrency(totals.changeOrders)} in ${totals.changeOrderCount} change order${totals.changeOrderCount === 1 ? "" : "s"} = ${formatCurrency(totals.revised)}`
+                : ` \u00b7 ${formatCurrency(totals.revised)}`
+              : ""}
             {/* "all mapped" meant "every line has an evidence source", and it
                 was read as "the cash flow has these". Two different columns
                 wear the word mapping: verification_method proves the percent,
@@ -487,14 +496,20 @@ export default async function SubBillingDetailPage({
           </span>
         </div>
 
-        {showDollars && sovLines.length > 0 && contractValue > 0 && Math.abs(sovVariance) >= 0.01 && (
-          <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            The SOV totals {formatCurrency(sovTotal)} against a contract value of{" "}
-            {formatCurrency(contractValue)}, a difference of {formatCurrency(Math.abs(sovVariance))}
-            {sovVariance > 0 ? " over" : " under"}. Every percentage on this page is priced off
-            the SOV, so the two should tie out before a bill is approved.
-          </p>
-        )}
+        {showDollars &&
+          sovLines.length > 0 &&
+          totals.variance != null &&
+          Math.abs(totals.variance) >= 0.01 && (
+            <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              The base SOV lines total {formatCurrency(totals.base)} against a contract
+              value of {formatCurrency(contractValue)}, a difference of{" "}
+              {formatCurrency(Math.abs(totals.variance))}
+              {totals.variance > 0 ? " over" : " under"}. Every percentage on this page is
+              priced off the SOV, so the two should tie out before a bill is approved.
+              {totals.changeOrderCount > 0 &&
+                " Change order lines are excluded from this check - they raise the contract rather than break it."}
+            </p>
+          )}
 
         {/* The rate is priced against the SOV, so it lives with the SOV
             rather than in a dialog on another page. Zarina: "Can you add
@@ -571,9 +586,34 @@ export default async function SubBillingDetailPage({
               </tbody>
               {showDollars && (
                 <tfoot className="border-t-2 bg-muted/30 font-medium">
+                  {/* Split only once there is something to split. On a sub
+                      with no change orders a single total is the clearer
+                      statement. */}
+                  {totals.changeOrderCount > 0 && (
+                    <>
+                      <tr className="font-normal text-muted-foreground">
+                        <td className="px-3 py-2" colSpan={2}>
+                          Base contract lines
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {formatCurrency(totals.base)}
+                        </td>
+                        <td colSpan={4} />
+                      </tr>
+                      <tr className="font-normal text-muted-foreground">
+                        <td className="px-3 py-2" colSpan={2}>
+                          Change orders ({totals.changeOrderCount})
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {formatCurrency(totals.changeOrders)}
+                        </td>
+                        <td colSpan={4} />
+                      </tr>
+                    </>
+                  )}
                   <tr>
                     <td className="px-3 py-2" colSpan={2}>
-                      SOV total
+                      {totals.changeOrderCount > 0 ? "Revised SOV total" : "SOV total"}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(sovTotal)}</td>
                     <td colSpan={4} />

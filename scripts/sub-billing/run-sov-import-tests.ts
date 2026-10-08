@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { flattenCell, sheetToTsv } from "@/lib/sheet-tsv";
 import type { SheetSummary } from "@/lib/schedule-workbook";
 import { parsePastedSovLines } from "@/lib/sub-sov-import";
+import { sovTotals } from "@/lib/sub-sov-totals";
 import {
   dayBefore,
   isRealDate,
@@ -566,6 +567,83 @@ section("A workbook cell that contains a line break");
   const straddles = resolveRange("2026-09-01", "2027-02-01", TODAY);
   eq("a window running past today keeps its start", straddles.from, "2026-09-01");
   eq("and stops at today", straddles.to, TODAY);
+}
+
+// ============================================================================
+// Base contract against change orders
+// ============================================================================
+//
+// Zarina: "Can we also add a change order line to their SOV?" The fields were
+// always there; what nothing did was tell the two apart when the SOV was
+// totalled, so the first CO line tripped the contract reconciliation for
+// doing exactly what a change order is for.
+{
+  console.log("\n-- SOV base vs change orders --");
+  const BASE = [
+    { scheduled_value: 100_000, is_change_order: false },
+    { scheduled_value: 50_000, is_change_order: false },
+  ];
+  const plain = sovTotals(BASE, 150_000);
+  eq("base is the sum of the base lines", plain.base, 150_000);
+  eq("no change orders means none counted", plain.changeOrders, 0);
+  eq("and none to report", plain.changeOrderCount, 0);
+  eq("revised equals base when there are no COs", plain.revised, 150_000);
+  eq("a tying SOV has no variance", plain.variance, 0);
+
+  const withCo = sovTotals(
+    [...BASE, { scheduled_value: 25_000, is_change_order: true }],
+    150_000,
+  );
+  eq("a CO line does not move the base", withCo.base, 150_000);
+  eq("it is counted separately", withCo.changeOrders, 25_000);
+  eq("and tallied", withCo.changeOrderCount, 1);
+  eq("revised carries both", withCo.revised, 175_000);
+  // The whole point: the CO must not read as the SOV being over contract.
+  eq("a change order raises the contract rather than breaking it", withCo.variance, 0);
+
+  // A real variance still has to show through the change orders.
+  const short = sovTotals(
+    [{ scheduled_value: 149_000, is_change_order: false }, { scheduled_value: 25_000, is_change_order: true }],
+    150_000,
+  );
+  eq("a short base is still caught", short.variance, -1_000);
+  eq("and the CO is not used to paper over it", short.changeOrders, 25_000);
+
+  // A deductive change order is a change order too.
+  const deduct = sovTotals(
+    [...BASE, { scheduled_value: -8_000, is_change_order: true }],
+    150_000,
+  );
+  eq("a credit CO subtracts from revised", deduct.revised, 142_000);
+  eq("and still counts as one line", deduct.changeOrderCount, 1);
+  eq("without touching the base check", deduct.variance, 0);
+
+  // No contract value on record is a missing field, not a finding.
+  eq("no contract value means no variance to report", sovTotals(BASE, 0).variance, null);
+  eq("but the totals still add up", sovTotals(BASE, 0).revised, 150_000);
+
+  // Null and missing values are treated as zero rather than NaN.
+  const messy = sovTotals(
+    [{ scheduled_value: null, is_change_order: null }, { is_change_order: true }],
+    0,
+  );
+  eq("a null value counts as nothing", messy.base, 0);
+  eq("a null flag is not a change order", messy.changeOrderCount, 1);
+  eq("and nothing becomes NaN", messy.revised, 0);
+
+  // Cents survive a sum of thirds.
+  const cents = sovTotals(
+    [
+      { scheduled_value: 33_333.33, is_change_order: false },
+      { scheduled_value: 33_333.33, is_change_order: false },
+      { scheduled_value: 33_333.34, is_change_order: false },
+    ],
+    100_000,
+  );
+  eq("the base rounds to the cent", cents.base, 100_000);
+  eq("and ties out exactly", cents.variance, 0);
+
+  eq("an empty SOV has nothing to say", sovTotals([], 0).revised, 0);
 }
 
 console.log(`\n${"=".repeat(60)}`);
