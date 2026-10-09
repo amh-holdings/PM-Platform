@@ -112,7 +112,10 @@ export async function DashboardKpis({ projectId, showCosts = true }: Props) {
   });
   const contractValue = contract.value;
   const billedToDate = Number(billingSumRes.data?.total_billed ?? 0);
-  const futurePlanned = Number(billingSumRes.data?.future_planned ?? 0);
+  // What is left on the contract. billing_entries' planned rows are an old
+  // imported plan the projection no longer reads, so future_planned is not
+  // shown; when the rest is billed is on the cash flow, timed by the schedule.
+  const leftToBill = Math.max(0, contractValue - billedToDate);
   const billedPct = contractValue > 0 ? (billedToDate / contractValue) * 100 : 0;
 
   const tasks = tasksRes.data ?? [];
@@ -144,6 +147,8 @@ export async function DashboardKpis({ projectId, showCosts = true }: Props) {
     (costForecastsRes.data ?? []) as unknown as CostPeriodRow[],
     firstOfThisMonthIso(),
   );
+
+  const costPct = estTotal > 0 ? (spend.actual / estTotal) * 100 : 0;
 
   const kpis: Kpi[] = [
     {
@@ -188,9 +193,12 @@ export async function DashboardKpis({ projectId, showCosts = true }: Props) {
       tone: billedPct >= 100 ? "good" : "default",
     },
     {
-      label: "Future planned",
-      value: formatCurrency(futurePlanned),
-      sub: futurePlanned > 0 ? "Forecast next months" : "Nothing scheduled",
+      label: "Left to bill",
+      value: formatCurrency(leftToBill),
+      sub:
+        contractValue > 0
+          ? `${(100 - billedPct).toFixed(1)}% of contract · timed on the cash flow`
+          : "No contract set",
     },
     {
       label: "Schedule complete",
@@ -207,37 +215,24 @@ export async function DashboardKpis({ projectId, showCosts = true }: Props) {
     ...(showCosts
       ? [
           {
-            // With no cost plan for the elapsed months there is nothing to
-            // compare against, so the tile reports spend and says so. Treating
-            // an absent plan as a plan of zero would turn every dollar spent
-            // into an overrun, which is the same mistake in the other
-            // direction.
-            label: spend.variance == null ? "Cost to date" : "Cost variance to date",
-            value:
-              spend.variance == null
-                ? formatCurrency(spend.actual)
-                : spend.variance === 0
-                  ? "$0"
-                  : `${spend.variance > 0 ? "+" : "-"}${formatCurrency(Math.abs(spend.variance))}`,
+            // Spend against the budget, beside how much of the contract is
+            // billed. Not against a monthly cost plan: bought-out scope (civil,
+            // electrical, racking, components) is planned in its subcontracts
+            // and POs, not in cost_forecasts, so a plan read from there covers
+            // only the overhead codes and made the job look $1.1M under plan.
+            // Cost running well ahead of billing is the signal worth a colour:
+            // money is going out faster than it is being earned on paper.
+            label: "Cost to date",
+            value: formatCurrency(spend.actual),
             sub:
-              spend.variance == null
-                ? estTotal > 0
-                  ? `${formatCurrency(estTotal)} budget at completion · no monthly cost plan to compare against`
-                  : "No estimates set"
-                : `${formatCurrency(spend.actual)} spent vs ${formatCurrency(spend.planned)} planned${
-                    estTotal > 0 ? ` · ${formatCurrency(estTotal)} budget at completion` : ""
-                  }${
+              estTotal > 0
+                ? `${costPct.toFixed(1)}% of ${formatCurrency(estTotal)} budget · ${billedPct.toFixed(1)}% billed${
                     rollup.doubleCounted !== 0
                       ? ` · ${formatCurrency(rollup.doubleCounted)} of breakdown folded into its parent`
                       : ""
-                  }`,
-            tone: (spend.variance == null
-              ? "default"
-              : spend.variance > 0
-                ? "bad"
-                : spend.variance < 0
-                  ? "good"
-                  : "default") as Kpi["tone"],
+                  }`
+                : "No estimates set",
+            tone: (estTotal > 0 && costPct > billedPct + 5 ? "warn" : "default") as Kpi["tone"],
           },
         ]
       : []),

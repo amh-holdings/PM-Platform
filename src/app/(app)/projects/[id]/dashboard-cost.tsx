@@ -36,16 +36,23 @@ export async function DashboardCost({ projectId }: Props) {
   const { data: nameRows } = codeIds.length
     ? await supabase
         .from("cost_codes")
-        .select("id, name, is_change_order")
+        .select("id, name, is_change_order, actual_cost")
         .in("id", codeIds)
     : { data: [] };
-  const nameById = new Map<string, { name: string; isCO: boolean }>();
+  const nameById = new Map<string, { name: string; isCO: boolean; incurred: number }>();
   for (const c of nameRows ?? []) {
     nameById.set(c.id, {
       name: c.name,
       isCO: Boolean(c.is_change_order),
+      incurred: Number(c.actual_cost ?? 0),
     });
   }
+  // Budget against INCURRED cost - paid plus owed - which the monthly
+  // QuickBooks sync writes to cost_codes.actual_cost. The view's total_actual
+  // is cash paid, so a bill sitting in payables (HUB's $31,224 bond premium)
+  // hid its overrun. Falls back to paid when no code carries an incurred
+  // figure, which is a project the sync has never run on.
+  const hasIncurred = Array.from(nameById.values()).some((m) => m.incurred !== 0);
 
   const rows = (rowsRaw ?? []).map((r) => {
     const meta = nameById.get(r.cost_code_id ?? "");
@@ -54,9 +61,11 @@ export async function DashboardCost({ projectId }: Props) {
       name: meta?.name ?? r.code ?? "",
       is_change_order: meta?.isCO ?? false,
       estimated: Number(r.estimated_cost ?? 0),
-      actual: Number(r.total_actual ?? 0),
+      actual: hasIncurred ? (meta?.incurred ?? 0) : Number(r.total_actual ?? 0),
       planned: Number(r.total_planned ?? 0),
-      variance: Number(r.total_actual ?? 0) - Number(r.estimated_cost ?? 0),
+      variance:
+        (hasIncurred ? (meta?.incurred ?? 0) : Number(r.total_actual ?? 0)) -
+        Number(r.estimated_cost ?? 0),
     };
   });
 
@@ -75,7 +84,9 @@ export async function DashboardCost({ projectId }: Props) {
         <div>
           <h2 className="text-sm font-semibold">Cost variance</h2>
           <p className="text-xs text-muted-foreground">
-            Estimated vs actual, per cost code
+            {hasIncurred
+              ? "Budget vs incurred to date (QuickBooks), per cost code"
+              : "Estimated vs actual, per cost code"}
           </p>
         </div>
         <Link

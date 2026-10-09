@@ -3,6 +3,8 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency } from "@/lib/format";
+import { scopeByLine } from "@/lib/sov-amendments";
+import { readAmendments } from "@/lib/sov-amendments-db";
 
 import { DashboardFinancialChart } from "./dashboard-financial-chart";
 
@@ -13,18 +15,21 @@ type Props = {
 export async function DashboardFinancial({ projectId }: Props) {
   const supabase = createClient();
 
-  const [linesRes, summaryRes] = await Promise.all([
+  const [linesRes, summaryRes, amendmentsRes] = await Promise.all([
     supabase
       .from("billing_lines")
-      .select("type, scheduled_value")
+      .select("id, item_number, description, type, scheduled_value, change_order_id")
       .eq("project_id", projectId),
     supabase
       .from("v_project_billing_summary")
       // total_scheduled is excluded deliberately: the view fans out over
       // billing_entries and multi-counts it. Summed from the lines below.
-      .select("total_billed, future_planned")
+      .select("total_billed")
       .eq("project_id", projectId)
       .maybeSingle(),
+    // Where change orders' money belongs (0054). Reads as no allocations on
+    // a database without the table.
+    readAmendments(supabase, projectId).catch(() => ({ rows: [], missing: true })),
   ]);
 
   if (linesRes.error) {
@@ -45,13 +50,29 @@ export async function DashboardFinancial({ projectId }: Props) {
     0,
   );
   const totalBilled = Number(summaryRes.data?.total_billed ?? 0);
-  const futurePlanned = Number(summaryRes.data?.future_planned ?? 0);
+  // Left on the contract, not billing_entries' old imported plan (which the
+  // projection no longer reads). Timing lives on the cash flow.
+  const leftToBill = Math.max(0, totalContract - totalBilled);
   const billedPct = totalContract > 0 ? (totalBilled / totalContract) * 100 : 0;
 
+  // By current scope, not contract value: CO-02 raised Site Work, Electrical
+  // and Mechanical, and reading scheduled_value alone drew it as a $710k
+  // "Change Order" slice while those trades looked smaller than they are.
+  // Only scope a CO did not hand to a contract line stays in its own slice.
+  const scope = scopeByLine(
+    lines.map((l) => ({
+      id: l.id,
+      item_number: l.item_number,
+      description: l.description ?? "",
+      scheduled_value: l.scheduled_value,
+      change_order_id: l.change_order_id,
+    })),
+    amendmentsRes.rows,
+  );
   const byType = new Map<string, number>();
   for (const r of lines) {
     const type = (r.type ?? "Untagged").trim() || "Untagged";
-    byType.set(type, (byType.get(type) ?? 0) + Number(r.scheduled_value ?? 0));
+    byType.set(type, (byType.get(type) ?? 0) + (scope.get(r.id) ?? Number(r.scheduled_value ?? 0)));
   }
   const chartData = Array.from(byType.entries())
     .map(([trade, value]) => ({ trade, value }))
@@ -88,9 +109,9 @@ export async function DashboardFinancial({ projectId }: Props) {
             style={{ width: `${Math.min(100, billedPct)}%` }}
           />
         </div>
-        {futurePlanned > 0 && (
+        {leftToBill > 0 && (
           <p className="mt-1 text-xs text-muted-foreground">
-            {formatCurrency(futurePlanned)} planned in upcoming months
+            {formatCurrency(leftToBill)} left to bill
           </p>
         )}
       </div>
