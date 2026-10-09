@@ -613,7 +613,10 @@ export async function buildProjection(
     accrual.revenueForecast += remaining;
     accrual.confidenceSignals.push("low"); // estimated from the schedule
 
-    const retainage = remaining * ownerRetPct;
+    // Sussex's LNTP lines carry no retainage (Exhibit E Note 3, migration 0071).
+    const retainage = (line as { retainage_exempt?: boolean | null }).retainage_exempt
+      ? 0
+      : remaining * ownerRetPct;
     accrual.retainageForecast += retainage;
     forecastRetainage += retainage;
     const cashMonth =
@@ -767,6 +770,7 @@ export async function buildProjection(
       subcontractor_id: string | null;
       procurement_order_id: string | null;
       commitment_covered?: boolean | null;
+      payment_terms_days?: number | null;
       subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
     } | null;
     if (isCommitmentCovered(code)) continue;
@@ -774,7 +778,11 @@ export async function buildProjection(
     if (gross <= 0) continue;
     const isActual = Number(f.actual_amount ?? 0) > 0;
     const fMonth = isActual ? f.period_month : notPast(f.period_month);
-    const subDays = Number(code?.subcontractors?.payment_terms_days ?? 0);
+    // The sub's terms when one is linked; the code's own placeholder terms
+    // (0072) for scope not bought out yet - Sussex construction at Net 30.
+    const subDays = Number(
+      code?.subcontractors?.payment_terms_days ?? code?.payment_terms_days ?? 0,
+    );
     const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
     const cashMonth = subDays > 0 ? shiftByDaysToMonth(fMonth, subDays) : fMonth;
     const netCash = gross * (1 - retPct);

@@ -74,7 +74,7 @@ async function main() {
 
   const { data: lines } = await sb
     .from("billing_lines")
-    .select("id, item_number, description, scheduled_value, sort_order, change_order_id")
+    .select("*")
     .eq("project_id", PID)
     .order("sort_order", { ascending: true, nullsFirst: false })
     .order("item_number", { ascending: true });

@@ -5,6 +5,8 @@
 //   full  -> Phil. Sees everything; can preview other roles via "view as".
 //   cm    -> Construction Manager (the AHC reviewer: ahc_super / zarina).
 //   sub   -> Subcontractor (sub_pm / sub_foreman). Files field reports only.
+//   bd    -> Business development (Luke, Shannon). The BD section only; RLS
+//            keeps them out of every project, contract value included.
 //
 // This is a presentation/capability layer ONLY. It never changes RLS or
 // server-action authorization - those still read the true DB role. The
@@ -15,7 +17,7 @@
 // Supabase) so client components can import `can` / types. The cookie- and
 // DB-backed helpers live in `roles-server.ts`.
 
-export type EffectiveRole = "full" | "cm" | "sub";
+export type EffectiveRole = "full" | "cm" | "sub" | "bd";
 
 export const VIEW_AS_COOKIE = "fr_view_as";
 
@@ -24,6 +26,7 @@ export function toEffectiveRole(dbRole: string | null | undefined): EffectiveRol
   if (dbRole === "phil") return "full";
   if (dbRole === "ahc_super" || dbRole === "zarina") return "cm";
   if (dbRole === "sub_pm" || dbRole === "sub_foreman") return "sub";
+  if (dbRole === "bd") return "bd";
   // owner / counsel / unknown: most-restricted view (RLS still governs data).
   return "sub";
 }
@@ -32,6 +35,7 @@ export const ROLE_LABEL: Record<EffectiveRole, string> = {
   full: "Full access",
   cm: "Construction Manager",
   sub: "Subcontractor",
+  bd: "Business Development",
 };
 
 // ---- Capability matrix: the one place features ask "can this role do X". ----
@@ -65,7 +69,11 @@ export type Capability =
   | "viewCosts" // Costs tab + all internal cost/profit/margin figures (Phil-only)
   | "viewContractValue" // project contract $ totals; hidden from subs
   | "viewDocuments" // Documents tab
-  | "viewAsToggle"; // the Phil-only "view as" switcher
+  | "viewAsToggle" // the Phil-only "view as" switcher
+  // --- business development ---
+  | "viewBD" // the BD section: clients, pipeline, bids, follow-ups, dashboard
+  | "viewProjects" // the portfolio / project side of the app
+  | "transferBdToProject"; // turn a won opportunity into a PM project (Phil-only)
 
 const MATRIX: Record<EffectiveRole, Set<Capability>> = {
   full: new Set<Capability>([
@@ -93,6 +101,9 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewContractValue",
     "viewDocuments",
     "viewAsToggle",
+    "viewBD",
+    "viewProjects",
+    "transferBdToProject",
   ]),
   // Construction Manager: operational visibility (schedule, subs, procurement,
   // documents, field reports) but NO financials - no dashboard Financial
@@ -119,11 +130,15 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewProcurement",
     "viewContractValue",
     "viewDocuments",
+    "viewProjects",
   ]),
   // Subcontractor: files field reports only. Commodity production is AHC's
   // deliverable to the owner, built FROM the sub's reports - the sub never
   // touches it.
-  sub: new Set<Capability>(["viewFieldReports", "submitFieldReport"]),
+  sub: new Set<Capability>(["viewFieldReports", "submitFieldReport", "viewProjects"]),
+  // Business development: the BD section and nothing else. Creating the
+  // project from a won job stays with Phil, who owns the contract setup.
+  bd: new Set<Capability>(["viewBD"]),
 };
 
 export function can(role: EffectiveRole, cap: Capability): boolean {

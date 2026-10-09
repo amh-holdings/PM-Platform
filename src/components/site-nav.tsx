@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { PaletteTrigger } from "@/components/nav/palette-trigger";
 import { signOut } from "@/app/actions";
 import { createClient } from "@/lib/supabase/server";
+import { can } from "@/lib/roles";
+import { getEffectiveRole } from "@/lib/roles-server";
 
 /**
  * The one bar that spans every page. Deliberately thin: project navigation
@@ -17,6 +19,7 @@ export async function SiteNav() {
   } = await supabase.auth.getUser();
 
   if (!user) return null;
+  const { effective } = await getEffectiveRole();
 
   return (
     // `print:hidden` because the report pages under this shell are printed and
@@ -27,12 +30,22 @@ export async function SiteNav() {
     <header className="sticky top-0 z-20 h-14 border-b bg-background print:hidden">
       <div className="flex h-14 items-center justify-between gap-3 px-4 lg:px-6">
         <nav className="flex items-center gap-1 text-sm">
-          <Link
-            href="/projects"
-            className="rounded-md px-2 py-1.5 font-semibold text-foreground hover:bg-accent"
-          >
-            AHC PM
-          </Link>
+          {can(effective, "viewProjects") && (
+            <Link
+              href="/projects"
+              className="rounded-md px-2 py-1.5 font-semibold text-foreground hover:bg-accent"
+            >
+              AHC PM
+            </Link>
+          )}
+          {can(effective, "viewBD") && (
+            <Link
+              href="/bd"
+              className="rounded-md px-2 py-1.5 font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              Business Dev
+            </Link>
+          )}
         </nav>
         <div className="flex items-center gap-2 sm:gap-3">
           <PaletteTrigger />
