@@ -127,7 +127,16 @@ export default async function SubBillingDetailPage({
         ) * 100,
       ) / 100
     : 0;
-  const projectedLines = projection.lines.filter((l) => l.projectedThisPeriod > 0);
+  // Rows worth showing. Expect to bill alone was the wrong filter once a
+  // window existed: a line the sub has already billed past hides, even when
+  // the field record says work happened inside the window. On Pyramid's AFP 3
+  // that silently dropped 2.04 and 3.01, the two lines carrying most of the
+  // bill, from the one table meant to explain it.
+  const projectedLines = projection.lines.filter(
+    (l) =>
+      l.projectedThisPeriod > 0 ||
+      (from != null && earnedInWindow(l.itemNumber, l.projectedToDate) > 0),
+  );
   const unprojectable = projection.lines.filter((l) => l.projectedPctAtPeriodEnd == null);
   // Why a line cannot be projected decides what to do about it, and the two
   // causes need opposite actions. "No evidence source mapped" means go and map
