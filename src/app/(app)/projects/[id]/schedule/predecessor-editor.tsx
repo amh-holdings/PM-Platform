@@ -201,6 +201,9 @@ export function PredecessorEditor({
           {links.map((l, i) => (
             <div key={i} className="flex flex-wrap items-center gap-2">
               <TaskCombobox
+                // A row with nothing picked blocks the save rather than being
+                // dropped from it. Removing the row is the way out.
+                required
                 value={l.pred}
                 options={options.filter(
                   (o) => o.wbs_code === l.pred || !chosen.has(o.wbs_code),
@@ -275,7 +278,9 @@ export function PredecessorEditor({
         <p className="text-xs text-amber-700">
           {blanks === 1 ? "One row has" : `${blanks} rows have`} no task picked
           yet. Start typing a row number, a WBS code or part of the task name.
-          Blank rows are not saved.
+          Saving is blocked until {blanks === 1 ? "it is" : "they are"} filled
+          in or removed - a blank row used to be dropped quietly, which looked
+          like the link had saved.
         </p>
       )}
 
