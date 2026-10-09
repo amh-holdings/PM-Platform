@@ -319,11 +319,20 @@ export function PredecessorEditor({
         {successors.length === 0 ? (
           <p className="mt-1 text-xs text-muted-foreground">
             Nothing depends on this task. Moving it will not push anything else.
+            To make something depend on it, open that task and add this one as
+            its predecessor.
           </p>
         ) : (
           <>
+            {/* Where they come from, and which way the logic runs. Zarina
+                added successors here and expected this task's dates to move.
+                They never do: a successor is pushed BY its predecessor, so
+                these links move the tasks listed below, not this one. What
+                moves this task is its own predecessors, above. */}
             <p className="mt-1 text-[11px] text-muted-foreground">
-              Derived from other tasks. Moving this pushes all of them.
+              Derived from other tasks - each of these names this task as a
+              predecessor. Moving this pushes all of them; they never move
+              this one. Add or remove them from the task itself.
             </p>
             <ul className="mt-1.5 space-y-0.5">
               {successors.map((s) => (
