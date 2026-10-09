@@ -29,6 +29,7 @@ export function TaskCombobox<T extends SearchableTask>({
   branchSizeOf,
   parentNameOf,
   invalid,
+  required,
   placeholder = "Type a row number, code or task name",
 }: {
   /** WBS code. May be a code that no longer exists. */
@@ -50,6 +51,15 @@ export function TaskCombobox<T extends SearchableTask>({
    */
   parentNameOf?: (wbs: string) => string | null | undefined;
   invalid?: boolean;
+  /**
+   * Blocks the surrounding form while nothing is picked.
+   *
+   * The box is empty whenever value is empty, so the browser's own required
+   * check catches a row somebody opened and never filled. Without it the
+   * predecessor editor drops the row on save and the dialog closes looking
+   * like it worked.
+   */
+  required?: boolean;
   placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -147,6 +157,33 @@ export function TaskCombobox<T extends SearchableTask>({
           setQuery("");
           setOpen(true);
         }}
+        // Typed text that was never clicked or Entered used to evaporate: the
+        // click-outside handler reset the query and the selection stayed
+        // empty, so "4.4.2.1" typed into the box and then Save produced a task
+        // with no predecessor and no complaint. Resolve what was typed if it
+        // can only mean one thing; otherwise clear the box so it reads as
+        // empty, which is what it is, and lets `required` do its job.
+        onBlur={() => {
+          if (query == null) return;
+          const typed = query.trim();
+          if (!typed) {
+            setQuery(null);
+            setOpen(false);
+            return;
+          }
+          const exact = options.find((o) => o.wbs_code === typed);
+          if (exact) {
+            choose(exact.wbs_code);
+            return;
+          }
+          if (matches.length === 1) {
+            choose(matches[0].wbs_code);
+            return;
+          }
+          setQuery(null);
+          setOpen(false);
+        }}
+        required={required}
         onKeyDown={onKeyDown}
         className={cn(
           "h-9 w-full rounded-md border bg-background px-2 text-sm",
