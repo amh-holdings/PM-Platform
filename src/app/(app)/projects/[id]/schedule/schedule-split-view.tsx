@@ -119,6 +119,8 @@ import {
 } from "@/lib/schedule-sync";
 import { InsertRowMenu } from "./insert-row-menu";
 import { TaskRecordsDialog, type RecordsTab } from "./task-records-dialog";
+import { attachDocumentToTask } from "../schedule-task-records-actions";
+import { uploadProjectDocument } from "../upload-document";
 import {
   describeRecordCounts,
   hasRecords,
@@ -584,6 +586,13 @@ export function ScheduleSplitView({
   const [linkLag, setLinkLag] = useState("0");
   const [dragging, setDragging] = useState<string[] | null>(null);
   const [dropAt, setDropAt] = useState<{ wbs: string; position: "before" | "after" } | null>(null);
+
+  // A file dragged in from outside, and the row it is currently over. Separate
+  // from `dragging`, which is a row being reordered inside the grid: the two
+  // gestures look identical to the browser and mean opposite things, so the
+  // handlers below tell them apart by whether the drag carries files.
+  const [fileOverWbs, setFileOverWbs] = useState<string | null>(null);
+  const [fileBusyId, setFileBusyId] = useState<string | null>(null);
   const [pendingDrop, setPendingDrop] = useState<{ plan: DropPlan; parent: string | null } | null>(null);
 
   // Bars dragged but not saved, held here rather than written on mouse-up so a
@@ -1432,7 +1441,80 @@ export function ScheduleSplitView({
     e.dataTransfer.setData("text/plain", codes.join(","));
   }
 
+  /**
+   * A drag carrying files from the desktop, rather than a row being reordered.
+   *
+   * `types` is the only thing readable during dragover - `files` is empty until
+   * the drop event, by design, so the browser cannot be interrogated about what
+   * is on somebody's clipboard while they are still deciding.
+   */
+  function isFileDrag(e: React.DragEvent): boolean {
+    return Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  }
+
+  /**
+   * Upload each dropped file and attach it to the row it landed on.
+   *
+   * Sequential, not parallel: six drawings dropped at once would otherwise open
+   * six uploads and six inserts, and the failure that matters here is the fifth
+   * one, which needs to be reportable by name.
+   *
+   * Category is "other". The grid has no way to know whether a file dropped on
+   * a Subcontracts line is the subcontract or a transmittal about it, and
+   * guessing would file it wrong silently. It can be recategorised on the
+   * Documents page.
+   */
+  async function attachDroppedFiles(t: ScheduleTaskRow, files: File[]) {
+    setFileBusyId(t.id);
+    setMsg({
+      tone: "warn",
+      text: `Uploading ${files.length} ${files.length === 1 ? "file" : "files"} to ${t.wbs_code} ${t.task_name}...`,
+    });
+
+    const failures: string[] = [];
+    let attached = 0;
+
+    for (const file of files) {
+      const up = await uploadProjectDocument({ projectId, file, category: "other" });
+      if (!up.ok) {
+        failures.push(`${file.name}: ${up.error}`);
+        continue;
+      }
+      const link = await attachDocumentToTask(projectId, t.id, up.id);
+      if (!link.ok) {
+        // The file IS on the Documents page. Only the link to this row failed,
+        // and saying "failed" flat would send somebody to upload it again.
+        failures.push(`${file.name} is on the Documents page but not attached: ${link.error}`);
+        continue;
+      }
+      attached += 1;
+    }
+
+    setFileBusyId(null);
+
+    if (!attached) {
+      setMsg({ tone: "bad", text: failures.join(" ") || "Nothing uploaded." });
+      return;
+    }
+    setMsg({
+      tone: failures.length ? "warn" : "good",
+      text:
+        `${attached} ${attached === 1 ? "file" : "files"} on ${t.wbs_code} ${t.task_name}` +
+        `, and on the Documents page.` +
+        (failures.length ? ` ${failures.join(" ")}` : ""),
+    });
+    startTransition(() => router.refresh());
+  }
+
   function onDragOverRow(e: React.DragEvent, t: ScheduleTaskRow) {
+    if (isFileDrag(e)) {
+      // preventDefault twice over: without it on dragover the browser refuses
+      // the drop, and without it the drop itself navigates to the file.
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      if (fileOverWbs !== t.wbs_code) setFileOverWbs(t.wbs_code);
+      return;
+    }
     if (!dragging) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
@@ -1441,7 +1523,25 @@ export function ScheduleSplitView({
     setDropAt({ wbs: t.wbs_code, position: before ? "before" : "after" });
   }
 
-  function onDropRow(e: React.DragEvent) {
+  function onDragLeaveRow(e: React.DragEvent, t: ScheduleTaskRow) {
+    if (!isFileDrag(e)) return;
+    // dragleave fires when the pointer crosses into a child element too. Only
+    // a move that actually left the row clears the highlight, or the outline
+    // flickers off every time the cursor passes over a cell.
+    const to = e.relatedTarget as Node | null;
+    if (to && (e.currentTarget as HTMLElement).contains(to)) return;
+    if (fileOverWbs === t.wbs_code) setFileOverWbs(null);
+  }
+
+  function onDropRow(e: React.DragEvent, t?: ScheduleTaskRow) {
+    if (isFileDrag(e)) {
+      e.preventDefault();
+      setFileOverWbs(null);
+      const files = Array.from(e.dataTransfer.files ?? []);
+      if (!t || !files.length) return;
+      void attachDroppedFiles(t, files);
+      return;
+    }
     e.preventDefault();
     const moving = dragging;
     const at = dropAt;
@@ -2378,7 +2478,10 @@ export function ScheduleSplitView({
                     onDragStart={(e) => onDragStart(e, t)}
                     onDragEnd={() => { setDragging(null); setDropAt(null); }}
                     onDragOver={(e) => onDragOverRow(e, t)}
-                    onDrop={onDropRow}
+                    onDragLeave={(e) => onDragLeaveRow(e, t)}
+                    onDrop={(e) => onDropRow(e, t)}
+                    fileOver={fileOverWbs === t.wbs_code}
+                    fileBusy={fileBusyId === t.id}
                     rowIndex={rowIndex}
                     predAsRows={predAsRows}
                     counts={recordCounts?.get(t.id)}
@@ -2649,7 +2752,12 @@ type GridRowProps = {
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
   onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
+  /** A file is being dragged over this row right now. */
+  fileOver: boolean;
+  /** A dropped file is uploading onto this row. */
+  fileBusy: boolean;
   projectId: string;
   phaseOptions: string[];
   allTasks: ScheduleTaskRow[];
@@ -2668,7 +2776,7 @@ function GridRow({
   collapsed, onToggleCollapse,
   focused, onFocusRow, selected, onSelect, valueOf, isDirty, setCell, onCellKeyDown, setCellRef,
   statusOptions, calendar, constraint, dragging, dropAt,
-  onDragStart, onDragEnd, onDragOver, onDrop,
+  onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, fileOver, fileBusy,
   projectId, phaseOptions, allTasks, phase1Available, typeAvailable, rowIndex, predAsRows,
   onDialogSaved, editTasks, counts, onOpenRecords,
 }: GridRowProps) {
@@ -2690,6 +2798,7 @@ function GridRow({
     <div
       data-wbs={t.wbs_code}
       onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
       onDrop={onDrop}
       className={cn(
         "group flex items-center border-b text-sm",
@@ -2712,6 +2821,9 @@ function GridRow({
             nearCritical: !!c?.nearCritical,
           }),
         dragging && "opacity-40",
+        // A file hovering over the row outlines the row, so there is never a
+        // question about which line it is about to land on.
+        fileOver && "ring-2 ring-inset ring-primary bg-primary/10",
       )}
       style={{
         height: ROW_H,
@@ -2890,6 +3002,16 @@ function GridRow({
                       Documents only. Photographs reach a task through an
                       approved inspection or a field report, which nobody
                       attached and nobody would look for under a paperclip. */}
+                  {fileOver && (
+                    <span className="shrink-0 whitespace-nowrap rounded bg-primary px-1.5 py-0.5 text-[9px] font-semibold text-primary-foreground">
+                      DROP TO ATTACH
+                    </span>
+                  )}
+                  {fileBusy && (
+                    <span className="shrink-0 whitespace-nowrap rounded bg-muted px-1.5 py-0.5 text-[9px] font-semibold text-muted-foreground">
+                      UPLOADING...
+                    </span>
+                  )}
                   {!!counts?.documents && (
                     <button
                       onClick={() => onOpenRecords("documents")}

@@ -5,21 +5,17 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { createClient } from "@/lib/supabase/client";
-import { recordDocument } from "./documents-actions";
 import {
-  ACCEPTED_MIME_PREFIXES,
-  DOCUMENT_BUCKET,
   DOCUMENT_CATEGORY_OPTIONS,
-  MAX_FILE_BYTES,
   type DocumentCategory,
 } from "./documents-constants";
+import { formatBytes, uploadProjectDocument } from "./upload-document";
 
 type UploadingFile = {
   id: string;
   name: string;
   size: number;
-  progress: "uploading" | "recording" | "linking" | "done" | "error";
+  progress: "uploading" | "linking" | "done" | "error";
   errorMessage?: string;
 };
 
@@ -42,21 +38,6 @@ type Props = {
   compact?: boolean;
 };
 
-function isAcceptedMime(mime: string | null | undefined): boolean {
-  if (!mime) return true; // some browsers omit mime for unusual extensions
-  return ACCEPTED_MIME_PREFIXES.some((prefix) => mime.startsWith(prefix));
-}
-
-function sanitizeFileName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_{2,}/g, "_");
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 export function DocumentUploader({
   projectId,
   defaultCategory = "prime_contract",
@@ -78,62 +59,7 @@ export function DocumentUploader({
         { id: itemId, name: file.name, size: file.size, progress: "uploading" },
       ]);
 
-      if (file.size > MAX_FILE_BYTES) {
-        setItems((prev) =>
-          prev.map((i) =>
-            i.id === itemId
-              ? { ...i, progress: "error", errorMessage: "File exceeds 50 MB limit" }
-              : i,
-          ),
-        );
-        return;
-      }
-      if (!isAcceptedMime(file.type)) {
-        setItems((prev) =>
-          prev.map((i) =>
-            i.id === itemId
-              ? { ...i, progress: "error", errorMessage: `Unsupported file type: ${file.type || "unknown"}` }
-              : i,
-          ),
-        );
-        return;
-      }
-
-      const supabase = createClient();
-      const documentId = crypto.randomUUID();
-      const storagePath = `${projectId}/${documentId}/${sanitizeFileName(file.name)}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from(DOCUMENT_BUCKET)
-        .upload(storagePath, file, {
-          cacheControl: "3600",
-          contentType: file.type || undefined,
-          upsert: false,
-        });
-
-      if (uploadError) {
-        setItems((prev) =>
-          prev.map((i) =>
-            i.id === itemId
-              ? { ...i, progress: "error", errorMessage: uploadError.message }
-              : i,
-          ),
-        );
-        return;
-      }
-
-      setItems((prev) =>
-        prev.map((i) => (i.id === itemId ? { ...i, progress: "recording" } : i)),
-      );
-
-      const result = await recordDocument({
-        projectId,
-        storagePath,
-        fileName: file.name,
-        mimeType: file.type || null,
-        sizeBytes: file.size,
-        category,
-      });
+      const result = await uploadProjectDocument({ projectId, file, category });
 
       if (!result.ok) {
         setItems((prev) =>
@@ -291,7 +217,6 @@ export function DocumentUploader({
                 className={cn(
                   "ml-3 shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium",
                   item.progress === "uploading" && "bg-muted text-muted-foreground",
-                  item.progress === "recording" && "bg-muted text-muted-foreground",
                   item.progress === "linking" && "bg-muted text-muted-foreground",
                   item.progress === "done" && "bg-emerald-100 text-emerald-900",
                   item.progress === "error" &&
@@ -299,7 +224,6 @@ export function DocumentUploader({
                 )}
               >
                 {item.progress === "uploading" && "Uploading..."}
-                {item.progress === "recording" && "Saving..."}
                 {item.progress === "linking" && "Attaching..."}
                 {item.progress === "done" && "Done"}
                 {item.progress === "error" && "Failed"}
@@ -314,10 +238,7 @@ export function DocumentUploader({
                 onClick={() =>
                   setItems((prev) =>
                     prev.filter(
-                      (i) =>
-                        i.progress === "uploading" ||
-                        i.progress === "recording" ||
-                        i.progress === "linking",
+                      (i) => i.progress === "uploading" || i.progress === "linking",
                     ),
                   )
                 }
