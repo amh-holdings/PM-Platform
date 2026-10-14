@@ -107,7 +107,8 @@ const COST: Record<string, CostRule> = {
   "800-1120": { tasks: CONSTRUCTION, how: "spread" },
   "800-1130": { tasks: CONSTRUCTION, how: "spread" },
   "800-1200": { tasks: CONSTRUCTION, how: "spread" },
-  "800-1150": { tasks: ["0.1.3.3"], how: "lump_end" },
+  // Paid in full Nov 2026 (Phil, 2026-10-14), not at EPC execution.
+  "800-1150": { tasks: [], how: "fixed", fixed: [["2026-11-01", 120000]] },
   "800-1160": { tasks: ["0.1.3.3"], how: "lump_end" },
 };
 
