@@ -19,13 +19,27 @@ type UploadingFile = {
   id: string;
   name: string;
   size: number;
-  progress: "uploading" | "recording" | "done" | "error";
+  progress: "uploading" | "recording" | "linking" | "done" | "error";
   errorMessage?: string;
 };
 
 type Props = {
   projectId: string;
   defaultCategory?: DocumentCategory;
+  /**
+   * Called once the document row exists, with its id, for a caller that wants
+   * the file linked to something - a schedule task, in the records popup.
+   *
+   * It returns the result rather than throwing so the failure can be reported
+   * honestly: the upload succeeded and only the link did not, which is a
+   * different thing from a failed upload and sends somebody to a different
+   * place to fix it.
+   */
+  onUploaded?: (
+    documentId: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Tighter layout, for the uploader inside a popup rather than a page. */
+  compact?: boolean;
 };
 
 function isAcceptedMime(mime: string | null | undefined): boolean {
@@ -46,6 +60,8 @@ function formatBytes(bytes: number): string {
 export function DocumentUploader({
   projectId,
   defaultCategory = "prime_contract",
+  onUploaded,
+  compact = false,
 }: Props) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -130,6 +146,27 @@ export function DocumentUploader({
         return;
       }
 
+      if (onUploaded) {
+        setItems((prev) =>
+          prev.map((i) => (i.id === itemId ? { ...i, progress: "linking" } : i)),
+        );
+        const linked = await onUploaded(result.id);
+        if (!linked.ok) {
+          setItems((prev) =>
+            prev.map((i) =>
+              i.id === itemId
+                ? {
+                    ...i,
+                    progress: "error",
+                    errorMessage: `in the library, not attached: ${linked.error}`,
+                  }
+                : i,
+            ),
+          );
+          return;
+        }
+      }
+
       setItems((prev) =>
         prev.map((i) => (i.id === itemId ? { ...i, progress: "done" } : i)),
       );
@@ -137,7 +174,7 @@ export function DocumentUploader({
         router.refresh();
       });
     },
-    [projectId, category, router],
+    [projectId, category, router, onUploaded],
   );
 
   const handleFiles = useCallback(
@@ -151,7 +188,7 @@ export function DocumentUploader({
   );
 
   return (
-    <div className="space-y-4">
+    <div className={cn(compact ? "space-y-2" : "space-y-4")}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1">
           <label
@@ -209,18 +246,21 @@ export function DocumentUploader({
           }
         }}
         className={cn(
-          "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed bg-card p-8 text-center transition-colors",
+          "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed bg-card text-center transition-colors",
+          compact ? "p-4" : "p-8",
           dragActive
             ? "border-primary bg-primary/5"
             : "border-input hover:border-foreground/30",
         )}
       >
-        <p className="text-sm font-medium">
+        <p className={cn("font-medium", compact ? "text-xs" : "text-sm")}>
           Drop files here or click to browse
         </p>
-        <p className="text-xs text-muted-foreground">
-          Files upload directly to Supabase Storage
-        </p>
+        {!compact && (
+          <p className="text-xs text-muted-foreground">
+            Files upload directly to Supabase Storage
+          </p>
+        )}
         <input
           ref={inputRef}
           type="file"
@@ -252,6 +292,7 @@ export function DocumentUploader({
                   "ml-3 shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium",
                   item.progress === "uploading" && "bg-muted text-muted-foreground",
                   item.progress === "recording" && "bg-muted text-muted-foreground",
+                  item.progress === "linking" && "bg-muted text-muted-foreground",
                   item.progress === "done" && "bg-emerald-100 text-emerald-900",
                   item.progress === "error" &&
                     "bg-destructive/10 text-destructive",
@@ -259,6 +300,7 @@ export function DocumentUploader({
               >
                 {item.progress === "uploading" && "Uploading..."}
                 {item.progress === "recording" && "Saving..."}
+                {item.progress === "linking" && "Attaching..."}
                 {item.progress === "done" && "Done"}
                 {item.progress === "error" && "Failed"}
               </span>
@@ -271,7 +313,12 @@ export function DocumentUploader({
                 size="sm"
                 onClick={() =>
                   setItems((prev) =>
-                    prev.filter((i) => i.progress === "uploading" || i.progress === "recording"),
+                    prev.filter(
+                      (i) =>
+                        i.progress === "uploading" ||
+                        i.progress === "recording" ||
+                        i.progress === "linking",
+                    ),
                   )
                 }
               >
