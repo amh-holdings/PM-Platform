@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { can } from "@/lib/roles";
 import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
-import { recommendedApproval, summarizeChecks } from "@/lib/sub-billing";
+import { billVerdict, recommendedApproval, summarizeChecks } from "@/lib/sub-billing";
 import { subBillingClient } from "@/lib/sub-billing-db";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +67,35 @@ export default async function SubBillPage({ params }: { params: Params }) {
   const heldLines = payLines.filter((p) => p.held > 0.004);
   const noEvidence = payLines.filter((p) => p.basis === "no_evidence");
 
+  const verdict = billVerdict({
+    checks: checks.map((c) => ({ status: c.status, severity: c.severity, label: c.label, message: c.message })),
+    lines: payLines.map((p) => ({
+      item_number: p.l.item_number,
+      description: p.l.description,
+      billed: p.billed,
+      approve: p.amount,
+      pct_billed: p.l.pct_billed != null ? Number(p.l.pct_billed) : null,
+      verified_pct: p.l.verified_pct != null ? Number(p.l.verified_pct) : null,
+      flag_level: p.l.flag_level,
+      detail: p.l.verification_detail,
+    })),
+    approveGross: payGross,
+    approveNet: round2(payGross - payRetainage),
+    money: formatCurrency,
+  });
+  const VERDICT_TONE: Record<string, string> = {
+    send_back: "border-destructive/50 bg-destructive/10",
+    hold: "border-amber-400 bg-amber-50",
+    needs_cm: "border-sky-300 bg-sky-50",
+    approve: "border-emerald-400 bg-emerald-50",
+  };
+  const VERDICT_TAG: Record<string, string> = {
+    send_back: "DO NOT APPROVE",
+    hold: "APPROVE WITH HOLD",
+    needs_cm: "NEEDS CM SIGN-OFF",
+    approve: "APPROVE",
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -105,30 +134,43 @@ export default async function SubBillPage({ params }: { params: Params }) {
         )}
       </div>
 
-      {/* --------------------------- Verdict banner --------------------------- */}
-      <div
-        className={cn(
-          "rounded-md border p-3 text-sm",
-          summary.hardFail
-            ? "border-destructive/40 bg-destructive/10"
-            : flagged.length > 0
-              ? "border-amber-300 bg-amber-50"
-              : "border-emerald-300 bg-emerald-50",
-        )}
-      >
-        <div className="font-medium">
-          {summary.hardFail
-            ? `${failures.length} check${failures.length === 1 ? "" : "s"} failed`
-            : flagged.length > 0
-              ? `Arithmetic is clean, ${flagged.length} line${flagged.length === 1 ? "" : "s"} outrun the field record`
-              : "Arithmetic is clean and every billed line is supported"}
+      {/* ------------------------------ Verdict ------------------------------ */}
+      {checks.length === 0 ? (
+        <div className="rounded-md border p-4 text-sm">
+          This bill has not been analyzed yet. Use <span className="font-medium">Analyze bill</span> below.
         </div>
-        <div className="mt-1 text-xs">
-          {summary.passed} passed · {warnings.length} warning{warnings.length === 1 ? "" : "s"} ·{" "}
-          {failures.length} failed
-          {unverifiable.length > 0 && ` · ${unverifiable.length} billed line${unverifiable.length === 1 ? "" : "s"} have no evidence source`}
-        </div>
-      </div>
+      ) : (
+        <section className={cn("space-y-2 rounded-md border-2 p-4", VERDICT_TONE[verdict.kind])}>
+          <div className="text-[11px] font-bold tracking-wider">
+            {decided ? `ANALYSIS (bill is ${STATUS_LABEL[app.status] ?? app.status})` : VERDICT_TAG[verdict.kind]}
+          </div>
+          <div className="text-base font-semibold">
+            {showDollars ? verdict.headline : verdict.headline.replace(/\$[\d,]+\.\d{2}/g, "[amount]")}
+          </div>
+          <ul className="list-disc space-y-1 pl-5 text-sm">
+            {verdict.reasons.map((r, i) => (
+              <li key={i}>{showDollars ? r : r.replace(/\$[\d,]+\.\d{2}/g, "[amount]")}</li>
+            ))}
+          </ul>
+          {verdict.notes.length > 0 && (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-muted-foreground">
+                {verdict.notes.length} other note{verdict.notes.length === 1 ? "" : "s"}
+              </summary>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-muted-foreground">
+                {verdict.notes.map((n, i) => (
+                  <li key={i}>{showDollars ? n : n.replace(/\$[\d,]+\.\d{2}/g, "[amount]")}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+          <div className="text-xs text-muted-foreground">
+            {summary.passed} checks passed · {warnings.length} warning{warnings.length === 1 ? "" : "s"} ·{" "}
+            {failures.length} failed · {flagged.length} line{flagged.length === 1 ? "" : "s"} ahead of the field record
+            {unverifiable.length > 0 && ` · ${unverifiable.length} with no evidence source`}
+          </div>
+        </section>
+      )}
 
       {/* ---------------------------- What to pay ---------------------------- */}
       {showDollars && billedLines.length > 0 && (

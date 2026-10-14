@@ -984,6 +984,107 @@ export function recommendedApproval(line: {
   };
 }
 
+// -------------------------------- verdict --------------------------------
+//
+// The answer to "should we pay this bill", in one line, with the reasons.
+// Phil: "enter the new AFP and then hit an analyze button and it comes back
+// with either approved or why it should not be approved."
+//
+// In order of severity, first match wins:
+//   send_back   - the bill itself is wrong (arithmetic, continuity, contract).
+//                 No amount is right to approve until the sub reissues it.
+//   hold        - the bill is sound, but some lines outrun the field record.
+//                 Approve the rest, hold those lines.
+//   needs_cm    - lines billed that the record cannot check (closeout, manual
+//                 sign-off). A person certifies them before approval.
+//   approve     - every billed line is supported. Pay as billed.
+
+export type VerdictKind = "send_back" | "hold" | "needs_cm" | "approve";
+
+export type BillVerdict = {
+  kind: VerdictKind;
+  headline: string;
+  reasons: string[];
+  /** Non-blocking things worth reading before approving. */
+  notes: string[];
+};
+
+export function billVerdict(args: {
+  checks: { status: string; severity: string; label: string; message: string | null }[];
+  lines: {
+    item_number: string;
+    description: string;
+    billed: number;
+    approve: number;
+    pct_billed: number | null;
+    verified_pct: number | null;
+    flag_level: string | null;
+    detail: string | null;
+  }[];
+  approveGross: number;
+  approveNet: number;
+  money: (v: number) => string;
+}): BillVerdict {
+  const { checks, lines, approveGross, approveNet, money } = args;
+  const pct = (v: number | null) => (v == null ? "?" : `${(v * 100).toFixed(1)}%`);
+
+  const notes = checks
+    .filter((c) => c.status === "warn" || (c.status === "fail" && c.severity !== "error"))
+    .map((c) => `${c.label}${c.message ? ` - ${c.message}` : ""}`);
+
+  const blocking = checks.filter((c) => c.status === "fail" && c.severity === "error");
+  if (blocking.length) {
+    return {
+      kind: "send_back",
+      headline: "Do not approve - send the bill back to the subcontractor",
+      reasons: blocking.map((c) => `${c.label}${c.message ? ` - ${c.message}` : ""}`),
+      notes,
+    };
+  }
+
+  const billedLines = lines.filter((l) => l.billed > 0);
+  const held = billedLines.filter((l) => l.billed - l.approve > 0.004);
+  const unchecked = billedLines.filter((l) => l.flag_level === "unverifiable" || l.verified_pct == null);
+
+  for (const l of unchecked) {
+    notes.push(`${l.item_number} ${l.description}: no field evidence to check it against, paid as billed unless the CM certifies otherwise.`);
+  }
+
+  if (held.length) {
+    const heldTotal = Math.round(held.reduce((s, l) => s + (l.billed - l.approve), 0) * 100) / 100;
+    return {
+      kind: "hold",
+      headline: `Approve ${money(approveGross)} (AHC pays ${money(approveNet)}) - hold ${money(heldTotal)}`,
+      reasons: held.map((l) => {
+        const base = `${l.item_number} ${l.description}: billed to ${pct(l.pct_billed)}, the reports and schedule support ${pct(l.verified_pct)}. Hold ${money(l.billed - l.approve)}.`;
+        // A stale source means the gap may be ours, not the sub's.
+        return l.detail?.includes("CHECK SOURCE")
+          ? `${base} Before disputing it, check the evidence source - ${l.detail.split("CHECK SOURCE: ")[1]}.`
+          : base;
+      }),
+      notes,
+    };
+  }
+
+  if (unchecked.length) {
+    return {
+      kind: "needs_cm",
+      headline: "Every checkable line is supported - CM sign-off needed on the rest",
+      reasons: unchecked.map(
+        (l) => `${l.item_number} ${l.description}: billed ${money(l.billed)}, nothing in the reports or schedule measures it. Certify a % below.`,
+      ),
+      notes: notes.filter((n) => !unchecked.some((l) => n.startsWith(`${l.item_number} `))),
+    };
+  }
+
+  return {
+    kind: "approve",
+    headline: `Approve as billed - AHC pays ${money(approveNet)}`,
+    reasons: [`All ${billedLines.length} billed line${billedLines.length === 1 ? " is" : "s are"} supported by the daily reports and schedule, and the bill adds up.`],
+    notes,
+  };
+}
+
 // -------------------------------- rollups --------------------------------
 
 export function summarizeChecks(checks: BillCheck[]) {

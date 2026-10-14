@@ -12,7 +12,7 @@ import {
   tasksAsOf,
   type AsOfTask,
 } from "../../src/lib/sub-billing-asof";
-import { recommendedApproval, staleSources, verifyLine, type BillLine, type Evidence, type SovLine } from "../../src/lib/sub-billing";
+import { billVerdict, recommendedApproval, staleSources, verifyLine, type BillLine, type Evidence, type SovLine } from "../../src/lib/sub-billing";
 
 let passed = 0;
 const failures: string[] = [];
@@ -136,6 +136,22 @@ eq("AFP 3 approves $62,931.76 gross", Math.round(gross * 100) / 100, 62931.76);
 eq("a line with no evidence is paid as billed but marked", recommendedApproval({ this_period: 500, from_previous: 0, verified_amount: null, flag_level: "unverifiable" }), { amount: 500, held: 0, basis: "no_evidence" });
 eq("a credit line passes through untouched", recommendedApproval({ this_period: -200, from_previous: 1000, verified_amount: 0, flag_level: "flag" }).amount, -200);
 eq("partly supported: pays up to the record", recommendedApproval({ this_period: 1000, from_previous: 2000, verified_amount: 2600, flag_level: "flag" }), { amount: 600, held: 400, basis: "capped" });
+
+console.log("\nThe verdict\n");
+
+const money = (v: number) => `$${v.toFixed(2)}`;
+const vline = (o: Partial<Parameters<typeof billVerdict>[0]["lines"][number]>) => ({
+  item_number: "2.04", description: "Drainage", billed: 1000, approve: 1000, pct_billed: 1, verified_pct: 1, flag_level: "ok", detail: "", ...o,
+});
+const pass = { status: "pass", severity: "error", label: "Adds up", message: null };
+eq("all supported -> approve", billVerdict({ checks: [pass], lines: [vline({})], approveGross: 1000, approveNet: 950, money }).kind, "approve");
+const held = billVerdict({ checks: [pass], lines: [vline({ approve: 0, pct_billed: 1, verified_pct: 0.592, flag_level: "flag" })], approveGross: 0, approveNet: 0, money });
+eq("a line ahead of the record -> hold", held.kind, "hold");
+eq("the hold names the line and both percents", held.reasons[0], "2.04 Drainage: billed to 100.0%, the reports and schedule support 59.2%. Hold $1000.00.");
+eq("arithmetic failure -> send back, even with lines held", billVerdict({ checks: [{ status: "fail", severity: "error", label: "Total foots", message: "off by $10" }], lines: [vline({ approve: 0, flag_level: "flag" })], approveGross: 0, approveNet: 0, money }).kind, "send_back");
+eq("a warning does not block approval", billVerdict({ checks: [{ status: "warn", severity: "warning", label: "COI pending", message: null }], lines: [vline({})], approveGross: 1000, approveNet: 950, money }).kind, "approve");
+eq("an unmeasured line -> CM sign-off", billVerdict({ checks: [pass], lines: [vline({ verified_pct: null, flag_level: "unverifiable" })], approveGross: 1000, approveNet: 950, money }).kind, "needs_cm");
+eq("a stale source is named on the hold", billVerdict({ checks: [pass], lines: [vline({ approve: 0, flag_level: "flag", detail: "Road: 0 of 250 ft. CHECK SOURCE: Road Install has never been updated" })], approveGross: 0, approveNet: 0, money }).reasons[0].includes("check the evidence source - Road Install has never been updated"), true);
 
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);

@@ -263,20 +263,22 @@ export function ReviewForm({
                 >
                   Reject
                 </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={pending}
-                  onClick={() =>
-                    startTransition(async () => {
-                      const res = await runVerification(projectId, appId);
-                      if (!res.ok) setError(res.error ?? "Verification failed");
-                    })
-                  }
-                >
-                  Re-run checks
-                </Button>
               </>
+            )}
+            {(canApprove || canRecommend) && (
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={pending}
+                onClick={() =>
+                  startTransition(async () => {
+                    const res = await runVerification(projectId, appId);
+                    if (!res.ok) setError(res.error ?? "Verification failed");
+                  })
+                }
+              >
+                Analyze bill
+              </Button>
             )}
             <span className="text-xs text-muted-foreground">
               Retainage {retainagePct}% is applied to the approved total.

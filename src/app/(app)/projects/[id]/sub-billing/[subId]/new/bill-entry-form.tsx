@@ -228,7 +228,7 @@ export function BillEntryForm({
 
       <div className="flex items-center gap-2">
         <Button type="submit" disabled={pending}>
-          {pending ? "Saving and checking..." : "Save and run checks"}
+          {pending ? "Analyzing against the reports and schedule..." : "Save and analyze"}
         </Button>
         <span className="text-xs text-muted-foreground">
           Saving runs every check and the field verification immediately.
