@@ -25,7 +25,8 @@ const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_
   auth: { persistSession: false },
 });
 
-const { data: codes, error } = await sb.from("cost_codes").select("*").eq("project_id", PID).like("code", "300-%");
+// 200-1050 cable joined 2026-10-14: the electrical sub buys it.
+const { data: codes, error } = await sb.from("cost_codes").select("*").eq("project_id", PID).or("code.like.300-%,code.eq.200-1050");
 if (error) throw error;
 if (codes?.length && !("retainage_pct" in codes[0])) {
   throw new Error("cost_codes.retainage_pct missing - apply migration 0077 first.");

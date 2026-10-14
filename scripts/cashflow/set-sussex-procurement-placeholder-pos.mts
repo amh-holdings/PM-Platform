@@ -46,10 +46,14 @@ const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_
   auth: { persistSession: false },
 });
 
+// Racking delivers on 3.4.3, the trackers delivery in the equipment section.
+// 200-1050 cable had a placeholder too until 2026-10-14, when Phil said the
+// electrical sub buys it - RETIRED below removes it and unlinks the code so
+// its cost counts as sub material again.
 const PLACEHOLDERS = [
-  { code: "200-1030", what: "Racking, Mounting & Trackers", delivery: "3.2" },
-  { code: "200-1050", what: "AC/MV Cabling & Conductors", delivery: "3.3" },
+  { code: "200-1030", what: "Racking, Mounting & Trackers", delivery: "3.4.3" },
 ];
+const RETIRED = ["200-1050"];
 
 const addDays = (iso: string, n: number) => {
   const [y, m, d] = iso.split("-").map(Number);
@@ -134,6 +138,18 @@ for (const p of PLACEHOLDERS) {
   const { error: le } = await sb.from("cost_codes").update({ procurement_order_id: poId } as never).eq("id", code.id);
   if (le) throw le;
   console.log(`  written: PO ${poNumber}, cost code linked`);
+}
+
+for (const codeNo of RETIRED) {
+  const poNumber = `SX-PLACEHOLDER-${codeNo}`;
+  const { data: po } = await sb.from("procurement_orders").select("id").eq("project_id", PID).eq("po_number", poNumber).maybeSingle();
+  console.log(`${codeNo}: retire ${poNumber}${po ? "" : " (already gone)"}`);
+  if (!APPLY || !po) continue;
+  const { error: ue } = await sb.from("cost_codes").update({ procurement_order_id: null } as never).eq("project_id", PID).eq("code", codeNo);
+  if (ue) throw ue;
+  const { error: de } = await sb.from("procurement_orders").delete().eq("id", po.id);
+  if (de) throw de;
+  console.log("  removed, cost code unlinked");
 }
 
 if (!APPLY) console.log("\nDry run. Pass --apply to write.");

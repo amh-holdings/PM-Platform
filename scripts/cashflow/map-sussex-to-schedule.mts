@@ -86,8 +86,10 @@ const COST: Record<string, CostRule> = {
   "800-1030": { tasks: DESIGN_TO_IFP, how: "spread" },
   // EPCA - engineering / procurement
   "100-1040": { tasks: IFP, how: "spread", standIn: "IFP packages until permitting has real tasks" },
-  "200-1030": { tasks: ["3.2"], how: "lump_end" },
-  "200-1050": { tasks: ["4.4"], how: "lump_start", standIn: "start of Electrical until cable has a delivery task" },
+  "200-1030": { tasks: ["3.4.3"], how: "lump_end" },
+  // Cable is bought by the electrical sub (Phil, 2026-10-14), so it is sub
+  // material at Electrical start on sub terms, not a PO of ours.
+  "200-1050": { tasks: ["4.4"], how: "lump_start" },
   // EPCA - construction
   "300-1010": { tasks: ["4.2"], how: "spread" },
   "300-1020": { tasks: ["4.2"], how: "spread" },
@@ -123,10 +125,12 @@ const BILLING: [string, string, string?][] = [
   // Contractor permits branch (Phil, 2026-10-14); earns when the last one,
   // 2.2.6 All Permits Received, finishes.
   ["4.00", "2.2"],
-  ["5.02", "3.3"],
+  // Owner modules on site for Racking start (Phil): the trackers delivery,
+  // which lands that day. 3.1-3.3 were deleted 2026-10-14.
+  ["5.02", "3.4.3"],
   ["5.04", "0.2.2.5"],
-  ["5.05", "3.2"],
-  ["5.06", "3.1"],
+  ["5.05", "3.4.3"],
+  ["5.06", "3.5.3"],
   ["6.01", "4.1"],
   ["6.02", "4.1"],
   ["6.03", "4.2"],
@@ -291,7 +295,7 @@ for (const p of plan) {
     .update({
       linked_task_wbs_codes: p.rule.tasks,
       commitment_covered: !!p.rule.covered,
-      ...(hasTerms ? { payment_terms_days: p.code.code.startsWith("300-") ? 30 : null } : {}),
+      ...(hasTerms ? { payment_terms_days: p.code.code.startsWith("300-") || p.code.code === "200-1050" ? 30 : null } : {}),
     })
     .eq("id", p.code.id);
   if (error) throw error;
