@@ -28,6 +28,9 @@ const APPLY = process.argv.includes("--apply");
 const PID = "39154377-bd1a-48ea-acdc-5d9b568863c9";
 const DEPOSIT_PCT = 30;
 const DELIVERY_NET_DAYS = 30;
+// Phil, 2026-10-14: "30% deposit and the rest upon delivery all net 30" - the
+// deposit is Net 30 from the PO too, not paid on signing.
+const DEPOSIT_NET_DAYS = 30;
 // Assumed lead time from PO to delivery. Phil has not set one.
 const LEAD_WEEKS = 16;
 
@@ -74,7 +77,7 @@ for (const p of PLACEHOLDERS) {
 
   console.log(
     `${p.code} ${p.what}: ${money(total)}\n` +
-      `  PO ${ordered} -> ${DEPOSIT_PCT}% deposit ${money(deposit)} (Net 0)\n` +
+      `  PO ${ordered} -> ${DEPOSIT_PCT}% deposit ${money(deposit)} Net ${DEPOSIT_NET_DAYS} = ${addDays(ordered, DEPOSIT_NET_DAYS)}\n` +
       `  delivery ${p.delivery} ${deliveryDate} -> ${100 - DEPOSIT_PCT}% ${money(balance)} Net ${DELIVERY_NET_DAYS} = ${addDays(deliveryDate, DELIVERY_NET_DAYS)}`,
   );
   if (!APPLY) continue;
@@ -87,7 +90,7 @@ for (const p of PLACEHOLDERS) {
     total_value: total,
     ordered_date: ordered,
     status: "active",
-    payment_terms_summary: `${DEPOSIT_PCT}% deposit on PO, ${100 - DEPOSIT_PCT}% Net ${DELIVERY_NET_DAYS} after delivery`,
+    payment_terms_summary: `${DEPOSIT_PCT}% deposit Net ${DEPOSIT_NET_DAYS} from PO, ${100 - DEPOSIT_PCT}% Net ${DELIVERY_NET_DAYS} after delivery`,
     net_terms_days: DELIVERY_NET_DAYS,
     linked_delivery_task_wbs_code: p.delivery,
     notes: `Placeholder written by scripts/cashflow/set-sussex-procurement-placeholder-pos.mts. PO date assumes ${LEAD_WEEKS} weeks lead time.`,
@@ -113,7 +116,7 @@ for (const p of PLACEHOLDERS) {
       trigger_event: "PO release",
       pct_of_total: DEPOSIT_PCT,
       amount: deposit,
-      net_terms_days: 0,
+      net_terms_days: DEPOSIT_NET_DAYS,
       sort_order: 1,
     },
     {
