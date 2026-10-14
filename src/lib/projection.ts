@@ -183,6 +183,20 @@ function isCommitmentCovered(
   return !!code?.procurement_order_id || code?.commitment_covered === true;
 }
 
+/**
+ * Retainage withheld on a cost code's cash-out, as a fraction.
+ *
+ * The linked sub's rate when there is one; otherwise the code's placeholder
+ * (0077), which is how Sussex's construction codes carry the 10% Phil will
+ * require of every sub before any is signed. Withheld and released must read
+ * the same rate, or held money is never paid back, so both loops call this.
+ */
+function codeRetainagePct(
+  code: { retainage_pct?: number | null; subcontractors: { retainage_pct: number | null } | null } | null,
+): number {
+  return Number(code?.subcontractors?.retainage_pct ?? code?.retainage_pct ?? 0) / 100;
+}
+
 type Options = { monthsAhead?: number; today?: Date };
 
 export async function buildProjection(
@@ -786,6 +800,7 @@ export async function buildProjection(
       procurement_order_id: string | null;
       commitment_covered?: boolean | null;
       payment_terms_days?: number | null;
+      retainage_pct?: number | null;
       subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
     } | null;
     if (isCommitmentCovered(code)) continue;
@@ -798,7 +813,7 @@ export async function buildProjection(
     const subDays = Number(
       code?.subcontractors?.payment_terms_days ?? code?.payment_terms_days ?? 0,
     );
-    const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
+    const retPct = codeRetainagePct(code);
     const cashMonth = subDays > 0 ? shiftByDaysToMonth(fMonth, subDays) : fMonth;
     const netCash = gross * (1 - retPct);
 
@@ -963,13 +978,14 @@ export async function buildProjection(
     const code = f.cost_codes as unknown as {
       procurement_order_id: string | null;
       commitment_covered?: boolean | null;
+      retainage_pct?: number | null;
       subcontractors: { retainage_pct: number | null } | null;
     } | null;
     // Same exclusion as the cost loop above, and it has to be: retainage held
     // on a code whose cost is not in the forecast is retainage on nothing, and
     // it would be released into cash in the final month out of thin air.
     if (isCommitmentCovered(code)) continue;
-    const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
+    const retPct = codeRetainagePct(code);
     const gross = effectiveAmount(f.actual_amount, f.planned_amount);
     totalSubRetainage += gross * retPct;
   }

@@ -55,7 +55,27 @@ const DESIGN_TO_IFP = [
 const IFP = ["1.2.1.4", "1.2.2.3", "1.2.3.3"];
 const CONSTRUCTION = ["4.1", "4.2", "4.3", "4.4", "4.5"];
 
-type CostRule = { tasks: string[]; how: "spread" | "lump_start" | "lump_end"; standIn?: string; covered?: boolean };
+type CostRule = {
+  tasks: string[];
+  how: "spread" | "lump_start" | "lump_end" | "fixed";
+  standIn?: string;
+  covered?: boolean;
+  /** how: "fixed" - written as given, not spread over the schedule. */
+  fixed?: [string, number][];
+};
+
+// AHC Annex A, exactly as Phil's cash flow has it (Phil, 2026-10-14: "exactly
+// how I have it in that spreadsheet for right now"). Source: Drive, Mac Mini/
+// 20261014 - Sussex_CSG1_Annex_A_Cash_Flow.xlsx, section 2 "Proposed Billing",
+// Cash In row - each month's staff cost billed to the JV one month ahead, so
+// these are the months the JV pays. It does NOT follow the schedule: if the
+// staffing plan changes, update these numbers from the sheet.
+const ANNEX_A_AHC: [string, number][] = [
+  ["2026-12-01", 59079], ["2027-01-01", 78602], ["2027-02-01", 81402],
+  ["2027-03-01", 69374], ["2027-04-01", 67974], ["2027-05-01", 68674],
+  ["2027-06-01", 61037], ["2027-07-01", 61562], ["2027-08-01", 60862],
+  ["2027-09-01", 60337], ["2027-10-01", 52364], ["2027-11-01", 53066],
+];
 const COST: Record<string, CostRule> = {
   // LNTP
   "100-1010": { tasks: ["1.2.1.1", "1.2.1.2", "1.2.1.3", "1.2.1.4", "1.2.1.5"], how: "spread" },
@@ -77,7 +97,7 @@ const COST: Record<string, CostRule> = {
   "300-1090": { tasks: ["4.1"], how: "spread" },
   "300-1100": { tasks: ["4.5"], how: "spread" },
   // EPCA - general conditions
-  "800-1010": { tasks: CONSTRUCTION, how: "spread" },
+  "800-1010": { tasks: [], how: "fixed", fixed: ANNEX_A_AHC },
   "800-1020": { tasks: CONSTRUCTION, how: "spread" },
   "800-1050": { tasks: CONSTRUCTION, how: "spread" },
   "800-1060": { tasks: CONSTRUCTION, how: "spread" },
@@ -191,7 +211,15 @@ for (const c of codes ?? []) {
   const actual = (existing ?? [])
     .filter((f) => f.cost_code_id === c.id)
     .reduce((s, f) => s + Number(f.actual_amount ?? 0), 0);
-  const rows = rule.covered ? new Map() : spread(est - actual, dayWeights(rule));
+  if (rule.fixed) {
+    const sum = r2(rule.fixed.reduce((s, [, v]) => s + v, 0));
+    if (sum !== r2(est)) throw new Error(`${c.code} fixed schedule $${sum} does not tie to budget $${est}`);
+  }
+  const rows = rule.covered
+    ? new Map()
+    : rule.fixed
+      ? new Map(rule.fixed)
+      : spread(est - actual, dayWeights(rule));
   plan.push({ code: c, rule, rows });
 }
 
