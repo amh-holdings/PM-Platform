@@ -19,6 +19,7 @@ import type { ScheduleBasis } from "@/lib/weekly-schedule-basis";
 
 import { estimateTaskProgress, type Confidence, type TaskLike } from "@/lib/progress";
 import { formatCurrency } from "@/lib/format";
+import { STALE_EVIDENCE_DAYS, daysBetween, expandToLeaves } from "@/lib/sub-billing-asof";
 
 // ------------------------------- tolerances -------------------------------
 
@@ -598,6 +599,14 @@ export type Evidence = {
    * when the cut-off IS today and a caveat when it is not.
    */
   scheduleAsOf?: ScheduleBasis;
+  /**
+   * Last date each evidence source was touched on or before the cut-off:
+   * `task:<wbs>` is the newest approved field-report pin on that task,
+   * `commodity:<id>` the newest production row. Absent key means never.
+   * Optional so callers that do not load it get no staleness notes at all,
+   * rather than a false "never updated" on every line.
+   */
+  lastUpdate?: Map<string, string>;
 };
 
 export type LineVerification = {
@@ -610,6 +619,43 @@ export type LineVerification = {
   variancePct: number | null;
   flag: "ok" | "review" | "flag" | "unverifiable";
 };
+
+/**
+ * The evidence sources on a line that are still open and have not been
+ * updated within STALE_EVIDENCE_DAYS of the cut-off, described for a reviewer.
+ * Null when every source is current or finished.
+ */
+export function staleSources(sov: SovLine, ev: Evidence): string | null {
+  if (!ev.lastUpdate) return null;
+  const asOf = ev.todayIso;
+  const notes: string[] = [];
+  const describe = (name: string, last: string | undefined) => {
+    if (!last) notes.push(`${name} has never been updated`);
+    else if (daysBetween(last, asOf) > STALE_EVIDENCE_DAYS) {
+      notes.push(`${name} last updated ${last} (${daysBetween(last, asOf)} days before ${asOf})`);
+    }
+  };
+  if (sov.verification_method === "commodity") {
+    for (const id of sov.linked_commodity_ids ?? []) {
+      const c = ev.commodities.get(id);
+      if (!c) continue;
+      const done = c.uom === "pct" || c.uom === "%" ? c.installed >= 100 : c.total > 0 && c.installed >= c.total;
+      if (!done) describe(c.label, ev.lastUpdate.get(`commodity:${id}`));
+    }
+  }
+  if (sov.verification_method === "schedule" || sov.verification_method === "time") {
+    const codes = expandToLeaves(sov.linked_task_wbs_codes ?? [], ev.tasks.keys());
+    for (const code of codes) {
+      const t = ev.tasks.get(code);
+      if (!t) continue;
+      if (Number(t.pct_complete ?? 0) >= 100 || (t.status ?? "").toLowerCase() === "complete") continue;
+      // Not due to have started by the cut-off: silence is expected.
+      if (t.start_date && t.start_date > asOf) continue;
+      describe(`${code} ${t.task_name ?? ""}`.trim(), ev.lastUpdate.get(`task:${code}`));
+    }
+  }
+  return notes.length ? notes.join("; ") : null;
+}
 
 export function verifyLine(
   sov: SovLine,
@@ -650,14 +696,16 @@ export function verifyLine(
   let source = method;
 
   if (method === "schedule" || method === "time") {
-    const codes = sov.linked_task_wbs_codes ?? [];
+    const linked = sov.linked_task_wbs_codes ?? [];
+    // A linked summary row stands for every leaf under it (sub-billing-asof).
+    const codes = expandToLeaves(linked, ev.tasks.keys());
     const found = codes.map((c) => ev.tasks.get(c)).filter(Boolean) as (TaskLike & {
       wbs_code: string;
       task_name?: string | null;
     })[];
     if (found.length === 0) {
       return unverifiable(
-        `Mapped to schedule task${codes.length === 1 ? "" : "s"} ${codes.join(", ") || "(none)"} but ${codes.length ? "none were found" : "no task is set"}.`,
+        `Mapped to schedule task${linked.length === 1 ? "" : "s"} ${linked.join(", ") || "(none)"} but ${linked.length ? "none were found" : "no task is set"}.`,
         method,
       );
     }
@@ -777,6 +825,16 @@ export function verifyLine(
 
   if (verifiedPct == null) {
     return unverifiable("Could not compute a verified percentage.", source);
+  }
+
+  // A source nobody is updating reads as "no work done", and the line then
+  // flags as over-billed when the field record is what fell behind. Pyramid's
+  // access road was mapped to a footage commodity nobody logged against; it
+  // read 0 of 250 ft for two months while the road was built. Said on the
+  // line, so the reviewer checks the mapping before disputing the bill.
+  if (ev.lastUpdate && n(billed.this_period) > 0 && verifiedPct < 1) {
+    const stale = staleSources(sov, ev);
+    if (stale) detail = `${detail}. CHECK SOURCE: ${stale}`;
   }
 
   const verifiedAmount = Math.round(verifiedPct * sv * 100) / 100;

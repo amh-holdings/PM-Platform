@@ -24,6 +24,7 @@ import {
   pickSnapshotFor,
   type ScheduleBasis,
 } from "@/lib/weekly-schedule-basis";
+import { tasksAsOf, type AsOfPin } from "@/lib/sub-billing-asof";
 
 export type VerificationRun = {
   ok: boolean;
@@ -56,7 +57,7 @@ export async function loadEvidence(
   const [{ data: tasks }, { data: commodities }, { data: production }] = await Promise.all([
     db
       .from("schedule_tasks")
-      .select("wbs_code, task_name, status, pct_complete, start_date, end_date, duration_days")
+      .select("id, wbs_code, task_name, status, pct_complete, start_date, end_date, duration_days")
       .eq("project_id", projectId),
     db
       .from("commodities")
@@ -78,12 +79,50 @@ export async function loadEvidence(
   ]);
 
   const installed = new Map<string, number>();
+  // Newest touch per source, for the stale-evidence note on each line.
+  const lastUpdate = new Map<string, string>();
+  const touch = (key: string, date: string | null | undefined) => {
+    if (!date || date > asOf) return;
+    const cur = lastUpdate.get(key);
+    if (!cur || date > cur) lastUpdate.set(key, date);
+  };
   for (const row of production ?? []) {
     if (!row.commodity_id) continue;
     installed.set(
       row.commodity_id,
       (installed.get(row.commodity_id) ?? 0) + Number(row.quantity ?? 0),
     );
+    // A zero row is someone saying "nothing today", which is still an update.
+    touch(`commodity:${row.commodity_id}`, row.production_date);
+  }
+
+  // Approved sub pins, by report date: what moved each task's percent, and
+  // when. Feeds both the as-of reconstruction and the staleness note.
+  const wbsById = new Map((tasks ?? []).map((t) => [t.id, t.wbs_code]));
+  const [{ data: pinRows }, { data: dprRows }] = await Promise.all([
+    db
+      .from("inspections")
+      .select("schedule_task_id, task_new_pct, dpr_id")
+      .eq("project_id", projectId)
+      .eq("origin", "sub")
+      .eq("status", "approved")
+      .not("schedule_task_id", "is", null),
+    db.from("dprs").select("id, report_date").eq("project_id", projectId).lte("report_date", asOf),
+  ]);
+  const reportDate = new Map(
+    ((dprRows ?? []) as { id: string; report_date: string }[]).map((d) => [d.id, d.report_date]),
+  );
+  const pins: AsOfPin[] = [];
+  for (const p of (pinRows ?? []) as {
+    schedule_task_id: string | null;
+    task_new_pct: number | null;
+    dpr_id: string | null;
+  }[]) {
+    const date = p.dpr_id ? reportDate.get(p.dpr_id) : undefined;
+    const wbs = p.schedule_task_id ? wbsById.get(p.schedule_task_id) : undefined;
+    if (!date || !wbs) continue;
+    pins.push({ wbsCode: wbs, reportDate: date, pct: p.task_new_pct });
+    touch(`task:${wbs}`, date);
   }
 
   // Earliest field report from this sub - the platform's record of the day they
@@ -126,10 +165,18 @@ export async function loadEvidence(
       .limit(1);
     const row = (snaps ?? [])[0] as { data_date: string; tasks: unknown } | undefined;
     const hit = row ? pickSnapshotFor([{ dataDate: row.data_date }], asOf) : null;
-    if (hit && Array.isArray(row?.tasks) && row.tasks.length) {
-      scheduleRows = row.tasks as SnapshotTask[];
-      picked = hit;
-    }
+    const snapshotRows =
+      hit && Array.isArray(row?.tasks) && row.tasks.length ? (row.tasks as SnapshotTask[]) : null;
+    if (snapshotRows) picked = hit;
+    // The snapshot is a fallback, not the answer: a task the live schedule
+    // shows finished by the cut-off, or one a dated field report covers, is
+    // read from that instead (sub-billing-asof explains the order).
+    scheduleRows = tasksAsOf({
+      live: scheduleRows,
+      pins,
+      snapshot: snapshotRows,
+      asOf,
+    }).tasks;
   }
   const scheduleAsOf: ScheduleBasis = basisFor({
     periodEnd: asOf,
@@ -157,6 +204,7 @@ export async function loadEvidence(
     ),
     subOnSiteDate,
     todayIso: asOf,
+    lastUpdate,
   };
 }
 

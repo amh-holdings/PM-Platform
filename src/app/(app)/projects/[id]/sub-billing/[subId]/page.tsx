@@ -366,7 +366,7 @@ export default async function SubBillingDetailPage({
                     )}
                     <tr>
                       <td className="px-3 py-2" colSpan={from ? 5 : 4}>
-                        Projected gross
+                        Earned, not yet billed (all periods)
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(projection.grossTotal)}</td>
                       <td />
@@ -380,7 +380,7 @@ export default async function SubBillingDetailPage({
                     </tr>
                     <tr>
                       <td className="px-3 py-2" colSpan={from ? 5 : 4}>
-                        Expected amount due
+                        Net of retainage, if billed in full
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(projection.netDue)}</td>
                       <td />

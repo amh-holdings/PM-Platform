@@ -85,7 +85,11 @@ const COST: Record<string, CostRule> = {
   "100-1030": { tasks: ["1.2.2.1", "1.2.2.2", "1.2.2.3", "1.2.2.4"], how: "spread" },
   "800-1030": { tasks: DESIGN_TO_IFP, how: "spread" },
   // EPCA - engineering / procurement
-  "100-1040": { tasks: IFP, how: "spread", standIn: "IFP packages until permitting has real tasks" },
+  // Over the open contractor permits (2.2), now that they are tasks.
+  "100-1040": {
+    tasks: ["2.2.1.1", "2.2.1.2", "2.2.1.3", "2.2.1.4", "2.2.2.1", "2.2.2.2", "2.2.3.3", "2.2.3.4", "2.2.4.1", "2.2.4.2"],
+    how: "spread",
+  },
   "200-1030": { tasks: ["3.4.3"], how: "lump_end" },
   // Cable is bought by the electrical sub (Phil, 2026-10-14), so it is sub
   // material at Electrical start on sub terms, not a PO of ours.
@@ -140,9 +144,10 @@ const BILLING: [string, string, string?][] = [
   ["7.04", "4.4"],
   ["8.01", "4.3"],
   ["8.02", "4.3"],
-  ["9.00", "4.4", "end of Electrical until Mechanical Completion is a milestone"],
-  ["10.00", "4.5", "end of Commissioning until COD is a milestone"],
-  ["11.00", "4.5", "end of Commissioning until Substantial Completion is a milestone"],
+  // Completion milestones added 2026-10-14 (add-sussex-completion-milestones).
+  ["9.00", "4.6"],
+  ["10.00", "4.7"],
+  ["11.00", "4.8"],
 ];
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
