@@ -12,7 +12,7 @@ import {
   tasksAsOf,
   type AsOfTask,
 } from "../../src/lib/sub-billing-asof";
-import { staleSources, verifyLine, type BillLine, type Evidence, type SovLine } from "../../src/lib/sub-billing";
+import { recommendedApproval, staleSources, verifyLine, type BillLine, type Evidence, type SovLine } from "../../src/lib/sub-billing";
 
 let passed = 0;
 const failures: string[] = [];
@@ -104,6 +104,38 @@ eq("the note rides on the line's detail when it is billed this period", verifyLi
 eq("no note when nothing is billed this period", verifyLine(road, bill(500, 0), ev).detail.includes("CHECK SOURCE"), false);
 eq("finished tasks are never stale", staleSources(sov({ linked_task_wbs_codes: ["5.1.1.6"] }), ev), null);
 eq("no lastUpdate loaded means no notes at all", staleSources(road, { ...ev, lastUpdate: undefined }), null);
+
+console.log("\nWhat Approve pays when nobody types a figure (Pyramid AFP 3)\n");
+
+// SV, from previous, this period, verified % at 9/25 - straight off the bill and the engine.
+const afp3: [string, number, number, number, number][] = [
+  ["1.03", 20192.01, 10096.0, 5048.0, 1],
+  ["2.02", 60576.03, 18172.8, 12115.21, 0.473],
+  ["2.04", 40384.02, 24230.41, 16153.61, 0.592],
+  ["3.01", 80768.04, 40384.02, 40384.02, 1],
+  ["5.01", 20192.01, 4038.4, 2019.2, 0.741],
+  ["5.02", 13461.34, 10096.0, 3365.33, 1],
+];
+let gross = 0;
+const byItem: Record<string, number> = {};
+for (const [item, sv, prev, cur, vp] of afp3) {
+  // Flag the way verifyLine does, from the verified percent.
+  const verifiedAmount = Math.round(vp * sv * 100) / 100;
+  const variance = prev + cur - verifiedAmount;
+  const overPct = (prev + cur) / sv - vp > 0.05;
+  const flag = overPct && variance > 2500 ? "flag" : overPct || variance > 2500 ? "review" : "ok";
+  const r = recommendedApproval({ this_period: cur, from_previous: prev, verified_amount: verifiedAmount, flag_level: flag });
+  byItem[item] = r.amount;
+  gross += r.amount;
+}
+eq("2.04 billed to 100% against 59.2% is held in full", byItem["2.04"], 0);
+eq("2.02 at 50% vs 47.3% is within tolerance and paid as billed", byItem["2.02"], 12115.21);
+eq("1.03 is paid as billed, not the larger amount the record supports", byItem["1.03"], 5048);
+eq("3.01 road finished 8/25 is paid", byItem["3.01"], 40384.02);
+eq("AFP 3 approves $62,931.76 gross", Math.round(gross * 100) / 100, 62931.76);
+eq("a line with no evidence is paid as billed but marked", recommendedApproval({ this_period: 500, from_previous: 0, verified_amount: null, flag_level: "unverifiable" }), { amount: 500, held: 0, basis: "no_evidence" });
+eq("a credit line passes through untouched", recommendedApproval({ this_period: -200, from_previous: 1000, verified_amount: 0, flag_level: "flag" }).amount, -200);
+eq("partly supported: pays up to the record", recommendedApproval({ this_period: 1000, from_previous: 2000, verified_amount: 2600, flag_level: "flag" }), { amount: 600, held: 400, basis: "capped" });
 
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);

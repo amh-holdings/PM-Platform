@@ -942,6 +942,48 @@ export function projectNextBill(args: {
   };
 }
 
+// --------------------------- approval default ----------------------------
+//
+// What to pay on one line of a bill when nobody has typed a figure.
+//
+// It used to be "the amount as billed", while the screen told the approver
+// it defaulted to the certified amount. On Pyramid's AFP 3 a single click of
+// Approve would have paid 2.04 to 100% against a field record at 59.2%.
+//
+// Within tolerance (flag "ok") the line is paid as billed: a few percent of
+// rounding is not worth a dispute, and the same thresholds already decided
+// the line was fine. Outside it, the line is paid up to what the record
+// supports - never above what the sub billed, because work they have not
+// invoiced is not ours to pay unasked. A line with no evidence is paid as
+// billed but marked, so a person decides it rather than the engine.
+
+export type ApprovalDefault = {
+  amount: number;
+  held: number;
+  basis: "as_billed" | "capped" | "no_evidence";
+};
+
+export function recommendedApproval(line: {
+  this_period: number | null;
+  from_previous: number | null;
+  verified_amount: number | null;
+  flag_level: string | null;
+}): ApprovalDefault {
+  const billed = n(line.this_period);
+  if (billed <= 0) return { amount: billed, held: 0, basis: "as_billed" };
+  if (line.verified_amount == null || line.flag_level === "unverifiable") {
+    return { amount: billed, held: 0, basis: "no_evidence" };
+  }
+  if (line.flag_level === "ok") return { amount: billed, held: 0, basis: "as_billed" };
+  const supportable = Math.max(0, Math.round((n(line.verified_amount) - n(line.from_previous)) * 100) / 100);
+  const amount = Math.min(billed, supportable);
+  return {
+    amount,
+    held: Math.round((billed - amount) * 100) / 100,
+    basis: amount < billed ? "capped" : "as_billed",
+  };
+}
+
 // -------------------------------- rollups --------------------------------
 
 export function summarizeChecks(checks: BillCheck[]) {

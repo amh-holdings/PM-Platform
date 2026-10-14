@@ -26,6 +26,8 @@ type Line = {
   flagLabel: string | null;
   flagTone: string;
   approved_this_period: number | null;
+  /** What Approve records for this line if nobody types a figure. */
+  recommended: number;
   cm_note: string | null;
 };
 
@@ -186,9 +188,7 @@ export function ReviewForm({
                         {isActive ? (
                           <input
                             name={`approved__${l.item_number}`}
-                            defaultValue={
-                              l.approved_this_period != null ? l.approved_this_period.toFixed(2) : ""
-                            }
+                            defaultValue={(l.approved_this_period ?? l.recommended).toFixed(2)}
                             placeholder={l.this_period.toFixed(2)}
                             inputMode="decimal"
                             className="w-28 rounded-md border bg-background px-2 py-1 text-right text-sm"
@@ -207,7 +207,8 @@ export function ReviewForm({
         <p className="text-xs text-muted-foreground">
           Certify % is what the field record actually supports for the line as a
           whole, cumulative. Leaving it blank keeps the engine&apos;s figure.
-          {showDollars && " Approve $ defaults to the certified amount less prior billings."}
+          {showDollars &&
+            " Approve $ starts at the recommended figure: as billed when the line is within tolerance, otherwise what the field record supports less prior billings."}
         </p>
       </section>
 

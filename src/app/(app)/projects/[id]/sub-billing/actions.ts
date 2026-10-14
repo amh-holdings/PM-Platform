@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { subBillingClient } from "@/lib/sub-billing-db";
 import { requireCapability } from "@/lib/sub-billing-auth";
 import { runVerificationCore } from "@/lib/sub-billing-run";
-import { approvedToDateByItem, type BillHeader, type BillLine, type SovLine } from "@/lib/sub-billing";
+import { approvedToDateByItem, recommendedApproval, type BillHeader, type BillLine, type SovLine } from "@/lib/sub-billing";
 import { parsePastedSovLines } from "@/lib/sub-sov-import";
 import { parseRetainageRate } from "@/lib/retainage-rate";
 import type { SubBillingClient, SubPayAppStatus } from "@/lib/sub-billing.types";
@@ -319,7 +319,7 @@ export async function recommendBill(
 
   const { data: lines } = await db
     .from("sub_pay_app_lines")
-    .select("id, item_number, scheduled_value, from_previous")
+    .select("id, item_number, scheduled_value, from_previous, this_period")
     .eq("sub_pay_app_id", appId);
 
   for (const line of lines ?? []) {
@@ -333,8 +333,13 @@ export async function recommendBill(
     const sv = Number(line.scheduled_value ?? 0);
     const verifiedAmount = round2(pct * sv);
     // What the CM certifies as earned this period, net of what was already
-    // billed in prior applications.
-    const approvedThisPeriod = Math.max(0, round2(verifiedAmount - Number(line.from_previous ?? 0)));
+    // billed in prior applications - capped at what the sub billed. Work done
+    // but not invoiced is not paid unasked (1.03 on Pyramid's AFP 3 would
+    // otherwise have approved $10,096 against a $5,048 line).
+    const approvedThisPeriod = Math.min(
+      Math.max(0, Number(line.this_period ?? 0)),
+      Math.max(0, round2(verifiedAmount - Number(line.from_previous ?? 0))),
+    );
     await db
       .from("sub_pay_app_lines")
       .update({
@@ -402,16 +407,25 @@ export async function decideBill(
 
   const { data: lines } = await db
     .from("sub_pay_app_lines")
-    .select("id, item_number, this_period, approved_this_period")
+    .select("id, item_number, this_period, approved_this_period, from_previous, verified_amount, flag_level")
     .eq("sub_pay_app_id", appId);
 
   // Any line Phil overrode on the approval form wins; otherwise take the CM's
-  // approved figure; otherwise, absent any decision, the amount as billed.
+  // approved figure; otherwise the engine's default (recommendedApproval),
+  // which holds back whatever outruns the field record.
   let approvedTotal = 0;
   for (const line of lines ?? []) {
     const override = optNum(formData.get(`approved__${line.item_number}`));
     const amount =
-      override ?? (line.approved_this_period != null ? Number(line.approved_this_period) : Number(line.this_period ?? 0));
+      override ??
+      (line.approved_this_period != null
+        ? Number(line.approved_this_period)
+        : recommendedApproval({
+            this_period: line.this_period,
+            from_previous: line.from_previous,
+            verified_amount: line.verified_amount,
+            flag_level: line.flag_level,
+          }).amount);
     approvedTotal += amount;
     if (override != null) {
       await db.from("sub_pay_app_lines").update({ approved_this_period: override }).eq("id", line.id);

@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { can } from "@/lib/roles";
 import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
-import { summarizeChecks } from "@/lib/sub-billing";
+import { recommendedApproval, summarizeChecks } from "@/lib/sub-billing";
 import { subBillingClient } from "@/lib/sub-billing-db";
 import { cn } from "@/lib/utils";
 
@@ -44,6 +44,28 @@ export default async function SubBillPage({ params }: { params: Params }) {
   const unverifiable = billedLines.filter((l) => l.flag_level === "unverifiable");
 
   const decided = app.status === "approved" || app.status === "rejected" || app.status === "paid";
+
+  // What to pay, line by line: a figure someone already set (CM or approver)
+  // wins, otherwise the engine's default. Summed here so the decision reads as
+  // one number - billed, held, retainage, net - instead of a table to add up.
+  const payLines = billedLines.map((l) => {
+    const def = recommendedApproval({
+      this_period: Number(l.this_period ?? 0),
+      from_previous: Number(l.from_previous ?? 0),
+      verified_amount: l.verified_amount != null ? Number(l.verified_amount) : null,
+      flag_level: l.flag_level,
+    });
+    const billed = Number(l.this_period ?? 0);
+    const amount = l.approved_this_period != null ? Number(l.approved_this_period) : def.amount;
+    return { l, billed, amount, held: Math.round((billed - amount) * 100) / 100, basis: def.basis };
+  });
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  const billedGross = round2(payLines.reduce((s, p) => s + p.billed, 0));
+  const payGross = round2(payLines.reduce((s, p) => s + p.amount, 0));
+  const retRate = Number(app.retainage_pct ?? sub?.retainage_pct ?? 0) / 100;
+  const payRetainage = round2(payGross * retRate);
+  const heldLines = payLines.filter((p) => p.held > 0.004);
+  const noEvidence = payLines.filter((p) => p.basis === "no_evidence");
 
   return (
     <div className="space-y-6">
@@ -107,6 +129,67 @@ export default async function SubBillPage({ params }: { params: Params }) {
           {unverifiable.length > 0 && ` · ${unverifiable.length} billed line${unverifiable.length === 1 ? "" : "s"} have no evidence source`}
         </div>
       </div>
+
+      {/* ---------------------------- What to pay ---------------------------- */}
+      {showDollars && billedLines.length > 0 && (
+        <section className="space-y-2 rounded-md border bg-card p-4">
+          <h3 className="text-sm font-semibold">
+            {decided ? "What was approved" : "What to pay"}
+          </h3>
+          <table className="w-full max-w-md text-sm">
+            <tbody>
+              <tr>
+                <td className="py-0.5 text-muted-foreground">Billed this period</td>
+                <td className="py-0.5 text-right tabular-nums">{formatCurrency(billedGross)}</td>
+              </tr>
+              {heldLines.length > 0 && (
+                <tr className="text-red-700">
+                  <td className="py-0.5">Held - ahead of the field record</td>
+                  <td className="py-0.5 text-right tabular-nums">
+                    ({formatCurrency(round2(billedGross - payGross))})
+                  </td>
+                </tr>
+              )}
+              <tr className="font-medium">
+                <td className="py-0.5">Approve (gross)</td>
+                <td className="py-0.5 text-right tabular-nums">{formatCurrency(payGross)}</td>
+              </tr>
+              <tr>
+                <td className="py-0.5 text-muted-foreground">Less {Math.round(retRate * 1000) / 10}% retainage</td>
+                <td className="py-0.5 text-right tabular-nums">({formatCurrency(payRetainage)})</td>
+              </tr>
+              <tr className="border-t text-base font-semibold">
+                <td className="py-1">AHC pays</td>
+                <td className="py-1 text-right tabular-nums">{formatCurrency(round2(payGross - payRetainage))}</td>
+              </tr>
+            </tbody>
+          </table>
+          {heldLines.length > 0 && (
+            <ul className="space-y-0.5 text-xs text-muted-foreground">
+              {heldLines.map((p) => (
+                <li key={p.l.id}>
+                  <span className="font-medium text-foreground">{p.l.item_number}</span> {p.l.description}:
+                  holding {formatCurrency(p.held)}. Billed to{" "}
+                  {p.l.pct_billed != null ? `${(Number(p.l.pct_billed) * 100).toFixed(1)}%` : "?"}, field record supports{" "}
+                  {p.l.verified_pct != null ? `${(Number(p.l.verified_pct) * 100).toFixed(1)}%` : "?"}.
+                </li>
+              ))}
+            </ul>
+          )}
+          {noEvidence.length > 0 && (
+            <p className="text-xs text-amber-800">
+              Paid as billed with no field evidence to check against:{" "}
+              {noEvidence.map((p) => p.l.item_number).join(", ")}. Certify a % below if any of these should be held.
+            </p>
+          )}
+          {!decided && (
+            <p className="text-xs text-muted-foreground">
+              Lines within tolerance are paid as billed. Change any line in the Approve $ column below to
+              pay a different amount; this box is what Approve for payment will record if you change nothing.
+            </p>
+          )}
+        </section>
+      )}
 
       {/* ------------------------------ Checks ------------------------------- */}
       <section className="space-y-2">
@@ -191,6 +274,12 @@ export default async function SubBillPage({ params }: { params: Params }) {
           flagLabel: l.flag_level ? FLAG_LABEL[l.flag_level] ?? l.flag_level : null,
           flagTone: l.flag_level ? FLAG_TONE[l.flag_level] ?? "" : "",
           approved_this_period: l.approved_this_period != null ? Number(l.approved_this_period) : null,
+          recommended: recommendedApproval({
+            this_period: Number(l.this_period ?? 0),
+            from_previous: Number(l.from_previous ?? 0),
+            verified_amount: l.verified_amount != null ? Number(l.verified_amount) : null,
+            flag_level: l.flag_level,
+          }).amount,
           cm_note: l.cm_note,
         }))}
       />
