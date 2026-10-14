@@ -118,7 +118,7 @@ import {
   describeForecastOverwrite,
 } from "@/lib/schedule-sync";
 import { InsertRowMenu } from "./insert-row-menu";
-import { TaskRecordsDialog } from "./task-records-dialog";
+import { TaskRecordsDialog, type RecordsTab } from "./task-records-dialog";
 import {
   describeRecordCounts,
   hasRecords,
@@ -433,6 +433,24 @@ export function ScheduleSplitView({
 
   // Which row's records popup is open, by task id. Null is closed.
   const [recordsFor, setRecordsFor] = useState<string | null>(null);
+
+  // The tab the popup should land on, when something more specific than the
+  // default asked for it. The paperclip on a row opens Documents, because the
+  // paperclip is what was clicked - landing on Evidence and making somebody
+  // find the tab defeats the point of putting the clip on the line.
+  //
+  // Cleared when arrowing to the next task, which is the dialog's own rule: an
+  // opening tab chosen for one row is not a choice about the next one.
+  const [recordsTab, setRecordsTab] = useState<RecordsTab | null>(null);
+
+  const openRecords = useCallback((taskId: string, tab: RecordsTab | null = null) => {
+    setRecordsFor(taskId);
+    setRecordsTab(tab);
+  }, []);
+  const closeRecords = useCallback(() => {
+    setRecordsFor(null);
+    setRecordsTab(null);
+  }, []);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
@@ -2207,18 +2225,19 @@ export function ScheduleSplitView({
           dataDate={dataDate}
           task={recordsPopup.task}
           position={{ index: recordsPopup.index, total: rows.length }}
-          onClose={() => setRecordsFor(null)}
+          onClose={closeRecords}
           onPrev={
             recordsPopup.index > 0
-              ? () => setRecordsFor(rows[recordsPopup.index - 1].id)
+              ? () => openRecords(rows[recordsPopup.index - 1].id)
               : null
           }
           onNext={
             recordsPopup.index < rows.length - 1
-              ? () => setRecordsFor(rows[recordsPopup.index + 1].id)
+              ? () => openRecords(rows[recordsPopup.index + 1].id)
               : null
           }
           hasAnyRecords={hasRecords(recordCounts?.get(recordsPopup.row.id))}
+          openTab={recordsTab ?? undefined}
           details={
             <TaskEditForm
               projectId={projectId}
@@ -2234,7 +2253,7 @@ export function ScheduleSplitView({
               onDone={() => onDialogSaved(recordsPopup.row.id)}
               // Saving or deleting closes the whole popup: the row it was
               // describing has either moved or gone.
-              onClose={() => setRecordsFor(null)}
+              onClose={closeRecords}
             />
           }
         />
@@ -2363,7 +2382,7 @@ export function ScheduleSplitView({
                     rowIndex={rowIndex}
                     predAsRows={predAsRows}
                     counts={recordCounts?.get(t.id)}
-                    onOpenRecords={() => setRecordsFor(t.id)}
+                    onOpenRecords={(tab) => openRecords(t.id, tab ?? null)}
                     projectId={projectId}
                     phaseOptions={phaseOptions}
                     allTasks={allTasks}
@@ -2640,8 +2659,8 @@ type GridRowProps = {
   predAsRows: boolean;
   /** Photo and document counts, or undefined for a row with neither. */
   counts: TaskRecordCounts | undefined;
-  /** Opens the records popup on this row. */
-  onOpenRecords: () => void;
+  /** Opens the records popup on this row, optionally on a named tab. */
+  onOpenRecords: (tab?: RecordsTab) => void;
 };
 
 function GridRow({
@@ -2720,7 +2739,7 @@ function GridRow({
             to click the row number or the Records badge. Hover-revealed, in the
             gutter where the eye already is. */}
         <button
-          onClick={onOpenRecords}
+          onClick={() => onOpenRecords()}
           className="shrink-0 text-[10px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 focus:opacity-100"
           title="Open this task's records"
         >
@@ -2779,7 +2798,7 @@ function GridRow({
               // inline editing and the drag handle.
               return (
                 <button
-                  onClick={onOpenRecords}
+                  onClick={() => onOpenRecords()}
                   className="block w-full truncate text-right text-[11px] tabular-nums text-muted-foreground hover:font-medium hover:text-foreground"
                   title={`Row ${rowIndex.byWbs.get(t.wbs_code) ?? "-"} - ${t.wbs_code}. Click to open this task's records.`}
                 >
@@ -2790,7 +2809,7 @@ function GridRow({
             case "records":
               return (
                 <button
-                  onClick={onOpenRecords}
+                  onClick={() => onOpenRecords("documents")}
                   className={cn(
                     "flex w-full items-center justify-end gap-1 text-[10px] tabular-nums",
                     hasRecords(counts)
@@ -2861,6 +2880,29 @@ function GridRow({
                     onKeyDown={(e) => onCellKeyDown(e, r, ci, t, "task_name")}
                     ref={(el) => setCellRef(`${r}:${ci}`, el)}
                   />
+                  {/* The clip sits on the line, beside the name, because the
+                      Records column it used to be the only sign of is the
+                      fourteenth column of a grid 1116px wide and off the right
+                      edge of every screen the schedule is read on. Zarina: "I
+                      need like an attachment logo appears if there are files
+                      attached to the line."
+
+                      Documents only. Photographs reach a task through an
+                      approved inspection or a field report, which nobody
+                      attached and nobody would look for under a paperclip. */}
+                  {!!counts?.documents && (
+                    <button
+                      onClick={() => onOpenRecords("documents")}
+                      className="shrink-0 text-[11px] leading-none text-muted-foreground hover:text-foreground"
+                      title={`${counts.documents} ${counts.documents === 1 ? "file" : "files"} attached. Click to open them.`}
+                      aria-label={`${counts.documents} attached ${counts.documents === 1 ? "file" : "files"}`}
+                    >
+                      &#128206;
+                      {counts.documents > 1 && (
+                        <span className="ml-0.5 text-[9px] tabular-nums">{counts.documents}</span>
+                      )}
+                    </button>
+                  )}
                   <RowBadges t={t} c={c} constraint={constraint} collapsed={collapsed} />
                 </div>
               );

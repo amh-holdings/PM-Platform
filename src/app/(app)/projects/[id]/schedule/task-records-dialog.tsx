@@ -35,6 +35,7 @@ import {
   type TaskPhoto,
   type TaskRecords,
 } from "@/lib/schedule-task-records";
+import { DocumentUploader } from "../document-uploader";
 import {
   attachDocumentToTask,
   detachDocumentFromTask,
@@ -43,7 +44,19 @@ import {
   type AttachableDocument,
 } from "../schedule-task-records-actions";
 
-type TabKey = "details" | "evidence" | "photos" | "reports" | "logic" | "documents";
+/**
+ * The popup's tabs, exported so the grid can say which one to open on. A
+ * paperclip on a row has to land on Documents.
+ */
+export type RecordsTab =
+  | "details"
+  | "evidence"
+  | "photos"
+  | "reports"
+  | "logic"
+  | "documents";
+
+type TabKey = RecordsTab;
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "details", label: "Details" },
@@ -104,6 +117,12 @@ type Props = {
    * 152 Sweet Springs rows that have no photographs yet.
    */
   hasAnyRecords?: boolean;
+  /**
+   * Land on this tab instead of the one `hasAnyRecords` would pick. Set when
+   * the thing that was clicked names a tab - the row's paperclip opens
+   * Documents - and left unset for every other way in.
+   */
+  openTab?: RecordsTab;
 };
 
 export function TaskRecordsDialog({
@@ -116,8 +135,9 @@ export function TaskRecordsDialog({
   onNext,
   details,
   hasAnyRecords = false,
+  openTab,
 }: Props) {
-  const openingTab: TabKey = hasAnyRecords ? "evidence" : "details";
+  const openingTab: TabKey = openTab ?? (hasAnyRecords ? "evidence" : "details");
   const [tab, setTab] = useState<TabKey>(openingTab);
   const [records, setRecords] = useState<TaskRecords | null>(null);
   const [loading, setLoading] = useState(true);
@@ -408,6 +428,7 @@ export function TaskRecordsDialog({
                 <DocumentsPane
                   projectId={projectId}
                   taskId={task.id}
+                  taskLabel={`${task.wbs_code} ${task.task_name}`}
                   records={records}
                   onChanged={load}
                 />
@@ -695,11 +716,14 @@ function LogicPane({ records }: { records: TaskRecords }) {
 function DocumentsPane({
   projectId,
   taskId,
+  taskLabel,
   records,
   onChanged,
 }: {
   projectId: string;
   taskId: string;
+  /** "4.4.2.2 CAB Hangers Delivery" - on every control that writes here. */
+  taskLabel: string;
   records: TaskRecords;
   onChanged: () => Promise<void> | void;
 }) {
@@ -710,6 +734,7 @@ function DocumentsPane({
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   if (!records.notes.documentsEnabled) {
     return (
@@ -770,12 +795,31 @@ function DocumentsPane({
       : true,
   );
 
+  // Upload, then link, as one move. The uploader reports the new document's
+  // id; attaching it is this pane's job, and a failure here has to say that
+  // the file DID land in the library - "Failed" on a file that uploaded fine
+  // would send somebody looking for it twice.
+  async function uploadedAndAttach(documentId: string) {
+    const res = await attachDocumentToTask(projectId, taskId, documentId);
+    if (!res.ok) return res;
+    await onChanged();
+    startTransition(() => router.refresh());
+    return res;
+  }
+
   return (
     <Card>
       <CardHead
         title="Documents on this task"
         meta={`${records.documents.length} attached`}
       />
+
+      {/* The line being written to, spelled out. The popup header says it too,
+          four inches up and above two rows of tags. Zarina: "when trying to
+          upload, add title to what line it is as I forget sometimes." */}
+      <p className="border-b bg-muted/20 px-3 py-1.5 text-[11px] text-muted-foreground">
+        Attaching to <span className="font-mono text-foreground">{taskLabel}</span>
+      </p>
 
       {records.documents.length ? (
         records.documents.map((d) => (
@@ -811,16 +855,38 @@ function DocumentsPane({
       )}
 
       <div className="border-t p-3">
-        {!picking ? (
+        {uploading ? (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] text-muted-foreground">
+                Uploading to{" "}
+                <span className="font-mono text-foreground">{taskLabel}</span>. The
+                file joins the project library and attaches to this line.
+              </p>
+              <Button variant="ghost" size="sm" onClick={() => setUploading(false)}>
+                Done
+              </Button>
+            </div>
+            <DocumentUploader
+              projectId={projectId}
+              defaultCategory="other"
+              compact
+              onUploaded={uploadedAndAttach}
+            />
+          </div>
+        ) : !picking ? (
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => void openPicker()}>
               Attach from library
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setUploading(true)}>
+              Upload a new file
             </Button>
             <Link
               href={`/projects/${projectId}/documents`}
               className="text-[11px] text-muted-foreground underline hover:text-foreground"
             >
-              Upload a new document
+              Open the document library
             </Link>
           </div>
         ) : (
@@ -830,7 +896,7 @@ function DocumentsPane({
                 autoFocus
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Filter by file name"
+                placeholder={`Filter by file name - attaching to ${taskLabel}`}
                 className="h-8 text-xs"
               />
               <Button
