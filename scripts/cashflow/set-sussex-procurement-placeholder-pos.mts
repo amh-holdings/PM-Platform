@@ -9,8 +9,14 @@
 // pointed at it. A linked PO makes the code commitment-covered, so the
 // cost_forecasts rows stop counting and nothing is doubled.
 //
+// Racking terms are the contract's (Phil, 2026-10-14): signed at row 27,
+// 0.2.2.5 Structural Subcontract Executed - the same task Exhibit E 5.04 bills
+// on - with 25% deposit Net 5 from signing, and 75% (70% + the last 5%) on
+// delivery Net 30. Other codes would take the general terms below.
+//
 // The delivery half moves with the schedule on its own. The PO date does NOT:
-// it is ordered_date, written here as delivery minus LEAD_WEEKS. Re-run this
+// it is ordered_date, written here as the signing task's date (or delivery
+// minus LEAD_WEEKS where no signing task is given). Re-run this
 // after a schedule revision moves a delivery, and replace each placeholder
 // with the real PO once it is placed (delete the placeholder, link the real
 // one to the cost code).
@@ -26,11 +32,11 @@ import { createClient } from "@supabase/supabase-js";
 
 const APPLY = process.argv.includes("--apply");
 const PID = "39154377-bd1a-48ea-acdc-5d9b568863c9";
-const DEPOSIT_PCT = 30;
+const DEFAULT_DEPOSIT_PCT = 30;
 const DELIVERY_NET_DAYS = 30;
 // Phil, 2026-10-14: "30% deposit and the rest upon delivery all net 30" - the
 // deposit is Net 30 from the PO too, not paid on signing.
-const DEPOSIT_NET_DAYS = 30;
+const DEFAULT_DEPOSIT_NET_DAYS = 30;
 // Assumed lead time from PO to delivery. Phil has not set one.
 const LEAD_WEEKS = 16;
 
@@ -50,8 +56,9 @@ const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_
 // 200-1050 cable had a placeholder too until 2026-10-14, when Phil said the
 // electrical sub buys it - RETIRED below removes it and unlinks the code so
 // its cost counts as sub material again.
-const PLACEHOLDERS = [
-  { code: "200-1030", what: "Racking, Mounting & Trackers", delivery: "3.4.3" },
+type Placeholder = { code: string; what: string; delivery: string; signedOn?: string; depositPct?: number; depositNetDays?: number };
+const PLACEHOLDERS: Placeholder[] = [
+  { code: "200-1030", what: "Racking, Mounting & Trackers", delivery: "3.4.3", signedOn: "0.2.2.5", depositPct: 25, depositNetDays: 5 },
 ];
 const RETIRED = ["200-1050"];
 
@@ -72,7 +79,15 @@ for (const p of PLACEHOLDERS) {
 
   // The engine dates a delivery milestone off the task finish.
   const deliveryDate = task.end_date;
-  const ordered = addDays(deliveryDate, -LEAD_WEEKS * 7);
+  let ordered = addDays(deliveryDate, -LEAD_WEEKS * 7);
+  if (p.signedOn) {
+    const { data: sign } = await sb
+      .from("schedule_tasks").select("end_date").eq("project_id", PID).eq("wbs_code", p.signedOn).single();
+    if (!sign?.end_date) throw new Error(`no signing task ${p.signedOn}`);
+    ordered = sign.end_date;
+  }
+  const DEPOSIT_PCT = p.depositPct ?? DEFAULT_DEPOSIT_PCT;
+  const DEPOSIT_NET_DAYS = p.depositNetDays ?? DEFAULT_DEPOSIT_NET_DAYS;
   const total = Number(code.estimated_cost ?? 0);
   if (!(total > 0)) throw new Error(`${p.code} has no budget`);
   const deposit = Math.round(total * DEPOSIT_PCT) / 100;
@@ -94,10 +109,10 @@ for (const p of PLACEHOLDERS) {
     total_value: total,
     ordered_date: ordered,
     status: "active",
-    payment_terms_summary: `${DEPOSIT_PCT}% deposit Net ${DEPOSIT_NET_DAYS} from PO, ${100 - DEPOSIT_PCT}% Net ${DELIVERY_NET_DAYS} after delivery`,
+    payment_terms_summary: `${DEPOSIT_PCT}% deposit Net ${DEPOSIT_NET_DAYS} from signing, ${100 - DEPOSIT_PCT}% Net ${DELIVERY_NET_DAYS} after delivery`,
     net_terms_days: DELIVERY_NET_DAYS,
     linked_delivery_task_wbs_code: p.delivery,
-    notes: `Placeholder written by scripts/cashflow/set-sussex-procurement-placeholder-pos.mts. PO date assumes ${LEAD_WEEKS} weeks lead time.`,
+    notes: `Placeholder written by scripts/cashflow/set-sussex-procurement-placeholder-pos.mts. ${p.signedOn ? `PO date = ${p.signedOn} (contract signing).` : `PO date assumes ${LEAD_WEEKS} weeks lead time.`}`,
   };
   const { data: existing } = await sb
     .from("procurement_orders").select("id").eq("project_id", PID).eq("po_number", poNumber).maybeSingle();
