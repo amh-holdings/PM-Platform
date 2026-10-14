@@ -120,7 +120,9 @@ const COST: Record<string, CostRule> = {
 const BILLING: [string, string, string?][] = [
   ["2.00", "0.1.3.3"],
   ["3.00", "LAST_IFC"],
-  ["4.00", "4.1", "Mobilization until permit receipt is a task"],
+  // Contractor permits branch (Phil, 2026-10-14); earns when the last one,
+  // 2.2.6 All Permits Received, finishes.
+  ["4.00", "2.2"],
   ["5.02", "3.3"],
   ["5.04", "0.2.2.5"],
   ["5.05", "3.2"],
