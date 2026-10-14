@@ -734,7 +734,6 @@ function DocumentsPane({
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
 
   if (!records.notes.documentsEnabled) {
     return (
@@ -854,33 +853,25 @@ function DocumentsPane({
         <p className="border-t bg-destructive/10 px-3 py-2 text-[11px] text-destructive">{err}</p>
       )}
 
+      {/* The drop zone is open, not behind an Upload button. Dropping a file
+          here uploads it, files it on the Documents page, and attaches it to
+          this line, in one move. Zarina: "should be direct drop of documents
+          and then once uploaded it will be automatically recorded in the
+          Documents Page". */}
       <div className="border-t p-3">
-        {uploading ? (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[11px] text-muted-foreground">
-                Uploading to{" "}
-                <span className="font-mono text-foreground">{taskLabel}</span>. The
-                file joins the project library and attaches to this line.
-              </p>
-              <Button variant="ghost" size="sm" onClick={() => setUploading(false)}>
-                Done
-              </Button>
-            </div>
-            <DocumentUploader
-              projectId={projectId}
-              defaultCategory="other"
-              compact
-              onUploaded={uploadedAndAttach}
-            />
-          </div>
-        ) : !picking ? (
+        <DocumentUploader
+          projectId={projectId}
+          defaultCategory="other"
+          compact
+          onUploaded={uploadedAndAttach}
+        />
+      </div>
+
+      <div className="border-t p-3">
+        {!picking ? (
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => void openPicker()}>
-              Attach from library
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setUploading(true)}>
-              Upload a new file
+              Attach a file already in the library
             </Button>
             <Link
               href={`/projects/${projectId}/documents`}
