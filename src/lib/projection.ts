@@ -55,6 +55,7 @@ import {
   type PoForecastLine,
 } from "@/lib/po-payment-forecast";
 import { hasBillingEvidence } from "@/lib/billing-progress";
+import { isProgressBilled, spreadByTaskDays, type SpreadTask } from "@/lib/progress-billing-spread";
 import { effectiveLineProgress, type AmendmentRow } from "@/lib/sov-amendments";
 import {
   aggregateConfidence,
@@ -180,6 +181,20 @@ function isCommitmentCovered(
   code: { procurement_order_id?: string | null; commitment_covered?: boolean | null } | null,
 ): boolean {
   return !!code?.procurement_order_id || code?.commitment_covered === true;
+}
+
+/**
+ * Retainage withheld on a cost code's cash-out, as a fraction.
+ *
+ * The linked sub's rate when there is one; otherwise the code's placeholder
+ * (0077), which is how Sussex's construction codes carry the 10% Phil will
+ * require of every sub before any is signed. Withheld and released must read
+ * the same rate, or held money is never paid back, so both loops call this.
+ */
+function codeRetainagePct(
+  code: { retainage_pct?: number | null; subcontractors: { retainage_pct: number | null } | null } | null,
+): number {
+  return Number(code?.subcontractors?.retainage_pct ?? code?.retainage_pct ?? 0) / 100;
 }
 
 type Options = { monthsAhead?: number; today?: Date };
@@ -509,7 +524,7 @@ export async function buildProjection(
   // Only the unbilled remainder is forecast, so a line half billed in real
   // entries contributes its other half here and nothing is counted twice.
   const schedTasks = (tasksRes.data ?? []) as {
-    wbs_code: string; task_name: string; end_date: string | null;
+    wbs_code: string; task_name: string; start_date: string | null; end_date: string | null;
   }[];
 
   /** The month an SOV line's milestone is planned to finish. */
@@ -607,18 +622,35 @@ export async function buildProjection(
       continue;
     }
 
-    const lineMonth = notPast(at.month);
-    const accrual = get(lineMonth);
-    accrual.revenueRecognized += remaining;
-    accrual.revenueForecast += remaining;
-    accrual.confidenceSignals.push("low"); // estimated from the schedule
+    // A percent-complete line (0076) bills as its work is done, spread over
+    // the days of its tasks. A milestone line, and any line whose tasks have
+    // no start date, bills the lot on the planned finish.
+    const spread = isProgressBilled(line as { billing_method?: string | null })
+      ? spreadByTaskDays(
+          remaining,
+          ((line.linked_task_wbs_codes ?? []) as string[])
+            .map((c) => schedTasks.find((t) => t.wbs_code === c))
+            .filter((t): t is (typeof schedTasks)[number] => !!t) as SpreadTask[],
+        )
+      : [];
+    const parts: [string, number][] = spread.length ? spread : [[at.month, remaining]];
 
-    const retainage = remaining * ownerRetPct;
-    accrual.retainageForecast += retainage;
-    forecastRetainage += retainage;
-    const cashMonth =
-      ownerTermsDays > 0 ? shiftByDaysToMonth(lineMonth, ownerTermsDays) : lineMonth;
-    get(cashMonth).cashIn += remaining - retainage;
+    // Sussex's LNTP lines carry no retainage (Exhibit E Note 3, migration 0071).
+    const retPct = (line as { retainage_exempt?: boolean | null }).retainage_exempt ? 0 : ownerRetPct;
+    for (const [month, amount] of parts) {
+      const lineMonth = notPast(month);
+      const accrual = get(lineMonth);
+      accrual.revenueRecognized += amount;
+      accrual.revenueForecast += amount;
+      accrual.confidenceSignals.push("low"); // estimated from the schedule
+
+      const retainage = amount * retPct;
+      accrual.retainageForecast += retainage;
+      forecastRetainage += retainage;
+      const cashMonth =
+        ownerTermsDays > 0 ? shiftByDaysToMonth(lineMonth, ownerTermsDays) : lineMonth;
+      get(cashMonth).cashIn += amount - retainage;
+    }
   }
 
   // ---- CHANGE ORDERS NOT APPROVED YET ----
@@ -767,6 +799,8 @@ export async function buildProjection(
       subcontractor_id: string | null;
       procurement_order_id: string | null;
       commitment_covered?: boolean | null;
+      payment_terms_days?: number | null;
+      retainage_pct?: number | null;
       subcontractors: { payment_terms_days: number | null; retainage_pct: number | null } | null;
     } | null;
     if (isCommitmentCovered(code)) continue;
@@ -774,8 +808,12 @@ export async function buildProjection(
     if (gross <= 0) continue;
     const isActual = Number(f.actual_amount ?? 0) > 0;
     const fMonth = isActual ? f.period_month : notPast(f.period_month);
-    const subDays = Number(code?.subcontractors?.payment_terms_days ?? 0);
-    const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
+    // The sub's terms when one is linked; the code's own placeholder terms
+    // (0072) for scope not bought out yet - Sussex construction at Net 30.
+    const subDays = Number(
+      code?.subcontractors?.payment_terms_days ?? code?.payment_terms_days ?? 0,
+    );
+    const retPct = codeRetainagePct(code);
     const cashMonth = subDays > 0 ? shiftByDaysToMonth(fMonth, subDays) : fMonth;
     const netCash = gross * (1 - retPct);
 
@@ -940,13 +978,14 @@ export async function buildProjection(
     const code = f.cost_codes as unknown as {
       procurement_order_id: string | null;
       commitment_covered?: boolean | null;
+      retainage_pct?: number | null;
       subcontractors: { retainage_pct: number | null } | null;
     } | null;
     // Same exclusion as the cost loop above, and it has to be: retainage held
     // on a code whose cost is not in the forecast is retainage on nothing, and
     // it would be released into cash in the final month out of thin air.
     if (isCommitmentCovered(code)) continue;
-    const retPct = Number(code?.subcontractors?.retainage_pct ?? 0) / 100;
+    const retPct = codeRetainagePct(code);
     const gross = effectiveAmount(f.actual_amount, f.planned_amount);
     totalSubRetainage += gross * retPct;
   }

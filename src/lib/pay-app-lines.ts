@@ -33,6 +33,8 @@ export type PayAppBillingLine = {
   sort_order: number | null;
   /** Set on a line a change order brought in. Null on a contract line. */
   change_order_id?: string | null;
+  /** The contract holds no retainage on this line (0071). */
+  retainage_exempt?: boolean | null;
 };
 
 export type PayAppEntry = {
@@ -246,7 +248,9 @@ export function buildPayAppLines(
       total_completed_and_stored: completed,
       pct_complete: Math.round(pct * 100) / 100,
       balance_to_finish: round2(scope - completed),
-      retainage_amount: round2(b.thisPeriodAmount * (retainagePct / 100)),
+      retainage_amount: l.retainage_exempt
+        ? 0
+        : round2(b.thisPeriodAmount * (retainagePct / 100)),
       sort_order: l.sort_order ?? i,
     });
   }

@@ -3,6 +3,8 @@ import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
 import { PageShell } from "@/components/nav/page-shell";
+import { can } from "@/lib/roles";
+import { getEffectiveRole } from "@/lib/roles-server";
 
 export default async function HomePage() {
   const supabase = createClient();
@@ -13,6 +15,10 @@ export default async function HomePage() {
   if (!user) {
     redirect("/login");
   }
+
+  // Business development users have no project side; their home is BD.
+  const { effective } = await getEffectiveRole();
+  if (!can(effective, "viewProjects")) redirect("/bd");
 
   const { count } = await supabase
     .from("projects")

@@ -119,10 +119,12 @@ export async function createPayApplication(
   }
 
   // Pull every billing_line for the project + its entries, and the change
-  // order allocations that say what each line's scope really is.
+  // order allocations that say what each line's scope really is. "*" so
+  // retainage_exempt (0071, applied by hand) rides along when it exists and a
+  // database without it still issues applications.
   const { data: lines, error: linesErr } = await auth.supabase
     .from("billing_lines")
-    .select("id, item_number, description, scheduled_value, sort_order, change_order_id")
+    .select("*")
     .eq("project_id", input.projectId)
     .order("sort_order", { ascending: true, nullsFirst: false })
     .order("item_number", { ascending: true });

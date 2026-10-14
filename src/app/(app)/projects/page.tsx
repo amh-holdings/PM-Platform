@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { can } from "@/lib/roles";
-import { getEffectiveRole } from "@/lib/roles-server";
+import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
 import { PageShell } from "@/components/nav/page-shell";
 
 export const metadata = {
@@ -12,6 +12,7 @@ export const metadata = {
 };
 
 export default async function ProjectsPage() {
+  await guardCapability("viewProjects");
   const supabase = createClient();
   const { effective } = await getEffectiveRole();
   const showContract = can(effective, "viewContractValue");

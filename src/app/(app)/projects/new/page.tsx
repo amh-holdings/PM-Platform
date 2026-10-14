@@ -3,12 +3,14 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ProjectForm } from "./project-form";
 import { PageShell } from "@/components/nav/page-shell";
+import { guardCapability } from "@/lib/roles-server";
 
 export const metadata = {
   title: "New project - AHC PM Platform",
 };
 
-export default function NewProjectPage() {
+export default async function NewProjectPage() {
+  await guardCapability("viewProjects");
   return (
     <PageShell>
       <div className="space-y-6">

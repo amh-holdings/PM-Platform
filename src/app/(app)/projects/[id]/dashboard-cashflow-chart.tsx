@@ -97,9 +97,21 @@ export function DashboardCashflowChart({ data }: { data: CashflowDatum[] }) {
             }}
             formatter={(value, name) => {
               const num = typeof value === "number" ? value : Number(value);
+              const label = SERIES_LABEL[String(name)] ?? String(name);
+              // The position keeps its sign. Phil read Sussexx's July
+              // -$1,916 as "positive by around 2k" because the minus was
+              // stripped here along with the cash-out ones.
+              if (name === "cumulative") {
+                return [
+                  <span key="v" style={num < 0 ? { color: "hsl(var(--destructive))", fontWeight: 600 } : undefined}>
+                    {formatCurrency(num)}
+                  </span>,
+                  label,
+                ];
+              }
               // Cash out is stored negative so it hangs below the axis. Nobody
               // wants to read "-$18,216 paid out".
-              return [formatCurrency(Math.abs(num)), SERIES_LABEL[String(name)] ?? String(name)];
+              return [formatCurrency(Math.abs(num)), label];
             }}
           />
           <Legend
