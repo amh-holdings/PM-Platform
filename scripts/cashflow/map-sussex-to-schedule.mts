@@ -60,6 +60,8 @@ type CostRule = {
   how: "spread" | "lump_start" | "lump_end" | "fixed";
   standIn?: string;
   covered?: boolean;
+  /** lump rules only: land this many months before the task's month. */
+  monthsBefore?: number;
   /** how: "fixed" - written as given, not spread over the schedule. */
   fixed?: [string, number][];
 };
@@ -98,6 +100,7 @@ const COST: Record<string, CostRule> = {
   "300-1100": { tasks: ["4.5"], how: "spread" },
   // EPCA - general conditions
   "800-1010": { tasks: [], how: "fixed", fixed: ANNEX_A_AHC },
+  // IBT Annex A: spread evenly through construction (Phil, 2026-10-14).
   "800-1020": { tasks: CONSTRUCTION, how: "spread" },
   "800-1050": { tasks: CONSTRUCTION, how: "spread" },
   "800-1060": { tasks: CONSTRUCTION, how: "spread" },
@@ -109,7 +112,8 @@ const COST: Record<string, CostRule> = {
   "800-1200": { tasks: CONSTRUCTION, how: "spread" },
   // Paid in full Nov 2026 (Phil, 2026-10-14), not at EPC execution.
   "800-1150": { tasks: [], how: "fixed", fixed: [["2026-11-01", 120000]] },
-  "800-1160": { tasks: ["0.1.3.3"], how: "lump_end" },
+  // Billed one month before mobilization (Phil, 2026-10-14), so it follows 4.1.
+  "800-1160": { tasks: ["4.1"], how: "lump_start", monthsBefore: 1 },
 };
 
 // [item, task it earns on, stand-in note]
@@ -165,7 +169,10 @@ function dayWeights(rule: CostRule): Map<string, number> {
   const w = new Map<string, number>();
   if (rule.how !== "spread") {
     const t = need(rule.tasks[0]);
-    w.set(monthOf(d(rule.how === "lump_start" ? t.start_date : t.end_date)), 1);
+    const at = new Date(d(rule.how === "lump_start" ? t.start_date : t.end_date));
+    at.setUTCDate(1);
+    at.setUTCMonth(at.getUTCMonth() - (rule.monthsBefore ?? 0));
+    w.set(monthOf(at.getTime()), 1);
     return w;
   }
   const days = new Set<number>();
