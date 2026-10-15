@@ -1101,6 +1101,11 @@ export function billVerdict(args: {
     verified_pct: number | null;
     flag_level: string | null;
     detail: string | null;
+    /** For the plain-language hold: line value and what prior AFPs billed. */
+    scheduled_value?: number;
+    from_previous?: number;
+    /** Open field items from summarizeEvidence, already joined. */
+    open?: string | null;
   }[];
   approveGross: number;
   approveNet: number;
@@ -1138,7 +1143,20 @@ export function billVerdict(args: {
       kind: "hold",
       headline: `Approve ${money(approveGross)} (AHC pays ${money(approveNet)}) - hold ${money(heldTotal)}`,
       reasons: held.map((l) => {
-        const base = `${l.item_number} ${l.description}: billed to ${pct(l.pct_billed)}, the reports and schedule support ${pct(l.verified_pct)}. Hold ${money(l.billed - l.approve)}.`;
+        // Spelled out as the arithmetic, because "billed 100%, supported 59%"
+        // left Phil asking why: what is built, what was already billed, so
+        // what is left to earn, and what is still open in the field.
+        const sv = l.scheduled_value ?? 0;
+        const built = l.verified_pct != null && sv > 0 ? Math.round(l.verified_pct * sv * 100) / 100 : null;
+        const prev = l.from_previous ?? null;
+        const earned = built != null && prev != null ? Math.max(0, Math.round((built - prev) * 100) / 100) : null;
+        const base =
+          built != null && prev != null
+            ? `${l.item_number} ${l.description}: built ${money(built)} (${pct(l.verified_pct)} of ${money(sv)}). ` +
+              `Already billed ${money(prev)} before this application, so ${earned! > 0 ? `only ${money(earned!)} more is earned` : "nothing more is earned yet"}. ` +
+              `They asked for ${money(l.billed)}, taking the line to ${pct(l.pct_billed)}. Hold ${money(l.billed - l.approve)}` +
+              (l.open ? ` until the open work is done - ${l.open}.` : ".")
+            : `${l.item_number} ${l.description}: billed to ${pct(l.pct_billed)}, the reports and schedule support ${pct(l.verified_pct)}. Hold ${money(l.billed - l.approve)}.`;
         // A stale source means the gap may be ours, not the sub's.
         return l.detail?.includes("CHECK SOURCE")
           ? `${base} Before disputing it, check the evidence source - ${l.detail.split("CHECK SOURCE: ")[1]}.`

@@ -105,6 +105,11 @@ export default async function SubBillPage({ params }: { params: Params }) {
       verified_pct: r.l.verified_pct != null ? Number(r.l.verified_pct) : null,
       flag_level: r.l.flag_level,
       detail: r.l.verification_detail,
+      scheduled_value: Number(r.l.scheduled_value ?? 0),
+      from_previous: Number(r.l.from_previous ?? 0),
+      open: r.evidence?.open.length
+        ? `${r.evidence.open.join(", ")}${r.evidence.more > 0 ? `, +${r.evidence.more} more` : ""}`
+        : null,
     })),
     approveGross: payGross,
     approveNet: payNet,
