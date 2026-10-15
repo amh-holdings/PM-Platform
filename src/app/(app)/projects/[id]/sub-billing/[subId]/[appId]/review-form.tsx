@@ -42,10 +42,11 @@ type Props = {
 const pct = (v: number | null) => (v == null ? "-" : `${(v * 100).toFixed(1)}%`);
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
-// Per SOV line, the four things Phil reads a bill for: the scheduled value,
-// what has been built (reports and schedule), what the sub is billing now, and
-// what the system says this bill should be. The CM, who does not see dollars,
-// gets the same rows in percent with a box to certify.
+// Per SOV line, read left to right the way a G703 is: scheduled value, billed
+// to date on prior applications, what the sub wants this period, and what the
+// system says to bill - with the field record's built-to-date percent under
+// it, since that is the reason for the figure. The CM, who does not see
+// dollars, gets the same rows in percent with a box to certify.
 export function ReviewForm({
   projectId,
   appId,
@@ -67,11 +68,11 @@ export function ReviewForm({
   const totals = lines.reduce(
     (t, l) => ({
       sv: t.sv + l.scheduled_value,
-      built: t.built + (l.built_amount ?? 0),
+      prev: t.prev + l.from_previous,
       billed: t.billed + l.this_period,
       should: t.should + (l.this_period !== 0 ? l.should : 0),
     }),
-    { sv: 0, built: 0, billed: 0, should: 0 },
+    { sv: 0, prev: 0, billed: 0, should: 0 },
   );
 
   function submit(fn: (fd: FormData) => Promise<{ ok: boolean; error?: string }>) {
@@ -113,16 +114,19 @@ export function ReviewForm({
               <tr>
                 <th className="px-3 py-2">Item</th>
                 <th className="px-3 py-2">Description and field record</th>
-                {showDollars && <th className="px-3 py-2 text-right">Scheduled value</th>}
-                <th className="px-3 py-2 text-right">Built to date</th>
                 {showDollars ? (
                   <>
-                    <th className="px-3 py-2 text-right">Sub billed this period</th>
-                    <th className="px-3 py-2 text-right">System says this bill</th>
+                    <th className="px-3 py-2 text-right">Scheduled value</th>
+                    <th className="px-3 py-2 text-right">Billed to date</th>
+                    <th className="px-3 py-2 text-right">Requested this period</th>
+                    <th className="px-3 py-2 text-right">System says to bill</th>
                     <th className="px-3 py-2 text-right">Difference</th>
                   </>
                 ) : (
-                  <th className="px-3 py-2 text-right">Sub billed to date</th>
+                  <>
+                    <th className="px-3 py-2 text-right">Built to date</th>
+                    <th className="px-3 py-2 text-right">Sub billed to date</th>
+                  </>
                 )}
                 {cmMode && <th className="px-3 py-2 text-right">Certify %</th>}
               </tr>
@@ -148,26 +152,18 @@ export function ReviewForm({
                         </div>
                       )}
                     </td>
-                    {showDollars && (
-                      <td className="px-3 py-2 text-right align-top tabular-nums">{formatCurrency(l.scheduled_value)}</td>
-                    )}
-                    <td className="px-3 py-2 text-right align-top tabular-nums">
-                      {l.built_pct == null ? (
-                        <span className="text-xs text-muted-foreground">CM to certify</span>
-                      ) : (
-                        <>
-                          <div>{pct(l.built_pct)}</div>
-                          {showDollars && l.built_amount != null && (
-                            <div className="text-xs text-muted-foreground">{formatCurrency(l.built_amount)}</div>
-                          )}
-                        </>
-                      )}
-                    </td>
                     {showDollars ? (
                       <>
+                        <td className="px-3 py-2 text-right align-top tabular-nums">{formatCurrency(l.scheduled_value)}</td>
+                        <td className="px-3 py-2 text-right align-top tabular-nums">
+                          <div>{formatCurrency(l.from_previous)}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {pct(l.scheduled_value > 0 ? l.from_previous / l.scheduled_value : null)}
+                          </div>
+                        </td>
                         <td className="px-3 py-2 text-right align-top tabular-nums">
                           <div>{active ? formatCurrency(l.this_period) : "-"}</div>
-                          <div className="text-xs text-muted-foreground">to {pct(l.pct_billed)}</div>
+                          {active && <div className="text-xs text-muted-foreground">takes it to {pct(l.pct_billed)}</div>}
                         </td>
                         <td className="px-3 py-2 text-right align-top tabular-nums">
                           {!active ? (
@@ -182,6 +178,9 @@ export function ReviewForm({
                           ) : (
                             formatCurrency(l.should)
                           )}
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            {l.built_pct == null ? "CM to certify" : `${pct(l.built_pct)} built`}
+                          </div>
                         </td>
                         <td
                           className={cn(
@@ -193,7 +192,12 @@ export function ReviewForm({
                         </td>
                       </>
                     ) : (
-                      <td className="px-3 py-2 text-right align-top tabular-nums">{pct(l.pct_billed)}</td>
+                      <>
+                        <td className="px-3 py-2 text-right align-top tabular-nums">
+                          {l.built_pct == null ? <span className="text-xs text-muted-foreground">CM to certify</span> : pct(l.built_pct)}
+                        </td>
+                        <td className="px-3 py-2 text-right align-top tabular-nums">{pct(l.pct_billed)}</td>
+                      </>
                     )}
                     {cmMode && (
                       <td className="px-3 py-2 text-right align-top">
@@ -228,7 +232,7 @@ export function ReviewForm({
                     Total
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(round2(totals.sv))}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(round2(totals.built))}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(round2(totals.prev))}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(round2(totals.billed))}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(round2(totals.should))}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-red-700">
@@ -242,9 +246,9 @@ export function ReviewForm({
           </table>
         </div>
         <p className="text-xs text-muted-foreground">
-          Built to date is what the daily reports and schedule show as of the period end.
+          Billed to date is what prior applications billed. Built is what the daily reports and schedule show as of the period end.
           {showDollars &&
-            " System says this bill is what the field record supports this period: as billed when the line is within tolerance, otherwise built to date less what was billed before, never more than the sub asked for."}
+            " System says to bill is what the field record supports this period: the request as-is when the line is within tolerance, otherwise built less billed to date, never more than the sub asked for."}
         </p>
       </section>
 
