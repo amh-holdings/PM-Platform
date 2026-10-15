@@ -190,10 +190,7 @@ export default async function SubBillPage({ params }: { params: Params }) {
     asks,
     money: formatCurrency,
   });
-  // Paperwork the letter already asks for is not repeated under "Before you pay".
-  const internalNotes = showDollars
-    ? verdict.notes.filter((n) => !/lien waiver|waiver and release|COI status|W-9 status/i.test(n))
-    : verdict.notes;
+  const internalNotes = verdict.notes;
   const passed = checks.filter((c) => c.status === "pass");
 
   return (
@@ -232,82 +229,12 @@ export default async function SubBillPage({ params }: { params: Params }) {
                 {decided ? `${(STATUS_LABEL[app.status] ?? app.status).toUpperCase()}` : VERDICT_TAG[verdict.kind]}
               </div>
               {showDollars ? (
-                <div className="space-y-3 text-sm">
-                  <p>{letter.opening}</p>
-                  {(letter.approved || letter.heldLine) && (
-                    <div className="space-y-0.5">
-                      {letter.approved && <p className="font-medium">{letter.approved}</p>}
-                      {letter.heldLine && <p className="font-medium text-red-700">{letter.heldLine}</p>}
-                    </div>
-                  )}
-                  {letter.kind === "send_back" && (
-                    <ul className="list-disc space-y-0.5 pl-5">
-                      {letter.sendBack.map((r, i) => (
-                        <li key={i}>{r}</li>
-                      ))}
-                    </ul>
-                  )}
-                  {(letter.kind === "approve" || letter.kind === "needs_cm") && (
-                    <ul className="list-disc space-y-0.5 pl-5">
-                      {verdict.reasons.map((r, i) => (
-                        <li key={i}>{r}</li>
-                      ))}
-                    </ul>
-                  )}
-                  {letter.holds.map((h) => (
-                    <div key={h.item} className="space-y-2 rounded border border-amber-300 bg-background/70 p-3">
-                      <div className="font-semibold">
-                        Line {h.item} - {h.description}
-                      </div>
-                      <p>{h.paragraph}</p>
-                      {h.areas.length > 0 && (
-                        <table className="w-full text-xs">
-                          <thead className="text-muted-foreground">
-                            <tr>
-                              <th className="py-0.5 pr-2 text-left font-normal">Area</th>
-                              <th className="py-0.5 pr-2 text-left font-normal">
-                                Work not complete as of {formatDate(app.period_end)}
-                              </th>
-                              <th className="py-0.5 text-right font-normal">% of line</th>
-                              <th className="py-0.5 text-right font-normal">Value</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {h.areas.map((a) => (
-                              <tr key={a.area} className="align-top">
-                                <td className="py-0.5 pr-2 font-medium">{a.area}</td>
-                                <td className="py-0.5 pr-2">{a.items}</td>
-                                <td className="py-0.5 text-right tabular-nums">{(a.pct * 100).toFixed(2)}%</td>
-                                <td className="py-0.5 text-right tabular-nums">
-                                  {formatCurrency(round2(a.pct * h.scheduledValue))}
-                                </td>
-                              </tr>
-                            ))}
-                            <tr className="border-t font-semibold">
-                              <td className="pt-1" colSpan={2}>
-                                Total not complete
-                              </td>
-                              <td className="pt-1 text-right tabular-nums">{((1 - h.builtPct) * 100).toFixed(1)}%</td>
-                              <td className="pt-1 text-right tabular-nums">
-                                {formatCurrency(round2((1 - h.builtPct) * h.scheduledValue))}
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      )}
-                      <p>{h.next}</p>
-                    </div>
-                  ))}
-                  {letter.asks.length > 0 && (
-                    <div>
-                      <div className="font-medium">Before payment is released, please send:</div>
-                      <ul className="list-disc pl-5">
-                        {letter.asks.map((a) => (
-                          <li key={a}>{a}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+                // Phil: "We just truly need this line" - the why, one sentence
+                // per held line. The full write-up lives in the copied email.
+                <div className="space-y-2 text-sm">
+                  {letter.holds.length > 0
+                    ? letter.holds.map((h) => <p key={h.item}>{h.paragraph}</p>)
+                    : (letter.kind === "send_back" ? letter.sendBack : verdict.reasons).map((r, i) => <p key={i}>{r}</p>)}
                   <CopyLetterButton text={letter.text} />
                 </div>
               ) : (
