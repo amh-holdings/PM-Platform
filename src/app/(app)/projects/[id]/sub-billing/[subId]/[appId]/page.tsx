@@ -19,7 +19,6 @@ import { loadEvidence } from "@/lib/sub-billing-run";
 import { cn } from "@/lib/utils";
 
 import { STATUS_LABEL, STATUS_TONE } from "../../constants";
-import { CopyLetterButton } from "./copy-letter-button";
 import { ReviewForm } from "./review-form";
 
 type Params = { id: string; subId: string; appId: string };
@@ -230,12 +229,11 @@ export default async function SubBillPage({ params }: { params: Params }) {
               </div>
               {showDollars ? (
                 // Phil: "We just truly need this line" - the why, one sentence
-                // per held line. The full write-up lives in the copied email.
+                // per held line.
                 <div className="space-y-2 text-sm">
                   {letter.holds.length > 0
                     ? letter.holds.map((h) => <p key={h.item}>{h.paragraph}</p>)
                     : (letter.kind === "send_back" ? letter.sendBack : verdict.reasons).map((r, i) => <p key={i}>{r}</p>)}
-                  <CopyLetterButton text={letter.text} />
                 </div>
               ) : (
                 <ul className="space-y-1 text-sm">
