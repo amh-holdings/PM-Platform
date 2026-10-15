@@ -942,6 +942,87 @@ export function projectNextBill(args: {
   };
 }
 
+// --------------------------- evidence summary ----------------------------
+//
+// What the reports and schedule say about a line, in words a person reads in
+// one glance. verifyLine's `detail` lists every task with its share of the
+// line, which is right for an audit and unreadable on a review screen: Phil
+// "for the evidence just needs to be summarized better".
+
+export type EvidenceSummary = {
+  /** One line: "9 of 16 schedule tasks complete" / "Civil Work: 47.3% reported". */
+  headline: string;
+  /** What is still open, short names, at most four. */
+  open: string[];
+  /** Count of open items beyond the four shown. */
+  more: number;
+};
+
+export function summarizeEvidence(sov: SovLine, ev: Evidence): EvidenceSummary {
+  const method = sov.verification_method;
+  if (method === "manual" || method === "unmapped") {
+    return { headline: "Nothing in the reports measures this line - the CM certifies it", open: [], more: 0 };
+  }
+  if (method === "on_site") {
+    return {
+      headline: ev.subOnSiteDate ? `Crew on site since ${ev.subOnSiteDate}` : "No field report from this crew yet",
+      open: [],
+      more: 0,
+    };
+  }
+  if (method === "milestone") {
+    const t = sov.milestone_task_wbs_code ? ev.tasks.get(sov.milestone_task_wbs_code) : undefined;
+    return { headline: t ? `Milestone: ${t.task_name ?? t.wbs_code} is ${t.status ?? "unknown"}` : "Milestone task not found", open: [], more: 0 };
+  }
+  if (method === "commodity") {
+    const parts = (sov.linked_commodity_ids ?? [])
+      .map((id) => ev.commodities.get(id))
+      .filter(Boolean)
+      .map((c) =>
+        c!.uom === "pct" || c!.uom === "%"
+          ? `${c!.label} ${Math.min(100, c!.installed).toFixed(1)}% per daily production`
+          : `${c!.label} ${c!.installed.toLocaleString("en-US")} of ${c!.total.toLocaleString("en-US")} ${c!.uom ?? ""}`.trim(),
+      );
+    return { headline: parts.join("; ") || "No production source found", open: [], more: 0 };
+  }
+
+  // Schedule: one entry per linked task. A linked summary row is reported as
+  // "<name> 4 of 7 done" over its leaves rather than leaf by leaf, which is
+  // how the field talks about it ("Basin 1 is mostly done").
+  const pctOf = (code: string) => {
+    const t = ev.tasks.get(code);
+    return t ? estimateTaskProgress(t, ev.todayIso).pct : null;
+  };
+  const groups = (sov.linked_task_wbs_codes ?? [])
+    .filter((code) => ev.tasks.has(code))
+    .map((code) => {
+      const name = (ev.tasks.get(code)!.task_name ?? code).replace(/^Construct /, "");
+      const leaves = expandToLeaves([code], ev.tasks.keys());
+      const pcts = leaves.map(pctOf).filter((p): p is number => p != null);
+      const done = pcts.filter((p) => p >= 1).length;
+      if (leaves.length === 1 && leaves[0] === code) {
+        const p = pcts[0] ?? 0;
+        return { name, done, total: 1, text: `${name} ${p >= 1 ? "complete" : p > 0 ? `${Math.round(p * 100)}%` : "not started"}` };
+      }
+      return {
+        name,
+        done,
+        total: pcts.length,
+        text: `${name} ${done === pcts.length ? "complete" : done === 0 && pcts.every((p) => p === 0) ? "not started" : `${done} of ${pcts.length} done`}`,
+      };
+    });
+  if (groups.length === 0) return { headline: "No schedule task found", open: [], more: 0 };
+  if (groups.length === 1) return { headline: groups[0].text, open: [], more: 0 };
+  const done = groups.reduce((s, g) => s + g.done, 0);
+  const total = groups.reduce((s, g) => s + g.total, 0);
+  const open = groups.filter((g) => g.done < g.total).map((g) => g.text);
+  return {
+    headline: `${done} of ${total} schedule tasks complete`,
+    open: open.slice(0, 4),
+    more: Math.max(0, open.length - 4),
+  };
+}
+
 // --------------------------- approval default ----------------------------
 //
 // What to pay on one line of a bill when nobody has typed a figure.
@@ -1030,7 +1111,8 @@ export function billVerdict(args: {
 
   const notes = checks
     .filter((c) => c.status === "warn" || (c.status === "fail" && c.severity !== "error"))
-    .map((c) => `${c.label}${c.message ? ` - ${c.message}` : ""}`);
+    // The message is the sentence a person acts on; the label is a check name.
+    .map((c) => c.message || c.label);
 
   const blocking = checks.filter((c) => c.status === "fail" && c.severity === "error");
   if (blocking.length) {

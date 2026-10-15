@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
 import { formatCurrency } from "@/lib/format";
+import type { EvidenceSummary } from "@/lib/sub-billing";
 import { cn } from "@/lib/utils";
 
 import { decideBill, recommendBill, runVerification } from "../../actions";
@@ -15,19 +16,13 @@ type Line = {
   scheduled_value: number;
   from_previous: number;
   this_period: number;
-  total_completed: number;
   pct_billed: number | null;
-  verified_pct: number | null;
-  verified_amount: number | null;
-  verification_detail: string | null;
-  verification_source: string | null;
-  variance_amount: number | null;
-  flag_level: string | null;
-  flagLabel: string | null;
-  flagTone: string;
-  approved_this_period: number | null;
-  /** What Approve records for this line if nobody types a figure. */
-  recommended: number;
+  /** Field record to date at the period end, as a fraction and in dollars. */
+  built_pct: number | null;
+  built_amount: number | null;
+  /** What the system says this period should be (a set figure, else the engine default). */
+  should: number;
+  evidence: EvidenceSummary | null;
   cm_note: string | null;
 };
 
@@ -39,12 +34,18 @@ type Props = {
   showDollars: boolean;
   canRecommend: boolean;
   canApprove: boolean;
-  retainagePct: number;
   cmNotes: string | null;
   approvalNotes: string | null;
   lines: Line[];
 };
 
+const pct = (v: number | null) => (v == null ? "-" : `${(v * 100).toFixed(1)}%`);
+const round2 = (v: number) => Math.round(v * 100) / 100;
+
+// Per SOV line, the four things Phil reads a bill for: the scheduled value,
+// what has been built (reports and schedule), what the sub is billing now, and
+// what the system says this bill should be. The CM, who does not see dollars,
+// gets the same rows in percent with a box to certify.
 export function ReviewForm({
   projectId,
   appId,
@@ -53,17 +54,25 @@ export function ReviewForm({
   showDollars,
   canRecommend,
   canApprove,
-  retainagePct,
   cmNotes,
   approvalNotes,
   lines,
 }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const cmMode = canRecommend && !canApprove;
+  const [showAll, setShowAll] = useState(false);
 
-  // Only lines with activity this period need a decision. The rest are shown
-  // for context but never asked about.
-  const active = lines.filter((l) => l.this_period !== 0);
+  const visible = showAll ? lines : lines.filter((l) => l.this_period !== 0);
+  const totals = lines.reduce(
+    (t, l) => ({
+      sv: t.sv + l.scheduled_value,
+      built: t.built + (l.built_amount ?? 0),
+      billed: t.billed + l.this_period,
+      should: t.should + (l.this_period !== 0 ? l.should : 0),
+    }),
+    { sv: 0, built: 0, billed: 0, should: 0 },
+  );
 
   function submit(fn: (fd: FormData) => Promise<{ ok: boolean; error?: string }>) {
     return (fd: FormData) => {
@@ -88,86 +97,111 @@ export function ReviewForm({
     >
       <section className="space-y-2">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h3 className="text-sm font-semibold">Line detail</h3>
-          <span className="text-xs text-muted-foreground">
-            {active.length} of {lines.length} lines billed this period
-          </span>
+          <h3 className="text-sm font-semibold">Schedule of values</h3>
+          <button
+            type="button"
+            onClick={() => setShowAll((v) => !v)}
+            className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+          >
+            {showAll ? "Show billed lines only" : `Show all ${lines.length} lines`}
+          </button>
         </div>
 
         <div className="overflow-x-auto rounded-md border">
-          <table className="w-full min-w-[980px] text-sm">
-            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+          <table className="w-full min-w-[900px] text-sm">
+            <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
               <tr>
                 <th className="px-3 py-2">Item</th>
-                <th className="px-3 py-2">Description</th>
-                <th className="px-3 py-2 text-right">Billed %</th>
-                {showDollars && <th className="px-3 py-2 text-right">Billed this period</th>}
-                <th className="px-3 py-2 text-right">Verified %</th>
-                {showDollars && <th className="px-3 py-2 text-right">Variance</th>}
-                <th className="px-3 py-2">Evidence</th>
-                {(canRecommend || canApprove) && <th className="px-3 py-2 text-right">Certify %</th>}
-                {canApprove && showDollars && <th className="px-3 py-2 text-right">Approve $</th>}
+                <th className="px-3 py-2">Description and field record</th>
+                {showDollars && <th className="px-3 py-2 text-right">Scheduled value</th>}
+                <th className="px-3 py-2 text-right">Built to date</th>
+                {showDollars ? (
+                  <>
+                    <th className="px-3 py-2 text-right">Sub billed this period</th>
+                    <th className="px-3 py-2 text-right">System says this bill</th>
+                    <th className="px-3 py-2 text-right">Difference</th>
+                  </>
+                ) : (
+                  <th className="px-3 py-2 text-right">Sub billed to date</th>
+                )}
+                {cmMode && <th className="px-3 py-2 text-right">Certify %</th>}
               </tr>
             </thead>
             <tbody className="divide-y">
-              {lines.map((l) => {
-                const isActive = l.this_period !== 0;
+              {visible.map((l) => {
+                const active = l.this_period !== 0;
+                const diff = active ? round2(l.this_period - l.should) : 0;
                 return (
-                  <tr
-                    key={l.id}
-                    className={cn(
-                      !isActive && "text-muted-foreground",
-                      l.flag_level === "flag" && "bg-red-50/60",
-                      l.flag_level === "review" && "bg-amber-50/50",
-                    )}
-                  >
+                  <tr key={l.id} className={cn(!active && "text-muted-foreground", diff > 0.004 && "bg-red-50/60")}>
                     <td className="px-3 py-2 align-top tabular-nums">{l.item_number}</td>
                     <td className="px-3 py-2 align-top">
-                      <div>{l.description}</div>
-                      {l.flagLabel && isActive && (
-                        <span className={cn("mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium", l.flagTone)}>
-                          {l.flagLabel}
-                        </span>
+                      <div className="font-medium">{l.description}</div>
+                      {l.evidence && (
+                        <div className="mt-0.5 text-xs text-muted-foreground">
+                          {l.evidence.headline}
+                          {l.evidence.open.length > 0 && (
+                            <>
+                              . Open: {l.evidence.open.join(", ")}
+                              {l.evidence.more > 0 && `, +${l.evidence.more} more`}
+                            </>
+                          )}
+                        </div>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-right align-top tabular-nums">
-                      {l.pct_billed != null ? `${(l.pct_billed * 100).toFixed(1)}%` : "-"}
-                    </td>
                     {showDollars && (
-                      <td className="px-3 py-2 text-right align-top tabular-nums">
-                        {isActive ? formatCurrency(l.this_period) : "-"}
-                      </td>
+                      <td className="px-3 py-2 text-right align-top tabular-nums">{formatCurrency(l.scheduled_value)}</td>
                     )}
                     <td className="px-3 py-2 text-right align-top tabular-nums">
-                      {l.verified_pct != null ? (
-                        `${(l.verified_pct * 100).toFixed(1)}%`
+                      {l.built_pct == null ? (
+                        <span className="text-xs text-muted-foreground">CM to certify</span>
                       ) : (
-                        <span className="text-xs text-muted-foreground">no evidence</span>
+                        <>
+                          <div>{pct(l.built_pct)}</div>
+                          {showDollars && l.built_amount != null && (
+                            <div className="text-xs text-muted-foreground">{formatCurrency(l.built_amount)}</div>
+                          )}
+                        </>
                       )}
                     </td>
-                    {showDollars && (
-                      <td
-                        className={cn(
-                          "px-3 py-2 text-right align-top tabular-nums",
-                          (l.variance_amount ?? 0) > 0 && "font-medium text-red-700",
-                        )}
-                      >
-                        {l.variance_amount != null && isActive ? formatCurrency(l.variance_amount) : "-"}
-                      </td>
+                    {showDollars ? (
+                      <>
+                        <td className="px-3 py-2 text-right align-top tabular-nums">
+                          <div>{active ? formatCurrency(l.this_period) : "-"}</div>
+                          <div className="text-xs text-muted-foreground">to {pct(l.pct_billed)}</div>
+                        </td>
+                        <td className="px-3 py-2 text-right align-top tabular-nums">
+                          {!active ? (
+                            "-"
+                          ) : canApprove ? (
+                            <input
+                              name={`approved__${l.item_number}`}
+                              defaultValue={l.should.toFixed(2)}
+                              inputMode="decimal"
+                              className="w-28 rounded-md border bg-background px-2 py-1 text-right text-sm"
+                            />
+                          ) : (
+                            formatCurrency(l.should)
+                          )}
+                        </td>
+                        <td
+                          className={cn(
+                            "px-3 py-2 text-right align-top tabular-nums",
+                            diff > 0.004 && "font-semibold text-red-700",
+                          )}
+                        >
+                          {diff > 0.004 ? `Hold ${formatCurrency(diff)}` : active ? "-" : ""}
+                        </td>
+                      </>
+                    ) : (
+                      <td className="px-3 py-2 text-right align-top tabular-nums">{pct(l.pct_billed)}</td>
                     )}
-                    <td className="px-3 py-2 align-top text-xs text-muted-foreground">
-                      {l.verification_detail ?? "-"}
-                    </td>
-                    {(canRecommend || canApprove) && (
-                      <td className="px-3 py-2 align-top text-right">
-                        {isActive ? (
+                    {cmMode && (
+                      <td className="px-3 py-2 text-right align-top">
+                        {active ? (
                           <>
                             <input
                               name={`verified_pct__${l.item_number}`}
-                              defaultValue={
-                                l.verified_pct != null ? (l.verified_pct * 100).toFixed(1) : ""
-                              }
-                              placeholder={l.pct_billed != null ? (l.pct_billed * 100).toFixed(1) : ""}
+                              defaultValue={l.built_pct != null ? (l.built_pct * 100).toFixed(1) : ""}
                               inputMode="decimal"
                               className="w-20 rounded-md border bg-background px-2 py-1 text-right text-sm"
                             />
@@ -183,32 +217,34 @@ export function ReviewForm({
                         )}
                       </td>
                     )}
-                    {canApprove && showDollars && (
-                      <td className="px-3 py-2 align-top text-right">
-                        {isActive ? (
-                          <input
-                            name={`approved__${l.item_number}`}
-                            defaultValue={(l.approved_this_period ?? l.recommended).toFixed(2)}
-                            placeholder={l.this_period.toFixed(2)}
-                            inputMode="decimal"
-                            className="w-28 rounded-md border bg-background px-2 py-1 text-right text-sm"
-                          />
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                    )}
                   </tr>
                 );
               })}
             </tbody>
+            {showDollars && (
+              <tfoot className="border-t-2 bg-muted/30 font-medium">
+                <tr>
+                  <td className="px-3 py-2" colSpan={2}>
+                    Total
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(round2(totals.sv))}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(round2(totals.built))}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(round2(totals.billed))}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(round2(totals.should))}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-red-700">
+                    {totals.billed - totals.should > 0.004
+                      ? `Hold ${formatCurrency(round2(totals.billed - totals.should))}`
+                      : ""}
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
         <p className="text-xs text-muted-foreground">
-          Certify % is what the field record actually supports for the line as a
-          whole, cumulative. Leaving it blank keeps the engine&apos;s figure.
+          Built to date is what the daily reports and schedule show as of the period end.
           {showDollars &&
-            " Approve $ starts at the recommended figure: as billed when the line is within tolerance, otherwise what the field record supports less prior billings."}
+            " System says this bill is what the field record supports this period: as billed when the line is within tolerance, otherwise built to date less what was billed before, never more than the sub asked for."}
         </p>
       </section>
 
@@ -227,16 +263,14 @@ export function ReviewForm({
       ) : (
         <div className="space-y-3 rounded-md border bg-card p-4">
           <label className="block space-y-1">
-            <span className="text-xs font-medium">
-              {canApprove ? "Approval notes" : "Verification notes"}
-            </span>
+            <span className="text-xs font-medium">{canApprove ? "Approval notes" : "Verification notes"}</span>
             <textarea
               name={canApprove ? "approval_notes" : "cm_notes"}
               rows={2}
               defaultValue={canApprove ? approvalNotes ?? "" : cmNotes ?? ""}
               placeholder={
                 canApprove
-                  ? "What was adjusted and why"
+                  ? "What was held and why - this goes back to the sub"
                   : "What you saw in the field that supports or contradicts this bill"
               }
               className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
@@ -244,7 +278,7 @@ export function ReviewForm({
           </label>
 
           <div className="flex flex-wrap items-center gap-2">
-            {canRecommend && !canApprove && (
+            {cmMode && (
               <Button type="submit" disabled={pending}>
                 {pending ? "Saving..." : "Submit verification"}
               </Button>
@@ -254,13 +288,7 @@ export function ReviewForm({
                 <Button type="submit" name="_intent" value="approve" disabled={pending}>
                   {pending ? "Working..." : "Approve for payment"}
                 </Button>
-                <Button
-                  type="submit"
-                  name="_intent"
-                  value="reject"
-                  variant="outline"
-                  disabled={pending}
-                >
+                <Button type="submit" name="_intent" value="reject" variant="outline" disabled={pending}>
                   Reject
                 </Button>
               </>
@@ -273,16 +301,13 @@ export function ReviewForm({
                 onClick={() =>
                   startTransition(async () => {
                     const res = await runVerification(projectId, appId);
-                    if (!res.ok) setError(res.error ?? "Verification failed");
+                    if (!res.ok) setError(res.error ?? "Analysis failed");
                   })
                 }
               >
                 Analyze bill
               </Button>
             )}
-            <span className="text-xs text-muted-foreground">
-              Retainage {retainagePct}% is applied to the approved total.
-            </span>
           </div>
         </div>
       )}
