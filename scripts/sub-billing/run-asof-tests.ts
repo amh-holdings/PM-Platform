@@ -12,6 +12,7 @@ import {
   tasksAsOf,
   type AsOfTask,
 } from "../../src/lib/sub-billing-asof";
+import { buildSubLetter, groupGaps } from "../../src/lib/sub-billing-letter";
 import { billVerdict, recommendedApproval, staleSources, verifyLine, type BillLine, type Evidence, type SovLine } from "../../src/lib/sub-billing";
 
 let passed = 0;
@@ -152,6 +153,36 @@ eq("arithmetic failure -> send back, even with lines held", billVerdict({ checks
 eq("a warning does not block approval", billVerdict({ checks: [{ status: "warn", severity: "warning", label: "COI pending", message: null }], lines: [vline({})], approveGross: 1000, approveNet: 950, money }).kind, "approve");
 eq("an unmeasured line -> CM sign-off", billVerdict({ checks: [pass], lines: [vline({ verified_pct: null, flag_level: "unverifiable" })], approveGross: 1000, approveNet: 950, money }).kind, "needs_cm");
 eq("a stale source is named on the hold", billVerdict({ checks: [pass], lines: [vline({ approve: 0, flag_level: "flag", detail: "Road: 0 of 250 ft. CHECK SOURCE: Road Install has never been updated" })], approveGross: 0, approveNet: 0, money }).reasons[0].includes("check the evidence source - Road Install has never been updated"), true);
+
+console.log("\nThe review, worded as the email to the sub (Pyramid AFP 3)\n");
+
+const usd = (v: number) => v.toLocaleString("en-US", { style: "currency", currency: "USD" });
+const areas = groupGaps([
+  { area: "Basin 1 ESC", task: "Matting and seeding", pctDone: 0, pctOfLine: 0.1125 },
+  { area: "Basin 1 ESC", task: "Lined inlets install", pctDone: 0, pctOfLine: 0.0375 },
+  { area: "Basin 1 ESC", task: "Emergency Spillway", pctDone: 0, pctOfLine: 0.0125 },
+  { area: "Basin 2 ESC", task: "Matting and seeding", pctDone: 0, pctOfLine: 0.1 },
+  { area: "Basin 2 ESC", task: "Cut/Fill", pctDone: 0.4, pctOfLine: 0.015 },
+  { area: "Basin 2 ESC", task: "Embankment", pctDone: 0.95, pctOfLine: 0.005625 },
+  { area: "", task: "Convert Sediment Basins to Stormwater Ponds", pctDone: 0, pctOfLine: 0.075 },
+]);
+eq("gaps group by area, biggest first", areas.map((a) => a.area), ["Basin 1 ESC", "Basin 2 ESC", "Convert Sediment Basins to Stormwater Ponds"]);
+eq("partly done tasks say how far along", areas[1].items, "Matting and seeding, Cut/Fill (40% complete), Embankment (95% complete)");
+eq("a task with no area reads as not started", areas[2].items, "Not started");
+const letter = buildSubLetter({
+  kind: "hold", projectName: "Sweet Springs", appNumber: 3, periodStart: "2026-09-01", periodEnd: "2026-09-25",
+  todayIso: "2026-10-15", retainagePct: 5, approveGross: 62931.76, retainage: 3146.59, net: 59785.17,
+  holds: [{ item: "2.04", description: "Drainage structures and stormwater management", held: 16153.61, scheduledValue: 40384.02,
+    billedToPct: 1, builtPct: 0.592, prevAmount: 24230.41, earned: 0, areas, todayPct: 0.9, nextBillable: 12115.21 }],
+  sendBack: [], asks: ["The conditional lien waiver for $59,785.17"], money: usd,
+});
+eq("subject names the project, period and held line", letter.subject, "Sweet Springs - Pay Application #3 (9/1 - 9/25) Approved with Hold on Line 2.04");
+eq("approved sentence", letter.approved, "Approved: $62,931.76 gross, less 5% retainage ($3,146.59), for a payment of $59,785.17.");
+eq("held sentence", letter.heldLine, "Held: $16,153.61 on Line 2.04, Drainage structures and stormwater management.");
+eq("the why, as in the email", letter.holds[0].paragraph, "The application bills Line 2.04 to 100% complete. Our daily reports show it was 59.2% complete at the 9/25 period end. Prior applications already billed 60% ($24,230.41), so no additional amount is earned on this line for this period.");
+eq("next step tells them what the next bill can carry", letter.holds[0].next, "Please carry the Line 2.04 balance forward on your next application. Based on our reports through 10/15/2026, about $12,115.21 of it is now supported and can be billed on Pay Application #4. The remainder will follow as the open work is completed.");
+eq("the copied email carries the breakdown", letter.text.includes("- Basin 1 ESC (16.25% of the line): Matting and seeding, Lined inlets install, Emergency Spillway"), true);
+console.log("\n----- copied email -----\n" + letter.text + "\n------------------------");
 
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);

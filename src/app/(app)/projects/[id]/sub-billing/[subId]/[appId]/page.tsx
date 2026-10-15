@@ -8,13 +8,18 @@ import {
   billVerdict,
   recommendedApproval,
   summarizeEvidence,
+  verifyLine,
+  type BillLine,
   type SovLine,
 } from "@/lib/sub-billing";
+import { buildSubLetter, groupGaps, type LetterHold } from "@/lib/sub-billing-letter";
+import { createClient } from "@/lib/supabase/server";
 import { subBillingClient } from "@/lib/sub-billing-db";
 import { loadEvidence } from "@/lib/sub-billing-run";
 import { cn } from "@/lib/utils";
 
 import { STATUS_LABEL, STATUS_TONE } from "../../constants";
+import { CopyLetterButton } from "./copy-letter-button";
 import { ReviewForm } from "./review-form";
 
 type Params = { id: string; subId: string; appId: string };
@@ -53,7 +58,7 @@ export default async function SubBillPage({ params }: { params: Params }) {
   if (!app) notFound();
 
   const [{ data: sub }, { data: lineRows }, { data: checkRows }, { data: sovRows }] = await Promise.all([
-    db.from("subcontractors").select("company_name, retainage_pct").eq("id", params.subId).single(),
+    db.from("subcontractors").select("company_name, retainage_pct, coi_status, w9_status").eq("id", params.subId).single(),
     db.from("sub_pay_app_lines").select("*").eq("sub_pay_app_id", params.appId).order("sort_order"),
     db.from("sub_pay_app_checks").select("*").eq("sub_pay_app_id", params.appId).order("severity"),
     db.from("sub_sov_lines").select("*").eq("subcontractor_id", params.subId).eq("active", true),
@@ -116,6 +121,79 @@ export default async function SubBillPage({ params }: { params: Params }) {
     money: formatCurrency,
   });
   const hide = (t: string) => (showDollars ? t : t.replace(/\$[\d,]+\.\d{2}/g, "[amount]"));
+
+  // ---- The review, worded as it goes back to the sub (sub-billing-letter) ----
+  const { data: project } = await createClient().from("projects").select("name").eq("id", app.project_id).single();
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const heldRows = billedRows.filter((r) => r.billed - r.should > 0.004 && r.l.verified_pct != null);
+  // Where the held lines stand now, if the field has moved on since the period
+  // end - so the sub is told how much of the hold the next bill can carry.
+  const evidenceToday =
+    heldRows.length && app.period_end < todayIso
+      ? await loadEvidence(db, app.project_id, todayIso, app.subcontractor_id)
+      : null;
+  const letterHolds: LetterHold[] = heldRows.map((r) => {
+    const sv = Number(r.l.scheduled_value ?? 0);
+    const prev = Number(r.l.from_previous ?? 0);
+    const built = Number(r.l.verified_pct);
+    const held = round2(r.billed - r.should);
+    let todayPct: number | null = null;
+    const sov = sovByItem.get(r.l.item_number);
+    if (evidenceToday && sov) {
+      const stub: BillLine = {
+        item_number: r.l.item_number,
+        description: r.l.description,
+        scheduled_value: sv,
+        from_previous: prev,
+        this_period: 0,
+        materials_stored: 0,
+        total_completed: prev,
+        pct_billed: sv > 0 ? prev / sv : 0,
+        balance_to_finish: sv - prev,
+        retainage_amount: 0,
+      };
+      todayPct = verifyLine(sov, stub, evidenceToday).verifiedPct;
+    }
+    return {
+      item: r.l.item_number,
+      description: r.l.description,
+      held,
+      scheduledValue: sv,
+      billedToPct: r.l.pct_billed != null ? Number(r.l.pct_billed) : 0,
+      builtPct: built,
+      prevAmount: prev,
+      earned: Math.max(0, round2(built * sv - prev)),
+      areas: groupGaps(r.evidence?.gaps ?? []),
+      todayPct,
+      nextBillable:
+        todayPct != null ? Math.min(held, Math.max(0, round2(todayPct * sv - prev - r.should))) : null,
+    };
+  });
+  const asks: string[] = [];
+  if (!app.lien_waiver_received) asks.push(`The conditional lien waiver for ${formatCurrency(payNet)}`);
+  if (!app.invoice_number || !app.invoice_date) asks.push("The invoice number and date for this application");
+  if (!["current", "approved"].includes((sub?.coi_status ?? "").toLowerCase())) asks.push("A current certificate of insurance");
+  if (!["received", "approved"].includes((sub?.w9_status ?? "").toLowerCase())) asks.push("A W-9");
+  const letter = buildSubLetter({
+    kind: verdict.kind,
+    projectName: project?.name ?? "Project",
+    appNumber: app.app_number,
+    periodStart: app.period_start,
+    periodEnd: app.period_end,
+    todayIso,
+    retainagePct: Math.round(retRate * 1000) / 10,
+    approveGross: payGross,
+    retainage: payRetainage,
+    net: payNet,
+    holds: letterHolds,
+    sendBack: verdict.kind === "send_back" ? verdict.reasons : [],
+    asks,
+    money: formatCurrency,
+  });
+  // Paperwork the letter already asks for is not repeated under "Before you pay".
+  const internalNotes = showDollars
+    ? verdict.notes.filter((n) => !/lien waiver|waiver and release|COI status|W-9 status/i.test(n))
+    : verdict.notes;
   const passed = checks.filter((c) => c.status === "pass");
 
   return (
@@ -153,65 +231,92 @@ export default async function SubBillPage({ params }: { params: Params }) {
               <div className="text-[11px] font-bold tracking-wider">
                 {decided ? `${(STATUS_LABEL[app.status] ?? app.status).toUpperCase()}` : VERDICT_TAG[verdict.kind]}
               </div>
-              <ul className="space-y-1 text-sm">
-                {verdict.reasons.map((r, i) => (
-                  <li key={i}>{hide(r)}</li>
-                ))}
-              </ul>
-              {/* Why a held line is not complete, item by item - the statement
-                  that goes back to the sub. */}
-              {billedRows
-                .filter((r) => r.billed - r.should > 0.004 && r.evidence?.gaps?.length && r.l.verified_pct != null)
-                .map((r) => {
-                  const sv = Number(r.l.scheduled_value ?? 0);
-                  const gaps = r.evidence!.gaps!;
-                  const notDone = 1 - Number(r.l.verified_pct);
-                  return (
-                    <div key={r.l.id} className="rounded border border-amber-300 bg-background/60 p-2">
-                      <div className="mb-1 text-xs font-semibold">
-                        Why {r.l.item_number} is {(Number(r.l.verified_pct) * 100).toFixed(1)}% complete, not 100%, at{" "}
-                        {formatDate(app.period_end)}
-                      </div>
-                      <table className="w-full text-xs">
-                        <thead className="text-muted-foreground">
-                          <tr>
-                            <th className="py-0.5 text-left font-normal">Area</th>
-                            <th className="py-0.5 text-left font-normal">Not complete</th>
-                            <th className="py-0.5 text-right font-normal">% of line</th>
-                            {showDollars && <th className="py-0.5 text-right font-normal">Value</th>}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {gaps.map((g, i) => (
-                            <tr key={i}>
-                              <td className="py-0.5 pr-2">{g.area || "-"}</td>
-                              <td className="py-0.5 pr-2">
-                                {g.task}
-                                {g.pctDone > 0 && ` (${Math.round(g.pctDone * 100)}% done)`}
-                              </td>
-                              <td className="py-0.5 text-right tabular-nums">{(g.pctOfLine * 100).toFixed(2)}%</td>
-                              {showDollars && (
-                                <td className="py-0.5 text-right tabular-nums">{formatCurrency(round2(g.pctOfLine * sv))}</td>
-                              )}
-                            </tr>
-                          ))}
-                          <tr className="border-t font-semibold">
-                            <td className="pt-1" colSpan={2}>
-                              Total not complete
-                            </td>
-                            <td className="pt-1 text-right tabular-nums">{(notDone * 100).toFixed(1)}%</td>
-                            {showDollars && (
-                              <td className="pt-1 text-right tabular-nums">{formatCurrency(round2(notDone * sv))}</td>
-                            )}
-                          </tr>
-                        </tbody>
-                      </table>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        Weighted by each task&apos;s scheduled duration, the same way the line&apos;s percent is figured.
-                      </p>
+              {showDollars ? (
+                <div className="space-y-3 text-sm">
+                  <p>{letter.opening}</p>
+                  {(letter.approved || letter.heldLine) && (
+                    <div className="space-y-0.5">
+                      {letter.approved && <p className="font-medium">{letter.approved}</p>}
+                      {letter.heldLine && <p className="font-medium text-red-700">{letter.heldLine}</p>}
                     </div>
-                  );
-                })}
+                  )}
+                  {letter.kind === "send_back" && (
+                    <ul className="list-disc space-y-0.5 pl-5">
+                      {letter.sendBack.map((r, i) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {(letter.kind === "approve" || letter.kind === "needs_cm") && (
+                    <ul className="list-disc space-y-0.5 pl-5">
+                      {verdict.reasons.map((r, i) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {letter.holds.map((h) => (
+                    <div key={h.item} className="space-y-2 rounded border border-amber-300 bg-background/70 p-3">
+                      <div className="font-semibold">
+                        Line {h.item} - {h.description}
+                      </div>
+                      <p>{h.paragraph}</p>
+                      {h.areas.length > 0 && (
+                        <table className="w-full text-xs">
+                          <thead className="text-muted-foreground">
+                            <tr>
+                              <th className="py-0.5 pr-2 text-left font-normal">Area</th>
+                              <th className="py-0.5 pr-2 text-left font-normal">
+                                Work not complete as of {formatDate(app.period_end)}
+                              </th>
+                              <th className="py-0.5 text-right font-normal">% of line</th>
+                              <th className="py-0.5 text-right font-normal">Value</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {h.areas.map((a) => (
+                              <tr key={a.area} className="align-top">
+                                <td className="py-0.5 pr-2 font-medium">{a.area}</td>
+                                <td className="py-0.5 pr-2">{a.items}</td>
+                                <td className="py-0.5 text-right tabular-nums">{(a.pct * 100).toFixed(2)}%</td>
+                                <td className="py-0.5 text-right tabular-nums">
+                                  {formatCurrency(round2(a.pct * h.scheduledValue))}
+                                </td>
+                              </tr>
+                            ))}
+                            <tr className="border-t font-semibold">
+                              <td className="pt-1" colSpan={2}>
+                                Total not complete
+                              </td>
+                              <td className="pt-1 text-right tabular-nums">{((1 - h.builtPct) * 100).toFixed(1)}%</td>
+                              <td className="pt-1 text-right tabular-nums">
+                                {formatCurrency(round2((1 - h.builtPct) * h.scheduledValue))}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      )}
+                      <p>{h.next}</p>
+                    </div>
+                  ))}
+                  {letter.asks.length > 0 && (
+                    <div>
+                      <div className="font-medium">Before payment is released, please send:</div>
+                      <ul className="list-disc pl-5">
+                        {letter.asks.map((a) => (
+                          <li key={a}>{a}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <CopyLetterButton text={letter.text} />
+                </div>
+              ) : (
+                <ul className="space-y-1 text-sm">
+                  {verdict.reasons.map((r, i) => (
+                    <li key={i}>{hide(r)}</li>
+                  ))}
+                </ul>
+              )}
             </div>
             {showDollars && (
               <table className="text-sm">
@@ -252,13 +357,13 @@ export default async function SubBillPage({ params }: { params: Params }) {
       )}
 
       {/* ---------------------------- Before you pay --------------------------- */}
-      {analyzed && (verdict.notes.length > 0 || passed.length > 0) && (
+      {analyzed && (internalNotes.length > 0 || passed.length > 0) && (
         <section className="rounded-md border p-3 text-sm">
-          {verdict.notes.length > 0 && (
+          {internalNotes.length > 0 && (
             <>
               <div className="mb-1 text-xs font-semibold">Before you pay</div>
               <ul className="space-y-0.5 text-xs">
-                {verdict.notes.map((n, i) => (
+                {internalNotes.map((n, i) => (
                   <li key={i} className="flex gap-2">
                     <span className="text-muted-foreground">☐</span>
                     <span>{hide(n)}</span>
