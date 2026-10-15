@@ -158,6 +158,60 @@ export default async function SubBillPage({ params }: { params: Params }) {
                   <li key={i}>{hide(r)}</li>
                 ))}
               </ul>
+              {/* Why a held line is not complete, item by item - the statement
+                  that goes back to the sub. */}
+              {billedRows
+                .filter((r) => r.billed - r.should > 0.004 && r.evidence?.gaps?.length && r.l.verified_pct != null)
+                .map((r) => {
+                  const sv = Number(r.l.scheduled_value ?? 0);
+                  const gaps = r.evidence!.gaps!;
+                  const notDone = 1 - Number(r.l.verified_pct);
+                  return (
+                    <div key={r.l.id} className="rounded border border-amber-300 bg-background/60 p-2">
+                      <div className="mb-1 text-xs font-semibold">
+                        Why {r.l.item_number} is {(Number(r.l.verified_pct) * 100).toFixed(1)}% complete, not 100%, at{" "}
+                        {formatDate(app.period_end)}
+                      </div>
+                      <table className="w-full text-xs">
+                        <thead className="text-muted-foreground">
+                          <tr>
+                            <th className="py-0.5 text-left font-normal">Area</th>
+                            <th className="py-0.5 text-left font-normal">Not complete</th>
+                            <th className="py-0.5 text-right font-normal">% of line</th>
+                            {showDollars && <th className="py-0.5 text-right font-normal">Value</th>}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {gaps.map((g, i) => (
+                            <tr key={i}>
+                              <td className="py-0.5 pr-2">{g.area || "-"}</td>
+                              <td className="py-0.5 pr-2">
+                                {g.task}
+                                {g.pctDone > 0 && ` (${Math.round(g.pctDone * 100)}% done)`}
+                              </td>
+                              <td className="py-0.5 text-right tabular-nums">{(g.pctOfLine * 100).toFixed(2)}%</td>
+                              {showDollars && (
+                                <td className="py-0.5 text-right tabular-nums">{formatCurrency(round2(g.pctOfLine * sv))}</td>
+                              )}
+                            </tr>
+                          ))}
+                          <tr className="border-t font-semibold">
+                            <td className="pt-1" colSpan={2}>
+                              Total not complete
+                            </td>
+                            <td className="pt-1 text-right tabular-nums">{(notDone * 100).toFixed(1)}%</td>
+                            {showDollars && (
+                              <td className="pt-1 text-right tabular-nums">{formatCurrency(round2(notDone * sv))}</td>
+                            )}
+                          </tr>
+                        </tbody>
+                      </table>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Weighted by each task&apos;s scheduled duration, the same way the line&apos;s percent is figured.
+                      </p>
+                    </div>
+                  );
+                })}
             </div>
             {showDollars && (
               <table className="text-sm">

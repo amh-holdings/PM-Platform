@@ -956,6 +956,13 @@ export type EvidenceSummary = {
   open: string[];
   /** Count of open items beyond the four shown. */
   more: number;
+  /**
+   * Schedule lines only: every leaf task not complete at the cut-off, with the
+   * share of the line it leaves undone (its duration weight times what is
+   * left of it). These sum to 100% less the verified percent, so a hold can
+   * be explained item by item - "Basin 1 matting and seeding: 11.25%".
+   */
+  gaps?: { area: string; task: string; pctDone: number; pctOfLine: number }[];
 };
 
 export function summarizeEvidence(sov: SovLine, ev: Evidence): EvidenceSummary {
@@ -1011,8 +1018,28 @@ export function summarizeEvidence(sov: SovLine, ev: Evidence): EvidenceSummary {
         text: `${name} ${done === pcts.length ? "complete" : done === 0 && pcts.every((p) => p === 0) ? "not started" : `${done} of ${pcts.length} done`}`,
       };
     });
+  // The gaps, weighted exactly as verifyLine weights the line.
+  const leaves = expandToLeaves(sov.linked_task_wbs_codes ?? [], ev.tasks.keys())
+    .map((c) => ev.tasks.get(c))
+    .filter(Boolean) as (TaskLike & { wbs_code: string; task_name?: string | null; duration_days?: number | null })[];
+  const totalWeight = leaves.reduce((s, t) => s + taskWeight(t), 0);
+  const gaps = leaves
+    .map((t) => {
+      const done = estimateTaskProgress(t, ev.todayIso).pct;
+      const linked = (sov.linked_task_wbs_codes ?? []).find((c) => t.wbs_code === c || t.wbs_code.startsWith(`${c}.`));
+      const area = linked && linked !== t.wbs_code ? (ev.tasks.get(linked)?.task_name ?? linked).replace(/^Construct /, "") : "";
+      return {
+        area,
+        task: t.task_name ?? t.wbs_code,
+        pctDone: done,
+        pctOfLine: totalWeight > 0 ? ((1 - done) * taskWeight(t)) / totalWeight : 0,
+      };
+    })
+    .filter((g) => g.pctOfLine > 0.00001)
+    .sort((a, b) => (a.area === b.area ? b.pctOfLine - a.pctOfLine : a.area === "" ? 1 : b.area === "" ? -1 : a.area.localeCompare(b.area)));
+
   if (groups.length === 0) return { headline: "No schedule task found", open: [], more: 0 };
-  if (groups.length === 1) return { headline: groups[0].text, open: [], more: 0 };
+  if (groups.length === 1) return { headline: groups[0].text, open: [], more: 0, gaps };
   const done = groups.reduce((s, g) => s + g.done, 0);
   const total = groups.reduce((s, g) => s + g.total, 0);
   const open = groups.filter((g) => g.done < g.total).map((g) => g.text);
@@ -1020,6 +1047,7 @@ export function summarizeEvidence(sov: SovLine, ev: Evidence): EvidenceSummary {
     headline: `${done} of ${total} schedule tasks complete`,
     open: open.slice(0, 4),
     more: Math.max(0, open.length - 4),
+    gaps,
   };
 }
 
