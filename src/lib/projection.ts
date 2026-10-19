@@ -277,7 +277,9 @@ export async function buildProjection(
         .eq("project_id", projectId),
       supabase
         .from("sub_pay_app_lines")
-        .select("sub_sov_line_id, total_completed, sub_pay_apps!inner(project_id, app_number)")
+        .select(
+          "sub_sov_line_id, total_completed, sub_pay_apps!inner(project_id, app_number, status)",
+        )
         .eq("sub_pay_apps.project_id", projectId),
       // Change orders that are not approved yet. An approved one is already in
       // the forecast through its own SOV line, so only the pipeline is read
@@ -682,9 +684,14 @@ export async function buildProjection(
   for (const l of subBilledRes.data ?? []) {
     const id = (l as { sub_sov_line_id?: string | null }).sub_sov_line_id;
     if (!id) continue;
-    const appNo = Number(
-      (l as { sub_pay_apps?: { app_number?: number | null } | null }).sub_pay_apps?.app_number ?? 0,
-    );
+    const header = (
+      l as { sub_pay_apps?: { app_number?: number | null; status?: string | null } | null }
+    ).sub_pay_apps;
+    // A refused bill is not spend. It never was, and since a rejected
+    // application now keeps its number while its replacement reuses it, the
+    // "latest by number" test below cannot tell the two apart on its own.
+    if (header?.status === "rejected") continue;
+    const appNo = Number(header?.app_number ?? 0);
     if (appNo >= (subLatestApp.get(id) ?? -1)) {
       subLatestApp.set(id, appNo);
       subBilledByLine.set(id, Number((l as { total_completed?: number | null }).total_completed ?? 0));

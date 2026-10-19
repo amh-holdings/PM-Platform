@@ -15,6 +15,13 @@ import type { SheetSummary } from "@/lib/schedule-workbook";
 import { parsePastedSovLines } from "@/lib/sub-sov-import";
 import { sovTotals } from "@/lib/sub-sov-totals";
 import {
+  compareAppsNewestFirst,
+  newestLiveApp,
+  nextAppNumber,
+  replacesRejected,
+  supersededAppIds,
+} from "@/lib/sub-app-numbering";
+import {
   dayBefore,
   isRealDate,
   resolveCutoff,
@@ -644,6 +651,72 @@ section("A workbook cell that contains a line break");
   eq("and ties out exactly", cents.variance, 0);
 
   eq("an empty SOV has nothing to say", sovTotals([], 0).revised, 0);
+}
+
+// ===========================================================================
+// Application numbering - a rejected app does not consume its number
+// ===========================================================================
+// Pyramid billed app 3, AHC rejected it, Pyramid resent. The file said 4 and
+// their G702 said 3. Zarina: "I rejected the previous pay app 3, the new
+// approved should still be pay app 3."
+{
+  const app = (n: number, status: string, id = `${n}-${status}`, created = "") => ({
+    id,
+    app_number: n,
+    status,
+    created_at: created,
+  });
+
+  eq("nothing on record starts at 1", nextAppNumber([]), 1);
+  eq("one approved app is followed by 2", nextAppNumber([app(1, "approved")]), 2);
+
+  const pyramid = [
+    app(1, "paid"),
+    app(2, "approved"),
+    app(3, "rejected"),
+  ];
+  eq("a rejected 3 is replaced by another 3", nextAppNumber(pyramid), 3);
+  eq("and the form says so", replacesRejected(pyramid, 3), true);
+
+  const replaced = [...pyramid, app(3, "approved", "3-live", "2026-09-28")];
+  eq("once replaced, the next one is 4", nextAppNumber(replaced), 4);
+  eq("and 4 is not a resubmission", replacesRejected(replaced, 4), false);
+
+  // Only a reused number is superseded. A rejection nobody has answered yet
+  // is still waiting, which is a different thing to tell somebody.
+  eq("the replaced rejection is marked", supersededAppIds(replaced).has("3-rejected"), true);
+  eq("an unanswered rejection is not", supersededAppIds(pyramid).size, 0);
+  eq("and the live one is never marked", supersededAppIds(replaced).has("3-live"), false);
+
+  // Every app rejected, nothing accepted: the next one is still 1.
+  eq(
+    "a rejected first app does not advance the count",
+    nextAppNumber([app(1, "rejected")]),
+    1,
+  );
+
+  // The newest app that counts is never a rejected one, whatever its number.
+  const rejectedOnTop = [app(1, "paid"), app(2, "approved"), app(5, "rejected")];
+  eq(
+    "billed-to-date reads past a rejected app with the highest number",
+    newestLiveApp(rejectedOnTop)?.app_number,
+    2,
+  );
+  eq("and nothing live means nothing to read", newestLiveApp([app(1, "rejected")]), null);
+
+  // Two rows share number 3. The live one sorts above the rejection, so the
+  // bill list reads top down in the order things happened.
+  const sorted = [...replaced].sort(compareAppsNewestFirst);
+  eq("the live 3 sorts above the rejected 3", sorted[0].id, "3-live");
+  eq("and the rejected 3 comes next", sorted[1].id, "3-rejected");
+  eq("then 2", sorted[2].app_number, 2);
+
+  // Same number, same status, different entry times: newest first.
+  const twoRejections = [
+    app(3, "rejected", "early", "2026-09-20"),
+    app(3, "rejected", "late", "2026-09-26"),
+  ].sort(compareAppsNewestFirst);
+  eq("the later rejection sorts first", twoRejections[0].id, "late");
 }
 
 console.log(`\n${"=".repeat(60)}`);

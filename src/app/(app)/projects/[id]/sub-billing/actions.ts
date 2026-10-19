@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { subBillingClient } from "@/lib/sub-billing-db";
+import { nextAppNumber } from "@/lib/sub-app-numbering";
 import { requireCapability } from "@/lib/sub-billing-auth";
 import { runVerificationCore } from "@/lib/sub-billing-run";
 import { approvedToDateByItem, recommendedApproval, type BillHeader, type BillLine, type SovLine } from "@/lib/sub-billing";
@@ -75,10 +76,15 @@ export async function recordSubBill(
   // The application history for this sub answers two different questions, and
   // they need two different answers:
   //
-  //   numbering  - the next number follows the highest we have ever recorded,
-  //                rejected applications included. A rejected app 3 still
-  //                consumed the number 3, and reusing it collides on the
-  //                unique key.
+  //   numbering  - a rejected application does NOT consume its number. The
+  //                sub revises the same G702 and sends it back as app 3,
+  //                which is what their paperwork, their lien waivers and
+  //                their accounting all say, so our file has to agree.
+  //                Zarina: "I rejected the previous pay app 3, the new
+  //                approved should still be pay app 3." Migration 0078
+  //                replaces the plain unique key on (subcontractor_id,
+  //                app_number) with a partial one that ignores rejected
+  //                rows, so the number can come round again.
   //   continuity - the baseline this bill opens from must EXCLUDE rejected
   //                applications. A bill AHC refused is not history, and
   //                letting it set the previously-billed floor hands back the
@@ -89,7 +95,6 @@ export async function recordSubBill(
     .eq("subcontractor_id", subcontractorId)
     .order("app_number", { ascending: true });
   const history = historyRows ?? [];
-  const latestApp = history.length > 0 ? history[history.length - 1] : null;
   const accepted = history.filter((a) => a.status !== "rejected");
   const priorApp = accepted.length > 0 ? accepted[accepted.length - 1] : null;
 
@@ -106,7 +111,7 @@ export async function recordSubBill(
   }
   const priorRetainageHeld = Number(priorApp?.retainage_to_date ?? 0);
 
-  const appNumber = optNum(formData.get("app_number")) ?? (latestApp ? latestApp.app_number + 1 : 1);
+  const appNumber = optNum(formData.get("app_number")) ?? nextAppNumber(history);
   const retainagePct = optNum(formData.get("retainage_pct")) ?? Number(sub.retainage_pct ?? 0);
   const rate = retainagePct / 100;
 
