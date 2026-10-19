@@ -47,6 +47,11 @@ import {
   MILESTONE_FIELDS,
   diffWords,
 } from "@/lib/weekly-report";
+import {
+  filterLookahead,
+  lookaheadCount,
+  type LookaheadWeek,
+} from "@/lib/schedule-lookahead";
 import { weeklyProvenance, type WeeklyReportView } from "@/lib/weekly-report-load";
 import {
   basisFor,
@@ -305,6 +310,79 @@ function unit() {
     "LA-15 nothing prints on an ordinary current-week report",
     describeBasisShort({ kind: "live" }) === null,
   );
+
+  // ---- look-ahead discipline filter ----
+  // Zarina: "Can we only print the civil portion of the schedule through the
+  // weekly progress report 3 week look ahead."
+  {
+    const card = (wbs: string, scope: unknown) =>
+      ({
+        wbs,
+        name: `Task ${wbs}`,
+        parent: null,
+        assignedTo: null,
+        scope,
+        start: "2026-10-19",
+        end: "2026-10-23",
+        pctComplete: null,
+        critical: false,
+        totalFloat: 3,
+        slipDays: 0,
+        continuing: false,
+        finishing: true,
+      }) as unknown as LookaheadWeek["tasks"][number];
+
+    const weeks: LookaheadWeek[] = [
+      {
+        weekStart: "2026-10-19",
+        weekEnd: "2026-10-25",
+        label: "Oct 19 - Oct 25",
+        workingDays: [],
+        tasks: [card("5.1.2", "Civil"), card("5.2.4", "Mechanical"), card("5.3.1", "Electrical")],
+      },
+      {
+        weekStart: "2026-10-26",
+        weekEnd: "2026-11-01",
+        label: "Oct 26 - Nov 1",
+        workingDays: [],
+        tasks: [card("5.2.5", "Mechanical")],
+      },
+    ];
+
+    check("SCOPE-01 no scope leaves the look-ahead alone", filterLookahead(weeks, null) === weeks);
+    const civil = filterLookahead(weeks, "Civil");
+    check("SCOPE-02 civil keeps only civil", lookaheadCount(civil) === 1);
+    check("SCOPE-03 and it is the right row", civil[0].tasks[0].wbs === "5.1.2");
+
+    // A week with nothing in the chosen scope stays in the list. A week that
+    // disappeared would read as a two-week look-ahead.
+    check("SCOPE-04 empty weeks are kept, not dropped", civil.length === 2);
+    check("SCOPE-05 and read as having no work", civil[1].tasks.length === 0);
+
+    // The source is never mutated: the editor renders All and Civil from the
+    // same array as the operator clicks between them.
+    check("SCOPE-06 filtering does not mutate the source", lookaheadCount(weeks) === 4);
+
+    // A report issued before scope existed has frozen cards with no scope
+    // field. Those must still filter off the WBS rather than vanish.
+    const legacy: LookaheadWeek[] = [
+      {
+        weekStart: "2026-10-19",
+        weekEnd: "2026-10-25",
+        label: "Oct 19 - Oct 25",
+        workingDays: [],
+        tasks: [card("5.1.9", undefined), card("5.3.9", undefined)],
+      },
+    ];
+    const legacyCivil = filterLookahead(legacy, "Civil");
+    check("SCOPE-07 a frozen card with no scope still filters", lookaheadCount(legacyCivil) === 1);
+    check("SCOPE-08 and lands in the right discipline", legacyCivil[0].tasks[0].wbs === "5.1.9");
+
+    check(
+      "SCOPE-09 a discipline with nothing scheduled counts zero, not everything",
+      lookaheadCount(filterLookahead(weeks, "Permitting")) === 0,
+    );
+  }
 
   // ---- dates ----
   // The case that motivated storing the period separately: Sweet Springs files

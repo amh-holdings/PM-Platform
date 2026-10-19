@@ -16,6 +16,8 @@ import {
   type EquipmentRow,
 } from "@/lib/weekly-report";
 import type { WeeklyReportView } from "@/lib/weekly-report-load";
+import { filterLookahead, lookaheadCount } from "@/lib/schedule-lookahead";
+import { SCOPE_ORDER, type TaskScope } from "@/lib/schedule-scope";
 import { describeBasis } from "@/lib/weekly-schedule-basis";
 
 import { HighlightedTextarea } from "./highlighted-textarea";
@@ -101,7 +103,15 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
   const [contractors, setContractors] = useState<ContractorRow[]>(view.contractors);
   const [equipment, setEquipment] = useState<EquipmentRow[]>(view.equipment);
 
-  const printHref = `/projects/${view.projectId}/reports/weekly-progress/print?week=${view.weekEnding}`;
+  // Which discipline the look-ahead prints. Presentation only: it steers the
+  // print link and the preview below, and never reaches what is saved or
+  // issued. Zarina: "Can we only print the civil portion of the schedule
+  // through the weekly progress report 3 week look ahead."
+  const [lookaheadScope, setLookaheadScope] = useState<TaskScope | "">("");
+
+  const printHref =
+    `/projects/${view.projectId}/reports/weekly-progress/print?week=${view.weekEnding}` +
+    (lookaheadScope ? `&scope=${encodeURIComponent(lookaheadScope)}` : "");
 
   function save(then?: () => void) {
     setError(null);
@@ -525,8 +535,30 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
 
         <Field
           label="3 week look ahead"
-          hint="The table below is built from the schedule for the three weeks after this period and prints in full on the report. Nothing to fill in - it is black for the same reason Site Resources is."
+          hint="Built from the schedule for the three weeks after this period. Nothing to fill in - it is black for the same reason Site Resources is. Pick a discipline to print one scope on its own; the rest of the report still covers the whole job."
         >
+          <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-muted-foreground">Print scope:</span>
+            {([""] as (TaskScope | "")[]).concat(SCOPE_ORDER).map((sc) => {
+              const n = lookaheadCount(filterLookahead(view.lookahead, sc || null));
+              return (
+                <button
+                  key={sc || "all"}
+                  type="button"
+                  onClick={() => setLookaheadScope(sc)}
+                  className={cn(
+                    "rounded-full px-2 py-0.5",
+                    lookaheadScope === sc
+                      ? "bg-foreground text-background"
+                      : "border hover:bg-accent",
+                    !n && sc && "opacity-40",
+                  )}
+                >
+                  {sc || "All"} ({n})
+                </button>
+              );
+            })}
+          </div>
           <Label className={cn("text-xs", MINE_LABEL)}>
             Optional note above the table
           </Label>
@@ -538,7 +570,7 @@ export function WeeklyReportForm({ view, canIssue, drift = [] }: Props) {
             className={cn("w-full rounded-md border bg-background p-2 text-sm", MINE_FIELD)}
             placeholder="Optional note, e.g. Panel delivery confirmed for the week of 7-Sep."
           />
-          <LookaheadPreview view={view} />
+          <LookaheadPreview view={view} scope={lookaheadScope || null} />
         </Field>
 
         <DerivedBox
@@ -1185,25 +1217,48 @@ function ScheduleBasisLine({ basis }: { basis: WeeklyReportView["scheduleBasis"]
   );
 }
 
-function LookaheadPreview({ view }: { view: WeeklyReportView }) {
-  const total = useMemo(
-    () => view.lookahead.reduce((n, w) => n + w.tasks.length, 0),
+function LookaheadPreview({
+  view,
+  scope,
+}: {
+  view: WeeklyReportView;
+  scope: TaskScope | null;
+}) {
+  // The preview shows what will PRINT, so it filters the same way the print
+  // page does. A picker that changes the sheet but not the thing above it is
+  // how somebody prints the wrong scope.
+  const weeks = useMemo(
+    () => filterLookahead(view.lookahead, scope),
+    [view.lookahead, scope],
+  );
+  const total = useMemo(() => lookaheadCount(weeks), [weeks]);
+  const fullTotal = useMemo(
+    () => lookaheadCount(view.lookahead),
     [view.lookahead],
   );
   if (!total) {
     return (
       <>
         <p className="mt-2 text-xs text-muted-foreground">
-          The schedule has no work projected in the three weeks after this period.
-          Nothing will print on the look-ahead page.
+          {scope && fullTotal > 0
+            ? `No ${scope.toLowerCase()} work is projected in the three weeks after this period. ${fullTotal} ${fullTotal === 1 ? "activity is" : "activities are"} scheduled in other disciplines - pick All to see them.`
+            : "The schedule has no work projected in the three weeks after this period. Nothing will print on the look-ahead page."}
         </p>
       </>
     );
   }
   return (
     <>
+      {scope && (
+        <p className="mt-2 text-xs text-amber-800">
+          Printing {scope} only. {fullTotal - total}{" "}
+          {fullTotal - total === 1 ? "activity" : "activities"} in other
+          disciplines will be left off the look-ahead. The rest of the report
+          still covers the whole job.
+        </p>
+      )}
       <div className="mt-2 grid gap-2 sm:grid-cols-3">
-      {view.lookahead.map((w) => (
+      {weeks.map((w) => (
         <div key={w.weekStart} className="rounded-md border bg-muted/30 p-2">
           <p className="text-xs font-medium">{w.label}</p>
           <ul className="mt-1 space-y-0.5">

@@ -8,6 +8,11 @@ import {
   weeklyProvenance,
   weeklySheet,
 } from "@/lib/weekly-report-load";
+import {
+  filterLookahead,
+  lookaheadCount,
+} from "@/lib/schedule-lookahead";
+import { SCOPE_ORDER, type TaskScope } from "@/lib/schedule-scope";
 import { describeBasisShort } from "@/lib/weekly-schedule-basis";
 import {
   MILESTONE_FIELDS,
@@ -21,7 +26,20 @@ import { PrintButton } from "./print-button";
 import { M, ProvenanceShell } from "./provenance";
 
 type Params = { id: string };
-type Search = { week?: string };
+type Search = { week?: string; scope?: string };
+
+/**
+ * Which discipline the look-ahead prints, from the query string.
+ *
+ * Anything unrecognised reads as no filter rather than as an empty sheet. A
+ * typo in a URL should print the whole look-ahead, not silently print none of
+ * it and leave somebody to notice the omission at the owner's end.
+ */
+function readScope(raw: string | undefined): TaskScope | null {
+  if (!raw) return null;
+  const hit = SCOPE_ORDER.find((s) => s.toLowerCase() === raw.trim().toLowerCase());
+  return hit ?? null;
+}
 
 const isIso = (s: string | undefined): s is string =>
   typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -68,7 +86,14 @@ export default async function WeeklyProgressPrintPage({
     date: r.milestones[f.key] ?? null,
     manual: prov.milestones[f.key] ?? false,
   }));
-  const lookaheadTotal = r.lookahead.reduce((n, w) => n + w.tasks.length, 0);
+  // Filtered HERE, at render, never in the stored payload. An issued report
+  // prints from a frozen look-ahead and what was sent has to stay what was
+  // sent; narrowing the printed sheet to one discipline is a choice about this
+  // printout, not an edit to the record.
+  const scope = readScope(searchParams.scope);
+  const lookahead = filterLookahead(r.lookahead, scope);
+  const lookaheadTotal = lookaheadCount(lookahead);
+  const lookaheadFullTotal = lookaheadCount(r.lookahead);
 
   return (
     <ProvenanceShell manualCount={prov.manualCount}>
@@ -81,6 +106,34 @@ export default async function WeeklyProgressPrintPage({
           ← Back to the editor
         </Link>
         <PrintButton />
+      </div>
+
+      {/* Discipline picker for the look-ahead. On screen only: pick, then
+          print. Nothing else on the sheet is filtered - the progress figures,
+          milestones and at-risk list still answer for the whole job, because
+          a weekly report that silently reported on a quarter of the project
+          would be a worse document than a long look-ahead. */}
+      <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] print:hidden">
+        <span className="text-neutral-600">Look-ahead scope:</span>
+        {([null, ...SCOPE_ORDER] as (TaskScope | null)[]).map((s) => {
+          const on = scope === s;
+          const qs = new URLSearchParams({ week: weekEnding });
+          if (s) qs.set("scope", s);
+          return (
+            <Link
+              key={s ?? "all"}
+              href={`/projects/${params.id}/reports/weekly-progress/print?${qs.toString()}`}
+              className={
+                on
+                  ? "rounded-full bg-neutral-900 px-2 py-0.5 text-white"
+                  : "rounded-full border border-neutral-400 px-2 py-0.5 hover:bg-neutral-100"
+              }
+            >
+              {s ?? "All"}
+              {s ? ` (${lookaheadCount(filterLookahead(r.lookahead, s))})` : ` (${lookaheadFullTotal})`}
+            </Link>
+          );
+        })}
       </div>
 
       {view.status !== "issued" ? (
@@ -307,7 +360,9 @@ export default async function WeeklyProgressPrintPage({
 
         <div className="border-b border-neutral-400">
           <div className="flex">
-            <Cell head>3 Week Look Ahead:</Cell>
+            <Cell head>
+              3 Week Look Ahead{scope ? ` - ${scope} only` : ""}:
+            </Cell>
             <div className="flex-1 px-2 py-1">
               {r.lookaheadNote ? (
                 <p className="wr-manual whitespace-pre-wrap">{r.lookaheadNote}</p>
@@ -315,6 +370,16 @@ export default async function WeeklyProgressPrintPage({
                 <p className="text-neutral-600">
                   Activities scheduled for the three weeks following this
                   reporting period, from the project schedule.
+                  {/* Said on the printed sheet, not just on screen. A sheet
+                      that quietly leaves out mechanical and electrical reads
+                      as the whole look-ahead to whoever receives it. */}
+                  {scope
+                    ? ` ${scope} scope only; ${lookaheadFullTotal - lookaheadTotal} ${
+                        lookaheadFullTotal - lookaheadTotal === 1
+                          ? "activity in other disciplines is"
+                          : "activities in other disciplines are"
+                      } not shown.`
+                    : ""}
                 </p>
               )}
             </div>
@@ -322,7 +387,9 @@ export default async function WeeklyProgressPrintPage({
 
           {lookaheadTotal === 0 ? (
             <p className="px-2 pb-1 text-[10px]">
-              No work is projected in the three weeks after this period.
+              {scope && lookaheadFullTotal > 0
+                ? `No ${scope.toLowerCase()} work is projected in the three weeks after this period. ${lookaheadFullTotal} ${lookaheadFullTotal === 1 ? "activity is" : "activities are"} scheduled in other disciplines.`
+                : "No work is projected in the three weeks after this period."}
             </p>
           ) : (
             <div className="px-2 pb-2">
@@ -337,7 +404,7 @@ export default async function WeeklyProgressPrintPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {r.lookahead.map((w) => (
+                  {lookahead.map((w) => (
                     <Fragment key={w.weekStart}>
                       <tr className="bg-[#bdd7ee] [print-color-adjust:exact]">
                         <td

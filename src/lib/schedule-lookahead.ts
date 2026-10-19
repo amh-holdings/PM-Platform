@@ -17,6 +17,7 @@ import {
   type CalendarLike,
 } from "@/lib/schedule-calendar";
 import type { CpmOutput } from "@/lib/schedule-cpm";
+import { scopeOf, type TaskScope } from "@/lib/schedule-scope";
 import { nearestNamedAncestor } from "@/lib/schedule-task-search";
 
 const DAY_MS = 86_400_000;
@@ -34,6 +35,16 @@ export type LookaheadTask = {
    */
   parent: string | null;
   assignedTo: string | null;
+  /**
+   * Discipline, derived the same way the schedule grid's scope filter derives
+   * it. Carried on the card so the weekly report can print one discipline on
+   * its own: Dennis runs civil and does not need three weeks of mechanical
+   * lead times in the sheet he works from.
+   *
+   * Zarina: "Can we only print the civil portion of the schedule through the
+   * weekly progress report 3 week look ahead."
+   */
+  scope: TaskScope;
   start: string;
   end: string;
   pctComplete: number | null;
@@ -96,6 +107,9 @@ export function buildLookahead(
     assigned_to: string | null;
     pct_complete: number | null;
     status: string | null;
+    /** Only used for the scopes the WBS does not encode. May be absent on a
+     *  snapshot taken before phase was selected. */
+    phase?: string | null;
   }[],
   cpm: CpmOutput,
   opts: {
@@ -140,6 +154,7 @@ export function buildLookahead(
         name: t.task_name,
         parent: parentLabel(t.wbs_code, nameByWbs),
         assignedTo: t.assigned_to,
+        scope: scopeOf(t),
         start: c.projectedStart,
         end: c.projectedEnd,
         pctComplete: t.pct_complete,
@@ -168,6 +183,40 @@ export function buildLookahead(
     });
   }
   return out;
+}
+
+/**
+ * One discipline's look-ahead, weeks and all.
+ *
+ * The weeks are kept even when a discipline has nothing in them. A week that
+ * disappears reads as a shorter look-ahead; a week that says "no scheduled
+ * work" reads as the fact it is.
+ *
+ * `scope` null means every discipline, which is the default and what the
+ * report has always printed.
+ *
+ * The fallback matters: a report issued before scope existed has a frozen
+ * look-ahead whose cards carry no `scope` field, and those still have to
+ * filter correctly rather than vanishing. The WBS alone answers for the
+ * construction branch, which is the only place a discipline filter is asked
+ * for, so deriving from it is enough to keep an old sheet readable.
+ */
+export function filterLookahead(
+  weeks: LookaheadWeek[],
+  scope: TaskScope | null,
+): LookaheadWeek[] {
+  if (!scope) return weeks;
+  return weeks.map((w) => ({
+    ...w,
+    tasks: w.tasks.filter(
+      (t) => (t.scope ?? scopeOf({ wbs_code: t.wbs })) === scope,
+    ),
+  }));
+}
+
+/** How many activities a look-ahead holds, across its weeks. */
+export function lookaheadCount(weeks: LookaheadWeek[]): number {
+  return weeks.reduce((n, w) => n + w.tasks.length, 0);
 }
 
 // Plain-text look-ahead, formatted the way the subs already write them so it
