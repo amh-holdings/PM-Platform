@@ -412,7 +412,11 @@ export async function loadWeeklyReport(
   // The schedule feeds three boxes (milestones, look-ahead, at-risk tasks) and
   // its Phase 1 columns are hand-applied, so a missing column degrades those
   // three rather than taking the page down. Same probe the schedule page uses.
-  const BASE = "wbs_code, task_name, assigned_to, status, pct_complete, start_date, end_date, duration_days, predecessors, level_code, sort_order";
+  // `phase` is here for the look-ahead's discipline filter. The WBS encodes
+  // civil, mechanical and electrical under the construction branch; phase is
+  // what separates contracts, permitting, engineering and procurement. See
+  // schedule-scope.
+  const BASE = "wbs_code, task_name, assigned_to, status, pct_complete, start_date, end_date, duration_days, predecessors, level_code, sort_order, phase";
   let tasks: Record<string, unknown>[] = [];
   let scheduleFlagsAvailable = true;
   const withFlags = await supabase
