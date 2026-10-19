@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { guardCapability } from "@/lib/roles-server";
+import { newestLiveApp, nextAppNumber, replacesRejected } from "@/lib/sub-app-numbering";
 import { subBillingClient } from "@/lib/sub-billing-db";
 
 import { BillEntryForm } from "./bill-entry-form";
@@ -21,16 +22,21 @@ export default async function NewSubBillPage({ params }: { params: Params }) {
 
   const [{ data: sovRows }, { data: priorRows }] = await Promise.all([
     db.from("sub_sov_lines").select("*").eq("subcontractor_id", params.subId).eq("active", true).order("sort_order"),
+    // Every application, not just the newest, and with its status. A rejected
+    // one neither sets the baseline nor advances the number, and both of those
+    // need the whole list to work out. See sub-app-numbering.
     db
       .from("sub_pay_apps")
-      .select("id, app_number, period_end, billed_to_date, retainage_to_date")
+      .select("id, app_number, period_end, billed_to_date, retainage_to_date, status, created_at")
       .eq("subcontractor_id", params.subId)
-      .order("app_number", { ascending: false })
-      .limit(1),
+      .order("app_number", { ascending: false }),
   ]);
 
   const sovLines = sovRows ?? [];
-  const prior = priorRows?.[0] ?? null;
+  const history = priorRows ?? [];
+  const prior = newestLiveApp(history);
+  const appNumber = nextAppNumber(history);
+  const isResubmission = replacesRejected(history, appNumber);
 
   // Carry the prior application's completed-to-date forward as this bill's
   // "from previous" column. This is the number the sub's own form must match.
@@ -53,8 +59,15 @@ export default async function NewSubBillPage({ params }: { params: Params }) {
           {sub.company_name}
         </Link>
         <h2 className="text-lg font-semibold">
-          Record application #{prior ? prior.app_number + 1 : 1}
+          Record application #{appNumber}
         </h2>
+        {isResubmission && (
+          <p className="text-xs text-amber-800">
+            Application #{appNumber} was rejected. This replaces it under the
+            same number, which is what {sub.company_name} will have on their own
+            form. The rejected one stays on file, marked superseded.
+          </p>
+        )}
         <p className="text-xs text-muted-foreground">
           Enter what the sub billed on each line this period. Completed to date,
           percent, balance and retainage are computed from our SOV and the last
@@ -66,7 +79,7 @@ export default async function NewSubBillPage({ params }: { params: Params }) {
       <BillEntryForm
         projectId={params.id}
         subId={params.subId}
-        appNumber={prior ? prior.app_number + 1 : 1}
+        appNumber={appNumber}
         retainagePct={Number(sub.retainage_pct ?? 0)}
         paymentTermsDays={sub.payment_terms_days}
         priorAppNumber={prior?.app_number ?? null}

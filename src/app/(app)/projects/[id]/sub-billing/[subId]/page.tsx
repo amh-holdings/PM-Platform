@@ -6,6 +6,11 @@ import { formatCurrency, formatDate } from "@/lib/format";
 import { can } from "@/lib/roles";
 import { getEffectiveRole, guardCapability } from "@/lib/roles-server";
 import { projectNextBill, type Evidence, type SovLine } from "@/lib/sub-billing";
+import {
+  compareAppsNewestFirst,
+  newestLiveApp,
+  supersededAppIds,
+} from "@/lib/sub-app-numbering";
 import { loadEvidence } from "@/lib/sub-billing-run";
 import { sovTotals } from "@/lib/sub-sov-totals";
 import { describeBasis } from "@/lib/weekly-schedule-basis";
@@ -46,18 +51,25 @@ export default async function SubBillingDetailPage({
   const [{ data: sovRows }, { data: appRows }, { data: taskRows }, { data: commodityRows }] =
     await Promise.all([
       db.from("sub_sov_lines").select("*").eq("subcontractor_id", params.subId).eq("active", true).order("sort_order"),
-      db.from("sub_pay_apps").select("*").eq("subcontractor_id", params.subId).order("app_number", { ascending: false }),
+      db.from("sub_pay_apps").select("*").eq("subcontractor_id", params.subId).order("app_number", { ascending: false }).order("created_at", { ascending: false }),
       db.from("schedule_tasks").select("wbs_code, task_name, status, pct_complete, start_date, end_date, duration_days").eq("project_id", params.id).order("wbs_code"),
       db.from("commodities").select("id, label, uom, total_quantity").eq("project_id", params.id).eq("active", true).order("sort_order"),
     ]);
 
   const sovLines = sovRows ?? [];
-  const apps = appRows ?? [];
+  // Sorted here rather than trusted from the query, because two rows can now
+  // share a number: a rejected application and the one that replaced it. The
+  // live one sorts above the rejection, so the list reads top down in the
+  // order things actually happened. See sub-app-numbering.
+  const apps = [...(appRows ?? [])].sort(compareAppsNewestFirst);
+  const superseded = supersededAppIds(apps);
   const tasks = taskRows ?? [];
   const commodities = commodityRows ?? [];
 
-  // Billed-to-date per line, from the most recent application on record.
-  const latest = apps[0];
+  // Billed-to-date per line, from the most recent application that still
+  // counts. Never a rejected one: reading it off a bill AHC refused reports
+  // the sub further along than anybody agreed they were.
+  const latest = newestLiveApp(apps);
   let billedByItem = new Map<string, number>();
   if (latest) {
     const { data: latestLines } = await db
@@ -437,6 +449,14 @@ export default async function SubBillingDetailPage({
                       >
                         #{a.app_number}
                       </Link>
+                      {superseded.has(a.id) && (
+                        <span
+                          className="ml-1.5 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+                          title={`Replaced by the application recorded under #${a.app_number} after this one was rejected.`}
+                        >
+                          superseded
+                        </span>
+                      )}
                     </td>
                     {/* Both ends, not just the finish. "Period end" alone
                         cannot answer what a bill covers, which is the first
