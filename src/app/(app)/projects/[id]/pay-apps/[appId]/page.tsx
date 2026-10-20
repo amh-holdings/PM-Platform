@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { guardCapability } from "@/lib/roles-server";
+import { payAppLabel, payAppNeighbours } from "@/lib/pay-app-nav";
 
 import { PayAppStatusActions } from "./pay-app-status-actions";
 
@@ -21,7 +22,8 @@ export default async function PayAppDetailPage({ params }: { params: Params }) {
   await guardCapability("viewPayApps");
   const supabase = createClient();
 
-  const [{ data: app, error }, { data: lines }, { data: project }] = await Promise.all([
+  const [{ data: app, error }, { data: lines }, { data: project }, { data: siblings }] =
+    await Promise.all([
     supabase
       .from("pay_applications")
       .select(
@@ -42,9 +44,19 @@ export default async function PayAppDetailPage({ params }: { params: Params }) {
       .select("name, client")
       .eq("id", params.id)
       .maybeSingle(),
+    // Every application on the project, for the arrows. Four columns, so this
+    // stays cheap on a job with thirty of them.
+    supabase
+      .from("pay_applications")
+      .select("id, app_number, period_end, created_at")
+      .eq("project_id", params.id),
   ]);
 
   if (error || !app) notFound();
+
+  // Chronological, so left is the earlier period and right is the later one.
+  // See pay-app-nav for why this cannot sort on app_number.
+  const nav = payAppNeighbours(siblings ?? [], params.appId);
 
   const rows = lines ?? [];
   // Subtotals for the footer
@@ -75,7 +87,49 @@ export default async function PayAppDetailPage({ params }: { params: Params }) {
           >
             &larr; Pay applications
           </Link>
-          <div className="mt-1 flex flex-wrap items-baseline gap-3">
+          <div className="mt-1 flex flex-wrap items-center gap-3">
+            {/* Step between applications without going back to the list.
+                Checking an AFP means comparing it with the one before it -
+                previous billings here are to-date there - and that was two
+                clicks and a scan of the list each way. Zarina: "Like an arrow
+                for right and left so we can view the next AFP or the previous
+                AFP in this page." */}
+            <div className="flex items-center gap-1">
+              {nav.prev ? (
+                <Link
+                  href={`/projects/${params.id}/pay-apps/${nav.prev.id}`}
+                  className="flex h-7 items-center gap-1 rounded border px-2 text-xs hover:bg-accent"
+                  title={`Previous application: ${payAppLabel(nav.prev)}`}
+                >
+                  &larr;
+                  <span className="hidden sm:inline">{payAppLabel(nav.prev)}</span>
+                </Link>
+              ) : (
+                <span
+                  className="flex h-7 items-center rounded border px-2 text-xs text-muted-foreground opacity-40"
+                  title="This is the earliest application on the project"
+                >
+                  &larr;
+                </span>
+              )}
+              {nav.next ? (
+                <Link
+                  href={`/projects/${params.id}/pay-apps/${nav.next.id}`}
+                  className="flex h-7 items-center gap-1 rounded border px-2 text-xs hover:bg-accent"
+                  title={`Next application: ${payAppLabel(nav.next)}`}
+                >
+                  <span className="hidden sm:inline">{payAppLabel(nav.next)}</span>
+                  &rarr;
+                </Link>
+              ) : (
+                <span
+                  className="flex h-7 items-center rounded border px-2 text-xs text-muted-foreground opacity-40"
+                  title="This is the latest application on the project"
+                >
+                  &rarr;
+                </span>
+              )}
+            </div>
             <h2 className="text-lg font-semibold">Pay application {app.app_number}</h2>
             <span
               className={cn(
@@ -85,6 +139,11 @@ export default async function PayAppDetailPage({ params }: { params: Params }) {
             >
               {app.status}
             </span>
+            {nav.total > 1 && nav.position > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {nav.position} of {nav.total}
+              </span>
+            )}
           </div>
         </div>
         <PayAppStatusActions
