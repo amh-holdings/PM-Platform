@@ -75,6 +75,134 @@ order by item_number;
 -- at the bottom is the by-hand version for that case.
 
 -- ===========================================================================
+-- 1b. THE NAMES ARE NOT UNIQUE ON THEIR OWN. Run this instead.
+-- ===========================================================================
+-- Step 1 on Sussex came back with eight lines proposing three distinct names:
+-- "30% Design" twice, "90% Design" three times, "IFP (Issued For Permit)"
+-- three times. The stage is only half the name. The other half is which
+-- design package it belongs to, and the WBS says so: 1.2.1.x, 1.2.2.x and
+-- 1.2.3.x are three packages, each running 30% -> 90% -> IFP.
+--
+-- So the name is the parent plus the stage. Same problem, same fix as the
+-- three-week look-ahead, where twelve cards all read "Lead Time" until the
+-- branch above them was put in front.
+--
+-- This proposes parent + stage and REFUSES any name that would still be a
+-- duplicate. A rename that leaves two rows identical has not solved anything.
+with proj as (
+  select id from public.projects where name ilike '%sussex%' limit 1
+),
+linked as (
+  select
+    bl.id,
+    bl.item_number,
+    bl.description                as current_name,
+    bl.scheduled_value,
+    min(t.wbs_code)               as task_wbs,
+    min(t.task_name)              as stage,
+    count(t.wbs_code)             as task_count
+  from public.billing_lines bl
+  join proj on proj.id = bl.project_id
+  left join public.schedule_tasks t
+    on t.project_id = bl.project_id
+   and t.wbs_code = any(coalesce(bl.linked_task_wbs_codes, array[]::text[]))
+  where bl.item_number like '1.01.%'
+  group by bl.id, bl.item_number, bl.description, bl.scheduled_value
+),
+-- The parent is the WBS with its last segment removed. Taken from the
+-- schedule rather than assumed, so a package with no row of its own shows as
+-- null instead of inventing a name.
+named as (
+  select
+    l.*,
+    parent.task_name as package,
+    case
+      when l.task_count <> 1 or l.stage is null then null
+      when parent.task_name is null then null
+      else parent.task_name || ' - ' || l.stage
+    end as proposed_name
+  from linked l
+  left join public.schedule_tasks parent
+    on parent.project_id = (select id from proj)
+   and parent.wbs_code = regexp_replace(l.task_wbs, '\.[^.]+$', '')
+),
+counted as (
+  select n.*, count(*) over (partition by n.proposed_name) as same_name
+  from named n
+)
+select
+  item_number,
+  current_name,
+  scheduled_value,
+  task_wbs,
+  package,
+  stage,
+  proposed_name,
+  case
+    when lower(btrim(current_name)) <> 'plan set' then 'skipped: not a Plan Set line'
+    when task_count <> 1 then 'SKIPPED: not exactly one linked task'
+    when package is null then 'SKIPPED: the parent WBS has no row, so there is no package name'
+    when proposed_name is null then 'SKIPPED: cannot build a name'
+    when same_name > 1 then 'SKIPPED: this name would still be a duplicate'
+    else 'rename to: ' || proposed_name
+  end as verdict
+from counted
+order by item_number;
+
+-- Read the package column first. If 1.2.1, 1.2.2 and 1.2.3 are named Civil,
+-- Electrical and Structural, the proposed names read right and step 2b is
+-- safe. If they are generic too, use the by-hand block at the bottom.
+
+-- ===========================================================================
+-- 2b. Rename with parent + stage. Uncomment and run.
+-- ===========================================================================
+-- begin;
+--
+-- with proj as (
+--   select id from public.projects where name ilike '%sussex%' limit 1
+-- ),
+-- linked as (
+--   select bl.id, bl.item_number,
+--          min(t.wbs_code)   as task_wbs,
+--          min(t.task_name)  as stage,
+--          count(t.wbs_code) as task_count
+--   from public.billing_lines bl
+--   join proj on proj.id = bl.project_id
+--   join public.schedule_tasks t
+--     on t.project_id = bl.project_id
+--    and t.wbs_code = any(coalesce(bl.linked_task_wbs_codes, array[]::text[]))
+--   where bl.item_number like '1.01.%'
+--     and lower(btrim(bl.description)) = 'plan set'
+--   group by bl.id, bl.item_number
+-- ),
+-- named as (
+--   select l.id, l.item_number,
+--          parent.task_name || ' - ' || l.stage as proposed_name
+--   from linked l
+--   join public.schedule_tasks parent
+--     on parent.project_id = (select id from proj)
+--    and parent.wbs_code = regexp_replace(l.task_wbs, '\.[^.]+$', '')
+--   where l.task_count = 1
+--     and btrim(coalesce(l.stage, '')) <> ''
+--     and btrim(coalesce(parent.task_name, '')) <> ''
+-- ),
+-- unique_names as (
+--   select n.* from named n
+--   where 1 = (select count(*) from named m where m.proposed_name = n.proposed_name)
+-- )
+-- update public.billing_lines bl
+--    set description = u.proposed_name,
+--        notes = trim(both E'\n' from
+--                  coalesce(bl.notes, '')
+--                  || case when coalesce(bl.notes, '') = '' then '' else E'\n' end
+--                  || 'Renamed from "Plan Set" to the design package and stage on '
+--                  || to_char(current_date, 'YYYY-MM-DD') || '.')
+--   from unique_names u
+--  where u.id = bl.id;
+--
+-- commit;
+
+-- ===========================================================================
 -- 2. Rename. Uncomment and run.
 -- ===========================================================================
 -- begin;
