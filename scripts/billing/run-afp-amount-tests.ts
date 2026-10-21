@@ -9,6 +9,8 @@ import {
   defaultAfpAmountForPo,
   forecastAmountPatch,
   needsADecision,
+  procurementBlockedReason,
+  recordedMilestones,
   pairForecastAmounts,
   pickAfpTargetLine,
   resolveProcurementAmount,
@@ -902,6 +904,102 @@ eq("half is flagged", planVsEvidenceGap({ planned: 50, evidence: 100 }), true);
 eq("close enough is not", planVsEvidenceGap({ planned: 110, evidence: 100 }), false);
 // No plan is not a disagreement, it is silence.
 eq("no plan is not a gap", planVsEvidenceGap({ planned: 0, evidence: 100 }), false);
+
+
+// ---------------------------------------------------------------------------
+// procurementBlockedReason - PROCUREMENT BLOCKED REASON
+// ---------------------------------------------------------------------------
+//
+// Sussex 5.04 Pile and Racking Procurement Deposit, October 2026. The PO was
+// linked, a Deposit milestone was added, and the line still read zero while
+// the panel still said the terms were missing. They were not. The PO was
+// unsigned and a deposit trigger earns on signature.
+
+section("PROCUREMENT BLOCKED REASON");
+
+const noTerms = procurementBlockedReason({
+  linkedPoTotal: 900454.74,
+  evidence: [
+    {
+      source: "payment milestone",
+      taskName: "no payment milestones recorded",
+      amount: 0,
+      pct: 0,
+      note: "no payment milestones recorded",
+    },
+  ],
+});
+check(
+  "a PO with no milestones still says the terms are missing",
+  noTerms.includes("No payment terms recorded") &&
+    noTerms.includes("$900,454.74"),
+);
+
+const unsigned = procurementBlockedReason({
+  linkedPoTotal: 900454.74,
+  evidence: [
+    {
+      source: "payment milestone",
+      taskName: "Deposit on PO",
+      amount: 225113.69,
+      pct: 0,
+      note: "PO is not signed",
+    },
+    {
+      source: "payment milestone",
+      taskName: "Balance on delivery",
+      amount: 675341.05,
+      pct: 0,
+      note: "delivery not recorded",
+    },
+  ],
+});
+check(
+  "an unsigned PO names the milestone and its amount, not missing terms",
+  unsigned.startsWith("Deposit on PO is $225,113.69 and has not earned: PO is not signed.") &&
+    !unsigned.includes("No payment terms recorded"),
+);
+check(
+  "and says how many others are also unearned",
+  unsigned.includes("1 other milestone on the PO have not earned either."),
+);
+
+const oneLeft = procurementBlockedReason({
+  linkedPoTotal: 1000,
+  evidence: [
+    { source: "payment milestone", taskName: "Deposit", amount: 250, pct: 100, note: "signed" },
+    { source: "payment milestone", taskName: "Balance", amount: 750, pct: 0, note: "not delivered" },
+  ],
+});
+check(
+  "an earned milestone is not named as the blocker",
+  oneLeft.startsWith("Balance is $750.00") && !oneLeft.includes("other milestone"),
+);
+
+const allEarned = procurementBlockedReason({
+  linkedPoTotal: 1000,
+  evidence: [
+    { source: "payment milestone", taskName: "Deposit", amount: 250, pct: 100, note: "signed" },
+  ],
+});
+check(
+  "every milestone earned gives the honest sentence, not a false blocker",
+  allEarned.includes("Every milestone on the linked PO has earned"),
+);
+
+check(
+  "schedule evidence is never mistaken for a milestone",
+  recordedMilestones([
+    { source: "duration", taskName: "1.2.3.1 30% Design", pct: 100 },
+  ]).length === 0,
+);
+
+const noPos = procurementBlockedReason({ linkedPoTotal: null, evidence: [] });
+check(
+  "no linked POs at all falls back without printing a total",
+  noPos.includes("No payment terms recorded on the linked POs") &&
+    !noPos.includes("totalling"),
+);
 
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);
