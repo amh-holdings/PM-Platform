@@ -116,21 +116,31 @@ order by bl.item_number;
 
 
 -- ===========================================================================
--- SECTION 2 - THE WRITE. Run only after section 1 reads clean:
---   1a shows AFP 2 on an October period and no other application there
---   1b shows the entries you expect
---   1c returns ZERO rows
+-- SECTION 2 - THE WRITE.
+--
+-- The first version of this script refused here, and it was right to: both of
+-- AFP 2's lines already carry a September row. Those rows are the SOV import's
+-- forecast for the month, laid down before the AFP was built. This version
+-- absorbs them.
+--
+-- An evidence-free September row is one with no actual amount, no afp_number,
+-- no pay application and a status outside the billed set. Those get deleted
+-- and the forecast figure is recorded in the surviving row's note. If ANY
+-- September row carries real billing evidence the whole thing refuses and
+-- names the lines, because that would mean the same work was billed twice and
+-- a date change is the wrong fix.
 -- ===========================================================================
 
 do $$
 declare
-  v_project uuid;
-  v_app     uuid;
-  v_start   date;
-  v_end     date;
-  v_entries int;
-  v_matches int;
-  v_clash   int;
+  v_project  uuid;
+  v_app      uuid;
+  v_start    date;
+  v_end      date;
+  v_matches  int;
+  v_entries  int;
+  v_absorbed int;
+  v_blocked  text;
 begin
   select count(*) into v_matches
   from public.projects p
@@ -156,31 +166,71 @@ begin
     raise exception 'Sussex has no application numbered AFP 2';
   end if;
 
-  -- Refuse if it is not sitting in October 2026. If this has already been
-  -- run, the period reads September and the script stops rather than
-  -- walking the application back into August.
+  -- Refuse if it is not sitting in October 2026, so a second run cannot walk
+  -- the application back into August.
   if date_trunc('month', v_start) <> date '2026-10-01' then
     raise exception
       'AFP 2 period starts % - expected an October 2026 period. Nothing changed.',
       v_start;
   end if;
 
-  select count(*) into v_entries
-  from public.billing_entries be
-  where be.pay_application_id = v_app;
-
-  select count(*) into v_clash
+  -- Any September row in the way that is NOT a bare forecast stops everything.
+  select string_agg(bl.item_number || ' (' ||
+           case
+             when coalesce(other.actual_amount, 0) <> 0
+               then 'actual ' || to_char(other.actual_amount, 'FM999,999,990.00')
+             when other.afp_number is not null then 'on ' || other.afp_number
+             when other.pay_application_id is not null then 'stamped on an application'
+             else coalesce(other.status, 'billed')
+           end || ')',
+           ', ' order by bl.item_number)
+    into v_blocked
   from public.billing_entries be
   join public.billing_entries other
     on other.billing_line_id = be.billing_line_id
    and other.period_month = (be.period_month - interval '1 month')::date
-  where be.pay_application_id = v_app;
+  join public.billing_lines bl on bl.id = be.billing_line_id
+  where be.pay_application_id = v_app
+    and (
+      coalesce(other.actual_amount, 0) <> 0
+      or other.afp_number is not null
+      or other.pay_application_id is not null
+      or coalesce(other.status, '') in ('on_pay_app', 'submitted', 'approved', 'paid')
+    );
 
-  if v_clash > 0 then
+  if v_blocked is not null then
     raise exception
-      '% of AFP 2''s lines already have a row in the target month. Nothing changed.',
-      v_clash;
+      'September rows on % carry billing evidence, not a forecast. '
+      'That is a double bill, not a date error. Nothing changed.',
+      v_blocked;
   end if;
+
+  -- Carry each absorbed forecast figure onto the row that survives, so the
+  -- number is not simply lost.
+  update public.billing_entries be
+  set notes = trim(both from
+        coalesce(be.notes || ' ', '') ||
+        'Absorbed the ' ||
+        to_char((be.period_month - interval '1 month')::date, 'YYYY-MM') ||
+        ' forecast of ' || to_char(other.planned_amount, 'FM999,999,990.00') || '.')
+  from public.billing_entries other
+  where be.pay_application_id = v_app
+    and other.billing_line_id = be.billing_line_id
+    and other.period_month = (be.period_month - interval '1 month')::date;
+
+  with doomed as (
+    select other.id
+    from public.billing_entries be
+    join public.billing_entries other
+      on other.billing_line_id = be.billing_line_id
+     and other.period_month = (be.period_month - interval '1 month')::date
+    where be.pay_application_id = v_app
+  )
+  delete from public.billing_entries be
+  using doomed d
+  where be.id = d.id;
+
+  get diagnostics v_absorbed = row_count;
 
   update public.billing_entries be
   set period_month = (be.period_month - interval '1 month')::date,
@@ -195,17 +245,19 @@ begin
         ' (AFP 2 was raised against the wrong month).')
   where be.pay_application_id = v_app;
 
+  get diagnostics v_entries = row_count;
+
   update public.pay_applications pa
   set period_start = (pa.period_start - interval '1 month')::date,
       period_end   = (pa.period_end   - interval '1 month')::date
   where pa.id = v_app;
 
   raise notice
-    'AFP 2 moved from % - % to % - %. % billing entries moved with it.',
+    'AFP 2 moved from % - % to % - %. % entries moved, % September forecasts absorbed.',
     v_start, v_end,
     (v_start - interval '1 month')::date,
     (v_end - interval '1 month')::date,
-    v_entries;
+    v_entries, v_absorbed;
 end $$;
 
 
