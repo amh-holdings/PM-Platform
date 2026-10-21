@@ -419,3 +419,88 @@ export function planVsEvidenceGap(input: {
   const ratio = planned / evidence;
   return ratio >= 1.5 || ratio <= 0.5;
 }
+
+// ---------------------------------------------------------------------------
+// Why a procurement line reads zero, in words the person pricing it can act on
+// ---------------------------------------------------------------------------
+//
+// "No payment terms recorded" was the only sentence this ever said, and it was
+// right exactly once: when the PO had no milestones on it. The moment Zarina
+// put a Deposit milestone on SX-PLACEHOLDER-200-1030 the line still read zero
+// and still blamed missing terms, which sent her back to a page that already
+// had what it asked for. The terms were there. The PO was not signed, and a
+// deposit trigger earns on signature.
+//
+// So the sentence has to name the milestone standing between the line and its
+// money, not the absence of one.
+
+export type MilestoneEvidenceLike = {
+  taskName?: string | null;
+  amount?: number | null;
+  /** Why the milestone did or did not fire, straight off the estimator. */
+  note?: string | null;
+  /** 100 when the milestone fired, 0 when it did not. */
+  pct?: number | null;
+  source?: string | null;
+};
+
+/** The evidence rows that are genuinely recorded milestones. */
+export function recordedMilestones(
+  evidence: readonly MilestoneEvidenceLike[] | null | undefined,
+): MilestoneEvidenceLike[] {
+  return (evidence ?? []).filter(
+    (e) =>
+      (e.source ?? "") === "payment milestone" &&
+      (e.taskName ?? "").trim() !== "" &&
+      e.taskName !== "no payment milestones recorded",
+  );
+}
+
+export function procurementBlockedReason(n: {
+  linkedPoTotal?: number | null;
+  evidence?: readonly MilestoneEvidenceLike[] | null;
+}): string {
+  const milestones = recordedMilestones(n.evidence);
+
+  if (milestones.length === 0) {
+    const total =
+      n.linkedPoTotal != null && n.linkedPoTotal > 0
+        ? `s, totalling ${formatCurrency(n.linkedPoTotal)}`
+        : "s";
+    return (
+      `No payment terms recorded on the linked PO${total}, so nothing can be ` +
+      `computed as earned. Enter the amount due this period, or add the ` +
+      `payment milestones to the PO and it will bill itself from then on.`
+    );
+  }
+
+  // Earned ones are not the blocker. If every milestone fired and the line
+  // still reads zero, the dollars went somewhere else and the generic
+  // already-billed sentence is the honest one.
+  const unearned = milestones.filter((m) => (m.pct ?? 0) < 100);
+  if (unearned.length === 0) {
+    return (
+      `Every milestone on the linked PO has earned, so nothing further is ` +
+      `computed for this period. Enter an amount if some of it belongs here.`
+    );
+  }
+
+  // The nearest one is the one worth naming: it carries the figure the person
+  // is most likely to type.
+  const next = unearned[0];
+  const name = (next.taskName ?? "").trim() || "A milestone";
+  const amount = Number(next.amount ?? 0);
+  const why = (next.note ?? "").trim() || "its trigger has not fired";
+  const others =
+    unearned.length > 1
+      ? ` ${unearned.length - 1} other milestone${
+          unearned.length === 2 ? "" : "s"
+        } on the PO have not earned either.`
+      : "";
+
+  return (
+    `${name} is ${formatCurrency(amount)} and has not earned: ${why}. ` +
+    `Enter the amount due this period, or clear that and it will bill itself ` +
+    `from then on.${others}`
+  );
+}

@@ -23,6 +23,7 @@ import {
 } from "@/lib/rule-of-credit";
 import {
   needsADecision,
+  procurementBlockedReason,
   resolveProcurementAmount,
   typedAmount,
   unsupportedForecastReason,
@@ -1525,11 +1526,7 @@ export async function getBillThisPeriodRows(
     // arithmetic on another page.
     blockedReason:
       n.earned <= 0.005 && n.procurement
-        ? `No payment terms recorded on the linked PO${
-            n.linkedPoTotal != null && n.linkedPoTotal > 0
-              ? `s, totalling ${formatCurrency(n.linkedPoTotal)}`
-              : "s"
-          }, so nothing can be computed as earned. Enter the amount due this period, or add the payment milestones to the PO and it will bill itself from then on.`
+        ? procurementBlockedReason(n)
         : `${formatCurrency(n.earned)} earned, ${formatCurrency(n.alreadyBilled)} already billed. Enter an amount if some of that earlier billing was for other scope.`,
   }));
 
