@@ -118,17 +118,28 @@ order by bl.item_number;
 -- ===========================================================================
 -- SECTION 2 - THE WRITE.
 --
--- The first version of this script refused here, and it was right to: both of
--- AFP 2's lines already carry a September row. Those rows are the SOV import's
--- forecast for the month, laid down before the AFP was built. This version
--- absorbs them.
+-- What is actually in the database, confirmed 2026-10-21:
 --
--- An evidence-free September row is one with no actual amount, no afp_number,
--- no pay application and a status outside the billed set. Those get deleted
--- and the forecast figure is recorded in the surviving row's note. If ANY
--- September row carries real billing evidence the whole thing refuses and
--- names the lines, because that would mean the same work was billed twice and
--- a date change is the wrong fix.
+--   1.01.2  2026-09-01  40,445.88  no AFP, status forecast
+--   1.01.2  2026-10-01  40,445.88  on AFP 2, status approved
+--   1.01.7  2026-09-01  40,445.87  no AFP, status forecast
+--   1.01.7  2026-10-01  40,445.87  on AFP 2, status approved
+--
+-- The September pair are duplicates of the same design work, entered as
+-- actuals but never attached to an application. They carry no billing
+-- evidence, so v_project_billing_summary already excludes them and no
+-- reported total is overstated today. They are inert clutter that shows on
+-- the billing page as a stale prior forecast.
+--
+-- So the write removes the September duplicate and moves the October row,
+-- the one AFP 2 actually bills, back into September.
+--
+-- A September row is removable only when it has no afp_number, no pay
+-- application, a status outside the billed set, AND its amount is either zero
+-- (a bare forecast) or matches the October row to the cent (a duplicate of
+-- the same work). Anything else refuses and names the line, because a
+-- September row holding a DIFFERENT billed amount is a second bill, and a
+-- date change is the wrong fix for that.
 -- ===========================================================================
 
 do $$
@@ -174,14 +185,18 @@ begin
       v_start;
   end if;
 
-  -- Any September row in the way that is NOT a bare forecast stops everything.
+  -- Any September row that is neither a bare forecast nor an exact duplicate
+  -- stops everything.
   select string_agg(bl.item_number || ' (' ||
            case
-             when coalesce(other.actual_amount, 0) <> 0
-               then 'actual ' || to_char(other.actual_amount, 'FM999,999,990.00')
-             when other.afp_number is not null then 'on ' || other.afp_number
              when other.pay_application_id is not null then 'stamped on an application'
-             else coalesce(other.status, 'billed')
+             when other.afp_number is not null then 'on ' || other.afp_number
+             when coalesce(other.status, '') in ('on_pay_app','submitted','approved','paid')
+               then 'status ' || other.status
+             else 'holds ' || to_char(other.actual_amount, 'FM999,999,990.00') ||
+                  ' against ' || to_char(coalesce(nullif(be.actual_amount, 0),
+                                                  be.planned_amount, 0),
+                                         'FM999,999,990.00') || ' on AFP 2'
            end || ')',
            ', ' order by bl.item_number)
     into v_blocked
@@ -192,27 +207,38 @@ begin
   join public.billing_lines bl on bl.id = be.billing_line_id
   where be.pay_application_id = v_app
     and (
-      coalesce(other.actual_amount, 0) <> 0
-      or other.afp_number is not null
+      other.afp_number is not null
       or other.pay_application_id is not null
-      or coalesce(other.status, '') in ('on_pay_app', 'submitted', 'approved', 'paid')
+      or coalesce(other.status, '') in ('on_pay_app','submitted','approved','paid')
+      or (
+        abs(coalesce(other.actual_amount, 0)) > 0.005
+        and abs(coalesce(other.actual_amount, 0)
+                - coalesce(nullif(be.actual_amount, 0), be.planned_amount, 0)) > 0.005
+      )
     );
 
   if v_blocked is not null then
     raise exception
-      'September rows on % carry billing evidence, not a forecast. '
-      'That is a double bill, not a date error. Nothing changed.',
+      'September rows on % are not bare forecasts or exact duplicates. '
+      'Resolve by hand. Nothing changed.',
       v_blocked;
   end if;
 
-  -- Carry each absorbed forecast figure onto the row that survives, so the
-  -- number is not simply lost.
+  -- Record what was removed on the row that survives, so the cleanup leaves a
+  -- trail rather than a silent deletion.
   update public.billing_entries be
   set notes = trim(both from
         coalesce(be.notes || ' ', '') ||
-        'Absorbed the ' ||
-        to_char((be.period_month - interval '1 month')::date, 'YYYY-MM') ||
-        ' forecast of ' || to_char(other.planned_amount, 'FM999,999,990.00') || '.')
+        case
+          when abs(coalesce(other.actual_amount, 0)) > 0.005
+            then 'Removed a duplicate ' ||
+                 to_char(other.period_month, 'YYYY-MM') || ' actual of ' ||
+                 to_char(other.actual_amount, 'FM999,999,990.00') ||
+                 ' for the same work.'
+          else 'Absorbed the ' || to_char(other.period_month, 'YYYY-MM') ||
+               ' forecast of ' ||
+               to_char(coalesce(other.planned_amount, 0), 'FM999,999,990.00') || '.'
+        end)
   from public.billing_entries other
   where be.pay_application_id = v_app
     and other.billing_line_id = be.billing_line_id
@@ -253,7 +279,7 @@ begin
   where pa.id = v_app;
 
   raise notice
-    'AFP 2 moved from % - % to % - %. % entries moved, % September forecasts absorbed.',
+    'AFP 2 moved from % - % to % - %. % entries moved, % September rows removed.',
     v_start, v_end,
     (v_start - interval '1 month')::date,
     (v_end - interval '1 month')::date,
