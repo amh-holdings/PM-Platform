@@ -55,39 +55,48 @@ const PHASE_SCOPE: Record<string, TaskScope> = {
 };
 
 /**
- * Outline words that name a discipline or a phase.
+ * Outline words that name a DISCIPLINE.
  *
- * Matched against the names of a task's ANCESTORS, on whole words. Substring
- * matching read Sussex's "Contractor Permits" branch as Contracts, which is a
- * different thing entirely. Sussex 2.2.1.2 is
- * "Electrical Permit - Sussex County" and sits under 2 Permitting: reading its
- * own name first would file it as electrical work, which is why the walk goes
- * upward before it looks at the row itself.
+ * These beat the phase words below, wherever they sit in the chain. Sussex
+ * names its engineering packages "Civil - IFP (Issued For Permit)", so the
+ * nearest ancestor of 1.2.1.4.1 Design carries both "civil" and "permit". Read
+ * nearest-match-wins, that design row filed itself under Permitting and the
+ * permitting sheet came out with nine engineering deliverables on it.
  */
-const OUTLINE_WORDS: [RegExp, TaskScope][] = [
-  [/\bcommissioning\b/, "Completion"],
+const DISCIPLINE_WORDS: [RegExp, TaskScope][] = [
   [/\bstructural\b/, "Structural"],
-  [/\bprocurements?\b/, "Procurement"],
   [/\bmechanical\b/, "Mechanical"],
   [/\belectrical\b/, "Electrical"],
+  [/\bcivil\b/, "Civil"],
+];
+
+/**
+ * Outline words that name a PHASE.
+ *
+ * Matched on whole words. A substring match read Sussex's "Contractor Permits"
+ * branch as Contracts, which is a different thing entirely: \bcontracts?\b
+ * cannot match inside "Contractor", so that branch falls through to the permit
+ * rule, which is what it is.
+ */
+const PHASE_WORDS: [RegExp, TaskScope][] = [
+  [/\bcommissioning\b/, "Completion"],
+  [/\bprocurements?\b/, "Procurement"],
   [/\bengine{1,2}ring\b/, "Engineering"],
   [/\bpermitting\b/, "Permitting"],
   [/\bcompletion\b/, "Completion"],
   [/\bcloseout\b/, "Completion"],
-  // Before permits, so a "Contracts" branch is not read as permitting. The
-  // word boundary is what keeps "Contractor Permits" out of here: \bcontracts?\b
-  // cannot match inside "Contractor", so that branch falls through to the
-  // permit rule, which is what it is.
   [/\bcontracts?\b/, "Contracts"],
   [/\bpermits?\b/, "Permitting"],
   [/\bdesign\b/, "Engineering"],
-  [/\bcivil\b/, "Civil"],
 ];
 
-function scopeFromName(name: string | null | undefined): TaskScope | null {
+function match(
+  words: [RegExp, TaskScope][],
+  name: string | null | undefined,
+): TaskScope | null {
   const n = (name ?? "").toLowerCase();
   if (!n) return null;
-  for (const [word, scope] of OUTLINE_WORDS) {
+  for (const [word, scope] of words) {
     if (word.test(n)) return scope;
   }
   return null;
@@ -106,7 +115,8 @@ function scopeFromName(name: string | null | undefined): TaskScope | null {
  *    Permitting, 3 Procurement, 4 Construction, and `phase` is not set on the
  *    rows added since. Every one of its 165 tasks read as Other, which made
  *    the scope filter a dropdown with one useless option in it, and would have
- *    headed a printed permitting sheet "Other scope".
+ *    headed a printed permitting sheet "Other scope". The chain is read whole,
+ *    discipline before phase - see DISCIPLINE_WORDS.
  *
  * `nameByWbs` is what makes reading 3 possible. Without it the function
  * behaves exactly as it did before, so a caller that has no task list is not
@@ -129,21 +139,31 @@ export function scopeOf(
   const byPhase = PHASE_SCOPE[phase];
   if (byPhase) return byPhase;
 
+  // Walk the whole ancestor chain, nearest first, rather than stopping at the
+  // first name that says anything. A discipline anywhere above the row wins
+  // over a phase word, however near that phase word sits: "Civil - IFP (Issued
+  // For Permit)" is a civil engineering package, not permitting work.
   if (nameByWbs && wbs) {
-    // Nearest ancestor first. A permit filed under the electrical package is
-    // still permitting work; the branch it hangs from is what names it.
+    let nearestPhase: TaskScope | null = null;
     let at = wbs;
     for (;;) {
       const dot = at.lastIndexOf(".");
       if (dot === -1) break;
       at = at.slice(0, dot);
-      const hit = scopeFromName(nameByWbs.get(at));
-      if (hit) return hit;
+      const name = nameByWbs.get(at);
+      const discipline = match(DISCIPLINE_WORDS, name);
+      if (discipline) return discipline;
+      if (!nearestPhase) nearestPhase = match(PHASE_WORDS, name);
     }
+    if (nearestPhase) return nearestPhase;
   }
 
   // A top-level branch has no ancestor to read, so it names itself.
-  return scopeFromName(task.task_name) ?? "Other";
+  return (
+    match(DISCIPLINE_WORDS, task.task_name) ??
+    match(PHASE_WORDS, task.task_name) ??
+    "Other"
+  );
 }
 
 /** The lookup `scopeOf` wants, built once for a whole schedule. */
