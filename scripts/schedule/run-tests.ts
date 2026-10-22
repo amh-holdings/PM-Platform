@@ -27,10 +27,16 @@ import {
   printRowClass,
   printSheetTitle,
   rangeSelect,
-  sharedScope,
   selectedPrintRows,
 } from "@/lib/schedule-print";
 import { nameByWbs, scopeOf } from "@/lib/schedule-scope";
+import {
+  branchLabel,
+  branchOptions,
+  filterByBranches,
+  isUnder,
+  pruneRedundant,
+} from "@/lib/schedule-branches";
 import type { TaskScope } from "@/lib/schedule-scope";
 import {
   nearestNamedAncestor,
@@ -4117,55 +4123,36 @@ eq(
 );
 
 // The header is the only thing on paper that says what was filtered out.
-const asRows = (n: number, scope: TaskScope = "Civil") =>
-  Array.from({ length: n }, (_, i) => ({ ...printRows[0], wbs: `x${i}`, scope }));
+const asRows = (n: number) =>
+  Array.from({ length: n }, (_, i) => ({ ...printRows[0], wbs: `x${i}` }));
 
 eq(
-  "the title names the scope and the full count when everything prints",
-  printSheetTitle("Sussex CSG 1", "Civil", asRows(61), 61),
-  "Sussex CSG 1 - Civil scope - 61 tasks",
+  "the title names the filter and the full count when everything prints",
+  printSheetTitle("Sussex CSG 1", "Permitting", asRows(21), 21),
+  "Sussex CSG 1 - Permitting - 21 tasks",
 );
 eq(
   "and says it is a cut when it is one",
-  printSheetTitle("Sussex CSG 1", "Civil", asRows(11), 61),
-  "Sussex CSG 1 - Civil scope - 11 of 61 tasks selected",
+  printSheetTitle("Sussex CSG 1", "Permitting", asRows(11), 21),
+  "Sussex CSG 1 - Permitting - 11 of 21 tasks selected",
 );
 eq(
-  "no scope filter, mixed rows, reads as all scopes",
-  printSheetTitle(
-    "Sweet Springs",
-    null,
-    [...asRows(2, "Civil"), ...asRows(2, "Electrical")],
-    204,
-  ),
-  "Sweet Springs - All scopes - 4 of 204 tasks selected",
+  "no filter reads as all branches",
+  printSheetTitle("Sweet Springs", null, asRows(204), 204),
+  "Sweet Springs - All branches - 204 tasks",
 );
 eq(
   "one task is not pluralised",
   printSheetTitle("P", "Civil", asRows(1), 1),
-  "P - Civil scope - 1 task",
+  "P - Civil - 1 task",
 );
-
-// Zarina's sheet: 21 permitting rows picked out of 165 with the filter on All
-// scopes. The header used to read "All scopes", which described the dropdown
-// rather than the page.
+// The filter's own words reach the paper, so the sheet and the screen agree
+// even when several branches are on.
 eq(
-  "a selection that is all one scope names that scope, not All scopes",
-  printSheetTitle("Sussexx CSG 1 LLC", null, asRows(21, "Permitting"), 165),
-  "Sussexx CSG 1 LLC - Permitting scope - 21 tasks selected from all scopes",
+  "several branches carry their own label",
+  printSheetTitle("P", "Permitting and Procurement", asRows(40), 40),
+  "P - Permitting and Procurement - 40 tasks",
 );
-// "21 of 165 tasks" would read as 21 of 165 PERMITTING tasks. It is not.
-check(
-  "and does not print a denominator that means something else",
-  printSheetTitle("P", null, asRows(21, "Permitting"), 165).includes("of 165") === false,
-);
-eq(
-  "the shared scope of a mixed set is nothing",
-  sharedScope([...asRows(1, "Civil"), ...asRows(1, "Permitting")]),
-  null,
-);
-eq("an empty sheet has no shared scope", sharedScope([]), null);
-eq("one row is its own shared scope", sharedScope(asRows(1, "Permitting")), "Permitting");
 
 check(
   "the stamp carries the data date when there is one",
@@ -4394,6 +4381,87 @@ check("so does Approved, which also maps to 100%", colourRows[1].complete);
 check("In Progress does not", colourRows[2].complete === false);
 check("a positive slip marks the row as slipping", colourRows[2].slipping);
 check("and no slip does not", colourRows[0].slipping === false);
+
+
+// ============================================================================
+section("Filtering a schedule by its branches");
+
+const TREE = [
+  { wbs_code: "1", task_name: "Engineering" },
+  { wbs_code: "1.2", task_name: "Design Packages" },
+  { wbs_code: "1.2.1", task_name: "Civil" },
+  { wbs_code: "1.2.1.4", task_name: "Civil - IFP (Issued For Permit)" },
+  { wbs_code: "1.2.1.4.1", task_name: "Design" },
+  { wbs_code: "1.20", task_name: "Not under 1.2" },
+  { wbs_code: "2", task_name: "Permitting" },
+  { wbs_code: "2.2", task_name: "Contractor Permits" },
+  { wbs_code: "2.2.1", task_name: "Sussex County Permits" },
+  { wbs_code: "2.2.1.1", task_name: "Building Permit" },
+  { wbs_code: "3", task_name: "Procurement" },
+  { wbs_code: "3.4", task_name: "Racking" },
+];
+
+// The bug class this replaces reading names: "1.20" is not under "1.2", and a
+// plain startsWith says it is.
+check("a dotted prefix is a real ancestor", isUnder("1.2.1", "1.2"));
+check("a row is under itself", isUnder("1.2", "1.2"));
+check("1.20 is NOT under 1.2", isUnder("1.20", "1.2") === false);
+check("a sibling is not an ancestor", isUnder("2.2", "1.2") === false);
+
+const opts = branchOptions(TREE);
+const wbsOf = opts.map((o) => o.wbs);
+check("leaves are not offered as branches", wbsOf.includes("2.2.1.1") === false);
+check("and neither is 1.20, which has nothing under it", wbsOf.includes("1.20") === false);
+check("a parent is offered", wbsOf.includes("2.2.1"));
+eq(
+  "branches sort numerically, so 1.20 would not jump ahead of 1.3",
+  wbsOf.join(" "),
+  "1 1.2 1.2.1 1.2.1.4 2 2.2 2.2.1 3",
+);
+eq("depth is for indenting the tree", opts.find((o) => o.wbs === "2.2.1")!.depth, 2);
+eq(
+  "the count is everything underneath, at any depth",
+  opts.find((o) => o.wbs === "2")!.descendants,
+  3,
+);
+
+eq("no branch selected prints everything", filterByBranches(TREE, []).length, 12);
+eq(
+  "one branch takes its whole subtree, itself included",
+  filterByBranches(TREE, ["2"]).map((t) => t.wbs_code).join(" "),
+  "2 2.2 2.2.1 2.2.1.1",
+);
+eq(
+  "and 1.20 does not ride along with 1.2",
+  filterByBranches(TREE, ["1.2"]).map((t) => t.wbs_code).join(" "),
+  "1.2 1.2.1 1.2.1.4 1.2.1.4.1",
+);
+eq(
+  "several branches union, in schedule order",
+  filterByBranches(TREE, ["2", "3"]).map((t) => t.wbs_code).join(" "),
+  "2 2.2 2.2.1 2.2.1.1 3 3.4",
+);
+eq(
+  "a branch nobody has rows under returns nothing rather than everything",
+  filterByBranches(TREE, ["9"]).length,
+  0,
+);
+
+// Ticking a parent after a child should not double count or leave two chips.
+eq("a child under a selected parent is dropped", pruneRedundant(["2", "2.2"]).join(" "), "2");
+eq("order does not matter", pruneRedundant(["2.2", "2"]).join(" "), "2");
+eq("unrelated branches both stand", pruneRedundant(["2", "3"]).join(" "), "2 3");
+eq("a duplicate of itself is not pruned to nothing", pruneRedundant(["2"]).join(" "), "2");
+
+eq("one branch is named", branchLabel(["2"], opts), "Permitting");
+eq("two are joined", branchLabel(["2", "3"], opts), "Permitting and Procurement");
+eq("three are counted", branchLabel(["1", "2", "3"], opts), "3 branches");
+eq("none is no label at all", branchLabel([], opts), null);
+eq(
+  "a redundant child does not inflate the count",
+  branchLabel(["2", "2.2"], opts),
+  "Permitting",
+);
 
 
 // ============================================================================

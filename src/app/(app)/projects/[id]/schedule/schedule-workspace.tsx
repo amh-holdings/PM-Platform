@@ -21,11 +21,11 @@ import {
 import { applyDraft, reconcileDates, type TaskDraft } from "@/lib/schedule-edit";
 import { sisterDurationSuggestions } from "@/lib/schedule-sister-durations";
 import {
-  SCOPE_ORDER,
-  nameByWbs,
-  scopeOf,
-  type TaskScope,
-} from "@/lib/schedule-scope";
+  branchLabel,
+  branchOptions,
+  filterByBranches,
+} from "@/lib/schedule-branches";
+import { ScheduleBranchFilter } from "./schedule-branch-filter";
 import {
   SchedulePrintDialog,
   SchedulePrintSheet,
@@ -138,38 +138,25 @@ export function ScheduleWorkspace({
     [tasks],
   );
 
-  // Sussex sets neither a 5.x WBS nor a phase, so its scope comes off the
-  // outline. Built once here rather than per row: scopeOf walks ancestors.
-  const outlineNames = useMemo(() => nameByWbs(tasks), [tasks]);
+  // The outline IS the taxonomy. Reading discipline off task names was not:
+  // Sussex calls its civil engineering package "Civil - IFP (Issued For
+  // Permit)", which matched the word "permit" and put nine design deliverables
+  // on a permitting sheet. Every fix was a sharper rule about words and the
+  // next schedule would have broken it again. 2 Permitting is a row, and
+  // everything under it is permitting work by construction.
+  const branches = useMemo(() => branchOptions(tasks), [tasks]);
 
-  const scopeCounts = useMemo(() => {
-    const m = new Map<TaskScope, number>();
-    for (const t of tasks) {
-      const sc = scopeOf(t, outlineNames);
-      m.set(sc, (m.get(sc) ?? 0) + 1);
-    }
-    return m;
-  }, [tasks, outlineNames]);
-
-  // Default to Civil ONLY while civil is the only construction discipline in
-  // the schedule. That was a safe shortcut when 5.1 was all that existed, but
-  // it silently hid the whole 5.2 mechanical branch the day it was imported -
-  // the tasks loaded, the counts were right, and the grid showed nothing,
-  // which reads as "the import failed" rather than "a filter is on". Any
-  // second discipline present means the honest default is everything, and this
-  // self-corrects as 5.3 and 5.4 land.
   // Print selection lives here rather than in the dialog so the sheet can be a
   // sibling of the workspace: the dialog is closed by the time the browser
   // renders the page, and a selection held inside it would go with it.
   const [printOpen, setPrintOpen] = useState(false);
   const [printSelection, setPrintSelection] = useState<PrintSelection>(null);
 
-  const [scopeFilter, setScopeFilter] = useState<string>(() => {
-    const disciplines = (["Civil", "Mechanical", "Electrical"] as const).filter(
-      (d) => scopeCounts.get(d),
-    );
-    return disciplines.length === 1 && disciplines[0] === "Civil" ? "Civil" : "";
-  });
+  // No default. The old one preselected Civil whenever civil was the only
+  // discipline present, which on a fresh import showed an empty grid and read
+  // as a failed load. Several branches at once is the point - "permitting and
+  // procurement" is a question somebody actually asks.
+  const [branchFilter, setBranchFilter] = useState<string[]>([]);
 
   // CPM runs over EVERY task, always. Running it over the scope filter dropped
   // any predecessor pointing outside the filter, because a link to an unknown
@@ -202,16 +189,19 @@ export function ScheduleWorkspace({
   const draftDirty = previewTasks !== tasks;
 
   const scoped = useMemo(
-    () =>
-      scopeFilter
-        ? tasks.filter((t) => scopeOf(t, outlineNames) === scopeFilter)
-        : tasks,
-    [tasks, scopeFilter, outlineNames],
+    () => filterByBranches(tasks, branchFilter),
+    [tasks, branchFilter],
   );
 
-  // Switching scope with a selection held would carry civil WBS codes into an
-  // electrical list, where they match nothing and the sheet prints empty.
-  useEffect(() => setPrintSelection(null), [scopeFilter]);
+  // What to call the filter, on screen and across the top of a printed sheet.
+  const scopeLabel = useMemo(
+    () => branchLabel(branchFilter, branches),
+    [branchFilter, branches],
+  );
+
+  // Changing the filter with a selection held would carry WBS codes into a
+  // list that no longer has them, and the sheet would print empty.
+  useEffect(() => setPrintSelection(null), [branchFilter]);
 
   // Health is a property of the whole schedule, not of a scope. A logic gap
   // between civil and electrical is invisible from inside either one.
@@ -574,19 +564,16 @@ export function ScheduleWorkspace({
 
         {view !== "health" && (
           <div className="flex items-center gap-2 text-sm">
-            <label className="text-xs uppercase tracking-wide text-muted-foreground">Scope</label>
-            <select
-              value={scopeFilter}
-              onChange={(e) => setScopeFilter(e.target.value)}
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm font-medium"
-            >
-              <option value="">All scopes ({tasks.length})</option>
-              {SCOPE_ORDER.filter((s) => scopeCounts.get(s)).map((s) => (
-                <option key={s} value={s}>
-                  {s} ({scopeCounts.get(s)})
-                </option>
-              ))}
-            </select>
+            <label className="text-xs uppercase tracking-wide text-muted-foreground">
+              Branch
+            </label>
+            <ScheduleBranchFilter
+              options={branches}
+              selected={branchFilter}
+              setSelected={setBranchFilter}
+              shown={scoped.length}
+              total={tasks.length}
+            />
           </div>
         )}
 
@@ -596,10 +583,9 @@ export function ScheduleWorkspace({
               civil schedule" means. */}
           {view !== "health" && (
             <SchedulePrintDialog
-              scope={scopeFilter || null}
+              scope={scopeLabel}
               tasks={scoped}
               cpmByWbs={cpm.byWbs}
-              outlineNames={outlineNames}
               selection={printSelection}
               setSelection={setPrintSelection}
               open={printOpen}
@@ -673,7 +659,7 @@ export function ScheduleWorkspace({
           phase1Available={phase1Available}
           typeAvailable={typeAvailable}
           constraintState={constraintState}
-          scopeFilter={scopeFilter || null}
+          scopeFilter={scopeLabel}
           recordCounts={recordCounts}
           draft={draft}
           setDraft={setDraft}
@@ -727,10 +713,9 @@ export function ScheduleWorkspace({
 
       <SchedulePrintSheet
         projectName={projectName}
-        scope={scopeFilter || null}
+        scope={scopeLabel}
         tasks={scoped}
         cpmByWbs={cpm.byWbs}
-        outlineNames={outlineNames}
         dataDate={effectiveDataDate}
         selection={printSelection}
       />
