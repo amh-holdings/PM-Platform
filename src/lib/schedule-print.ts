@@ -100,17 +100,6 @@ export function selectedPrintRows(
   return rows.filter((r) => selected.has(r.wbs));
 }
 
-/** Ticking a box off and on again, without mutating the set that came in. */
-export function toggleSelected(
-  selected: ReadonlySet<string>,
-  wbs: string,
-): Set<string> {
-  const next = new Set(selected);
-  if (next.has(wbs)) next.delete(wbs);
-  else next.add(wbs);
-  return next;
-}
-
 /**
  * The line across the top of the sheet.
  *
@@ -139,4 +128,51 @@ export function printSheetStamp(
 ): string {
   const printed = `Printed ${formatDate(printedOn)}`;
   return dataDate ? `Data date ${formatDate(dataDate)} - ${printed}` : printed;
+}
+
+// ---------------------------------------------------------------------------
+// Range selection
+// ---------------------------------------------------------------------------
+//
+// Unticking 180 of 204 boxes one at a time is not a feature, it is a chore the
+// chooser handed back. Shift-click takes the anchor (the last box clicked) and
+// the box just clicked and applies ONE state across everything between them.
+//
+// The state applied is the one the click itself produces, not a blind toggle.
+// Toggling each row in the range independently is the obvious implementation
+// and the wrong one: on a mixed range it inverts the pattern instead of
+// flattening it, so a second shift-click does not undo the first and the
+// person is left worse off than before they tried.
+
+export function rangeSelect(
+  rows: readonly { wbs: string }[],
+  selected: ReadonlySet<string> | null,
+  anchorWbs: string | null,
+  clickedWbs: string,
+  shift: boolean,
+): Set<string> {
+  // A null selection means everything in scope is on. Materialise it before
+  // the first untick, or the set would start empty and read as "all cleared".
+  const next = new Set(selected ?? rows.map((r) => r.wbs));
+  const target = !next.has(clickedWbs);
+
+  const from = anchorWbs == null ? -1 : rows.findIndex((r) => r.wbs === anchorWbs);
+  const to = rows.findIndex((r) => r.wbs === clickedWbs);
+
+  // No shift, no anchor, an anchor that scrolled out of the current scope, or
+  // a click on the anchor itself: this is an ordinary one-row toggle.
+  if (!shift || from < 0 || to < 0 || from === to) {
+    if (to < 0) return next;
+    if (target) next.add(clickedWbs);
+    else next.delete(clickedWbs);
+    return next;
+  }
+
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  for (let i = lo; i <= hi; i++) {
+    if (target) next.add(rows[i].wbs);
+    else next.delete(rows[i].wbs);
+  }
+  return next;
 }

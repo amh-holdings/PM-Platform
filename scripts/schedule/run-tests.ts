@@ -25,8 +25,8 @@ import {
   buildPrintRows,
   printSheetStamp,
   printSheetTitle,
+  rangeSelect,
   selectedPrintRows,
-  toggleSelected,
 } from "@/lib/schedule-print";
 import {
   nearestNamedAncestor,
@@ -4112,11 +4112,6 @@ eq(
   0,
 );
 
-const before = new Set(["5.1.2"]);
-const after = toggleSelected(before, "5.1.9");
-check("toggling adds without mutating the set it was given", after.has("5.1.9") && before.size === 1);
-check("toggling again removes", toggleSelected(after, "5.1.9").has("5.1.9") === false);
-
 // The header is the only thing on paper that says what was filtered out.
 eq(
   "the title names the scope and the full count when everything prints",
@@ -4143,6 +4138,79 @@ check(
 check(
   "and just the print date when there is not",
   printSheetStamp(null, "2026-10-22") === "Printed Oct 22, 2026",
+);
+
+
+// Shift-click. The anchor is the last box clicked; shift-clicking a second box
+// carries ONE state across the run between them.
+const RANGE = [
+  { wbs: "1" }, { wbs: "2" }, { wbs: "3" }, { wbs: "4" }, { wbs: "5" },
+];
+const all5 = () => new Set(["1", "2", "3", "4", "5"]);
+const list = (set: Set<string>) => Array.from(set).sort().join(",");
+
+eq(
+  "no shift is an ordinary one-row toggle",
+  list(rangeSelect(RANGE, all5(), "1", "3", false)),
+  "1,2,4,5",
+);
+eq(
+  "shift unticks the whole run between anchor and click",
+  list(rangeSelect(RANGE, all5(), "2", "4", true)),
+  "1,5",
+);
+eq(
+  "and ranges backwards just the same",
+  list(rangeSelect(RANGE, all5(), "4", "2", true)),
+  "1,5",
+);
+eq(
+  "shift ticks a run back on when the clicked box was off",
+  list(rangeSelect(RANGE, new Set(["1"]), "2", "4", true)),
+  "1,2,3,4",
+);
+// The bug this guards: toggling each row independently inverts a mixed run
+// instead of flattening it, so a second shift-click cannot undo the first.
+// Over rows 2-4 of {1,2,4}, a per-row toggle would give {1,3} and {1,3,4};
+// flattening gives all-off and all-on, which is what the click asked for.
+eq(
+  "a mixed run flattens off when the clicked box was on",
+  list(rangeSelect(RANGE, new Set(["1", "2", "4"]), "2", "4", true)),
+  "1",
+);
+eq(
+  "and flattens on when the clicked box was off",
+  list(rangeSelect(RANGE, new Set(["1", "2", "4"]), "2", "3", true)),
+  "1,2,3,4",
+);
+eq(
+  "shift-clicking the anchor itself is just a toggle",
+  list(rangeSelect(RANGE, all5(), "3", "3", true)),
+  "1,2,4,5",
+);
+eq(
+  "with no anchor yet, shift is a plain toggle",
+  list(rangeSelect(RANGE, all5(), null, "3", true)),
+  "1,2,4,5",
+);
+// Scope changed under the chooser and the anchor is not in this list.
+eq(
+  "an anchor outside the current rows falls back to a toggle",
+  list(rangeSelect(RANGE, all5(), "99", "3", true)),
+  "1,2,4,5",
+);
+eq(
+  "a null selection materialises to everything before the first untick",
+  list(rangeSelect(RANGE, null, null, "3", false)),
+  "1,2,4,5",
+);
+check(
+  "the set handed in is never mutated",
+  (() => {
+    const before = all5();
+    rangeSelect(RANGE, before, "2", "4", true);
+    return before.size === 5;
+  })(),
 );
 
 
