@@ -22,6 +22,7 @@ import {
   parseRuleOfCredit,
 } from "@/lib/rule-of-credit";
 import {
+  hasBillingEvidence,
   needsADecision,
   procurementBlockedReason,
   resolveProcurementAmount,
@@ -43,6 +44,12 @@ import {
   describeContributions,
   type PoContribution,
 } from "@/lib/afp-po-staging";
+import {
+  buildPoBillDetail,
+  type BillPoDetail,
+  type BillPoItemInput,
+  type EarlierPoBilling,
+} from "@/lib/bill-po-detail";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -864,6 +871,13 @@ export type BillableRow =
        * confusing. it should be referencing one PO."
        */
       typedPoIds?: string[];
+      /**
+       * Each PO behind the typed figure, with the items ticked for it on Add
+       * to AFP and what earlier AFPs already billed on it. Phil: "show as a
+       * sub information what PO's and what equipments are added here through
+       * the procurement page".
+       */
+      poDetails?: BillPoDetail[];
       /** The scope split behind the recommendation. See BillingSuggestion. */
       ruleOfCredit?: BillingSuggestion["ruleOfCredit"];
     }
@@ -1126,6 +1140,71 @@ export async function getBillThisPeriodRows(
     contributionsByEntry.set(r.billing_entry_id, list);
   }
 
+  // What each of those POs is made of, for the sub-rows under a procurement
+  // line. Read-only, and each part degrades to "nothing to show" on its own:
+  // without 0079 there are no ticks and the PO row says the figure covers the
+  // whole PO, which is what it did before items could be ticked.
+  const stagedPoIds = Array.from(
+    new Set(Array.from(contributionsByEntry.values()).flat().map((c) => c.poId)),
+  );
+  const [{ data: tickRows }, { data: poLineRows }, { data: poHistoryRows }] =
+    stagedPoIds.length
+      ? await Promise.all([
+          auth.supabase
+            .from("billing_entry_po_items")
+            .select("billing_entry_id, procurement_order_line_id")
+            .in("billing_entry_id", Array.from(contributionsByEntry.keys())),
+          // * rather than by name: actual_delivery_date is migration 0062.
+          auth.supabase
+            .from("procurement_order_lines")
+            .select("*")
+            .in("procurement_order_id", stagedPoIds)
+            .order("sort_order", { ascending: true, nullsFirst: false })
+            .order("line_no", { ascending: true, nullsFirst: false }),
+          auth.supabase
+            .from("billing_entry_po_amounts")
+            .select(
+              "billing_entry_id, procurement_order_id, amount, billing_entries!inner(afp_number, pay_application_id, status)",
+            )
+            .in("procurement_order_id", stagedPoIds),
+        ])
+      : [{ data: null }, { data: null }, { data: null }];
+  const ticksByEntry = new Map<string, Set<string>>();
+  for (const t of tickRows ?? []) {
+    const set = ticksByEntry.get(t.billing_entry_id) ?? new Set<string>();
+    set.add(t.procurement_order_line_id);
+    ticksByEntry.set(t.billing_entry_id, set);
+  }
+  const itemsByPo = new Map<string, BillPoItemInput[]>();
+  for (const raw of poLineRows ?? []) {
+    const l = raw as typeof raw & { actual_delivery_date?: string | null };
+    const list = itemsByPo.get(l.procurement_order_id) ?? [];
+    list.push({
+      id: l.id,
+      description: l.description,
+      quantity: l.quantity,
+      units: l.units,
+      unitPrice: l.unit_price,
+      extendedPrice: l.extended_price,
+      deliveredOn: l.actual_delivery_date ?? null,
+    });
+    itemsByPo.set(l.procurement_order_id, list);
+  }
+  const earlierPoBilling: EarlierPoBilling[] = (poHistoryRows ?? []).map((r) => {
+    const e = r.billing_entries as unknown as {
+      afp_number: string | null;
+      pay_application_id: string | null;
+      status: string | null;
+    };
+    return {
+      poId: r.procurement_order_id,
+      entryId: r.billing_entry_id,
+      amount: Number(r.amount ?? 0),
+      billed: hasBillingEvidence(e),
+      afpNumber: e.afp_number ?? null,
+    };
+  });
+
   const { data: lineTotals } = await auth.supabase
     .from("v_billing_line_totals")
     .select("billing_line_id, total_billed")
@@ -1249,6 +1328,21 @@ export async function getBillThisPeriodRows(
           formatCurrency,
         ),
         typedPoIds: (contributionsByEntry.get(x.e.id) ?? []).map((c) => c.poId),
+        poDetails: buildPoBillDetail({
+          entryId: x.e.id,
+          contributions: contributionsByEntry.get(x.e.id) ?? [],
+          po: (id) => {
+            const p = poStateById.get(id);
+            return {
+              label: poLabelById.get(id) ?? "a PO",
+              vendor: p?.vendor_name ?? null,
+              total: p?.total_value != null ? Number(p.total_value) : null,
+            };
+          },
+          itemsByPo,
+          tickedIds: ticksByEntry.get(x.e.id) ?? new Set<string>(),
+          earlier: earlierPoBilling,
+        }),
       } as BillableRow);
       continue;
     }
