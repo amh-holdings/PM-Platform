@@ -20,6 +20,8 @@ import { cn } from "@/lib/utils";
 
 import { STATUS_LABEL, STATUS_TONE } from "../../constants";
 import { ReviewForm } from "./review-form";
+import { EditBillHeader } from "./edit-header";
+import { canEditHeader, HEADER_FIELDS } from "@/lib/sub-bill-header-edit";
 
 type Params = { id: string; subId: string; appId: string };
 
@@ -51,6 +53,7 @@ export default async function SubBillPage({ params }: { params: Params }) {
   const showDollars = can(effective, "viewSubBillingDollars");
   const canRecommend = can(effective, "recommendSubBill");
   const canApprove = can(effective, "approveSubBilling");
+  const canEnter = can(effective, "enterSubBill");
   const db = subBillingClient();
 
   const { data: app } = await db.from("sub_pay_apps").select("*").eq("id", params.appId).single();
@@ -213,6 +216,26 @@ export default async function SubBillPage({ params }: { params: Params }) {
           {app.invoice_number ? ` · Invoice ${app.invoice_number}` : ""}
           {app.payment_terms_days != null ? ` · Net ${app.payment_terms_days}` : ""}
         </p>
+        {/* Entry notes, including every header correction and who made it. */}
+        {app.notes && (
+          <p className="mt-2 whitespace-pre-line rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">
+            {app.notes}
+          </p>
+        )}
+        {canEnter && canEditHeader(app.status) && (
+          <div className="mt-2">
+            <EditBillHeader
+              projectId={params.id}
+              appId={params.appId}
+              values={Object.fromEntries(
+                HEADER_FIELDS.map((f) => [
+                  f.key,
+                  ((app as unknown as Record<string, string | number | boolean | null>)[f.key]) ?? null,
+                ]),
+              )}
+            />
+          </div>
+        )}
       </div>
 
       {/* ------------------------------ Decision ------------------------------ */}

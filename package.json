@@ -53,6 +53,7 @@
     "test:sov-forecast-date": "tsx scripts/sub-billing/run-sov-forecast-date-tests.ts",
     "test:retainage-rate": "tsx scripts/sub-billing/run-retainage-rate-tests.ts",
     "test:sub-billing-asof": "tsx scripts/sub-billing/run-asof-tests.ts",
+    "test:sub-bill-header-edit": "tsx scripts/sub-billing/run-header-edit-tests.ts",
     "test:retainage-exempt": "tsx scripts/billing/run-retainage-exempt-tests.ts",
     "test:progress-spread": "tsx scripts/billing/run-progress-spread-tests.ts",
     "test:milestone-split": "tsx scripts/procurement/run-milestone-split-tests.ts",
