@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -8,8 +8,8 @@ import {
   buildPrintRows,
   printSheetStamp,
   printSheetTitle,
+  rangeSelect,
   selectedPrintRows,
-  toggleSelected,
   type PrintCpmLike,
   type PrintableTask,
 } from "@/lib/schedule-print";
@@ -110,6 +110,15 @@ export function SchedulePrintDialog({
   const printing = useMemo(() => selectedPrintRows(rows, selection), [rows, selection]);
   const allOn = selection === null || selection.size === rows.length;
 
+  // The last box clicked, which shift-click ranges from. A ref rather than
+  // state: moving the anchor must not re-render the list mid-click.
+  const anchor = useRef<string | null>(null);
+
+  function clickRow(e: React.MouseEvent<HTMLInputElement>, wbs: string) {
+    setSelection(rangeSelect(rows, selection, anchor.current, wbs, e.shiftKey));
+    anchor.current = wbs;
+  }
+
   function print() {
     if (printing.length === 0) return;
     // Close first. The overlay is fixed-position and would otherwise be what
@@ -143,7 +152,8 @@ export function SchedulePrintDialog({
                 <p className="text-xs text-muted-foreground">
                   {scope ? `${scope} scope` : "All scopes"} - {rows.length} task
                   {rows.length === 1 ? "" : "s"}. Untick anything you do not want
-                  on the sheet.
+                  on the sheet. Shift-click to carry one box across a run of
+                  rows.
                 </p>
               </div>
               <button
@@ -185,20 +195,20 @@ export function SchedulePrintDialog({
                     return (
                       <tr
                         key={r.wbs}
-                        className={cn("border-b last:border-b-0", !on && "opacity-45")}
+                        className={cn(
+                          "select-none border-b last:border-b-0",
+                          !on && "opacity-45",
+                        )}
                       >
                         <td className="w-8 py-1.5 pl-3">
                           <input
                             type="checkbox"
                             checked={on}
-                            onChange={() =>
-                              setSelection(
-                                toggleSelected(
-                                  selection ?? new Set(rows.map((x) => x.wbs)),
-                                  r.wbs,
-                                ),
-                              )
-                            }
+                            // onClick, not onChange: a React change event on a
+                            // checkbox carries no shiftKey. onChange stays as a
+                            // no-op so the controlled input does not warn.
+                            onClick={(e) => clickRow(e, r.wbs)}
+                            onChange={() => {}}
                             aria-label={`Print ${r.wbs} ${r.name}`}
                           />
                         </td>
