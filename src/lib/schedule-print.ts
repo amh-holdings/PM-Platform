@@ -19,6 +19,9 @@ import { compareWbs } from "@/lib/schedule-edit";
 import { formatDate } from "@/lib/format";
 import { scopeOf, type TaskScope } from "@/lib/schedule-scope";
 
+/** The two status labels the schedule treats as 100%. See STATUS_PCT. */
+const COMPLETE_STATUSES = new Set(["Complete", "Approved"]);
+
 export type PrintableTask = {
   wbs_code: string;
   task_name: string;
@@ -51,12 +54,22 @@ export type PrintRow = {
   slip: string;
   critical: boolean;
   milestone: boolean;
+  /** Status is Complete or Approved, which the sheet prints in green. */
+  complete: boolean;
+  /** The projection is behind the plan on this row. */
+  slipping: boolean;
   scope: TaskScope;
 };
 
 export function buildPrintRows(
   tasks: readonly PrintableTask[],
   cpmByWbs?: ReadonlyMap<string, PrintCpmLike> | null,
+  /**
+   * WBS to task name for the WHOLE schedule, not just the rows being printed.
+   * Scope is read off a task's ancestors, and the ancestors of a filtered set
+   * are usually outside it.
+   */
+  outlineNames?: ReadonlyMap<string, string> | null,
 ): PrintRow[] {
   return [...tasks]
     .sort((a, b) => compareWbs(a.wbs_code ?? "", b.wbs_code ?? ""))
@@ -85,7 +98,9 @@ export function buildPrintRows(
         slip: Number.isFinite(slip) && slip > 0 ? `+${slip}d` : "-",
         critical: c?.critical === true,
         milestone,
-        scope: scopeOf(t),
+        complete: COMPLETE_STATUSES.has((t.status ?? "").trim()),
+        slipping: Number.isFinite(slip) && slip > 0,
+        scope: scopeOf(t, outlineNames ?? undefined),
       };
     });
 }
@@ -205,4 +220,22 @@ export function rangeSelect(
     else next.delete(rows[i].wbs);
   }
   return next;
+}
+
+/**
+ * The row's class on the printed sheet.
+ *
+ * Complete beats critical. A finished task on the critical path is not a
+ * warning any more, and printing it red sends somebody chasing work that is
+ * already done.
+ */
+export function printRowClass(row: {
+  complete: boolean;
+  critical: boolean;
+  slipping: boolean;
+}): string | undefined {
+  if (row.complete) return "sp-row-complete";
+  if (row.critical) return "sp-row-critical";
+  if (row.slipping) return "sp-row-slipping";
+  return undefined;
 }

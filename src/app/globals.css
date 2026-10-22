@@ -150,10 +150,44 @@
     text-align: right;
     white-space: nowrap;
   }
-  /* Bold rather than coloured. A red row on a sheet handed to a sub reads as
-     an instruction nobody gave; weight says "watch this" without shouting, and
-     it survives a black and white printer. */
-  .sp-critical td {
+  /* Colour, matching the legend on the schedule page, because that is what the
+     reader already knows how to read. Browsers drop backgrounds from print by
+     default, so the sheet opts back in; a black and white printer renders
+     these as greys and the bold weight still carries the critical rows. */
+  .sp-sheet {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .sp-row-complete td {
+    color: #15803d;
+  }
+  .sp-row-complete .sp-done {
+    font-weight: 600;
+  }
+  .sp-row-critical td {
+    color: #b91c1c;
     font-weight: 700;
+  }
+  .sp-row-slipping td {
+    color: #b45309;
+  }
+  .sp-row-slipping .sp-slipcell {
+    font-weight: 700;
+  }
+  /* The key, so a sheet read away from the screen explains its own colours. */
+  .sp-key {
+    font-size: 7.5pt;
+    margin: 6pt 0 0;
+    color: #444;
+  }
+  .sp-key .k-complete {
+    color: #15803d;
+  }
+  .sp-key .k-critical {
+    color: #b91c1c;
+    font-weight: 700;
+  }
+  .sp-key .k-slip {
+    color: #b45309;
   }
 }

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   buildPrintRows,
+  printRowClass,
   printSheetStamp,
   printSheetTitle,
   rangeSelect,
@@ -23,13 +24,18 @@ type SheetProps = {
   /** Already narrowed by the scope filter. */
   tasks: PrintableTask[];
   cpmByWbs: ReadonlyMap<string, PrintCpmLike>;
+  /** The whole schedule's WBS-to-name map, for reading scope off the outline. */
+  outlineNames: ReadonlyMap<string, string>;
   dataDate?: string | null;
   selection: PrintSelection;
 };
 
 // The chooser needs the rows and the scope label, not the sheet's header
 // material. Narrowing it keeps the call site honest about what it is for.
-type DialogProps = Pick<SheetProps, "scope" | "tasks" | "cpmByWbs" | "selection"> & {
+type DialogProps = Pick<
+  SheetProps,
+  "scope" | "tasks" | "cpmByWbs" | "outlineNames" | "selection"
+> & {
   open: boolean;
   setOpen: (open: boolean) => void;
   setSelection: (next: PrintSelection) => void;
@@ -47,10 +53,14 @@ export function SchedulePrintSheet({
   scope,
   tasks,
   cpmByWbs,
+  outlineNames,
   dataDate,
   selection,
 }: SheetProps) {
-  const rows = useMemo(() => buildPrintRows(tasks, cpmByWbs), [tasks, cpmByWbs]);
+  const rows = useMemo(
+    () => buildPrintRows(tasks, cpmByWbs, outlineNames),
+    [tasks, cpmByWbs, outlineNames],
+  );
   const printing = useMemo(() => selectedPrintRows(rows, selection), [rows, selection]);
 
   return (
@@ -76,7 +86,7 @@ export function SchedulePrintSheet({
         </thead>
         <tbody>
           {printing.map((r) => (
-            <tr key={r.wbs} className={r.critical ? "sp-critical" : undefined}>
+            <tr key={r.wbs} className={printRowClass(r)}>
               <td className="sp-wbs">{r.wbs}</td>
               <td>
                 {r.name}
@@ -86,12 +96,20 @@ export function SchedulePrintSheet({
               <td>{r.finish}</td>
               <td className="sp-num">{r.days}</td>
               <td className="sp-num">{r.pct}</td>
-              <td>{r.status}</td>
-              <td className="sp-num">{r.slip}</td>
+              <td className={r.complete ? "sp-done" : undefined}>{r.status}</td>
+              <td className="sp-num sp-slipcell">{r.slip}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      <p className="sp-key">
+        <span className="k-complete">Complete</span>
+        {"  -  "}
+        <span className="k-critical">Critical path</span>
+        {"  -  "}
+        <span className="k-slip">Behind the plan</span>
+        {"  -  Slip is working days against the projection."}
+      </p>
     </div>
   );
 }
@@ -101,12 +119,16 @@ export function SchedulePrintDialog({
   scope,
   tasks,
   cpmByWbs,
+  outlineNames,
   selection,
   open,
   setOpen,
   setSelection,
 }: DialogProps) {
-  const rows = useMemo(() => buildPrintRows(tasks, cpmByWbs), [tasks, cpmByWbs]);
+  const rows = useMemo(
+    () => buildPrintRows(tasks, cpmByWbs, outlineNames),
+    [tasks, cpmByWbs, outlineNames],
+  );
   const printing = useMemo(() => selectedPrintRows(rows, selection), [rows, selection]);
   const allOn = selection === null || selection.size === rows.length;
 
