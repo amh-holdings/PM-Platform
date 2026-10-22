@@ -10,7 +10,11 @@ import { formatCurrency } from "@/lib/format";
 import { describeStagingEffect } from "@/lib/afp-po-staging";
 import { amountForPoItems, poItemValue } from "@/lib/billing-progress";
 import { PO_ITEM_STATUS_TONE, poItemStatus } from "@/lib/po-item-status";
-import { canBillItem, type ItemBillingState } from "@/lib/po-item-ledger";
+import {
+  canBillItem,
+  type ItemBillingState,
+  type PoBillingPosition,
+} from "@/lib/po-item-ledger";
 import { todayIso } from "@/lib/schedule-calendar";
 
 import {
@@ -38,6 +42,10 @@ import {
  * staged for another period, is greyed out with where it went. Items this PO
  * already staged for the period open ticked, so saving again adds to them
  * rather than quietly replacing them.
+ *
+ * Ticked items are priced net of what the PO already billed PO-wide. A PO
+ * that went out at the standing half has half of every item billed, so only
+ * the other half is offered, and nothing ticked can take the PO past 100%.
  */
 export function AddToAfpButton({
   poId,
@@ -72,6 +80,7 @@ export function AddToAfpButton({
   const [freight, setFreight] = useState<number | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [itemBilling, setItemBilling] = useState<Record<string, ItemBillingState>>({});
+  const [position, setPosition] = useState<PoBillingPosition | null>(null);
 
   async function openDialog() {
     setOpen(true);
@@ -94,6 +103,7 @@ export function AddToAfpButton({
     setSalesTax(res.salesTax);
     setFreight(res.freight);
     setItemBilling(res.itemBilling);
+    setPosition(res.poPosition);
     // What this PO already put on this period opens ticked, priced from the
     // ticks, so the dialog shows the figure saving would keep.
     const staged = res.items
@@ -106,17 +116,28 @@ export function AddToAfpButton({
         selectedIds: staged,
         salesTax: res.salesTax,
         freight: res.freight,
+        billedFraction: res.poPosition.billedFraction,
+        cap: res.poPosition.remaining,
       }).total;
       setAmount(total > 0 ? total.toFixed(2) : "");
     }
   }
 
-  const itemAmount = amountForPoItems({
-    items,
-    selectedIds: picked,
-    salesTax,
-    freight,
-  });
+  // Every item price in the dialog goes through here, so the list, the
+  // breakdown and the amount box can never disagree about the net figure.
+  const priceItems = (ids: readonly string[]) =>
+    amountForPoItems({
+      items,
+      selectedIds: ids,
+      salesTax,
+      freight,
+      billedFraction: position?.billedFraction ?? 0,
+      cap: position?.remaining ?? null,
+    });
+  const itemAmount = priceItems(picked);
+  const priorOnPo = position
+    ? Math.round((position.billedToDate + position.stagedElsewhere) * 100) / 100
+    : 0;
 
   const today = todayIso();
   const billable = (id: string) => {
@@ -136,12 +157,7 @@ export function AddToAfpButton({
     setPicked(next);
     // Nothing ticked goes back to the standing half-the-PO figure, so
     // unticking the last item does not leave a stale partial amount behind.
-    const total = amountForPoItems({
-      items,
-      selectedIds: next,
-      salesTax,
-      freight,
-    }).total;
+    const total = priceItems(next).total;
     const value = next.length > 0 ? total : suggested;
     setAmount(value > 0 ? value.toFixed(2) : "");
   }
@@ -228,6 +244,28 @@ export function AddToAfpButton({
                       {formatCurrency(poTotalValue)}
                     </span>
                   </div>
+                  {priorOnPo > 0 && position && (
+                    <>
+                      <div className="mt-1 flex justify-between">
+                        <span className="text-muted-foreground">
+                          Already on other AFPs
+                          {position.stagedElsewhere > 0 ? " or staged" : ""}
+                        </span>
+                        <span className="font-mono">
+                          {formatCurrency(priorOnPo)}
+                          {poTotalValue > 0
+                            ? ` (${Math.round((priorOnPo / poTotalValue) * 100)}%)`
+                            : ""}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex justify-between">
+                        <span className="text-muted-foreground">Left on this PO</span>
+                        <span className="font-mono">
+                          {formatCurrency(position.remaining)}
+                        </span>
+                      </div>
+                    </>
+                  )}
                   <div className="mt-1 flex justify-between">
                     <span className="text-muted-foreground">Billing period</span>
                     <span>{monthLabel(periodMonth)}</span>
@@ -362,8 +400,25 @@ export function AddToAfpButton({
                               </span>
                             )}
                           </span>
-                          <span className="font-mono">
-                            {formatCurrency(poItemValue(item))}
+                          <span className="text-right font-mono">
+                            {(() => {
+                              // An item partly covered by earlier PO-wide
+                              // billing shows what is left on it, with its
+                              // full price beneath.
+                              const full = poItemValue(item);
+                              const net = priceItems([item.id]).total;
+                              if (locked || Math.abs(full - net) < 0.005) {
+                                return formatCurrency(full);
+                              }
+                              return (
+                                <>
+                                  {formatCurrency(net)}
+                                  <span className="block text-[10px] text-muted-foreground">
+                                    of {formatCurrency(full)}
+                                  </span>
+                                </>
+                              );
+                            })()}
                           </span>
                         </label>
                         );
@@ -374,6 +429,9 @@ export function AddToAfpButton({
                         {formatCurrency(itemAmount.items)} in items
                         {itemAmount.taxAndFreight > 0
                           ? ` plus ${formatCurrency(itemAmount.taxAndFreight)} share of tax and freight`
+                          : ""}
+                        {itemAmount.alreadyBilled > 0
+                          ? `, less ${formatCurrency(itemAmount.alreadyBilled)} already billed on earlier AFPs`
                           : ""}
                         {" "}= {formatCurrency(itemAmount.total)}
                       </p>
@@ -391,6 +449,15 @@ export function AddToAfpButton({
                     onTextChange={setAmount}
                     className="mt-1 font-mono"
                   />
+                  {position &&
+                    priorOnPo > 0 &&
+                    Number.isFinite(typed) &&
+                    typed > position.remaining + 0.005 && (
+                      <p className="mt-1 text-[11px] text-amber-700">
+                        That is more than the {formatCurrency(position.remaining)} left
+                        on {poNumber ?? "this PO"} after earlier AFPs.
+                      </p>
+                    )}
                   <p className="mt-1 text-[11px] text-muted-foreground">
                     {picked.length > 0
                       ? "Filled from the ticked items. Saving replaces this PO's figure and item list for the period with what is ticked here."

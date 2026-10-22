@@ -32,8 +32,11 @@ import type { ItemDeliveryTask } from "@/lib/po-item-status";
 import {
   blockedItems,
   itemBillingStates,
+  poBillingPosition,
   type ItemBillingState,
   type ItemLedgerRow,
+  type PoBillingPosition,
+  type PoContributionRow,
 } from "@/lib/po-item-ledger";
 
 async function assertAhcUser() {
@@ -1167,6 +1170,12 @@ export type AfpContextResult =
        * 0079 runs, when every item reads as open.
        */
       itemBilling: Record<string, ItemBillingState>;
+      /**
+       * What this PO has already put on other applications, and how much of
+       * every item that covers. Ticked items are priced net of it. Zeros when
+       * the per-PO ledger (0059) is not there.
+       */
+      poPosition: PoBillingPosition;
     }
   | { ok: false; error: string };
 
@@ -1316,7 +1325,59 @@ export async function getPoAfpContext(
     salesTax: poLines.ok ? poLines.salesTax : null,
     freight: poLines.ok ? poLines.freight : null,
     itemBilling: itemBillingStates(itemLedger.rows, periodMonth),
+    poPosition: await readPoPosition(
+      auth.supabase,
+      poId,
+      Number(po.total_value ?? 0),
+      periodMonth,
+    ),
   };
+}
+
+/**
+ * This PO's billing position across every application but the one being
+ * built. Read from the per-PO ledger (0059) and the item ledger (0079); with
+ * either missing it degrades to what it can see, and with neither it reports
+ * nothing billed - which is how the dialog behaved before.
+ */
+async function readPoPosition(
+  supabase: ReturnType<typeof createClient>,
+  poId: string,
+  poTotal: number,
+  periodMonth: string,
+): Promise<PoBillingPosition> {
+  const [{ data: amounts }, { data: itemRows }] = await Promise.all([
+    supabase
+      .from("billing_entry_po_amounts")
+      .select(
+        "billing_entry_id, amount, billing_entries!inner(period_month, afp_number, pay_application_id, status)",
+      )
+      .eq("procurement_order_id", poId),
+    supabase
+      .from("billing_entry_po_items")
+      .select("billing_entry_id")
+      .eq("procurement_order_id", poId),
+  ]);
+  const contributions: PoContributionRow[] = (amounts ?? []).map((r) => {
+    const e = r.billing_entries as unknown as {
+      period_month: string;
+      afp_number: string | null;
+      pay_application_id: string | null;
+      status: string | null;
+    };
+    return {
+      entryId: r.billing_entry_id,
+      amount: Number(r.amount ?? 0),
+      periodMonth: e.period_month,
+      billed: hasBillingEvidence(e),
+    };
+  });
+  return poBillingPosition({
+    poTotal,
+    contributions,
+    itemEntryIds: (itemRows ?? []).map((r) => r.billing_entry_id),
+    periodMonth,
+  });
 }
 
 /** Migration 0079 has not run, so items cannot be remembered yet. */

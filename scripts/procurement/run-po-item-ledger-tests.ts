@@ -7,6 +7,7 @@ import {
   canBillItem,
   itemBillingState,
   itemBillingStates,
+  poBillingPosition,
 } from "../../src/lib/po-item-ledger";
 
 let passed = 0;
@@ -74,6 +75,58 @@ eq(
   ["billed", "stale"],
 );
 eq("nothing blocked when every tick is allowed", blockedItems(["mine", "fresh"], states), []);
+
+
+// What the PO has already billed, and how much of it covered every item.
+const half = poBillingPosition({
+  poTotal: 47339.72,
+  contributions: [{ entryId: "e13", amount: 23669.86, periodMonth: SEP, billed: true }],
+  itemEntryIds: [],
+  periodMonth: OCT,
+});
+eq("half the PO billed PO-wide is half of every item", half.billedFraction, 0.5);
+eq("and leaves the other half on the PO", half.remaining, 23669.86);
+const mine = poBillingPosition({
+  poTotal: 1000,
+  contributions: [{ entryId: "eOct", amount: 500, periodMonth: OCT, billed: false }],
+  itemEntryIds: [],
+  periodMonth: OCT,
+});
+eq(
+  "this period's own staged figure is not counted against itself",
+  [mine.billedFraction, mine.remaining],
+  [0, 1000],
+);
+const mixed = poBillingPosition({
+  poTotal: 1000,
+  contributions: [
+    { entryId: "eSep", amount: 500, periodMonth: SEP, billed: true },
+    { entryId: "eAug", amount: 200, periodMonth: "2026-08-01", billed: true },
+    { entryId: "eNov", amount: 100, periodMonth: "2026-11-01", billed: false },
+  ],
+  itemEntryIds: ["eAug"],
+  periodMonth: OCT,
+});
+eq(
+  "item-specific billing is left out of the PO-wide share",
+  [mixed.poWide, mixed.billedFraction],
+  [600, 0.6],
+);
+eq(
+  "but everything billed or staged elsewhere comes off what is left",
+  [mixed.billedToDate, mixed.stagedElsewhere, mixed.remaining],
+  [700, 100, 200],
+);
+eq(
+  "an over-billed PO leaves nothing, never a negative",
+  poBillingPosition({
+    poTotal: 100,
+    contributions: [{ entryId: "e", amount: 150, periodMonth: SEP, billed: true }],
+    itemEntryIds: [],
+    periodMonth: OCT,
+  }).remaining,
+  0,
+);
 
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);

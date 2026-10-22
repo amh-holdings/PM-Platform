@@ -292,13 +292,21 @@ export function poItemValue(item: AfpPoItem): number {
  * no single item, so each ticked item carries its share of them by value.
  * Ticking every item comes back to subtotal plus tax plus freight - the PO
  * total - to the cent, rather than a few cents of rounding short.
+ *
+ * billedFraction is how much of every item an earlier PO-wide billing already
+ * covered: the standing rule bills half the PO the day it goes out, against no
+ * item in particular, so each item has half its value billed before anything
+ * is ticked. Only the other half is offered. cap is what is left on the PO,
+ * the last stop on ever billing it past 100%.
  */
 export function amountForPoItems(opts: {
   items: readonly AfpPoItem[];
   selectedIds: readonly string[];
   salesTax: number | null;
   freight: number | null;
-}): { items: number; taxAndFreight: number; total: number } {
+  billedFraction?: number;
+  cap?: number | null;
+}): { items: number; taxAndFreight: number; alreadyBilled: number; total: number } {
   const picked = new Set(opts.selectedIds);
   let subtotal = 0;
   let selected = 0;
@@ -311,10 +319,15 @@ export function amountForPoItems(opts: {
   const share =
     subtotal > 0 && Number.isFinite(extras) ? (extras * selected) / subtotal : 0;
   const itemsTotal = Math.round(selected * 100) / 100;
-  const total = Math.round((selected + share) * 100) / 100;
+  const gross = Math.round((selected + share) * 100) / 100;
+  const f = Math.min(1, Math.max(0, Number(opts.billedFraction ?? 0) || 0));
+  let total = Math.round(gross * (1 - f) * 100) / 100;
+  const cap = opts.cap;
+  if (cap != null && Number.isFinite(cap)) total = Math.min(total, Math.max(0, cap));
   return {
     items: itemsTotal,
-    taxAndFreight: Math.round((total - itemsTotal) * 100) / 100,
+    taxAndFreight: Math.round((gross - itemsTotal) * 100) / 100,
+    alreadyBilled: Math.round((gross - total) * 100) / 100,
     total,
   };
 }

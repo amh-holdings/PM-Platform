@@ -1058,6 +1058,40 @@ eq(
   4210.5,
 );
 
+
+// A PO already half billed PO-wide: ticking items offers only the other half.
+const halfAll = amountForPoItems({
+  items: po19,
+  selectedIds: po19.map((i) => i.id),
+  salesTax: 1500,
+  freight: 750,
+  billedFraction: 0.5,
+});
+eq(
+  "half billed PO-wide, every item ticked is the other half of the PO",
+  halfAll.total,
+  Math.round(((po19Sub + 2250) / 2) * 100) / 100,
+);
+const halfSome = amountForPoItems({
+  items: po19,
+  selectedIds: ["l1"],
+  salesTax: null,
+  freight: null,
+  billedFraction: 0.5,
+});
+eq("half billed, one item bills half its value", halfSome.total, 2105.25);
+eq("and says the other half is already billed", halfSome.alreadyBilled, 2105.25);
+eq(
+  "nothing left on the PO caps the items at zero",
+  amountForPoItems({ items: po19, selectedIds: ["l2"], salesTax: null, freight: null, cap: 0 }).total,
+  0,
+);
+eq(
+  "the cap only bites when the items exceed it",
+  amountForPoItems({ items: po19, selectedIds: ["l1"], salesTax: null, freight: null, cap: 1000000 }).total,
+  4210.5,
+);
+
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);
 if (failures.length) {
