@@ -128,6 +128,27 @@ eq(
   0,
 );
 
+
+eq(
+  "each application the PO is on is named, oldest first",
+  poBillingPosition({
+    poTotal: 1000,
+    contributions: [
+      { entryId: "eNov", amount: 100, periodMonth: "2026-11-01", billed: false },
+      { entryId: "eSep", amount: 300, periodMonth: SEP, billed: true, afpNumber: "13" },
+      { entryId: "eSep2", amount: 200, periodMonth: SEP, billed: true, afpNumber: "13" },
+      { entryId: "eAug", amount: 50, periodMonth: "2026-08-01", billed: true, afpNumber: null },
+    ],
+    itemEntryIds: [],
+    periodMonth: OCT,
+  }).byApplication,
+  [
+    { label: "Billed August 2026", amount: 50, billed: true },
+    { label: "AFP 13 (September 2026)", amount: 500, billed: true },
+    { label: "Staged for November 2026", amount: 100, billed: false },
+  ],
+);
+
 console.log(`\n${"=".repeat(60)}`);
 console.log(`${passed} passed, ${failures.length} failed`);
 if (failures.length) {

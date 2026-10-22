@@ -258,6 +258,17 @@ export function AddToAfpButton({
                             : ""}
                         </span>
                       </div>
+                      {/* Which application each dollar went on, so the
+                          figure above can be checked against the AFPs. */}
+                      {position.byApplication.map((a) => (
+                        <div
+                          key={a.label}
+                          className="flex justify-between pl-3 text-[11px] text-muted-foreground"
+                        >
+                          <span>{a.label}</span>
+                          <span className="font-mono">{formatCurrency(a.amount)}</span>
+                        </div>
+                      ))}
                       <div className="mt-1 flex justify-between">
                         <span className="text-muted-foreground">Left on this PO</span>
                         <span className="font-mono">

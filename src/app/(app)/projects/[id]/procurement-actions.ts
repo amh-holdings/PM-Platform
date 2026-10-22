@@ -1370,6 +1370,7 @@ async function readPoPosition(
       amount: Number(r.amount ?? 0),
       periodMonth: e.period_month,
       billed: hasBillingEvidence(e),
+      afpNumber: e.afp_number ?? null,
     };
   });
   return poBillingPosition({

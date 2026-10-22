@@ -121,6 +121,14 @@ export type PoContributionRow = {
   amount: number;
   periodMonth: string;
   billed: boolean;
+  afpNumber?: string | null;
+};
+
+/** One application, or one staged month, this PO has money on. */
+export type PoApplicationShare = {
+  label: string;
+  amount: number;
+  billed: boolean;
 };
 
 export type PoBillingPosition = {
@@ -134,6 +142,11 @@ export type PoBillingPosition = {
   remaining: number;
   /** poWide as a share of the PO: how much of each item is already covered. */
   billedFraction: number;
+  /**
+   * Where that money sits: "AFP 13 (September 2026)" for each application,
+   * "Staged for November 2026" for a month not billed yet. Oldest first.
+   */
+  byApplication: PoApplicationShare[];
 };
 
 /**
@@ -154,6 +167,7 @@ export function poBillingPosition(opts: {
   let billed = 0;
   let staged = 0;
   let poWide = 0;
+  const groups = new Map<string, PoApplicationShare & { sort: string }>();
   for (const c of opts.contributions) {
     const amount = Number(c.amount) || 0;
     if (amount <= 0) continue;
@@ -161,6 +175,16 @@ export function poBillingPosition(opts: {
     if (c.billed) billed += amount;
     else staged += amount;
     if (!withItems.has(c.entryId)) poWide += amount;
+    const month = monthLabel(c.periodMonth);
+    const key = c.billed ? `afp:${c.afpNumber ?? c.periodMonth}` : `staged:${c.periodMonth}`;
+    const label = c.billed
+      ? c.afpNumber
+        ? `AFP ${c.afpNumber} (${month})`
+        : `Billed ${month}`
+      : `Staged for ${month}`;
+    const g = groups.get(key) ?? { label, amount: 0, billed: c.billed, sort: c.periodMonth };
+    g.amount += amount;
+    groups.set(key, g);
   }
   const total = Math.max(0, Number(opts.poTotal) || 0);
   const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -170,5 +194,12 @@ export function poBillingPosition(opts: {
     poWide: r2(poWide),
     remaining: r2(Math.max(0, total - billed - staged)),
     billedFraction: total > 0 ? Math.min(1, poWide / total) : 0,
+    byApplication: Array.from(groups.values())
+      .sort((a, b) => a.sort.localeCompare(b.sort))
+      .map(({ label, amount, billed: isBilled }) => ({
+        label,
+        amount: r2(amount),
+        billed: isBilled,
+      })),
   };
 }
