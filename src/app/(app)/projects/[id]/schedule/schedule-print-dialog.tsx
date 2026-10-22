@@ -24,18 +24,13 @@ type SheetProps = {
   /** Already narrowed by the scope filter. */
   tasks: PrintableTask[];
   cpmByWbs: ReadonlyMap<string, PrintCpmLike>;
-  /** The whole schedule's WBS-to-name map, for reading scope off the outline. */
-  outlineNames: ReadonlyMap<string, string>;
   dataDate?: string | null;
   selection: PrintSelection;
 };
 
 // The chooser needs the rows and the scope label, not the sheet's header
 // material. Narrowing it keeps the call site honest about what it is for.
-type DialogProps = Pick<
-  SheetProps,
-  "scope" | "tasks" | "cpmByWbs" | "outlineNames" | "selection"
-> & {
+type DialogProps = Pick<SheetProps, "scope" | "tasks" | "cpmByWbs" | "selection"> & {
   open: boolean;
   setOpen: (open: boolean) => void;
   setSelection: (next: PrintSelection) => void;
@@ -53,14 +48,10 @@ export function SchedulePrintSheet({
   scope,
   tasks,
   cpmByWbs,
-  outlineNames,
   dataDate,
   selection,
 }: SheetProps) {
-  const rows = useMemo(
-    () => buildPrintRows(tasks, cpmByWbs, outlineNames),
-    [tasks, cpmByWbs, outlineNames],
-  );
+  const rows = useMemo(() => buildPrintRows(tasks, cpmByWbs), [tasks, cpmByWbs]);
   const printing = useMemo(() => selectedPrintRows(rows, selection), [rows, selection]);
 
   return (
@@ -119,16 +110,12 @@ export function SchedulePrintDialog({
   scope,
   tasks,
   cpmByWbs,
-  outlineNames,
   selection,
   open,
   setOpen,
   setSelection,
 }: DialogProps) {
-  const rows = useMemo(
-    () => buildPrintRows(tasks, cpmByWbs, outlineNames),
-    [tasks, cpmByWbs, outlineNames],
-  );
+  const rows = useMemo(() => buildPrintRows(tasks, cpmByWbs), [tasks, cpmByWbs]);
   const printing = useMemo(() => selectedPrintRows(rows, selection), [rows, selection]);
   const allOn = selection === null || selection.size === rows.length;
 

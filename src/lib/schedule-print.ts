@@ -17,7 +17,6 @@
 
 import { compareWbs } from "@/lib/schedule-edit";
 import { formatDate } from "@/lib/format";
-import { scopeOf, type TaskScope } from "@/lib/schedule-scope";
 
 /** The two status labels the schedule treats as 100%. See STATUS_PCT. */
 const COMPLETE_STATUSES = new Set(["Complete", "Approved"]);
@@ -25,8 +24,6 @@ const COMPLETE_STATUSES = new Set(["Complete", "Approved"]);
 export type PrintableTask = {
   wbs_code: string;
   task_name: string;
-  /** Needed to derive the scope - see scopeOf. */
-  phase?: string | null;
   status?: string | null;
   pct_complete?: number | null;
   duration_days?: number | null;
@@ -58,18 +55,11 @@ export type PrintRow = {
   complete: boolean;
   /** The projection is behind the plan on this row. */
   slipping: boolean;
-  scope: TaskScope;
 };
 
 export function buildPrintRows(
   tasks: readonly PrintableTask[],
   cpmByWbs?: ReadonlyMap<string, PrintCpmLike> | null,
-  /**
-   * WBS to task name for the WHOLE schedule, not just the rows being printed.
-   * Scope is read off a task's ancestors, and the ancestors of a filtered set
-   * are usually outside it.
-   */
-  outlineNames?: ReadonlyMap<string, string> | null,
 ): PrintRow[] {
   return [...tasks]
     .sort((a, b) => compareWbs(a.wbs_code ?? "", b.wbs_code ?? ""))
@@ -100,7 +90,6 @@ export function buildPrintRows(
         milestone,
         complete: COMPLETE_STATUSES.has((t.status ?? "").trim()),
         slipping: Number.isFinite(slip) && slip > 0,
-        scope: scopeOf(t, outlineNames ?? undefined),
       };
     });
 }
@@ -121,48 +110,28 @@ export function selectedPrintRows(
 }
 
 /**
- * The one scope every printed row belongs to, or null when they are mixed.
- *
- * Zarina printed 21 permitting rows with the filter on All scopes and got a
- * sheet headed "All scopes - 21 of 165 tasks selected". Every row on it was
- * permitting. The filter is not the only thing that narrows a sheet; the
- * selection does too, and the header has to read what is actually on the page.
- */
-export function sharedScope(rows: readonly PrintRow[]): TaskScope | null {
-  if (rows.length === 0) return null;
-  const first = rows[0].scope;
-  return rows.every((r) => r.scope === first) ? first : null;
-}
-
-/**
  * The line across the top of the sheet.
  *
  * It has to say what was filtered out, because a printed page carries no
- * dropdown. Somebody handed eleven civil rows with no header cannot tell
- * whether that is the whole civil scope or a cut of it.
+ * dropdown. Somebody handed eleven rows with no header cannot tell whether
+ * that is a whole branch or a cut of it.
  *
- * A scope read off the rows rather than the filter is worded differently on
- * purpose. "Permitting - 21 of 165 tasks selected" reads as 21 of 165
- * PERMITTING tasks, which is not what the number means: 165 is the whole
- * project. Saying "selected from all scopes" keeps the denominator honest.
+ * `filterLabel` is the branch filter's own words - "Permitting", "Permitting
+ * and Procurement", "3 branches" - so the sheet and the screen agree. It used
+ * to be a scope guessed from the rows, which was only ever a patch over a
+ * filter that could not name itself.
  */
 export function printSheetTitle(
   projectName: string,
-  filterScope: string | null,
+  filterLabel: string | null,
   printing: readonly PrintRow[],
   inScope: number,
 ): string {
   const shown = printing.length;
   const plural = (n: number) => `${n} task${n === 1 ? "" : "s"}`;
-
-  const derived = filterScope ? null : sharedScope(printing);
-  const label = filterScope ?? derived;
-  const where = label ? `${label} scope` : "All scopes";
+  const where = filterLabel ?? "All branches";
 
   if (shown === inScope) return `${projectName} - ${where} - ${plural(shown)}`;
-  if (derived) {
-    return `${projectName} - ${where} - ${plural(shown)} selected from all scopes`;
-  }
   return `${projectName} - ${where} - ${shown} of ${plural(inScope)} selected`;
 }
 
