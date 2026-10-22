@@ -57,6 +57,7 @@
     "test:progress-spread": "tsx scripts/billing/run-progress-spread-tests.ts",
     "test:milestone-split": "tsx scripts/procurement/run-milestone-split-tests.ts",
     "test:po-item-status": "tsx scripts/procurement/run-po-item-status-tests.ts",
+    "test:po-item-ledger": "tsx scripts/procurement/run-po-item-ledger-tests.ts",
     "test:schedule-insert": "tsx scripts/schedule/run-insert-tests.ts"
   },
   "dependencies": {

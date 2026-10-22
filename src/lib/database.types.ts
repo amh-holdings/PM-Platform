@@ -148,6 +148,52 @@ export type Database = {
           },
         ]
       }
+      billing_entry_po_items: {
+        Row: {
+          billing_entry_id: string
+          created_at: string | null
+          id: string
+          procurement_order_id: string
+          procurement_order_line_id: string
+        }
+        Insert: {
+          billing_entry_id: string
+          created_at?: string | null
+          id?: string
+          procurement_order_id: string
+          procurement_order_line_id: string
+        }
+        Update: {
+          billing_entry_id?: string
+          created_at?: string | null
+          id?: string
+          procurement_order_id?: string
+          procurement_order_line_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_entry_po_items_billing_entry_id_fkey"
+            columns: ["billing_entry_id"]
+            isOneToOne: false
+            referencedRelation: "billing_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_entry_po_items_procurement_order_id_fkey"
+            columns: ["procurement_order_id"]
+            isOneToOne: false
+            referencedRelation: "procurement_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_entry_po_items_procurement_order_line_id_fkey"
+            columns: ["procurement_order_line_id"]
+            isOneToOne: false
+            referencedRelation: "procurement_order_lines"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       billing_lines: {
         Row: {
           change_order_id: string | null
