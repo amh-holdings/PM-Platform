@@ -4268,10 +4268,15 @@ eq(
 // which left the scope filter a dropdown with one useless option in it.
 const SUSSEX = [
   { wbs_code: "1", task_name: "Engineering" },
+  { wbs_code: "1.2.1.4.1", task_name: "Design" },
+  { wbs_code: "1.2.1.4.3", task_name: "IFP Page Turn" },
+  { wbs_code: "1.2.2.3.2", task_name: "IFP - Internal Review" },
+  { wbs_code: "1.2.3.3.1", task_name: "Design" },
   { wbs_code: "1.2.1", task_name: "Civil" },
   { wbs_code: "1.2.1.4", task_name: "Civil - IFP (Issued For Permit)" },
   { wbs_code: "1.2.2", task_name: "Structural" },
   { wbs_code: "1.2.2.3", task_name: "Structural - IFP (Issued For Permit)" },
+  { wbs_code: "1.2.3.3", task_name: "Electrical - IFP (Issued For Permit)" },
   { wbs_code: "1.2.3", task_name: "Electrical" },
   { wbs_code: "1.2.3.1", task_name: "30% Design" },
   { wbs_code: "2", task_name: "Permitting" },
@@ -4317,6 +4322,24 @@ eq(
   "Contracts",
 );
 eq("a delivery under Procurement is procurement", sc("3.4.3"), "Procurement");
+
+// The nine rows that turned up on a permitting sheet. Their nearest ancestor
+// is "Civil - IFP (Issued For Permit)", which carries both a discipline and a
+// phase word; nearest-match-wins filed them as Permitting. A discipline
+// anywhere in the chain beats a phase word however near it sits.
+eq("a design row under the civil IFP package is civil", sc("1.2.1.4.1"), "Civil");
+eq("and so is its page turn", sc("1.2.1.4.3"), "Civil");
+eq("the structural IFP package is structural", sc("1.2.2.3.2"), "Structural");
+eq("the electrical one is electrical", sc("1.2.3.3.1"), "Electrical");
+check(
+  "none of the IFP deliverables land in Permitting",
+  ["1.2.1.4.1", "1.2.1.4.3", "1.2.2.3.2", "1.2.3.3.1"].every(
+    (w) => sc(w) !== "Permitting",
+  ),
+);
+// The counterpart: a permit row genuinely under the permitting branch has no
+// discipline above it, so the phase word still answers.
+eq("a permit under the permitting branch is still permitting", sc("2.2.1.2"), "Permitting");
 check(
   "nothing in the Sussex sample falls through to Other",
   SUSSEX.every((t) => scopeOf(t, SUSSEX_NAMES) !== "Other"),
