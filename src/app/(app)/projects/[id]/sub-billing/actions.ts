@@ -10,6 +10,9 @@ import { approvedToDateByItem, recommendedApproval, type BillHeader, type BillLi
 import { parsePastedSovLines } from "@/lib/sub-sov-import";
 import { parseRetainageRate } from "@/lib/retainage-rate";
 import type { SubBillingClient, SubPayAppStatus } from "@/lib/sub-billing.types";
+import { canEditHeader, headerEditNote, planHeaderEdit, HEADER_FIELDS } from "@/lib/sub-bill-header-edit";
+import { createClient } from "@/lib/supabase/server";
+import { formatCurrency } from "@/lib/format";
 
 export type ActionResult =
   | { ok: true; id?: string }
@@ -235,6 +238,84 @@ export async function recordSubBill(
 
   revalidatePath(`/projects/${projectId}/sub-billing`);
   return { ok: true, id: app.id };
+}
+
+// ---------------------------------------------------------------------------
+// Correct the header of a bill already entered.
+//
+// The header is the sub's G702 typed in, and a keying slip there used to mean
+// rejecting the bill and entering every line again. Only the header moves:
+// lines stay derived from our SOV. Each change is appended to the bill's
+// notes with who made it, and the checks run again so the verdict on screen
+// is always about the figures on file. A decided bill is left alone.
+// ---------------------------------------------------------------------------
+export async function updateBillHeader(
+  projectId: string,
+  appId: string,
+  formData: FormData,
+): Promise<ActionResult> {
+  const auth = await requireCapability("enterSubBill");
+  if (!auth.ok) return auth;
+  const db = subBillingClient();
+
+  const { data: app } = await db.from("sub_pay_apps").select("*").eq("id", appId).single();
+  if (!app) return { ok: false, error: "Bill not found" };
+  if (!canEditHeader(app.status)) {
+    return {
+      ok: false,
+      error: `This bill is ${app.status}. A decided bill's header is on record and cannot be changed.`,
+    };
+  }
+
+  const { data: lines } = await db
+    .from("sub_pay_app_lines")
+    .select("from_previous, this_period, total_completed")
+    .eq("sub_pay_app_id", appId);
+  const sum = (k: "from_previous" | "this_period" | "total_completed") =>
+    round2((lines ?? []).reduce((acc, l) => acc + Number(l[k] ?? 0), 0));
+
+  const input: Record<string, string | null> = {};
+  for (const f of HEADER_FIELDS) {
+    const v = formData.get(f.key);
+    input[f.key] = typeof v === "string" ? v : null;
+  }
+  const plan = planHeaderEdit({
+    current: app as unknown as Record<string, unknown>,
+    input,
+    derived: {
+      billed_previous: sum("from_previous"),
+      billed_this_period: sum("this_period"),
+      billed_to_date: sum("total_completed"),
+    },
+    money: formatCurrency,
+  });
+  if (!plan.ok) return { ok: false, error: plan.error };
+  if (plan.changes.length === 0) return { ok: true, id: appId };
+
+  const { data: me } = await createClient()
+    .from("profiles")
+    .select("full_name, email")
+    .eq("id", auth.userId)
+    .maybeSingle();
+  const note = headerEditNote({
+    changes: plan.changes,
+    who: me?.full_name || me?.email || "unknown user",
+    whenIso: new Date().toISOString(),
+  });
+  const notes = [app.notes, note].filter(Boolean).join("\n");
+
+  const { error } = await db
+    .from("sub_pay_apps")
+    .update({ ...plan.patch, notes } as never)
+    .eq("id", appId);
+  if (error) return { ok: false, error: error.message };
+
+  const res = await runVerificationCore(db, appId);
+  if (!res.ok) return { ok: false, error: res.error ?? "Saved, but the checks did not run" };
+
+  revalidatePath(`/projects/${projectId}/sub-billing/${app.subcontractor_id}/${appId}`);
+  revalidatePath(`/projects/${projectId}/sub-billing`);
+  return { ok: true, id: appId };
 }
 
 // ---------------------------------------------------------------------------
