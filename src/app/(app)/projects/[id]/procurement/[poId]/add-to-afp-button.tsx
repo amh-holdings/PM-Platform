@@ -8,11 +8,15 @@ import { MoneyInput } from "@/components/ui/money-input";
 import { Label } from "@/components/ui/label";
 import { formatCurrency } from "@/lib/format";
 import { describeStagingEffect } from "@/lib/afp-po-staging";
+import { amountForPoItems, poItemValue } from "@/lib/billing-progress";
+import { PO_ITEM_STATUS_TONE, poItemStatus } from "@/lib/po-item-status";
+import { todayIso } from "@/lib/schedule-calendar";
 
 import {
   getPoAfpContext,
   stagePoAmountForAfp,
   type AfpTargetLine,
+  type PoLineRow,
 } from "../../procurement-actions";
 
 /**
@@ -23,6 +27,11 @@ import {
  * period so the number can be set against them. Saving writes an ordinary
  * forecast row, which then behaves like every other row on the Bill this
  * period panel.
+ *
+ * Where the PO has a line-item table, the items are listed with a box each.
+ * Ticking the ones that arrived fills the amount with their value plus their
+ * share of tax and freight, for a PO that is only partly delivered. The box
+ * stays editable afterwards; the ticks are a way to arrive at the number.
  */
 export function AddToAfpButton({
   poId,
@@ -51,6 +60,11 @@ export function AddToAfpButton({
   const [lineId, setLineId] = useState("");
   const [amount, setAmount] = useState("");
   const [poNumber, setPoNumber] = useState<string | null>(null);
+  const [suggested, setSuggested] = useState(0);
+  const [items, setItems] = useState<PoLineRow[]>([]);
+  const [salesTax, setSalesTax] = useState<number | null>(null);
+  const [freight, setFreight] = useState<number | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
 
   async function openDialog() {
     setOpen(true);
@@ -67,7 +81,42 @@ export function AddToAfpButton({
     setPoNumber(res.poNumber);
     setLines(res.lines);
     setLineId(res.defaultBillingLineId ?? "");
+    setSuggested(res.suggestedAmount);
     setAmount(res.suggestedAmount > 0 ? res.suggestedAmount.toFixed(2) : "");
+    setItems(res.items);
+    setSalesTax(res.salesTax);
+    setFreight(res.freight);
+    setPicked([]);
+  }
+
+  const itemAmount = amountForPoItems({
+    items,
+    selectedIds: picked,
+    salesTax,
+    freight,
+  });
+
+  const today = todayIso();
+  const deliveredIds = items
+    .filter((i) => poItemStatus(i.deliveryTask, today).kind === "delivered")
+    .map((i) => i.id);
+
+  function pick(next: string[]) {
+    setPicked(next);
+    // Nothing ticked goes back to the standing half-the-PO figure, so
+    // unticking the last item does not leave a stale partial amount behind.
+    const total = amountForPoItems({
+      items,
+      selectedIds: next,
+      salesTax,
+      freight,
+    }).total;
+    const value = next.length > 0 ? total : suggested;
+    setAmount(value > 0 ? value.toFixed(2) : "");
+  }
+
+  function togglePicked(id: string) {
+    pick(picked.includes(id) ? picked.filter((p) => p !== id) : [...picked, id]);
   }
 
   const selected = lines.find((l) => l.id === lineId) ?? null;
@@ -203,6 +252,81 @@ export function AddToAfpButton({
                   </div>
                 )}
 
+                {items.length > 0 && (
+                  <div>
+                    <div className="flex items-baseline justify-between">
+                      <Label className="text-xs">Items delivered</Label>
+                      <span className="flex gap-3">
+                        {/* What the schedule says has arrived, in one click.
+                            Delivered means its row is Complete. */}
+                        {deliveredIds.length > 0 && (
+                          <button
+                            type="button"
+                            className="text-[11px] text-muted-foreground underline"
+                            onClick={() => pick(deliveredIds)}
+                          >
+                            Tick delivered ({deliveredIds.length})
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="text-[11px] text-muted-foreground underline"
+                          onClick={() =>
+                            pick(
+                              picked.length === items.length
+                                ? []
+                                : items.map((i) => i.id),
+                            )
+                          }
+                        >
+                          {picked.length === items.length ? "Clear" : "Tick all"}
+                        </button>
+                      </span>
+                    </div>
+                    <div className="mt-1 divide-y rounded-md border text-xs">
+                      {items.map((item) => (
+                        <label
+                          key={item.id}
+                          className="flex cursor-pointer items-start gap-2 p-2 hover:bg-muted/30"
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={picked.includes(item.id)}
+                            onChange={() => togglePicked(item.id)}
+                          />
+                          <span className="flex-1">
+                            {item.lineNo != null ? `Line ${item.lineNo} ` : ""}
+                            {item.description ?? "Unnamed item"}
+                            {(() => {
+                              const status = poItemStatus(item.deliveryTask, today);
+                              return (
+                                <span
+                                  className={`ml-1.5 inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium ${PO_ITEM_STATUS_TONE[status.kind]}`}
+                                >
+                                  {status.label}
+                                </span>
+                              );
+                            })()}
+                          </span>
+                          <span className="font-mono">
+                            {formatCurrency(poItemValue(item))}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    {picked.length > 0 && (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        {formatCurrency(itemAmount.items)} in items
+                        {itemAmount.taxAndFreight > 0
+                          ? ` plus ${formatCurrency(itemAmount.taxAndFreight)} share of tax and freight`
+                          : ""}
+                        {" "}= {formatCurrency(itemAmount.total)}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div>
                   <Label htmlFor="afp-amount" className="text-xs">
                     Amount to bill
@@ -214,8 +338,11 @@ export function AddToAfpButton({
                     className="mt-1 font-mono"
                   />
                   <p className="mt-1 text-[11px] text-muted-foreground">
-                    Opens on half the PO. Change it to whatever the owner is
-                    actually billed this period.
+                    {picked.length > 0
+                      ? "Filled from the ticked items. Saving again on this PO replaces its figure for the period, so tick everything being billed this period in one go."
+                      : items.length > 0
+                        ? "Opens on half the PO. Tick the items that arrived to bill only those, or type the figure."
+                        : "Opens on half the PO. Change it to whatever the owner is actually billed this period."}
                   </p>
                 </div>
 

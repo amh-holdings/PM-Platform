@@ -6,6 +6,7 @@
  */
 
 import {
+  amountForPoItems,
   defaultAfpAmountForPo,
   forecastAmountPatch,
   needsADecision,
@@ -999,6 +1000,62 @@ check(
   "no linked POs at all falls back without printing a total",
   noPos.includes("No payment terms recorded on the linked POs") &&
     !noPos.includes("totalling"),
+);
+
+
+// Billing some of the items on one PO. PO-019's figures: seven items, tax and
+// freight below the subtotal.
+const po19 = [
+  { id: "l1", quantity: 1, unitPrice: 4210.5, extendedPrice: 4210.5 },
+  { id: "l2", quantity: 1, unitPrice: 18920, extendedPrice: 18920 },
+  { id: "l3", quantity: 3, unitPrice: 410.33, extendedPrice: 1230.99 },
+  { id: "l4", quantity: 1, unitPrice: 9875.4, extendedPrice: 9875.4 },
+  { id: "l5", quantity: 1, unitPrice: 9875.4, extendedPrice: 9875.4 },
+  { id: "l6", quantity: 1, unitPrice: 612.18, extendedPrice: 612.18 },
+  { id: "l7", quantity: 3, unitPrice: 18.45, extendedPrice: null },
+];
+const po19Sub = 4210.5 + 18920 + 1230.99 + 9875.4 + 9875.4 + 612.18 + 55.35;
+eq(
+  "no items ticked is nothing to bill",
+  amountForPoItems({ items: po19, selectedIds: [], salesTax: 1500, freight: 750 }).total,
+  0,
+);
+eq(
+  "every item ticked is the PO total to the cent",
+  amountForPoItems({
+    items: po19,
+    selectedIds: po19.map((i) => i.id),
+    salesTax: 1500,
+    freight: 750,
+  }).total,
+  Math.round((po19Sub + 2250) * 100) / 100,
+);
+const partial = amountForPoItems({
+  items: po19,
+  selectedIds: ["l2", "l3"],
+  salesTax: 1500,
+  freight: 750,
+});
+eq("ticked items sum their extended prices", partial.items, 20150.99);
+eq(
+  "ticked items carry their share of tax and freight by value",
+  partial.total,
+  Math.round((20150.99 + (2250 * 20150.99) / po19Sub) * 100) / 100,
+);
+eq(
+  "items and tax-and-freight add back to the total",
+  Math.round((partial.items + partial.taxAndFreight) * 100) / 100,
+  partial.total,
+);
+eq(
+  "an item with no extended price is valued at quantity times unit price",
+  amountForPoItems({ items: po19, selectedIds: ["l7"], salesTax: null, freight: null }).total,
+  55.35,
+);
+eq(
+  "no tax or freight bills the items alone",
+  amountForPoItems({ items: po19, selectedIds: ["l1"], salesTax: null, freight: null }).total,
+  4210.5,
 );
 
 console.log(`\n${"=".repeat(60)}`);

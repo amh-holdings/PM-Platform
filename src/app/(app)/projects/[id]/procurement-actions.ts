@@ -28,6 +28,7 @@ import { createClient } from "@/lib/supabase/server";
 import { parseDraftLines, totalForNewPo } from "@/lib/procurement-lines";
 import { formatCurrency } from "@/lib/format";
 import type { TablesInsert, TablesUpdate } from "@/lib/database.types";
+import type { ItemDeliveryTask } from "@/lib/po-item-status";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -1145,6 +1146,14 @@ export type AfpContextResult =
       suggestedAmount: number;
       defaultBillingLineId: string | null;
       lines: AfpTargetLine[];
+      /**
+       * The PO's line items, so a part delivery can be billed by ticking what
+       * arrived. Empty when the PO has no item table or migration 0061 has
+       * not run, and the dialog falls back to one typed figure.
+       */
+      items: PoLineRow[];
+      salesTax: number | null;
+      freight: number | null;
     }
   | { ok: false; error: string };
 
@@ -1248,6 +1257,11 @@ export async function getPoAfpContext(
     );
   }
 
+  // Items are a convenience on top of the typed figure, so a failed read
+  // leaves the dialog working the way it always has.
+  const poLines = await getPoLines(poId);
+  const items = poLines.ok && poLines.available ? poLines.lines : [];
+
   const linkedLineIds = (lines ?? [])
     .filter((l) =>
       (
@@ -1282,6 +1296,9 @@ export async function getPoAfpContext(
         : null,
       allocated: allocByLine.get(l.id) ?? null,
     })),
+    items,
+    salesTax: poLines.ok ? poLines.salesTax : null,
+    freight: poLines.ok ? poLines.freight : null,
   };
 }
 
@@ -1835,7 +1852,12 @@ export type PoLineRow = {
    * that arrives on one truck leaves these null and uses the PO-level link.
    */
   linkedDeliveryTaskWbsCode: string | null;
-
+  /**
+   * The schedule row this item actually follows: its own link, else the
+   * whole-order link. Its status is the item's status - see po-item-status.
+   * Null when neither is set or the row is gone.
+   */
+  deliveryTask: ItemDeliveryTask | null;
 };
 
 export type PoLinesResult =
@@ -1869,7 +1891,41 @@ export async function getPoLines(poId: string): Promise<PoLinesResult> {
     .eq("id", poId)
     .maybeSingle();
 
-  const row = (po ?? {}) as { sales_tax?: number | null; freight?: number | null };
+  const row = (po ?? {}) as {
+    sales_tax?: number | null;
+    freight?: number | null;
+    project_id?: string | null;
+    linked_delivery_task_wbs_code?: string | null;
+  };
+
+  // The rows the items land on, so each can say whether it has arrived. A
+  // failed read leaves every item without a status rather than failing the
+  // item table.
+  const poWbs = row.linked_delivery_task_wbs_code ?? null;
+  // Selected with *, so the 0062 column is simply absent until it runs.
+  const itemWbs = (l: object) =>
+    (l as { linked_delivery_task_wbs_code?: string | null }).linked_delivery_task_wbs_code ??
+    poWbs;
+  const codes = Array.from(
+    new Set((data ?? []).map((l) => itemWbs(l)).filter((c): c is string => Boolean(c))),
+  );
+  const taskByCode = new Map<string, ItemDeliveryTask>();
+  if (codes.length && row.project_id) {
+    const { data: tasks } = await auth.supabase
+      .from("schedule_tasks")
+      .select("wbs_code, status, pct_complete, end_date")
+      .eq("project_id", row.project_id)
+      .in("wbs_code", codes);
+    for (const t of tasks ?? []) {
+      taskByCode.set(t.wbs_code, {
+        wbsCode: t.wbs_code,
+        status: t.status,
+        pctComplete: t.pct_complete,
+        endDate: t.end_date,
+      });
+    }
+  }
+
   return {
     ok: true,
     available: true,
@@ -1887,6 +1943,7 @@ export async function getPoLines(poId: string): Promise<PoLinesResult> {
       linkedDeliveryTaskWbsCode:
         (l as { linked_delivery_task_wbs_code?: string | null }).linked_delivery_task_wbs_code ??
         null,
+      deliveryTask: taskByCode.get(itemWbs(l) ?? "") ?? null,
     })),
   };
 }

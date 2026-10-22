@@ -260,6 +260,65 @@ export function defaultAfpAmountForPo(poTotalValue: number): number {
   return Math.round(total * DEFAULT_OWNER_BILL_PCT) / 100;
 }
 
+/** One item off the PO's line-item table, as the Add to AFP dialog lists it. */
+export type AfpPoItem = {
+  id: string;
+  quantity: number | null;
+  unitPrice: number | null;
+  extendedPrice: number | null;
+};
+
+/**
+ * What an item is worth on the PO. The extended price is what the paper says;
+ * where only quantity and unit price were entered, their product stands in.
+ */
+export function poItemValue(item: AfpPoItem): number {
+  const ext = Number(item.extendedPrice);
+  if (item.extendedPrice != null && Number.isFinite(ext)) return ext;
+  const qty = Number(item.quantity);
+  const unit = Number(item.unitPrice);
+  if (Number.isFinite(qty) && Number.isFinite(unit)) return qty * unit;
+  return 0;
+}
+
+/**
+ * The owner amount for the items ticked on Add to AFP.
+ *
+ * Zarina: "how to bill to AFP per items inside 1 PO? Only some of them were
+ * delivered." PO-019 is seven items landing on four different dates, and the
+ * box only took one figure for the whole order.
+ *
+ * Sales tax and freight sit below the subtotal on the paper PO and belong to
+ * no single item, so each ticked item carries its share of them by value.
+ * Ticking every item comes back to subtotal plus tax plus freight - the PO
+ * total - to the cent, rather than a few cents of rounding short.
+ */
+export function amountForPoItems(opts: {
+  items: readonly AfpPoItem[];
+  selectedIds: readonly string[];
+  salesTax: number | null;
+  freight: number | null;
+}): { items: number; taxAndFreight: number; total: number } {
+  const picked = new Set(opts.selectedIds);
+  let subtotal = 0;
+  let selected = 0;
+  for (const item of opts.items) {
+    const v = poItemValue(item);
+    subtotal += v;
+    if (picked.has(item.id)) selected += v;
+  }
+  const extras = Number(opts.salesTax ?? 0) + Number(opts.freight ?? 0);
+  const share =
+    subtotal > 0 && Number.isFinite(extras) ? (extras * selected) / subtotal : 0;
+  const itemsTotal = Math.round(selected * 100) / 100;
+  const total = Math.round((selected + share) * 100) / 100;
+  return {
+    items: itemsTotal,
+    taxAndFreight: Math.round((total - itemsTotal) * 100) / 100,
+    total,
+  };
+}
+
 export type ProcurementAmount =
   | { kind: "manual"; amount: number }
   | { kind: "earned"; amount: number }
