@@ -56,7 +56,7 @@ export function SchedulePrintSheet({
   return (
     <div className="sp-sheet hidden print:block">
       <h1 className="sp-title">
-        {printSheetTitle(projectName, scope, printing.length, rows.length)}
+        {printSheetTitle(projectName, scope, printing, rows.length)}
       </h1>
       <p className="sp-stamp">
         {printSheetStamp(dataDate, new Date().toISOString().slice(0, 10))}

@@ -26,8 +26,10 @@ import {
   printSheetStamp,
   printSheetTitle,
   rangeSelect,
+  sharedScope,
   selectedPrintRows,
 } from "@/lib/schedule-print";
+import type { TaskScope } from "@/lib/schedule-scope";
 import {
   nearestNamedAncestor,
   searchTasks,
@@ -4113,22 +4115,55 @@ eq(
 );
 
 // The header is the only thing on paper that says what was filtered out.
+const asRows = (n: number, scope: TaskScope = "Civil") =>
+  Array.from({ length: n }, (_, i) => ({ ...printRows[0], wbs: `x${i}`, scope }));
+
 eq(
   "the title names the scope and the full count when everything prints",
-  printSheetTitle("Sussex CSG 1", "Civil", 61, 61),
+  printSheetTitle("Sussex CSG 1", "Civil", asRows(61), 61),
   "Sussex CSG 1 - Civil scope - 61 tasks",
 );
 eq(
   "and says it is a cut when it is one",
-  printSheetTitle("Sussex CSG 1", "Civil", 11, 61),
+  printSheetTitle("Sussex CSG 1", "Civil", asRows(11), 61),
   "Sussex CSG 1 - Civil scope - 11 of 61 tasks selected",
 );
 eq(
-  "no scope filter reads as all scopes",
-  printSheetTitle("Sweet Springs", null, 204, 204),
-  "Sweet Springs - All scopes - 204 tasks",
+  "no scope filter, mixed rows, reads as all scopes",
+  printSheetTitle(
+    "Sweet Springs",
+    null,
+    [...asRows(2, "Civil"), ...asRows(2, "Electrical")],
+    204,
+  ),
+  "Sweet Springs - All scopes - 4 of 204 tasks selected",
 );
-eq("one task is not pluralised", printSheetTitle("P", "Civil", 1, 1), "P - Civil scope - 1 task");
+eq(
+  "one task is not pluralised",
+  printSheetTitle("P", "Civil", asRows(1), 1),
+  "P - Civil scope - 1 task",
+);
+
+// Zarina's sheet: 21 permitting rows picked out of 165 with the filter on All
+// scopes. The header used to read "All scopes", which described the dropdown
+// rather than the page.
+eq(
+  "a selection that is all one scope names that scope, not All scopes",
+  printSheetTitle("Sussexx CSG 1 LLC", null, asRows(21, "Permitting"), 165),
+  "Sussexx CSG 1 LLC - Permitting scope - 21 tasks selected from all scopes",
+);
+// "21 of 165 tasks" would read as 21 of 165 PERMITTING tasks. It is not.
+check(
+  "and does not print a denominator that means something else",
+  printSheetTitle("P", null, asRows(21, "Permitting"), 165).includes("of 165") === false,
+);
+eq(
+  "the shared scope of a mixed set is nothing",
+  sharedScope([...asRows(1, "Civil"), ...asRows(1, "Permitting")]),
+  null,
+);
+eq("an empty sheet has no shared scope", sharedScope([]), null);
+eq("one row is its own shared scope", sharedScope(asRows(1, "Permitting")), "Permitting");
 
 check(
   "the stamp carries the data date when there is one",
