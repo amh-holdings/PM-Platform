@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,11 @@ import {
 import { applyDraft, reconcileDates, type TaskDraft } from "@/lib/schedule-edit";
 import { sisterDurationSuggestions } from "@/lib/schedule-sister-durations";
 import { SCOPE_ORDER, scopeOf, type TaskScope } from "@/lib/schedule-scope";
+import {
+  SchedulePrintDialog,
+  SchedulePrintSheet,
+  type PrintSelection,
+} from "./schedule-print-dialog";
 import {
   applyProjectedDates,
   bulkUpdateScheduleTasks,
@@ -141,6 +146,12 @@ export function ScheduleWorkspace({
   // which reads as "the import failed" rather than "a filter is on". Any
   // second discipline present means the honest default is everything, and this
   // self-corrects as 5.3 and 5.4 land.
+  // Print selection lives here rather than in the dialog so the sheet can be a
+  // sibling of the workspace: the dialog is closed by the time the browser
+  // renders the page, and a selection held inside it would go with it.
+  const [printOpen, setPrintOpen] = useState(false);
+  const [printSelection, setPrintSelection] = useState<PrintSelection>(null);
+
   const [scopeFilter, setScopeFilter] = useState<string>(() => {
     const disciplines = (["Civil", "Mechanical", "Electrical"] as const).filter(
       (d) => scopeCounts.get(d),
@@ -182,6 +193,10 @@ export function ScheduleWorkspace({
     () => (scopeFilter ? tasks.filter((t) => scopeOf(t) === scopeFilter) : tasks),
     [tasks, scopeFilter],
   );
+
+  // Switching scope with a selection held would carry civil WBS codes into an
+  // electrical list, where they match nothing and the sheet prints empty.
+  useEffect(() => setPrintSelection(null), [scopeFilter]);
 
   // Health is a property of the whole schedule, not of a scope. A logic gap
   // between civil and electrical is invisible from inside either one.
@@ -285,7 +300,10 @@ export function ScheduleWorkspace({
   const hasBaseline = tasks.some((t) => t.baseline_end);
 
   return (
-    <div className="space-y-4">
+    <>
+      {/* Everything on screen is hidden at print time. The only thing that
+          reaches paper is the sheet below, which is what Print builds. */}
+      <div className="space-y-4 print:hidden">
       {/* Forecast banner - the numbers that matter, side by side. */}
       <div
         className={cn(
@@ -558,6 +576,20 @@ export function ScheduleWorkspace({
         )}
 
         <div className="ml-auto flex items-center gap-2">
+          {/* Health already has its own Print. Everywhere else the sheet is the
+              scoped task list, which is what somebody asking to "print the
+              civil schedule" means. */}
+          {view !== "health" && (
+            <SchedulePrintDialog
+              scope={scopeFilter || null}
+              tasks={scoped}
+              cpmByWbs={cpm.byWbs}
+              selection={printSelection}
+              setSelection={setPrintSelection}
+              open={printOpen}
+              setOpen={setPrintOpen}
+            />
+          )}
           {view !== "health" && drifted.length > 0 && (
             <Button
               variant="outline"
@@ -675,7 +707,17 @@ export function ScheduleWorkspace({
           . See Health for the full history.
         </p>
       )}
-    </div>
+      </div>
+
+      <SchedulePrintSheet
+        projectName={projectName}
+        scope={scopeFilter || null}
+        tasks={scoped}
+        cpmByWbs={cpm.byWbs}
+        dataDate={effectiveDataDate}
+        selection={printSelection}
+      />
+    </>
   );
 }
 

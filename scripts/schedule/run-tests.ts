@@ -22,6 +22,13 @@ import {
   workingDaysBetween,
 } from "@/lib/schedule-calendar";
 import {
+  buildPrintRows,
+  printSheetStamp,
+  printSheetTitle,
+  selectedPrintRows,
+  toggleSelected,
+} from "@/lib/schedule-print";
+import {
   nearestNamedAncestor,
   searchTasks,
   taskDisplayLabel,
@@ -4030,6 +4037,114 @@ section("Task records - what a schedule row can show about itself");
     0,
   );
 }
+
+// ============================================================================
+section("Printing part of a schedule");
+
+const PRINT_TASKS = [
+  {
+    wbs_code: "5.1.10",
+    task_name: "Fencing Installation",
+    status: "In Progress",
+    pct_complete: 40,
+    duration_days: 4,
+    start_date: "2026-10-05",
+    end_date: "2026-10-08",
+  },
+  {
+    wbs_code: "5.1.2",
+    task_name: "Site Prep",
+    status: "Complete",
+    pct_complete: 100,
+    duration_days: 12,
+    start_date: "2026-09-01",
+    end_date: "2026-09-16",
+  },
+  {
+    wbs_code: "5.1.9",
+    task_name: "Civil Complete",
+    status: null,
+    pct_complete: null,
+    duration_days: 0,
+    start_date: "2026-10-09",
+    end_date: "2026-10-09",
+    is_milestone: true,
+  },
+];
+
+const PRINT_CPM = new Map([
+  ["5.1.2", { slipDays: 0, critical: false }],
+  ["5.1.10", { slipDays: 3, critical: true }],
+]);
+
+const printRows = buildPrintRows(PRINT_TASKS, PRINT_CPM);
+
+// 5.1.10 sorts after 5.1.9 numerically. A plain string sort puts it second,
+// which on a printed sheet reads as the schedule being out of order.
+eq(
+  "rows print in WBS order, not string order",
+  printRows.map((r) => r.wbs).join(" "),
+  "5.1.2 5.1.9 5.1.10",
+);
+eq("a milestone prints no duration", printRows[1].days, "");
+eq("a null percent prints as a dash, never 0%", printRows[1].pct, "-");
+eq("a real percent prints rounded", printRows[0].pct, "100%");
+eq("no status prints as a dash", printRows[1].status, "-");
+eq("slip prints only when the projection disagrees", printRows[0].slip, "-");
+eq("and reads as days when it does", printRows[2].slip, "+3d");
+check("the critical row is marked", printRows[2].critical === true);
+check("a task the CPM never saw still prints", buildPrintRows(PRINT_TASKS).length === 3);
+
+// Selection. The difference between "nothing has been unticked" and "every box
+// was unticked" is the whole feature: one prints the lot, the other prints
+// nothing, and collapsing them would silently print 61 rows when somebody
+// cleared the list on purpose.
+eq("no selection prints every row in scope", selectedPrintRows(printRows, null).length, 3);
+eq("an empty selection prints nothing", selectedPrintRows(printRows, new Set()).length, 0);
+eq(
+  "a selection prints only its rows",
+  selectedPrintRows(printRows, new Set(["5.1.2", "5.1.10"])).map((r) => r.wbs).join(" "),
+  "5.1.2 5.1.10",
+);
+eq(
+  "a selected code that is not in scope is ignored, not an error",
+  selectedPrintRows(printRows, new Set(["5.2.1"])).length,
+  0,
+);
+
+const before = new Set(["5.1.2"]);
+const after = toggleSelected(before, "5.1.9");
+check("toggling adds without mutating the set it was given", after.has("5.1.9") && before.size === 1);
+check("toggling again removes", toggleSelected(after, "5.1.9").has("5.1.9") === false);
+
+// The header is the only thing on paper that says what was filtered out.
+eq(
+  "the title names the scope and the full count when everything prints",
+  printSheetTitle("Sussex CSG 1", "Civil", 61, 61),
+  "Sussex CSG 1 - Civil scope - 61 tasks",
+);
+eq(
+  "and says it is a cut when it is one",
+  printSheetTitle("Sussex CSG 1", "Civil", 11, 61),
+  "Sussex CSG 1 - Civil scope - 11 of 61 tasks selected",
+);
+eq(
+  "no scope filter reads as all scopes",
+  printSheetTitle("Sweet Springs", null, 204, 204),
+  "Sweet Springs - All scopes - 204 tasks",
+);
+eq("one task is not pluralised", printSheetTitle("P", "Civil", 1, 1), "P - Civil scope - 1 task");
+
+check(
+  "the stamp carries the data date when there is one",
+  printSheetStamp("2026-10-16", "2026-10-22") ===
+    "Data date Oct 16, 2026 - Printed Oct 22, 2026",
+);
+check(
+  "and just the print date when there is not",
+  printSheetStamp(null, "2026-10-22") === "Printed Oct 22, 2026",
+);
+
 
 // ============================================================================
 console.log("\n" + "=".repeat(60));
