@@ -24,11 +24,13 @@ import {
 import {
   buildPrintRows,
   printSheetStamp,
+  printRowClass,
   printSheetTitle,
   rangeSelect,
   sharedScope,
   selectedPrintRows,
 } from "@/lib/schedule-print";
+import { nameByWbs, scopeOf } from "@/lib/schedule-scope";
 import type { TaskScope } from "@/lib/schedule-scope";
 import {
   nearestNamedAncestor,
@@ -4247,6 +4249,128 @@ check(
     return before.size === 5;
   })(),
 );
+
+
+// ============================================================================
+section("Scope when the WBS does not encode it");
+
+// Sweet Springs. The 5.x branch is exact and keeps winning.
+eq("5.1 is civil", scopeOf({ wbs_code: "5.1.4", task_name: "Road Install" }), "Civil");
+eq("5.2 is mechanical", scopeOf({ wbs_code: "5.2.1", task_name: "Racking" }), "Mechanical");
+eq("5.3 is electrical", scopeOf({ wbs_code: "5.3.2", task_name: "Trenching" }), "Electrical");
+eq(
+  "phase still answers where it is set",
+  scopeOf({ wbs_code: "1.09", phase: "Permitting", task_name: "Zoning" }),
+  "Permitting",
+);
+
+// Sussex. No 5.x branch, no phase. Every one of its 165 tasks read as Other,
+// which left the scope filter a dropdown with one useless option in it.
+const SUSSEX = [
+  { wbs_code: "1", task_name: "Engineering" },
+  { wbs_code: "1.2.1", task_name: "Civil" },
+  { wbs_code: "1.2.1.4", task_name: "Civil - IFP (Issued For Permit)" },
+  { wbs_code: "1.2.2", task_name: "Structural" },
+  { wbs_code: "1.2.2.3", task_name: "Structural - IFP (Issued For Permit)" },
+  { wbs_code: "1.2.3", task_name: "Electrical" },
+  { wbs_code: "1.2.3.1", task_name: "30% Design" },
+  { wbs_code: "2", task_name: "Permitting" },
+  { wbs_code: "2.2", task_name: "Contractor Permits" },
+  { wbs_code: "2.2.1", task_name: "Sussex County Permits" },
+  { wbs_code: "2.2.1.2", task_name: "Electrical Permit - Sussex County" },
+  { wbs_code: "2.2.3.2", task_name: "Stormwater Pollution Prevention Plan (SWPPP)" },
+  { wbs_code: "3", task_name: "Procurement" },
+  { wbs_code: "3.4.3", task_name: "Delivery (transit)" },
+];
+const SUSSEX_NAMES = nameByWbs(SUSSEX);
+const sc = (wbs: string) =>
+  scopeOf(SUSSEX.find((t) => t.wbs_code === wbs)!, SUSSEX_NAMES);
+
+eq("a top-level branch names itself", sc("2"), "Permitting");
+eq("and so does Procurement", sc("3"), "Procurement");
+eq("a design package takes its discipline branch", sc("1.2.3.1"), "Electrical");
+eq("civil under 1.2.1", sc("1.2.1.4"), "Civil");
+eq("structural is its own scope now", sc("1.2.2.3"), "Structural");
+// The one that makes the walk go upward before it reads the row itself.
+eq(
+  "an electrical permit is permitting work, not electrical work",
+  sc("2.2.1.2"),
+  "Permitting",
+);
+// 2.2.3 is absent from this sample, so the walk climbs to 2.2 "Contractor
+// Permits". A substring match read that as Contracts; whole words do not.
+eq("a deep permit row still resolves", sc("2.2.3.2"), "Permitting");
+eq(
+  "Contractor Permits is permitting, not contracts",
+  scopeOf(
+    { wbs_code: "2.2.9", task_name: "Something" },
+    nameByWbs([{ wbs_code: "2.2", task_name: "Contractor Permits" }]),
+  ),
+  "Permitting",
+);
+eq(
+  "a real Contracts branch is still contracts",
+  scopeOf(
+    { wbs_code: "1.1.1", task_name: "EPCA" },
+    nameByWbs([{ wbs_code: "1.1", task_name: "Contracts" }]),
+  ),
+  "Contracts",
+);
+eq("a delivery under Procurement is procurement", sc("3.4.3"), "Procurement");
+check(
+  "nothing in the Sussex sample falls through to Other",
+  SUSSEX.every((t) => scopeOf(t, SUSSEX_NAMES) !== "Other"),
+);
+// Without the map it behaves exactly as it did before, so a caller that has no
+// task list is not forced to build one.
+eq("no outline map means the old answer", scopeOf({ wbs_code: "2.2.1.2" }), "Other");
+eq(
+  "a branch with no recognisable word is still Other",
+  scopeOf(
+    { wbs_code: "9.1", task_name: "Widget" },
+    nameByWbs([{ wbs_code: "9", task_name: "Miscellany" }]),
+  ),
+  "Other",
+);
+
+section("Colour on the printed sheet");
+
+// Complete beats critical. A finished task on the critical path is not a
+// warning any more, and printing it red sends somebody chasing done work.
+eq(
+  "a complete critical row prints as complete",
+  printRowClass({ complete: true, critical: true, slipping: true }),
+  "sp-row-complete",
+);
+eq(
+  "critical beats slipping",
+  printRowClass({ complete: false, critical: true, slipping: true }),
+  "sp-row-critical",
+);
+eq(
+  "slipping on its own is amber",
+  printRowClass({ complete: false, critical: false, slipping: true }),
+  "sp-row-slipping",
+);
+eq(
+  "an ordinary row carries no class",
+  printRowClass({ complete: false, critical: false, slipping: false }),
+  undefined,
+);
+
+const colourRows = buildPrintRows(
+  [
+    { wbs_code: "1", task_name: "Done", status: "Complete", start_date: "2026-01-01", end_date: "2026-01-02" },
+    { wbs_code: "2", task_name: "Signed off", status: "Approved", start_date: "2026-01-01", end_date: "2026-01-02" },
+    { wbs_code: "3", task_name: "Running", status: "In Progress", start_date: "2026-01-01", end_date: "2026-01-02" },
+  ],
+  new Map([["3", { slipDays: 4, critical: false }]]),
+);
+check("Complete reads as complete", colourRows[0].complete);
+check("so does Approved, which also maps to 100%", colourRows[1].complete);
+check("In Progress does not", colourRows[2].complete === false);
+check("a positive slip marks the row as slipping", colourRows[2].slipping);
+check("and no slip does not", colourRows[0].slipping === false);
 
 
 // ============================================================================

@@ -20,7 +20,12 @@ import {
 } from "@/lib/schedule-constraints";
 import { applyDraft, reconcileDates, type TaskDraft } from "@/lib/schedule-edit";
 import { sisterDurationSuggestions } from "@/lib/schedule-sister-durations";
-import { SCOPE_ORDER, scopeOf, type TaskScope } from "@/lib/schedule-scope";
+import {
+  SCOPE_ORDER,
+  nameByWbs,
+  scopeOf,
+  type TaskScope,
+} from "@/lib/schedule-scope";
 import {
   SchedulePrintDialog,
   SchedulePrintSheet,
@@ -133,11 +138,18 @@ export function ScheduleWorkspace({
     [tasks],
   );
 
+  // Sussex sets neither a 5.x WBS nor a phase, so its scope comes off the
+  // outline. Built once here rather than per row: scopeOf walks ancestors.
+  const outlineNames = useMemo(() => nameByWbs(tasks), [tasks]);
+
   const scopeCounts = useMemo(() => {
     const m = new Map<TaskScope, number>();
-    for (const t of tasks) m.set(scopeOf(t), (m.get(scopeOf(t)) ?? 0) + 1);
+    for (const t of tasks) {
+      const sc = scopeOf(t, outlineNames);
+      m.set(sc, (m.get(sc) ?? 0) + 1);
+    }
     return m;
-  }, [tasks]);
+  }, [tasks, outlineNames]);
 
   // Default to Civil ONLY while civil is the only construction discipline in
   // the schedule. That was a safe shortcut when 5.1 was all that existed, but
@@ -190,8 +202,11 @@ export function ScheduleWorkspace({
   const draftDirty = previewTasks !== tasks;
 
   const scoped = useMemo(
-    () => (scopeFilter ? tasks.filter((t) => scopeOf(t) === scopeFilter) : tasks),
-    [tasks, scopeFilter],
+    () =>
+      scopeFilter
+        ? tasks.filter((t) => scopeOf(t, outlineNames) === scopeFilter)
+        : tasks,
+    [tasks, scopeFilter, outlineNames],
   );
 
   // Switching scope with a selection held would carry civil WBS codes into an
@@ -584,6 +599,7 @@ export function ScheduleWorkspace({
               scope={scopeFilter || null}
               tasks={scoped}
               cpmByWbs={cpm.byWbs}
+              outlineNames={outlineNames}
               selection={printSelection}
               setSelection={setPrintSelection}
               open={printOpen}
@@ -714,6 +730,7 @@ export function ScheduleWorkspace({
         scope={scopeFilter || null}
         tasks={scoped}
         cpmByWbs={cpm.byWbs}
+        outlineNames={outlineNames}
         dataDate={effectiveDataDate}
         selection={printSelection}
       />

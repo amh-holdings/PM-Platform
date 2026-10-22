@@ -154,7 +154,7 @@ export function buildLookahead(
         name: t.task_name,
         parent: parentLabel(t.wbs_code, nameByWbs),
         assignedTo: t.assigned_to,
-        scope: scopeOf(t),
+        scope: scopeOf(t, nameByWbs),
         start: c.projectedStart,
         end: c.projectedEnd,
         pctComplete: t.pct_complete,
