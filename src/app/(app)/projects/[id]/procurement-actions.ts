@@ -1145,6 +1145,14 @@ export type AfpContextResult =
       suggestedAmount: number;
       defaultBillingLineId: string | null;
       lines: AfpTargetLine[];
+      /**
+       * The PO's line items, so a part delivery can be billed by ticking what
+       * arrived. Empty when the PO has no item table or migration 0061 has
+       * not run, and the dialog falls back to one typed figure.
+       */
+      items: PoLineRow[];
+      salesTax: number | null;
+      freight: number | null;
     }
   | { ok: false; error: string };
 
@@ -1248,6 +1256,11 @@ export async function getPoAfpContext(
     );
   }
 
+  // Items are a convenience on top of the typed figure, so a failed read
+  // leaves the dialog working the way it always has.
+  const poLines = await getPoLines(poId);
+  const items = poLines.ok && poLines.available ? poLines.lines : [];
+
   const linkedLineIds = (lines ?? [])
     .filter((l) =>
       (
@@ -1282,6 +1295,9 @@ export async function getPoAfpContext(
         : null,
       allocated: allocByLine.get(l.id) ?? null,
     })),
+    items,
+    salesTax: poLines.ok ? poLines.salesTax : null,
+    freight: poLines.ok ? poLines.freight : null,
   };
 }
 
