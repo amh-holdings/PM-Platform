@@ -20,6 +20,7 @@ import type {
 } from "../billing-actions";
 import { billedElsewhereMessage } from "@/lib/pay-app-undo";
 import { UndoAfpButton } from "./undo-afp-button";
+import { PoBreakdown } from "./po-breakdown";
 import { periodLabel } from "@/lib/billing-period";
 
 type Props = {
@@ -339,10 +340,15 @@ export function BillThisPeriodClient({
                       {/* What the typed figure is made of. Several POs can
                           bill one SOV line in one period, and the sum on its
                           own cannot be checked against anything. */}
-                      {r.kind === "forecast" && r.manualBreakdown && (
-                        <div className="mt-0.5 text-[10px] text-emerald-700">
-                          {r.manualBreakdown}
-                        </div>
+                      {r.kind === "forecast" && r.poDetails?.length ? (
+                        <PoBreakdown details={r.poDetails} />
+                      ) : (
+                        r.kind === "forecast" &&
+                        r.manualBreakdown && (
+                          <div className="mt-0.5 text-[10px] text-emerald-700">
+                            {r.manualBreakdown}
+                          </div>
+                        )
                       )}
                       {/* What the evidence makes of a typed figure. Said, not
                           acted on: a typed amount is a decision, not an
