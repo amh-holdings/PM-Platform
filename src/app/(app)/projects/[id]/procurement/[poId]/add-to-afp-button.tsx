@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 import { formatCurrency } from "@/lib/format";
 import { describeStagingEffect } from "@/lib/afp-po-staging";
 import { amountForPoItems, poItemValue } from "@/lib/billing-progress";
+import { PO_ITEM_STATUS_TONE, poItemStatus } from "@/lib/po-item-status";
+import { todayIso } from "@/lib/schedule-calendar";
 
 import {
   getPoAfpContext,
@@ -94,10 +96,12 @@ export function AddToAfpButton({
     freight,
   });
 
-  function togglePicked(id: string) {
-    const next = picked.includes(id)
-      ? picked.filter((p) => p !== id)
-      : [...picked, id];
+  const today = todayIso();
+  const deliveredIds = items
+    .filter((i) => poItemStatus(i.deliveryTask, today).kind === "delivered")
+    .map((i) => i.id);
+
+  function pick(next: string[]) {
     setPicked(next);
     // Nothing ticked goes back to the standing half-the-PO figure, so
     // unticking the last item does not leave a stale partial amount behind.
@@ -109,6 +113,10 @@ export function AddToAfpButton({
     }).total;
     const value = next.length > 0 ? total : suggested;
     setAmount(value > 0 ? value.toFixed(2) : "");
+  }
+
+  function togglePicked(id: string) {
+    pick(picked.includes(id) ? picked.filter((p) => p !== id) : [...picked, id]);
   }
 
   const selected = lines.find((l) => l.id === lineId) ?? null;
@@ -248,27 +256,32 @@ export function AddToAfpButton({
                   <div>
                     <div className="flex items-baseline justify-between">
                       <Label className="text-xs">Items delivered</Label>
-                      <button
-                        type="button"
-                        className="text-[11px] text-muted-foreground underline"
-                        onClick={() => {
-                          const all =
-                            picked.length === items.length
-                              ? []
-                              : items.map((i) => i.id);
-                          setPicked(all);
-                          const total = amountForPoItems({
-                            items,
-                            selectedIds: all,
-                            salesTax,
-                            freight,
-                          }).total;
-                          const value = all.length > 0 ? total : suggested;
-                          setAmount(value > 0 ? value.toFixed(2) : "");
-                        }}
-                      >
-                        {picked.length === items.length ? "Clear" : "Tick all"}
-                      </button>
+                      <span className="flex gap-3">
+                        {/* What the schedule says has arrived, in one click.
+                            Delivered means its row is Complete. */}
+                        {deliveredIds.length > 0 && (
+                          <button
+                            type="button"
+                            className="text-[11px] text-muted-foreground underline"
+                            onClick={() => pick(deliveredIds)}
+                          >
+                            Tick delivered ({deliveredIds.length})
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="text-[11px] text-muted-foreground underline"
+                          onClick={() =>
+                            pick(
+                              picked.length === items.length
+                                ? []
+                                : items.map((i) => i.id),
+                            )
+                          }
+                        >
+                          {picked.length === items.length ? "Clear" : "Tick all"}
+                        </button>
+                      </span>
                     </div>
                     <div className="mt-1 divide-y rounded-md border text-xs">
                       {items.map((item) => (
@@ -285,6 +298,16 @@ export function AddToAfpButton({
                           <span className="flex-1">
                             {item.lineNo != null ? `Line ${item.lineNo} ` : ""}
                             {item.description ?? "Unnamed item"}
+                            {(() => {
+                              const status = poItemStatus(item.deliveryTask, today);
+                              return (
+                                <span
+                                  className={`ml-1.5 inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium ${PO_ITEM_STATUS_TONE[status.kind]}`}
+                                >
+                                  {status.label}
+                                </span>
+                              );
+                            })()}
                           </span>
                           <span className="font-mono">
                             {formatCurrency(poItemValue(item))}

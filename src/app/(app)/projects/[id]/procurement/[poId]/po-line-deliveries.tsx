@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/format";
 import { lineLabel } from "@/lib/po-payment-forecast";
+import { PO_ITEM_STATUS_TONE, poItemStatus } from "@/lib/po-item-status";
+import { todayIso } from "@/lib/schedule-calendar";
 
 import {
   setPoLineDelivery,
@@ -32,6 +34,10 @@ import { deliveryOptionLabel, type DeliveryTaskOption } from "./delivery-task-li
  * Linking an item here overrides the order-level link for any payment
  * milestone tied to that item. Leave them all blank and nothing changes.
  *
+ * Each item's Status is read off that schedule row (or the whole-order row
+ * when the item follows it): Delivered once the row is Complete, Late once
+ * its finish has passed. Completing the row is how an item is marked arrived.
+ *
  * There is no arrival date on an item, on purpose. Zarina: "If the delivery
  * date in the schedule is different on when it actually arrives, I will just
  * adjust schedule and not here." One fact, one place. The schedule row is it.
@@ -56,6 +62,7 @@ export function PoLineDeliveries({
   const [error, setError] = useState<string | null>(null);
 
   const linked = lines.filter((l) => l.linkedDeliveryTaskWbsCode).length;
+  const today = todayIso();
   // Open when the PO is already split. Closed is not "hidden": the line and
   // the button below still say the rule and offer the split.
   const [open, setOpen] = useState(linked > 0);
@@ -131,6 +138,7 @@ export function PoLineDeliveries({
             <tr>
               <th className="px-2 py-2 text-left font-medium">Item</th>
               <th className="px-2 py-2 text-left font-medium">Delivered against</th>
+              <th className="px-2 py-2 text-left font-medium">Status</th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -143,6 +151,7 @@ export function PoLineDeliveries({
               // unlinked, and the next change would quietly overwrite it.
               const orphaned =
                 l.linkedDeliveryTaskWbsCode != null && task === undefined;
+              const status = poItemStatus(l.deliveryTask, today);
               return (
                 <tr key={l.id}>
                   <td className="px-2 py-2 align-top">
@@ -182,6 +191,13 @@ export function PoLineDeliveries({
                         </option>
                       )}
                     </select>
+                  </td>
+                  <td className="px-2 py-2 align-top">
+                    <span
+                      className={`inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium ${PO_ITEM_STATUS_TONE[status.kind]}`}
+                    >
+                      {status.label}
+                    </span>
                   </td>
                 </tr>
               );
