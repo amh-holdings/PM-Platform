@@ -29,6 +29,12 @@ import { parseDraftLines, totalForNewPo } from "@/lib/procurement-lines";
 import { formatCurrency } from "@/lib/format";
 import type { TablesInsert, TablesUpdate } from "@/lib/database.types";
 import type { ItemDeliveryTask } from "@/lib/po-item-status";
+import {
+  blockedItems,
+  itemBillingStates,
+  type ItemBillingState,
+  type ItemLedgerRow,
+} from "@/lib/po-item-ledger";
 
 async function assertAhcUser() {
   const supabase = createClient();
@@ -1154,6 +1160,13 @@ export type AfpContextResult =
       items: PoLineRow[];
       salesTax: number | null;
       freight: number | null;
+      /**
+       * Where each item stands against this period: billed on an AFP, staged
+       * for this period by this PO, staged for another period, or open. Keyed
+       * by item id; an item missing from it is open. Empty until migration
+       * 0079 runs, when every item reads as open.
+       */
+      itemBilling: Record<string, ItemBillingState>;
     }
   | { ok: false; error: string };
 
@@ -1261,6 +1274,9 @@ export async function getPoAfpContext(
   // leaves the dialog working the way it always has.
   const poLines = await getPoLines(poId);
   const items = poLines.ok && poLines.available ? poLines.lines : [];
+  const itemLedger = items.length
+    ? await readItemLedger(auth.supabase, poId)
+    : { available: false, rows: [] as ItemLedgerRow[] };
 
   const linkedLineIds = (lines ?? [])
     .filter((l) =>
@@ -1299,6 +1315,55 @@ export async function getPoAfpContext(
     items,
     salesTax: poLines.ok ? poLines.salesTax : null,
     freight: poLines.ok ? poLines.freight : null,
+    itemBilling: itemBillingStates(itemLedger.rows, periodMonth),
+  };
+}
+
+/** Migration 0079 has not run, so items cannot be remembered yet. */
+function isMissingItemLedger(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === "42P01" || error.code === "PGRST205") return true;
+  return /billing_entry_po_items/i.test(error.message ?? "");
+}
+
+/**
+ * Every item this PO has put on a billing entry, with whether that entry has
+ * gone out. Billed is read off the entry by the same test the Billing page
+ * uses, never stored on the ledger row.
+ */
+async function readItemLedger(
+  supabase: ReturnType<typeof createClient>,
+  poId: string,
+): Promise<{ available: boolean; rows: ItemLedgerRow[]; error?: string }> {
+  const { data, error } = await supabase
+    .from("billing_entry_po_items")
+    .select(
+      "procurement_order_line_id, billing_entries!inner(period_month, afp_number, pay_application_id, status)",
+    )
+    .eq("procurement_order_id", poId);
+  // Missing table: the app runs as before 0079. Any other failure is
+  // reported, so the guard never switches itself off quietly.
+  if (error) {
+    return isMissingItemLedger(error)
+      ? { available: false, rows: [] }
+      : { available: false, rows: [], error: error.message };
+  }
+  return {
+    available: true,
+    rows: (data ?? []).map((r) => {
+      const e = r.billing_entries as unknown as {
+        period_month: string;
+        afp_number: string | null;
+        pay_application_id: string | null;
+        status: string | null;
+      };
+      return {
+        itemId: r.procurement_order_line_id,
+        periodMonth: e.period_month,
+        billed: hasBillingEvidence(e),
+        afpNumber: e.afp_number ?? null,
+      };
+    }),
   };
 }
 
@@ -1390,7 +1455,17 @@ async function readPoContributions(
 export async function stagePoAmountForAfp(
   poId: string,
   projectId: string,
-  input: { billingLineId: string; amount: number; periodMonth?: string },
+  input: {
+    billingLineId: string;
+    amount: number;
+    periodMonth?: string;
+    /**
+     * The PO items this figure is for, when it was built by ticking them.
+     * Recorded so the same items cannot be billed again; an item already on
+     * an AFP, or staged for another period, refuses the save.
+     */
+    itemIds?: string[];
+  },
 ): Promise<StageAfpResult> {
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
@@ -1417,6 +1492,36 @@ export async function stagePoAmountForAfp(
       ok: false,
       error: `This line is already on AFP ${existing.afp_number ?? "an application"} for ${periodMonth.slice(0, 7)}. Bill the next period instead.`,
     };
+  }
+
+  // The double-billing guard. The dialog already greys these out; this is
+  // the check that holds when two people have the PO open at once.
+  const itemIds = Array.from(new Set(input.itemIds ?? []));
+  const itemLedger = await readItemLedger(auth.supabase, poId);
+  if (itemLedger.error) return { ok: false, error: itemLedger.error };
+  if (itemIds.length && itemLedger.available) {
+    const blocked = blockedItems(
+      itemIds,
+      itemBillingStates(itemLedger.rows, periodMonth),
+    );
+    if (blocked.length) {
+      const { data: named } = await auth.supabase
+        .from("procurement_order_lines")
+        .select("id, line_no, description")
+        .in("id", blocked.map((b) => b.itemId));
+      const nameOf = new Map(
+        (named ?? []).map((l) => [
+          l.id,
+          l.line_no != null ? `Line ${l.line_no}` : (l.description ?? "An item"),
+        ]),
+      );
+      return {
+        ok: false,
+        error: blocked
+          .map((b) => `${nameOf.get(b.itemId) ?? "An item"}: ${b.label}.`)
+          .join(" "),
+      };
+    }
   }
 
   // What each PO already puts on this line this period.
@@ -1552,6 +1657,40 @@ export async function stagePoAmountForAfp(
       });
     if (error && !isMissingLedger(error)) {
       return { ok: false, error: error.message };
+    }
+  }
+
+  // This PO's item list on the entry is replaced along with its figure, the
+  // same way the figure is: what was ticked now, nothing left over from the
+  // last save. A typed figure with nothing ticked clears it.
+  if (entryId && itemLedger.available) {
+    const { error: clearErr } = await auth.supabase
+      .from("billing_entry_po_items")
+      .delete()
+      .eq("billing_entry_id", entryId)
+      .eq("procurement_order_id", poId);
+    if (clearErr && !isMissingItemLedger(clearErr)) {
+      return { ok: false, error: clearErr.message };
+    }
+    if (itemIds.length) {
+      const { data: owned } = await auth.supabase
+        .from("procurement_order_lines")
+        .select("id")
+        .eq("procurement_order_id", poId)
+        .in("id", itemIds);
+      const rows = (owned ?? []).map((l) => ({
+        billing_entry_id: entryId as string,
+        procurement_order_id: poId,
+        procurement_order_line_id: l.id,
+      }));
+      if (rows.length) {
+        const { error: itemErr } = await auth.supabase
+          .from("billing_entry_po_items")
+          .insert(rows);
+        if (itemErr && !isMissingItemLedger(itemErr)) {
+          return { ok: false, error: itemErr.message };
+        }
+      }
     }
   }
 
@@ -1779,6 +1918,16 @@ export async function unstagePoAmountFromAfp(
     .eq("billing_entry_id", target.id)
     .eq("procurement_order_id", poId);
   if (delErr) return { ok: false, error: delErr.message };
+
+  // Its items come off with it, so they can be ticked again.
+  const { error: itemErr } = await auth.supabase
+    .from("billing_entry_po_items")
+    .delete()
+    .eq("billing_entry_id", target.id)
+    .eq("procurement_order_id", poId);
+  if (itemErr && !isMissingItemLedger(itemErr)) {
+    return { ok: false, error: itemErr.message };
+  }
 
   if (plan.action === "delete_entry") {
     const { error } = await auth.supabase

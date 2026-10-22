@@ -10,6 +10,7 @@ import { formatCurrency } from "@/lib/format";
 import { describeStagingEffect } from "@/lib/afp-po-staging";
 import { amountForPoItems, poItemValue } from "@/lib/billing-progress";
 import { PO_ITEM_STATUS_TONE, poItemStatus } from "@/lib/po-item-status";
+import { canBillItem, type ItemBillingState } from "@/lib/po-item-ledger";
 import { todayIso } from "@/lib/schedule-calendar";
 
 import {
@@ -32,6 +33,11 @@ import {
  * Ticking the ones that arrived fills the amount with their value plus their
  * share of tax and freight, for a PO that is only partly delivered. The box
  * stays editable afterwards; the ticks are a way to arrive at the number.
+ *
+ * The ticks are remembered (migration 0079). An item already on an AFP, or
+ * staged for another period, is greyed out with where it went. Items this PO
+ * already staged for the period open ticked, so saving again adds to them
+ * rather than quietly replacing them.
  */
 export function AddToAfpButton({
   poId,
@@ -65,6 +71,7 @@ export function AddToAfpButton({
   const [salesTax, setSalesTax] = useState<number | null>(null);
   const [freight, setFreight] = useState<number | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+  const [itemBilling, setItemBilling] = useState<Record<string, ItemBillingState>>({});
 
   async function openDialog() {
     setOpen(true);
@@ -86,7 +93,22 @@ export function AddToAfpButton({
     setItems(res.items);
     setSalesTax(res.salesTax);
     setFreight(res.freight);
-    setPicked([]);
+    setItemBilling(res.itemBilling);
+    // What this PO already put on this period opens ticked, priced from the
+    // ticks, so the dialog shows the figure saving would keep.
+    const staged = res.items
+      .filter((i) => res.itemBilling[i.id]?.kind === "staged_here")
+      .map((i) => i.id);
+    setPicked(staged);
+    if (staged.length) {
+      const total = amountForPoItems({
+        items: res.items,
+        selectedIds: staged,
+        salesTax: res.salesTax,
+        freight: res.freight,
+      }).total;
+      setAmount(total > 0 ? total.toFixed(2) : "");
+    }
   }
 
   const itemAmount = amountForPoItems({
@@ -97,8 +119,17 @@ export function AddToAfpButton({
   });
 
   const today = todayIso();
+  const billable = (id: string) => {
+    const state = itemBilling[id];
+    return !state || canBillItem(state);
+  };
+  const billableIds = items.filter((i) => billable(i.id)).map((i) => i.id);
   const deliveredIds = items
-    .filter((i) => poItemStatus(i.deliveryTask, today).kind === "delivered")
+    .filter(
+      (i) =>
+        billable(i.id) &&
+        poItemStatus(i.deliveryTask, today).kind === "delivered",
+    )
     .map((i) => i.id);
 
   function pick(next: string[]) {
@@ -140,6 +171,7 @@ export function AddToAfpButton({
       billingLineId: lineId,
       amount: typed,
       periodMonth: periodMonth || undefined,
+      itemIds: items.length > 0 ? picked : undefined,
     });
     setSaving(false);
     if (!res.ok) {
@@ -273,26 +305,36 @@ export function AddToAfpButton({
                           className="text-[11px] text-muted-foreground underline"
                           onClick={() =>
                             pick(
-                              picked.length === items.length
+                              picked.length === billableIds.length
                                 ? []
-                                : items.map((i) => i.id),
+                                : billableIds,
                             )
                           }
                         >
-                          {picked.length === items.length ? "Clear" : "Tick all"}
+                          {picked.length === billableIds.length && picked.length > 0
+                            ? "Clear"
+                            : "Tick all"}
                         </button>
                       </span>
                     </div>
                     <div className="mt-1 divide-y rounded-md border text-xs">
-                      {items.map((item) => (
+                      {items.map((item) => {
+                        const billing = itemBilling[item.id];
+                        const locked = !billable(item.id);
+                        return (
                         <label
                           key={item.id}
-                          className="flex cursor-pointer items-start gap-2 p-2 hover:bg-muted/30"
+                          className={
+                            locked
+                              ? "flex items-start gap-2 p-2 opacity-60"
+                              : "flex cursor-pointer items-start gap-2 p-2 hover:bg-muted/30"
+                          }
                         >
                           <input
                             type="checkbox"
                             className="mt-0.5"
                             checked={picked.includes(item.id)}
+                            disabled={locked}
                             onChange={() => togglePicked(item.id)}
                           />
                           <span className="flex-1">
@@ -308,12 +350,24 @@ export function AddToAfpButton({
                                 </span>
                               );
                             })()}
+                            {billing && billing.kind !== "open" && (
+                              <span
+                                className={`ml-1.5 inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                  billing.kind === "staged_here"
+                                    ? "bg-blue-100 text-blue-900"
+                                    : "bg-muted text-muted-foreground"
+                                }`}
+                              >
+                                {billing.label}
+                              </span>
+                            )}
                           </span>
                           <span className="font-mono">
                             {formatCurrency(poItemValue(item))}
                           </span>
                         </label>
-                      ))}
+                        );
+                      })}
                     </div>
                     {picked.length > 0 && (
                       <p className="mt-1 text-[11px] text-muted-foreground">
@@ -339,7 +393,7 @@ export function AddToAfpButton({
                   />
                   <p className="mt-1 text-[11px] text-muted-foreground">
                     {picked.length > 0
-                      ? "Filled from the ticked items. Saving again on this PO replaces its figure for the period, so tick everything being billed this period in one go."
+                      ? "Filled from the ticked items. Saving replaces this PO's figure and item list for the period with what is ticked here."
                       : items.length > 0
                         ? "Opens on half the PO. Tick the items that arrived to bill only those, or type the figure."
                         : "Opens on half the PO. Change it to whatever the owner is actually billed this period."}
