@@ -83,3 +83,77 @@
     color: #b91c1c;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Schedule print sheet.
+ *
+ * The chrome already carries print:hidden (site nav, mobile nav, project rail,
+ * project header), and the workspace adds it too, so the sheet is the only
+ * thing left on the page when it prints. No body class, no portal.
+ *
+ * The page box is NAMED rather than set on bare @page. A global
+ * `@page { size: landscape }` would turn the weekly progress report landscape
+ * as well, and that sheet goes to Dimension in portrait. A browser without
+ * named page support just prints this one portrait, which still reads.
+ */
+@page schedule-sheet {
+  size: landscape;
+  margin: 12mm;
+}
+
+@media print {
+  .sp-sheet {
+    page: schedule-sheet;
+  }
+  .sp-title {
+    font-size: 13pt;
+    font-weight: 700;
+    margin: 0 0 2pt;
+  }
+  .sp-stamp {
+    font-size: 8pt;
+    color: #444;
+    margin: 0 0 8pt;
+  }
+  .sp-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 8.5pt;
+  }
+  .sp-table th,
+  .sp-table td {
+    border-bottom: 0.5pt solid #bbb;
+    padding: 2.5pt 4pt;
+    text-align: left;
+    vertical-align: top;
+  }
+  .sp-table th {
+    border-bottom: 1pt solid #333;
+    font-size: 7.5pt;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  /* Repeat the header on every page. Eleven civil rows fit on one sheet; the
+     full 204-task schedule does not, and a second page of unlabelled columns
+     is a page nobody can read. */
+  .sp-table thead {
+    display: table-header-group;
+  }
+  .sp-table tr {
+    page-break-inside: avoid;
+  }
+  .sp-wbs {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: nowrap;
+  }
+  .sp-num {
+    text-align: right;
+    white-space: nowrap;
+  }
+  /* Bold rather than coloured. A red row on a sheet handed to a sub reads as
+     an instruction nobody gave; weight says "watch this" without shouting, and
+     it survives a black and white printer. */
+  .sp-critical td {
+    font-weight: 700;
+  }
+}
