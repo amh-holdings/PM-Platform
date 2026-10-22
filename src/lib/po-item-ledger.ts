@@ -105,3 +105,101 @@ export function blockedItems(
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// What the whole PO has already put on applications
+// ---------------------------------------------------------------------------
+//
+// Phil: "build the unbilled share fix". The standing rule bills half a PO the
+// day it goes out, typed against the PO rather than any item. Ticking items
+// later priced them at full value, so a half-billed PO's items came out at
+// 150%. The fix is to know what the PO has already billed, and which part of
+// that was PO-wide rather than for particular items.
+
+export type PoContributionRow = {
+  entryId: string;
+  amount: number;
+  periodMonth: string;
+  billed: boolean;
+  afpNumber?: string | null;
+};
+
+/** One application, or one staged month, this PO has money on. */
+export type PoApplicationShare = {
+  label: string;
+  amount: number;
+  billed: boolean;
+};
+
+export type PoBillingPosition = {
+  /** On submitted applications. */
+  billedToDate: number;
+  /** Staged for another period and not billed yet. */
+  stagedElsewhere: number;
+  /** The part of both that named no items - spread across every item. */
+  poWide: number;
+  /** PO total less everything above. Never negative. */
+  remaining: number;
+  /** poWide as a share of the PO: how much of each item is already covered. */
+  billedFraction: number;
+  /**
+   * Where that money sits: "AFP 13 (September 2026)" for each application,
+   * "Staged for November 2026" for a month not billed yet. Oldest first.
+   */
+  byApplication: PoApplicationShare[];
+};
+
+/**
+ * This PO's position, leaving out what it has staged for the period being
+ * billed - that figure is about to be replaced by the save, so counting it
+ * would net the PO against itself.
+ *
+ * An entry that carries item rows billed those items, and they are locked by
+ * the ledger, so only entries with no items count towards the PO-wide share.
+ */
+export function poBillingPosition(opts: {
+  poTotal: number;
+  contributions: readonly PoContributionRow[];
+  itemEntryIds: readonly string[];
+  periodMonth: string;
+}): PoBillingPosition {
+  const withItems = new Set(opts.itemEntryIds);
+  let billed = 0;
+  let staged = 0;
+  let poWide = 0;
+  const groups = new Map<string, PoApplicationShare & { sort: string }>();
+  for (const c of opts.contributions) {
+    const amount = Number(c.amount) || 0;
+    if (amount <= 0) continue;
+    if (!c.billed && c.periodMonth === opts.periodMonth) continue;
+    if (c.billed) billed += amount;
+    else staged += amount;
+    if (!withItems.has(c.entryId)) poWide += amount;
+    const month = monthLabel(c.periodMonth);
+    const key = c.billed ? `afp:${c.afpNumber ?? c.periodMonth}` : `staged:${c.periodMonth}`;
+    const label = c.billed
+      ? c.afpNumber
+        ? `AFP ${c.afpNumber} (${month})`
+        : `Billed ${month}`
+      : `Staged for ${month}`;
+    const g = groups.get(key) ?? { label, amount: 0, billed: c.billed, sort: c.periodMonth };
+    g.amount += amount;
+    groups.set(key, g);
+  }
+  const total = Math.max(0, Number(opts.poTotal) || 0);
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  return {
+    billedToDate: r2(billed),
+    stagedElsewhere: r2(staged),
+    poWide: r2(poWide),
+    remaining: r2(Math.max(0, total - billed - staged)),
+    billedFraction: total > 0 ? Math.min(1, poWide / total) : 0,
+    byApplication: Array.from(groups.values())
+      .sort((a, b) => a.sort.localeCompare(b.sort))
+      .map(({ label, amount, billed: isBilled }) => ({
+        label,
+        amount: r2(amount),
+        billed: isBilled,
+      })),
+  };
+}
