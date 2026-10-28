@@ -11,8 +11,9 @@ npm run email:ingest -- --file /path/to/events.json --dry-run   # see what would
 npm run email:ingest -- --file /path/to/events.json             # write it
 ```
 
-Needs `.env.local` with `NEXT_PUBLIC_SUPABASE_URL` and
-`SUPABASE_SERVICE_ROLE_KEY` (already on the Mac Mini). Optional `APP_URL` puts
+Needs `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`, from
+`.env.local` on the Mac Mini or from the environment's variables in a cloud
+session (where there is no `.env.local`). Optional `APP_URL` puts
 a link to the page in the Chat message.
 
 The script prints a JSON report. If `chat` is not null, post it to the
