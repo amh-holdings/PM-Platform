@@ -89,6 +89,21 @@ export async function getNavCounts(
     );
   }
 
+  // Email updates waiting on a decision. RLS returns rows to Phil and Zarina
+  // only, so for anyone else this reads zero and no badge shows. Before 0080
+  // runs the query errors and countOf reports zero.
+  if (can(role, "reviewEmailUpdates")) {
+    jobs.push(
+      countOf(
+        supabase
+          .from("email_updates")
+          .select("id", { count: "exact", head: true })
+          .eq("project_id", projectId)
+          .eq("status", "proposed"),
+      ).then((n) => ["email-updates", n]),
+    );
+  }
+
   const settled = await Promise.all(jobs);
   const counts: NavCounts = {};
   for (const [key, n] of settled) {

@@ -24,6 +24,7 @@ import {
   FileSpreadsheet,
   FolderOpen,
   HandCoins,
+  Inbox,
   LayoutDashboard,
   NotebookPen,
   ReceiptText,
@@ -226,6 +227,17 @@ export const PROJECT_NAV: NavItem[] = [
     icon: FolderOpen,
     blurb: "Drawings, specs and project files",
     find: ["files", "drawings", "specs", "uploads"],
+  },
+  {
+    key: "email-updates",
+    label: "Email updates",
+    group: "records",
+    path: "email-updates",
+    cap: "reviewEmailUpdates",
+    icon: Inbox,
+    blurb: "Changes the email automation made or wants to make, with approve and undo",
+    find: ["email", "inbox", "proposals", "automation", "approve", "undo"],
+    hasCount: true,
   },
 ];
 

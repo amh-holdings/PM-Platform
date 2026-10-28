@@ -69,6 +69,7 @@ export type Capability =
   | "viewCosts" // Costs tab + all internal cost/profit/margin figures (Phil-only)
   | "viewContractValue" // project contract $ totals; hidden from subs
   | "viewDocuments" // Documents tab
+  | "reviewEmailUpdates" // Email updates page; RLS narrows the rows to Phil and Zarina
   | "viewAsToggle" // the Phil-only "view as" switcher
   // --- business development ---
   | "viewBD" // the BD section: clients, pipeline, bids, follow-ups, dashboard
@@ -100,6 +101,7 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewCosts",
     "viewContractValue",
     "viewDocuments",
+    "reviewEmailUpdates",
     "viewAsToggle",
     "viewBD",
     "viewProjects",
@@ -130,6 +132,7 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewProcurement",
     "viewContractValue",
     "viewDocuments",
+    "reviewEmailUpdates",
     "viewProjects",
   ]),
   // Subcontractor: files field reports only. Commodity production is AHC's

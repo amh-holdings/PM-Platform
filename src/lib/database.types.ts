@@ -1226,6 +1226,106 @@ export type Database = {
           },
         ]
       }
+      email_updates: {
+        Row: {
+          auto_applied: boolean
+          created_at: string | null
+          decided_at: string | null
+          decided_by: string | null
+          decision_note: string | null
+          id: string
+          kind: string
+          match_reason: string | null
+          payload: Json
+          project_id: string
+          requires_phil: boolean
+          source_from: string | null
+          source_message_id: string
+          source_received_at: string | null
+          source_subject: string | null
+          source_url: string | null
+          status: string
+          summary: string
+          target_id: string | null
+          target_table: string | null
+          undo_data: Json | null
+          undone_at: string | null
+          undone_by: string | null
+        }
+        Insert: {
+          auto_applied?: boolean
+          created_at?: string | null
+          decided_at?: string | null
+          decided_by?: string | null
+          decision_note?: string | null
+          id?: string
+          kind: string
+          match_reason?: string | null
+          payload?: Json
+          project_id: string
+          requires_phil?: boolean
+          source_from?: string | null
+          source_message_id: string
+          source_received_at?: string | null
+          source_subject?: string | null
+          source_url?: string | null
+          status?: string
+          summary: string
+          target_id?: string | null
+          target_table?: string | null
+          undo_data?: Json | null
+          undone_at?: string | null
+          undone_by?: string | null
+        }
+        Update: {
+          auto_applied?: boolean
+          created_at?: string | null
+          decided_at?: string | null
+          decided_by?: string | null
+          decision_note?: string | null
+          id?: string
+          kind?: string
+          match_reason?: string | null
+          payload?: Json
+          project_id?: string
+          requires_phil?: boolean
+          source_from?: string | null
+          source_message_id?: string
+          source_received_at?: string | null
+          source_subject?: string | null
+          source_url?: string | null
+          status?: string
+          summary?: string
+          target_id?: string | null
+          target_table?: string | null
+          undo_data?: Json | null
+          undone_at?: string | null
+          undone_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "email_updates_decided_by_fkey"
+            columns: ["decided_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_updates_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_updates_undone_by_fkey"
+            columns: ["undone_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       inspection_photos: {
         Row: {
           caption: string | null

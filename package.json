@@ -60,7 +60,8 @@
     "test:po-item-status": "tsx scripts/procurement/run-po-item-status-tests.ts",
     "test:po-item-ledger": "tsx scripts/procurement/run-po-item-ledger-tests.ts",
     "test:bill-po-detail": "tsx scripts/billing/run-bill-po-detail-tests.ts",
-    "test:schedule-insert": "tsx scripts/schedule/run-insert-tests.ts"
+    "test:schedule-insert": "tsx scripts/schedule/run-insert-tests.ts",
+    "test:email-updates": "tsx scripts/email-updates/run-tests.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
