@@ -259,31 +259,14 @@ if (Math.abs(appBudget - jobTotal.revised) > 0.005 || budgetDiffs.length) review
   why: `${budgetDiffs.length} mapped codes differ, ${unmapped.length} IBT codes and ${appOnly.length} app codes have no partner. See the crosswalk table.`,
   proposal: "Decide which budget is the record for the JV before anything is written to estimated_cost." });
 
-// ---- Step 1: cost incurred ---------------------------------------------
-const reportMonth = jobAsOf.slice(0, 7) + "-01";
-const appActual = (c: any) => r2(forecasts.filter((f) => f.cost_code_id === c.id).reduce((s, f) => s + n(f.actual_amount), 0));
-for (const c of cross.filter((c) => c.app)) {
-  const app = c.app;
-  if (Math.abs(n(app.actual_cost) - c.ibt.toDate) > 0.005) ops.push({ step: "1 Cost", table: "cost_codes", action: "update", id: app.id, target: `${app.code} ${app.name}`,
-    change: `actual_cost ${usd2(n(app.actual_cost))} -> ${usd2(c.ibt.toDate)}`, source: `IBT job cost ${c.ibt.code}, costs to date ${jobAsOf}`, set: { actual_cost: c.ibt.toDate } });
-  const delta = r2(c.ibt.toDate - appActual(app));
-  if (Math.abs(delta) < 0.005) continue;
-  if (delta < 0) { review.push({ item: `${app.code} costs to date fell`, why: `IBT ${usd2(c.ibt.toDate)}, app already carries ${usd2(appActual(app))} of actuals.`, proposal: "A credit or recode at IBT - find which month to reverse." }); continue; }
-  const row = forecasts.find((f) => f.cost_code_id === app.id && f.period_month === reportMonth);
-  const actual = r2(n(row?.actual_amount) + delta);
-  // The row's plan is replaced by the actual (engine reads actual when > 0);
-  // map-sussex-to-schedule re-spreads what is left of the budget.
-  ops.push(row
-    ? { step: "1 Cost", table: "cost_forecasts", action: "update", id: row.id, target: `${app.code} ${reportMonth.slice(0, 7)}`, change: `actual ${usd2(n(row.actual_amount))} -> ${usd2(actual)} (plan ${usd2(n(row.planned_amount))} gives way)`, source: `IBT costs to date ${usd2(c.ibt.toDate)} less ${usd2(appActual(app))} already in the app`, set: { actual_amount: actual, notes: `ibt-sync ${jobAsOf}` } }
-    : { step: "1 Cost", table: "cost_forecasts", action: "insert", target: `${app.code} ${reportMonth.slice(0, 7)}`, change: `new actual ${usd2(actual)}`, source: `IBT costs to date ${usd2(c.ibt.toDate)} less ${usd2(appActual(app))} already in the app`, row: { cost_code_id: app.id, period_month: reportMonth, planned_amount: 0, actual_amount: actual, notes: `ibt-sync ${jobAsOf}` } });
-}
-
-// ---- Step 2: open AP -----------------------------------------------------
+// ---- Step 1: open AP -----------------------------------------------------
 // A bill in AP should already be in the job cost's costs to date. One that
 // isn't (vendor's code shows less to date than the bill) has not been
-// distributed to the job yet - carried as cost in its invoice month, held
-// until the code is confirmed.
+// distributed to the job yet - carried as cost in its invoice month. A bill
+// booked on an earlier run is recognised by its note and not booked again.
+const reportMonth = jobAsOf.slice(0, 7) + "-01";
 const apPending = new Map<string, number>(); // app code -> AP not yet in job cost
+const apBookedNow = new Map<string, number>(); // app code -> booked by this run
 for (const b of bills) {
   const v = VENDOR_CODE[b.vendor];
   if (!v) { review.push({ item: `Open bill ${b.vendor} ${b.invoice} ${usd2(b.amount)} (${b.date})`, why: "IBT's AP report has no cost code and this vendor is not in VENDOR_CODE.", proposal: "Ask IBT which cost code it is distributed to." }); continue; }
@@ -292,14 +275,38 @@ for (const b of bills) {
   const inJobCost = (ibtLine?.toDate ?? 0) >= b.amount - 0.005;
   if (inJobCost) continue;
   apPending.set(v.code, r2((apPending.get(v.code) ?? 0) + b.amount + b.retainage));
+  review.push({ item: `${b.vendor} ${b.invoice} ${usd2(b.amount)} is in AP but not in job cost`, why: `IBT ${ibtLine?.code ?? v.code} shows ${usd2(ibtLine?.toDate ?? 0)} to date as of ${jobAsOf}, but the bill is dated ${b.date}. ${v.confirmed ? "" : `Code ${v.code} is an assumption: ${v.note}.`}`, proposal: "Ask IBT to distribute it to the job. The app carries it as incurred meanwhile." });
+  if (forecasts.some((f) => f.cost_code_id === app.id && String(f.notes ?? "").includes(`ibt-sync AP ${b.invoice}`))) continue;
   const month = b.date.slice(0, 7) + "-01";
   const row = forecasts.find((f) => f.cost_code_id === app.id && f.period_month === month);
   const hold = v.confirmed ? undefined : `confirm ${b.vendor} ${b.invoice} is ${v.code} ${app.name} (${v.note}) and why it is not on the job cost report`;
-  const op: Op = row
-    ? { step: "2 AP", table: "cost_forecasts", action: "update", id: row.id, target: `${app.code} ${month.slice(0, 7)}`, change: `actual ${usd2(n(row.actual_amount))} -> ${usd2(n(row.actual_amount) + b.amount)}, due ${b.dueDate}`, source: `IBT AP ${b.vendor} inv ${b.invoice} ${b.date}`, set: { actual_amount: r2(n(row.actual_amount) + b.amount), notes: `ibt-sync AP ${b.invoice}` }, hold }
-    : { step: "2 AP", table: "cost_forecasts", action: "insert", target: `${app.code} ${month.slice(0, 7)}`, change: `new actual ${usd2(b.amount)}, due ${b.dueDate}`, source: `IBT AP ${b.vendor} inv ${b.invoice} ${b.date}`, row: { cost_code_id: app.id, period_month: month, planned_amount: 0, actual_amount: b.amount, notes: `ibt-sync AP ${b.invoice}` }, hold };
-  ops.push(op);
-  review.push({ item: `${b.vendor} ${b.invoice} ${usd2(b.amount)} is in AP but not in job cost`, why: `IBT ${ibtLine?.code ?? v.code} shows ${usd2(ibtLine?.toDate ?? 0)} to date as of ${jobAsOf}, but the bill is dated ${b.date}. ${v.confirmed ? "" : `Code ${v.code} is an assumption: ${v.note}.`}`, proposal: "Ask IBT to distribute it to the job; the held op books it meanwhile." });
+  if (!hold) apBookedNow.set(v.code, r2((apBookedNow.get(v.code) ?? 0) + b.amount));
+  ops.push(row
+    ? { step: "1 AP", table: "cost_forecasts", action: "update", id: row.id, target: `${app.code} ${month.slice(0, 7)}`, change: `actual ${usd2(n(row.actual_amount))} -> ${usd2(n(row.actual_amount) + b.amount)}, due ${b.dueDate}`, source: `IBT AP ${b.vendor} inv ${b.invoice} ${b.date}`, set: { actual_amount: r2(n(row.actual_amount) + b.amount), notes: `ibt-sync AP ${b.invoice}` }, hold }
+    : { step: "1 AP", table: "cost_forecasts", action: "insert", target: `${app.code} ${month.slice(0, 7)}`, change: `new actual ${usd2(b.amount)}, due ${b.dueDate}`, source: `IBT AP ${b.vendor} inv ${b.invoice} ${b.date}`, row: { cost_code_id: app.id, period_month: month, planned_amount: 0, actual_amount: b.amount, notes: `ibt-sync AP ${b.invoice}` }, hold });
+}
+
+// ---- Step 2: cost incurred ---------------------------------------------
+// Incurred = IBT costs to date + AP not yet on the job cost. actual_cost is
+// what the Costs page shows; the month rows must add up to the same figure,
+// so whatever they are short lands in the report month.
+const appActual = (c: any) => r2(forecasts.filter((f) => f.cost_code_id === c.id).reduce((s, f) => s + n(f.actual_amount), 0));
+for (const c of cross.filter((c) => c.app)) {
+  const app = c.app;
+  const incurred = r2(c.ibt.toDate + (apPending.get(app.code) ?? 0));
+  if (Math.abs(n(app.actual_cost) - incurred) > 0.005) ops.push({ step: "2 Cost", table: "cost_codes", action: "update", id: app.id, target: `${app.code} ${app.name}`,
+    change: `actual_cost ${usd2(n(app.actual_cost))} -> ${usd2(incurred)}`, source: `IBT job cost ${c.ibt.code} ${usd2(c.ibt.toDate)} to date ${jobAsOf}${apPending.get(app.code) ? ` + ${usd2(apPending.get(app.code)!)} AP not yet on it` : ""}`, set: { actual_cost: incurred } });
+  const have = r2(appActual(app) + (apBookedNow.get(app.code) ?? 0));
+  const delta = r2(incurred - have);
+  if (Math.abs(delta) < 0.005) continue;
+  if (delta < 0) { review.push({ item: `${app.code} incurred fell`, why: `IBT ${usd2(incurred)}, app month rows carry ${usd2(have)}.`, proposal: "A credit or recode at IBT - find which month to reverse." }); continue; }
+  const row = forecasts.find((f) => f.cost_code_id === app.id && f.period_month === reportMonth);
+  const actual = r2(n(row?.actual_amount) + delta);
+  // The row's plan is replaced by the actual (engine reads actual when > 0);
+  // map-sussex-to-schedule re-spreads what is left of the budget.
+  ops.push(row
+    ? { step: "2 Cost", table: "cost_forecasts", action: "update", id: row.id, target: `${app.code} ${reportMonth.slice(0, 7)}`, change: `actual ${usd2(n(row.actual_amount))} -> ${usd2(actual)} (plan ${usd2(n(row.planned_amount))} gives way)`, source: `incurred ${usd2(incurred)} less ${usd2(have)} already in the app`, set: { actual_amount: actual, notes: `ibt-sync ${jobAsOf}` } }
+    : { step: "2 Cost", table: "cost_forecasts", action: "insert", target: `${app.code} ${reportMonth.slice(0, 7)}`, change: `new actual ${usd2(actual)}`, source: `incurred ${usd2(incurred)} less ${usd2(have)} already in the app`, row: { cost_code_id: app.id, period_month: reportMonth, planned_amount: 0, actual_amount: actual, notes: `ibt-sync ${jobAsOf}` } });
 }
 
 // ---- Step 3: owner billing and receipts -----------------------------------
