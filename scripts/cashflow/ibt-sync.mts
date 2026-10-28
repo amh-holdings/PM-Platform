@@ -57,11 +57,12 @@ if (!DIR) throw new Error("usage: ibt-sync.mts <IBT pack folder> [--apply]");
 const RENUMBER: Record<string, string> = {
   "200-1030": "100-1030", // Structural Design, $10,000 - IBT files it under procurement
   "200-1035": "200-1030", // Racking, Mounting & Trackers, $900,454.74
+  "800-1030": "800-1020", // IBT's Project Management is IBT Annex A (Phil, 2026-10-28); app 800-1030 is TVIG Annex A - LNTP
 };
 // IBT AP carries no cost code, so open bills are coded by vendor. A vendor
 // missing here is reported, never guessed.
 const VENDOR_CODE: Record<string, { code: string; confirmed: boolean; note: string }> = {
-  "HUB INTERNATIONAL": { code: "800-1160", confirmed: false, note: "HUB is an insurance broker; it also places bonds (800-1150)" },
+  "HUB INTERNATIONAL": { code: "800-1150", confirmed: true, note: "the JV's bond (Phil, 2026-10-28)" },
 };
 
 const n = (v: any) => Number(v ?? 0);

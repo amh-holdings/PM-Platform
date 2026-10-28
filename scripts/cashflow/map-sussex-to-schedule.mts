@@ -237,7 +237,7 @@ for (const c of codes ?? []) {
   const rows = rule.covered
     ? new Map()
     : rule.fixed
-      ? new Map(rule.fixed)
+      ? lessActual(rule.fixed, actual)
       : spread(est - actual, dayWeights(rule));
   // A month that already carries an actual (ibt-sync) can't take plan too:
   // the upsert would zero the actual, and the engine reads actual over plan
@@ -255,6 +255,20 @@ for (const c of codes ?? []) {
     throw new Error(`${c.code} has a fixed schedule and an actual in the same month - settle it by hand`);
   }
   plan.push({ code: c, rule, rows });
+}
+
+// A fixed schedule is what the money was expected to do. Once actuals arrive
+// they come off the earliest planned payments first - the bond's real
+// invoice replaces the start of its November lump, the rest stays planned.
+function lessActual(fixed: [string, number][], actual: number) {
+  const rows = new Map<string, number>();
+  let left = actual;
+  for (const [m, v] of [...fixed].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const take = Math.min(v, Math.max(0, left));
+    left -= take;
+    if (v - take > 0.005) rows.set(m, r2(v - take));
+  }
+  return rows;
 }
 
 const months = [...new Set(plan.flatMap((p) => [...p.rows.keys()]))].sort();
