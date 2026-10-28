@@ -102,6 +102,23 @@ export default async function EmailUpdatesPage({
     for (const t of data ?? []) taskNames.set(t.id, `${t.wbs_code} ${t.task_name}`);
   }
 
+  // Subs (COI, W-9) and AFPs (status, payment), linked.
+  const idsFor = (table: string) =>
+    Array.from(new Set(rows.filter((r) => r.target_table === table && r.target_id).map((r) => r.target_id as string)));
+  const subIdsTargeted = idsFor("subcontractors");
+  const afpIds = idsFor("pay_applications");
+  const records = new Map<string, { label: string; href: string }>();
+  if (subIdsTargeted.length) {
+    const { data } = await supabase.from("subcontractors").select("id, company_name").in("id", subIdsTargeted);
+    for (const s of data ?? []) records.set(s.id, { label: s.company_name, href: `/projects/${params.id}/subs` });
+  }
+  if (afpIds.length) {
+    const { data } = await supabase.from("pay_applications").select("id, app_number").in("id", afpIds);
+    for (const a of data ?? []) {
+      records.set(a.id, { label: `AFP ${a.app_number}`, href: `/projects/${params.id}/pay-apps/${a.id}` });
+    }
+  }
+
   // Bills entered from email: the sub and application number, linked.
   const appIds = Array.from(
     new Set(
@@ -182,7 +199,7 @@ export default async function EmailUpdatesPage({
                   const res = canDecide(r, dbRole, decision);
                   return res.ok ? null : res.reason;
                 })();
-                const bill = r.target_id ? bills.get(r.target_id) : undefined;
+                const bill = r.target_id ? bills.get(r.target_id) ?? records.get(r.target_id) : undefined;
                 const matched = bill ? (
                   <Link href={bill.href} className="underline">
                     {bill.label}

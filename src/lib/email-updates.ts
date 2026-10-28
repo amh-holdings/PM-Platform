@@ -129,6 +129,7 @@ export type ApplyPlan =
 export const KINDS_WITH_APPLIER: ReadonlySet<EmailUpdateKind> = new Set<EmailUpdateKind>([
   "schedule_complete",
   "schedule_constraint",
+  "inspection_result",
 ]);
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -162,6 +163,11 @@ export function planApply(input: {
   const { row, task } = input;
   const kind = row.kind as EmailUpdateKind;
   if (!KINDS_WITH_APPLIER.has(kind)) return { ok: true, table: null };
+  // A failed inspection changes nothing in the schedule: it is a heads-up,
+  // and the re-inspection is planned by hand.
+  if (kind === "inspection_result" && (row.payload as { result?: string } | null)?.result !== "passed") {
+    return { ok: true, table: null };
+  }
 
   if (!row.target_id || !task) return { ok: false, reason: "The schedule task is gone." };
   if (task.id !== row.target_id || task.project_id !== row.project_id) {
@@ -172,7 +178,7 @@ export function planApply(input: {
   }
   const payload = (row.payload ?? {}) as Record<string, unknown>;
 
-  if (kind === "schedule_complete") {
+  if (kind === "schedule_complete" || kind === "inspection_result") {
     if (!progressCanBeSetByHand(task.task_type)) {
       return {
         ok: false,
@@ -224,20 +230,24 @@ export function planApply(input: {
  * else, somebody has edited it, and putting the old value back would silently
  * erase their edit.
  */
-export function planUndo(input: {
-  applied: TaskPatch;
-  undo: TaskPatch | null;
-  task: TaskSnapshot | null;
-}): { ok: true; patch: TaskPatch } | { ok: false; reason: string } {
+export function planUndo<P extends Record<string, unknown>>(input: {
+  applied: P;
+  undo: P | null;
+  /** The record as it stands now: a task, a sub, an AFP. */
+  task: Record<string, unknown> | null;
+  /** What to call the record in a refusal. */
+  noun?: string;
+}): { ok: true; patch: P } | { ok: false; reason: string } {
+  const noun = input.noun ?? "task";
   if (!input.undo) return { ok: false, reason: "Nothing was recorded to undo." };
-  if (!input.task) return { ok: false, reason: "The schedule task is gone." };
-  const changed = (Object.keys(input.applied) as (keyof TaskPatch)[]).filter(
+  if (!input.task) return { ok: false, reason: `The ${noun} is gone.` };
+  const changed = Object.keys(input.applied).filter(
     (k) => !sameValue(input.task![k], input.applied[k]),
   );
   if (changed.length > 0) {
     return {
       ok: false,
-      reason: `The task was edited after this change (${changed.join(", ")}). Fix it by hand.`,
+      reason: `The ${noun} was edited after this change (${changed.join(", ")}). Fix it by hand.`,
     };
   }
   return { ok: true, patch: input.undo };
@@ -262,6 +272,12 @@ export const EMAIL_UPDATE_TABS = [
  */
 export type UndoData =
   | { table: "schedule_tasks"; applied: TaskPatch; restore: TaskPatch }
+  /** A sub's COI or W-9 status, or an AFP's notes or paid status. */
+  | {
+      table: "subcontractors" | "pay_applications";
+      applied: Record<string, unknown>;
+      restore: Record<string, unknown>;
+    }
   /** A sub bill the sweep entered from email. Undo removes it. */
   | { table: "sub_pay_apps"; id: string };
 
@@ -271,7 +287,9 @@ export function readUndoData(v: unknown): UndoData | null {
   if (o.table === "sub_pay_apps") {
     return typeof o.id === "string" && o.id ? { table: "sub_pay_apps", id: o.id } : null;
   }
-  if (o.table !== "schedule_tasks") return null;
+  if (o.table !== "schedule_tasks" && o.table !== "subcontractors" && o.table !== "pay_applications") {
+    return null;
+  }
   if (!o.applied || typeof o.applied !== "object") return null;
   if (!o.restore || typeof o.restore !== "object") return null;
   return o as unknown as UndoData;
@@ -291,5 +309,109 @@ export function planUndoPayApp(
   return {
     ok: false,
     reason: "The bill has been recommended or decided since. Reject it in Sub billing instead.",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Records other than schedule tasks: a sub's COI and W-9, an AFP.
+// ---------------------------------------------------------------------------
+
+export type SubCompliance = {
+  id: string;
+  project_id: string | null;
+  company_name: string;
+  coi_status: string | null;
+  w9_status: string | null;
+};
+
+export type AfpRecord = {
+  id: string;
+  project_id: string;
+  app_number: string;
+  status: string | null;
+  paid_at: string | null;
+  notes: string | null;
+  amount_due: number | null;
+};
+
+export type RecordPlan =
+  | {
+      ok: true;
+      table: "subcontractors" | "pay_applications";
+      id: string;
+      patch: Record<string, unknown>;
+      undo: Record<string, unknown>;
+      /** Billing entries on the AFP follow its status, as they do in the app. */
+      cascadeEntryStatus?: string;
+    }
+  | { ok: false; reason: string };
+
+/** A COI or W-9 that already counts as on file. */
+const ON_FILE = new Set(["received", "waived", "approved", "current"]);
+
+/**
+ * Mark a sub's COI or W-9 received. Only from a status that means it is
+ * missing or lapsing; one already on file is left alone. Approval stays a
+ * person's call in the Subs screen.
+ */
+export function planComplianceApply(
+  row: { project_id: string; payload: unknown },
+  sub: SubCompliance | null,
+): RecordPlan {
+  const doc = (row.payload as { doc?: string } | null)?.doc;
+  if (doc !== "coi" && doc !== "w9") return { ok: false, reason: "The email did not say COI or W-9." };
+  if (!sub) return { ok: false, reason: "The subcontractor is gone." };
+  if (sub.project_id && sub.project_id !== row.project_id) {
+    return { ok: false, reason: "That subcontractor is not on this project." };
+  }
+  const col = doc === "coi" ? "coi_status" : "w9_status";
+  const current = (sub[col] ?? "").toLowerCase();
+  if (ON_FILE.has(current)) {
+    return { ok: false, reason: `${sub.company_name}'s ${doc === "coi" ? "COI" : "W-9"} is already ${current}.` };
+  }
+  return { ok: true, table: "subcontractors", id: sub.id, patch: { [col]: "received" }, undo: { [col]: sub[col] } };
+}
+
+/** Add an AFP status note from the owner to the AFP's notes. */
+export function planAfpStatusApply(
+  row: { project_id: string; payload: unknown },
+  afp: AfpRecord | null,
+  today: string,
+): RecordPlan {
+  const note = String((row.payload as { note?: string } | null)?.note ?? "").trim();
+  if (!note) return { ok: false, reason: "The email gave no status to note." };
+  if (!afp || afp.project_id !== row.project_id) return { ok: false, reason: "The AFP is not on this project." };
+  const line = `${today} from email: ${note.slice(0, 500)}`;
+  if ((afp.notes ?? "").includes(line)) return { ok: false, reason: "That note is already on the AFP." };
+  const notes = afp.notes ? `${afp.notes}\n${line}` : line;
+  return { ok: true, table: "pay_applications", id: afp.id, patch: { notes }, undo: { notes: afp.notes } };
+}
+
+/**
+ * Mark an AFP paid on the date the email gives. Only an AFP that has gone to
+ * the owner and is not already paid. Its billing entries follow, the same as
+ * setting Paid on the AFP page.
+ */
+export function planAfpPaidApply(
+  row: { project_id: string; payload: unknown },
+  afp: AfpRecord | null,
+  today: string,
+): RecordPlan {
+  const paidOn = (row.payload as { paid_on?: string } | null)?.paid_on;
+  if (!isIsoDate(paidOn)) return { ok: false, reason: "The email gave no usable payment date." };
+  if (paidOn > today) return { ok: false, reason: `The payment date ${paidOn} is in the future.` };
+  if (!afp || afp.project_id !== row.project_id) return { ok: false, reason: "The AFP is not on this project." };
+  const status = (afp.status ?? "").toLowerCase();
+  if (status === "paid") return { ok: false, reason: `AFP ${afp.app_number} is already paid.` };
+  if (status !== "submitted" && status !== "approved") {
+    return { ok: false, reason: `AFP ${afp.app_number} is ${status || "a draft"}, not submitted to the owner.` };
+  }
+  return {
+    ok: true,
+    table: "pay_applications",
+    id: afp.id,
+    patch: { status: "paid", paid_at: `${paidOn}T12:00:00.000Z` },
+    undo: { status: afp.status, paid_at: afp.paid_at },
+    cascadeEntryStatus: "paid",
   };
 }

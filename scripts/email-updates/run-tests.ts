@@ -4,6 +4,9 @@ import {
   planApply,
   planUndo,
   planUndoPayApp,
+  planAfpPaidApply,
+  planAfpStatusApply,
+  planComplianceApply,
   readUndoData,
   type TaskSnapshot,
 } from "../../src/lib/email-updates";
@@ -116,6 +119,32 @@ check("future constraint date is fine",
   check("undo refused with no record", !planUndo({ applied, undo: null, task: now }).ok);
   check("undo refused when task gone", !planUndo({ applied, undo, task: null }).ok);
 }
+
+// --- inspection result as an applier ---
+{
+  const p = planApply({ row: row("inspection_result", { result: "passed", date: "2026-10-27" }), task: task({ task_type: "inspection" }), hasChildren: false, today: TODAY });
+  check("passed inspection approves to complete", p.ok && p.table === "schedule_tasks" && p.patch.status === "Complete");
+  const f = planApply({ row: row("inspection_result", { result: "failed", date: "2026-10-27" }), task: task({ task_type: "inspection" }), hasChildren: false, today: TODAY });
+  check("failed inspection applies nothing", f.ok && f.table === null);
+}
+
+// --- records ---
+const subRec = { id: "s1", project_id: PID, company_name: "SCS", coi_status: "pending", w9_status: "received" };
+check("COI pending -> received", (() => { const p = planComplianceApply({ project_id: PID, payload: { doc: "coi" } }, subRec); return p.ok && p.patch.coi_status === "received" && p.undo.coi_status === "pending"; })());
+check("W-9 received is refused", !planComplianceApply({ project_id: PID, payload: { doc: "w9" } }, subRec).ok);
+check("other project's sub refused", !planComplianceApply({ project_id: PID, payload: { doc: "coi" } }, { ...subRec, project_id: "other" }).ok);
+const afpRec = { id: "a1", project_id: PID, app_number: "13", status: "approved", paid_at: null, notes: null, amount_due: 1 };
+check("paid cascades to entries", (() => { const p = planAfpPaidApply({ project_id: PID, payload: { paid_on: "2026-10-24" } }, afpRec, TODAY); return p.ok && p.cascadeEntryStatus === "paid" && p.undo.status === "approved"; })());
+check("same note twice refused", (() => {
+  const once = planAfpStatusApply({ project_id: PID, payload: { note: "Received" } }, afpRec, TODAY);
+  if (!once.ok) return false;
+  return !planAfpStatusApply({ project_id: PID, payload: { note: "Received" } }, { ...afpRec, notes: String(once.patch.notes) }, TODAY).ok;
+})());
+check("generic undo checks the record", (() => {
+  const u = planUndo({ applied: { coi_status: "received" }, undo: { coi_status: "pending" }, task: { coi_status: "approved" }, noun: "subcontractor" });
+  return !u.ok && u.reason.includes("subcontractor was edited");
+})());
+check("reads record undo data", readUndoData({ table: "pay_applications", applied: { notes: "x" }, restore: { notes: null } })?.table === "pay_applications");
 
 // --- undo for a bill entered from email ---
 check("received bill can be undone", planUndoPayApp({ status: "received" }).ok);

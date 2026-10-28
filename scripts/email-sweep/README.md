@@ -20,7 +20,7 @@ Google Chat DM. If the exit code is not 0, log the run as failed.
 
 ## Event format
 
-One event per thing an email reports. Three kinds today: two schedule kinds, plus sub pay applications.
+One event per thing an email reports. Eight kinds today: two schedule kinds, sub pay applications, COI and W-9, AFP status, AFP paid, inspection results and possible change orders.
 
 ```json
 {
@@ -95,6 +95,39 @@ attachment and write one `sub_pay_app` event.
   page as Needs a match, with the reason, for a person to enter by hand.
 - Undo removes the bill, as long as nobody has recommended or decided it yet.
 
+### COI and W-9, AFP status and payment, inspections, change orders
+
+```json
+{ "kind": "compliance_doc", "project": "Sussex", "subcontractor": "Pyramid Excavation",
+  "doc": "coi", "expires_on": "2027-10-01", "source": { "...": "..." } }
+
+{ "kind": "afp_status", "project": "Sussex", "afp_number": "AFP 13",
+  "note": "Received, under review", "source": { "...": "..." } }
+
+{ "kind": "afp_paid", "project": "Sussex", "afp_number": "AFP 13",
+  "paid_on": "2026-10-24", "amount": 212400.00,
+  "evidence": "Payment for AFP 13 was released 10/24.", "source": { "...": "..." } }
+
+{ "kind": "inspection_result", "project": "Sussex", "task_hint": "electrical rough inspection",
+  "result": "passed", "date": "2026-10-27", "inspector": "Sussex County",
+  "evidence": "Inspection result: APPROVED", "source": { "...": "..." } }
+
+{ "kind": "change_order", "project": "Sussex", "title": "Fence relocation",
+  "reference": "Revised proposal 10/25", "evidence": "...", "source": { "...": "..." } }
+```
+
+- **compliance_doc**: a COI or W-9 sent for a sub. `doc` is `coi` or `w9`.
+  Write it even when it comes from an insurance broker. The script holds a
+  broker's email for a person rather than dropping it.
+- **afp_status**: the owner saying where an AFP stands. `note` is their words,
+  one line.
+- **afp_paid**: the owner saying an AFP was paid. `paid_on` is the payment
+  date and `amount` is the amount paid, if the email gives one.
+- **inspection_result**: a third-party or owner inspection, `passed` or
+  `failed`, on the date of the inspection.
+- **change_order**: anything that reads like new scope, a directive or a
+  revised proposal. Never include a price. CO pricing stays manual.
+
 ## Rules for writing events
 
 - **schedule_complete** only when the email says it already happened:
@@ -131,4 +164,12 @@ attachment and write one `sub_pay_app` event.
 | Pay app, all checks pass | Entered as Received, checks run, with Undo |
 | Pay app, any check fails | Needs a match, with the reason |
 | Pay app number already on file | Skipped, reported |
+| COI or W-9, sender on the list or the sub's own domain | Marked received, with Undo |
+| COI or W-9 from anyone else (a broker) | Waits for a person, saying who sent it |
+| COI or W-9 already on file | Skipped, reported |
+| AFP status note | Added to the AFP's notes, with Undo |
+| AFP paid | Waits for a person, with any short pay called out. Approving it marks the AFP and its billing entries paid |
+| Inspection passed | Waits for a person. Approving it marks the inspection task complete |
+| Inspection failed | Waits as a heads-up. Nothing changes |
+| Possible change order | Waits for a person. Raise the CO by hand in Change orders |
 | Same email and change already recorded | No-op |
