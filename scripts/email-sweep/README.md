@@ -20,7 +20,7 @@ Google Chat DM. If the exit code is not 0, log the run as failed.
 
 ## Event format
 
-One event per thing an email reports. Two kinds today.
+One event per thing an email reports. Three kinds today: two schedule kinds, plus sub pay applications.
 
 ```json
 {
@@ -51,6 +51,49 @@ One event per thing an email reports. Two kinds today.
   ]
 }
 ```
+
+### Sub pay applications
+
+When a sub emails a pay application, read the G702 and G703 from the
+attachment and write one `sub_pay_app` event.
+
+```json
+{
+  "project": "Sussex",
+  "kind": "sub_pay_app",
+  "subcontractor": "Southern Commercial Solutions",
+  "bill": {
+    "app_number": 3,
+    "period_start": "2026-10-01",
+    "period_end": "2026-10-31",
+    "invoice_number": "SCS-1031",
+    "billed_this_period": 12500.00,
+    "billed_to_date": 48200.00,
+    "retainage_this_period": 1250.00,
+    "retainage_to_date": 4820.00,
+    "amount_due": 11250.00,
+    "lien_waiver_received": true
+  },
+  "lines": [
+    { "item_number": "1", "this_period": 10000.00 },
+    { "item_number": "2", "this_period": 2500.00, "stored": 0 }
+  ],
+  "source": { "message_id": "...", "from": "redwards@scsofga.com", "subject": "SCS Pay App 3" }
+}
+```
+
+- `lines` holds only the G703 lines with a this-period or stored figure, each
+  under the item number exactly as printed on the G703.
+- Copy figures exactly. Leave a header figure out if it can't be read. Never
+  work one out.
+- The script enters the bill as **Received**, the same as Record a bill, and
+  runs the checks. That only starts the review: the bill still needs the CM's
+  recommendation and an approval. It does this only when the sender is the
+  sub's own domain, the company matches one sub, every line is on the sub's
+  SOV, the lines add up to the G702 this-period figure within $1, and the
+  application number isn't already on file. Otherwise the email waits on the
+  page as Needs a match, with the reason, for a person to enter by hand.
+- Undo removes the bill, as long as nobody has recommended or decided it yet.
 
 ## Rules for writing events
 
@@ -85,4 +128,7 @@ One event per thing an email reports. Two kinds today.
 | Completion, one match, passes the checks | Applied now, with Undo |
 | Completion on a construction task, a future date, or already done | Skipped, reported |
 | Planned date, one match | Proposed, waits for a person |
+| Pay app, all checks pass | Entered as Received, checks run, with Undo |
+| Pay app, any check fails | Needs a match, with the reason |
+| Pay app number already on file | Skipped, reported |
 | Same email and change already recorded | No-op |

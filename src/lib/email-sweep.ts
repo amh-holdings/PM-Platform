@@ -20,9 +20,22 @@ import {
   type TaskSnapshot,
   type UndoData,
 } from "./email-updates";
+import type { SubBillInput } from "./sub-bill-build";
 
 /** What the sweep hands over for one thing an email reported. */
-export type SweepEvent = {
+export type SweepEvent = ScheduleEvent | PayAppEvent;
+
+export type SweepSource = {
+  message_id: string;
+  url?: string | null;
+  /** The original sender. For a forwarded email, the address inside the forward. */
+  from: string;
+  subject?: string | null;
+  received_at?: string | null;
+};
+
+/** A schedule fact: something happened, or a date was committed to. */
+export type ScheduleEvent = {
   /** Project name or part of it, e.g. "Sussex". */
   project: string;
   kind: "schedule_complete" | "schedule_constraint";
@@ -36,14 +49,20 @@ export type SweepEvent = {
   constraint_type?: string | null;
   /** The sentence in the email that says so, quoted. Shown as the match reason. */
   evidence?: string | null;
-  source: {
-    message_id: string;
-    url?: string | null;
-    /** The original sender. For a forwarded email, the address inside the forward. */
-    from: string;
-    subject?: string | null;
-    received_at?: string | null;
-  };
+  source: SweepSource;
+};
+
+/** A sub's pay application, read from the G702/G703 attached to the email. */
+export type PayAppEvent = {
+  project: string;
+  kind: "sub_pay_app";
+  /** The sub's company name as it appears on the G702. */
+  subcontractor: string;
+  /** The G702 header. Leave a figure out rather than guess it. */
+  bill: Omit<SubBillInput, "this_period" | "stored">;
+  /** The G703 continuation sheet, one entry per line with a figure on it. */
+  lines: { item_number: string; this_period: number; stored?: number | null }[];
+  source: SweepSource;
 };
 
 export type SweepConfig = {
@@ -206,7 +225,7 @@ const CONSTRAINT_WORDS: Record<string, string> = {
  *   skipped and reported, because approving it would be refused the same way.
  */
 export function planIngest(input: {
-  event: SweepEvent;
+  event: ScheduleEvent;
   projectId: string;
   tasks: readonly SweepTask[];
   hasChildren: (taskId: string) => boolean;
@@ -323,4 +342,155 @@ export function chatNotice(input: {
   }
   if (input.link) lines.push(input.link);
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Sub pay applications
+// ---------------------------------------------------------------------------
+
+export type PayAppSub = { id: string; company_name: string; contact_email: string | null };
+
+export type PayAppPlan =
+  | { action: "skip"; reason: string }
+  | { action: "unmatched"; row: PlannedRow }
+  | { action: "enter"; sub: PayAppSub; bill: SubBillInput; row: PlannedRow };
+
+/** Lines may differ from the stated total by rounding, never more. */
+export const PAY_APP_TOLERANCE = 1;
+
+function money(v: number): string {
+  return `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+const COMPANY_NOISE = new Set(["llc", "inc", "co", "corp", "company", "ltd"]);
+
+/**
+ * What a pay application from email becomes.
+ *
+ * It is entered as Received - which only starts the review: the CM still
+ * recommends and approval still decides - when every check passes:
+ *   - the company name matches exactly one sub on the project
+ *   - the email came from that sub's own domain (the contact email on file)
+ *   - the sub has an SOV, and every G703 line is one of its item numbers
+ *   - the G703 lines add up to the G702's this-period figure
+ *   - that application number is not already on file
+ * Anything else is parked as unmatched with the reason, for a person to enter
+ * by hand from the email. Nothing is ever guessed into a bill.
+ */
+export function planPayAppIngest(input: {
+  event: PayAppEvent;
+  subs: readonly PayAppSub[];
+  /** Active SOV item numbers per sub id. */
+  sovItems: ReadonlyMap<string, readonly string[]>;
+  /** App numbers on file per sub id, rejected ones excluded. */
+  liveAppNumbers: ReadonlyMap<string, readonly number[]>;
+}): PayAppPlan {
+  const { event } = input;
+  const src = {
+    source_message_id: event.source.message_id,
+    source_url: event.source.url ?? null,
+    source_from: event.source.from,
+    source_subject: event.source.subject ?? null,
+    source_received_at: event.source.received_at ?? null,
+  };
+  if (!event.source.message_id) return { action: "skip", reason: "No message id on the event." };
+
+  const lines = event.lines ?? [];
+  const appLabel = event.bill?.app_number ? `Application ${event.bill.app_number}` : "Pay application";
+  const total = lines.reduce((s, l) => s + Number(l.this_period ?? 0), 0);
+  const park = (why: string, subId: string | null = null): PayAppPlan => ({
+    action: "unmatched",
+    row: {
+      kind: "unmatched",
+      status: "proposed",
+      auto_applied: false,
+      summary: `${KIND_LABEL.sub_pay_app}: ${appLabel} from "${event.subcontractor}", ${money(event.bill?.billed_this_period ?? total)} this period. ${why} Enter it by hand from the email.`,
+      target_table: null,
+      target_id: null,
+      payload: { event_kind: "sub_pay_app", subcontractor: event.subcontractor, sub_id: subId, bill: event.bill, lines },
+      undo_data: null,
+      match_reason: why,
+      ...src,
+    },
+  });
+
+  // The sub.
+  const want = tokens(event.subcontractor ?? "").filter((t) => !COMPANY_NOISE.has(t));
+  const hits = want.length
+    ? input.subs.filter((s) => {
+        const have = new Set(tokens(s.company_name));
+        return want.every((w) => have.has(w));
+      })
+    : [];
+  if (hits.length !== 1) {
+    return park(
+      hits.length
+        ? `Matches ${hits.length} subs: ${hits.map((s) => s.company_name).join(", ")}.`
+        : "No sub on this project by that name.",
+    );
+  }
+  const sub = hits[0];
+
+  // The sender is the sub. Our own people forwarding a bill go to a person.
+  const senderDomain = (emailAddress(event.source.from) ?? "").split("@")[1] ?? "";
+  const subDomain = (emailAddress(sub.contact_email ?? "") ?? "").split("@")[1] ?? "";
+  if (!subDomain) return park(`${sub.company_name} has no contact email on file to check the sender against.`, sub.id);
+  if (senderDomain !== subDomain) {
+    return park(`Sent from ${senderDomain || "an unknown address"}, not ${sub.company_name}'s ${subDomain}.`, sub.id);
+  }
+
+  // The lines.
+  const items = input.sovItems.get(sub.id) ?? [];
+  if (items.length === 0) return park(`${sub.company_name} has no SOV loaded.`, sub.id);
+  if (lines.length === 0) return park("No G703 lines were read from the attachment.", sub.id);
+  const known = new Set(items);
+  const unknown = lines.filter((l) => !known.has(String(l.item_number).trim())).map((l) => l.item_number);
+  if (unknown.length) return park(`Line items not on the SOV: ${unknown.slice(0, 8).join(", ")}.`, sub.id);
+  const seen = new Set<string>();
+  for (const l of lines) {
+    const k = String(l.item_number).trim();
+    if (seen.has(k)) return park(`Item ${k} appears twice on the G703.`, sub.id);
+    seen.add(k);
+  }
+  if (lines.some((l) => !Number.isFinite(Number(l.this_period)) || Number(l.this_period) < 0)) {
+    return park("A G703 line has a negative or unreadable amount.", sub.id);
+  }
+
+  // The arithmetic.
+  const stated = event.bill?.billed_this_period;
+  if (stated == null) return park("The G702 this-period figure was not read.", sub.id);
+  if (Math.abs(total - stated) > PAY_APP_TOLERANCE) {
+    return park(`G703 lines total ${money(total)} but the G702 says ${money(stated)}.`, sub.id);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(event.bill.period_end ?? "")) return park("No usable period end date.", sub.id);
+
+  // Not already on file.
+  if (event.bill.app_number != null && (input.liveAppNumbers.get(sub.id) ?? []).includes(event.bill.app_number)) {
+    return { action: "skip", reason: `${sub.company_name} application ${event.bill.app_number} is already on file.` };
+  }
+
+  const thisPeriod: Record<string, number> = {};
+  const stored: Record<string, number> = {};
+  for (const l of lines) {
+    const k = String(l.item_number).trim();
+    thisPeriod[k] = Number(l.this_period);
+    if (l.stored) stored[k] = Number(l.stored);
+  }
+  return {
+    action: "enter",
+    sub,
+    bill: { ...event.bill, this_period: thisPeriod, stored },
+    row: {
+      kind: "sub_pay_app",
+      status: "applied",
+      auto_applied: true,
+      summary: `${sub.company_name} ${appLabel.toLowerCase()} entered as Received, ${money(stated)} this period. Checks run.`,
+      target_table: null,
+      target_id: null,
+      payload: { sub_id: sub.id, app_number: event.bill.app_number ?? null, billed_this_period: stated },
+      undo_data: null,
+      match_reason: `Sender is ${sub.company_name} (${subDomain}). G703 lines match the SOV and add up to the G702.`,
+      ...src,
+    },
+  };
 }

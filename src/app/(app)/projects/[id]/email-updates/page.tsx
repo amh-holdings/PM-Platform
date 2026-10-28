@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { guardCapability, readDbRole } from "@/lib/roles-server";
 import { formatDate } from "@/lib/format";
+import { subBillingClient } from "@/lib/sub-billing-db";
 import {
   DECIDER_ROLES,
   EMAIL_UPDATE_TABS,
@@ -101,6 +102,34 @@ export default async function EmailUpdatesPage({
     for (const t of data ?? []) taskNames.set(t.id, `${t.wbs_code} ${t.task_name}`);
   }
 
+  // Bills entered from email: the sub and application number, linked.
+  const appIds = Array.from(
+    new Set(
+      rows
+        .filter((r) => r.target_table === "sub_pay_apps" && r.target_id)
+        .map((r) => r.target_id as string),
+    ),
+  );
+  const bills = new Map<string, { label: string; href: string }>();
+  if (appIds.length > 0) {
+    const db = subBillingClient();
+    const { data: apps } = await db
+      .from("sub_pay_apps")
+      .select("id, app_number, subcontractor_id")
+      .in("id", appIds);
+    const subIds = Array.from(new Set((apps ?? []).map((a) => a.subcontractor_id)));
+    const { data: subs } = subIds.length
+      ? await db.from("subcontractors").select("id, company_name").in("id", subIds)
+      : { data: [] as { id: string; company_name: string }[] };
+    const subName = new Map((subs ?? []).map((s) => [s.id, s.company_name]));
+    for (const a of apps ?? []) {
+      bills.set(a.id, {
+        label: `${subName.get(a.subcontractor_id) ?? "Sub"} application ${a.app_number}`,
+        href: `/projects/${params.id}/sub-billing/${a.subcontractor_id}/${a.id}`,
+      });
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -153,12 +182,18 @@ export default async function EmailUpdatesPage({
                   const res = canDecide(r, dbRole, decision);
                   return res.ok ? null : res.reason;
                 })();
-                const matched =
-                  r.target_id && taskNames.get(r.target_id)
-                    ? taskNames.get(r.target_id)
-                    : r.target_id
-                      ? "Record removed"
-                      : "No match";
+                const bill = r.target_id ? bills.get(r.target_id) : undefined;
+                const matched = bill ? (
+                  <Link href={bill.href} className="underline">
+                    {bill.label}
+                  </Link>
+                ) : r.target_id && taskNames.get(r.target_id) ? (
+                  taskNames.get(r.target_id)
+                ) : r.target_id ? (
+                  "Record removed"
+                ) : (
+                  "No match"
+                );
                 return (
                   <tr key={r.id} className="border-t align-top">
                     <td className="whitespace-nowrap px-3 py-2">

@@ -3,10 +3,10 @@
 import { revalidatePath } from "next/cache";
 
 import { subBillingClient } from "@/lib/sub-billing-db";
-import { nextAppNumber } from "@/lib/sub-app-numbering";
+import { acceptedHistory, buildSubBill, lineRows } from "@/lib/sub-bill-build";
 import { requireCapability } from "@/lib/sub-billing-auth";
 import { runVerificationCore } from "@/lib/sub-billing-run";
-import { approvedToDateByItem, recommendedApproval, type BillHeader, type BillLine, type SovLine } from "@/lib/sub-billing";
+import { recommendedApproval, type SovLine } from "@/lib/sub-billing";
 import { parsePastedSovLines } from "@/lib/sub-sov-import";
 import { parseRetainageRate } from "@/lib/retainage-rate";
 import type { SubBillingClient, SubPayAppStatus } from "@/lib/sub-billing.types";
@@ -98,111 +98,68 @@ export async function recordSubBill(
     .eq("subcontractor_id", subcontractorId)
     .order("app_number", { ascending: true });
   const history = historyRows ?? [];
-  const accepted = history.filter((a) => a.status !== "rejected");
-  const priorApp = accepted.length > 0 ? accepted[accepted.length - 1] : null;
+  const accepted = acceptedHistory(history);
 
   // Seed the previous column from what AHC APPROVED to date, never from what
   // the sub billed. See approvedToDateByItem() for why, and for how a line
   // carrying no recorded decision is handled.
-  let priorByItem = new Map<string, number>();
+  let priorLines: Parameters<typeof buildSubBill>[0]["priorLines"] = [];
   if (accepted.length > 0) {
     const { data } = await db
       .from("sub_pay_app_lines")
       .select("item_number, this_period, materials_stored, approved_this_period")
       .in("sub_pay_app_id", accepted.map((a) => a.id));
-    priorByItem = approvedToDateByItem(data ?? []);
+    priorLines = data ?? [];
   }
-  const priorRetainageHeld = Number(priorApp?.retainage_to_date ?? 0);
 
-  const appNumber = optNum(formData.get("app_number")) ?? nextAppNumber(history);
-  const retainagePct = optNum(formData.get("retainage_pct")) ?? Number(sub.retainage_pct ?? 0);
-  const rate = retainagePct / 100;
-
-  // Build the line set from OUR SOV, not from what the sub sent.
-  const lines: (BillLine & { sub_sov_line_id: string; sort_order: number })[] = sovLines.map(
-    (sov, i) => {
-      const sv = Number(sov.scheduled_value ?? 0);
-      const fromPrevious = priorByItem.get(sov.item_number) ?? 0;
-      const thisPeriod = num(formData.get(`this_period__${sov.item_number}`));
-      const stored = num(formData.get(`stored__${sov.item_number}`));
-      const totalCompleted = round2(fromPrevious + thisPeriod + stored);
-      return {
-        sub_sov_line_id: sov.id,
-        item_number: sov.item_number,
-        description: sov.description,
-        scheduled_value: sv,
-        from_previous: fromPrevious,
-        this_period: thisPeriod,
-        materials_stored: stored,
-        total_completed: totalCompleted,
-        pct_billed: sv > 0 ? totalCompleted / sv : 0,
-        balance_to_finish: round2(sv - totalCompleted),
-        retainage_amount: round2(totalCompleted * rate),
-        sort_order: (i + 1) * 10,
-      };
+  // The form posts the sub's G703 verbatim: one this-period figure per SOV
+  // line. buildSubBill derives everything else, the same way it does for a
+  // bill read from email.
+  const thisPeriod: Record<string, number> = {};
+  const stored: Record<string, number> = {};
+  for (const sov of sovLines) {
+    thisPeriod[sov.item_number] = num(formData.get(`this_period__${sov.item_number}`));
+    stored[sov.item_number] = num(formData.get(`stored__${sov.item_number}`));
+  }
+  const built = buildSubBill({
+    bill: {
+      period_end: periodEnd,
+      period_start: str(formData.get("period_start")),
+      app_number: optNum(formData.get("app_number")),
+      app_date: str(formData.get("app_date")),
+      retainage_pct: optNum(formData.get("retainage_pct")),
+      payment_terms_days: optNum(formData.get("payment_terms_days")),
+      due_date: str(formData.get("due_date")),
+      invoice_number: str(formData.get("invoice_number")),
+      invoice_date: str(formData.get("invoice_date")),
+      invoice_total: optNum(formData.get("invoice_total")),
+      billed_previous: optNum(formData.get("billed_previous")),
+      billed_this_period: optNum(formData.get("billed_this_period")),
+      billed_to_date: optNum(formData.get("billed_to_date")),
+      retainage_this_period: optNum(formData.get("retainage_this_period")),
+      retainage_to_date: optNum(formData.get("retainage_to_date")),
+      amount_due: optNum(formData.get("amount_due")),
+      lien_waiver_received: formData.get("lien_waiver_received") === "on",
+      lien_waiver_amount: optNum(formData.get("lien_waiver_amount")),
+      lien_waiver_through_date: str(formData.get("lien_waiver_through_date")),
+      notes: str(formData.get("notes")),
+      this_period: thisPeriod,
+      stored,
     },
-  );
-
-  const derivedThisPeriod = round2(lines.reduce((s, l) => s + Number(l.this_period), 0));
-  const derivedToDate = round2(lines.reduce((s, l) => s + Number(l.total_completed), 0));
-  const derivedPrevious = round2(lines.reduce((s, l) => s + Number(l.from_previous), 0));
-
-  // The sub's own stated totals, entered from their form. When left blank we
-  // fall back to ours, and the corresponding check simply passes.
-  const statedThisPeriod = optNum(formData.get("billed_this_period")) ?? derivedThisPeriod;
-  const statedToDate = optNum(formData.get("billed_to_date")) ?? derivedToDate;
-  const statedRetainageThis =
-    optNum(formData.get("retainage_this_period")) ??
-    round2(round2(derivedToDate * rate) - priorRetainageHeld);
-  const statedRetainageToDate =
-    optNum(formData.get("retainage_to_date")) ?? round2(derivedToDate * rate);
-  const statedAmountDue =
-    optNum(formData.get("amount_due")) ?? round2(statedThisPeriod - statedRetainageThis);
-
-  const header: BillHeader = {
-    app_number: appNumber,
-    period_start: str(formData.get("period_start")),
-    period_end: periodEnd,
-    retainage_pct: retainagePct,
-    payment_terms_days: optNum(formData.get("payment_terms_days")),
-    invoice_total: optNum(formData.get("invoice_total")),
-    billed_previous: optNum(formData.get("billed_previous")) ?? derivedPrevious,
-    billed_this_period: statedThisPeriod,
-    billed_to_date: statedToDate,
-    retainage_this_period: statedRetainageThis,
-    retainage_to_date: statedRetainageToDate,
-    amount_due: statedAmountDue,
-    lien_waiver_received: formData.get("lien_waiver_received") === "on",
-    lien_waiver_amount: optNum(formData.get("lien_waiver_amount")),
-    lien_waiver_through_date: str(formData.get("lien_waiver_through_date")),
-  };
+    subRetainagePct: sub.retainage_pct,
+    sovLines,
+    history,
+    priorLines,
+  });
+  const appNumber = built.appNumber;
 
   const { data: app, error: appErr } = await db
     .from("sub_pay_apps")
     .insert({
+      ...built.row,
       project_id: projectId,
       subcontractor_id: subcontractorId,
-      app_number: appNumber,
-      app_date: str(formData.get("app_date")),
-      period_start: header.period_start,
-      period_end: periodEnd,
-      retainage_pct: retainagePct,
-      payment_terms_days: header.payment_terms_days,
-      due_date: str(formData.get("due_date")),
-      invoice_number: str(formData.get("invoice_number")),
-      invoice_date: str(formData.get("invoice_date")),
-      invoice_total: header.invoice_total,
-      billed_previous: header.billed_previous,
-      billed_this_period: header.billed_this_period,
-      billed_to_date: header.billed_to_date,
-      retainage_this_period: header.retainage_this_period,
-      retainage_to_date: header.retainage_to_date,
-      amount_due: header.amount_due,
       status: "received" as SubPayAppStatus,
-      lien_waiver_received: header.lien_waiver_received ?? false,
-      lien_waiver_amount: header.lien_waiver_amount,
-      lien_waiver_through_date: header.lien_waiver_through_date,
-      notes: str(formData.get("notes")),
       entered_by: auth.userId,
     })
     .select("id")
@@ -215,23 +172,7 @@ export async function recordSubBill(
     return { ok: false, error: appErr?.message ?? "Could not save the bill" };
   }
 
-  const { error: lineErr } = await db.from("sub_pay_app_lines").insert(
-    lines.map((l) => ({
-      sub_pay_app_id: app.id,
-      sub_sov_line_id: l.sub_sov_line_id,
-      item_number: l.item_number,
-      description: l.description,
-      scheduled_value: l.scheduled_value,
-      from_previous: l.from_previous,
-      this_period: l.this_period,
-      materials_stored: l.materials_stored,
-      total_completed: l.total_completed,
-      pct_billed: l.pct_billed,
-      balance_to_finish: l.balance_to_finish,
-      retainage_amount: l.retainage_amount,
-      sort_order: l.sort_order,
-    })),
-  );
+  const { error: lineErr } = await db.from("sub_pay_app_lines").insert(lineRows(app.id, built.lines));
   if (lineErr) return { ok: false, error: lineErr.message };
 
   await runVerification(projectId, app.id);
