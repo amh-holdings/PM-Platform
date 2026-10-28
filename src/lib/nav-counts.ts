@@ -13,7 +13,7 @@ import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
 import { subBillingClient } from "@/lib/sub-billing-db";
-import { can, type EffectiveRole } from "@/lib/roles";
+import { can, canWith, type Capability, type EffectiveRole } from "@/lib/roles";
 import type { NavCounts } from "@/lib/nav";
 
 async function countOf(promise: PromiseLike<{ count: number | null }>): Promise<number> {
@@ -30,6 +30,7 @@ async function countOf(promise: PromiseLike<{ count: number | null }>): Promise<
 export async function getNavCounts(
   projectId: string,
   role: EffectiveRole,
+  grants: readonly Capability[] = [],
 ): Promise<NavCounts> {
   const supabase = createClient();
   const jobs: Promise<[string, number]>[] = [];
@@ -86,6 +87,21 @@ export async function getNavCounts(
           .eq("project_id", projectId)
           .eq("status", "submitted"),
       ).then((n) => ["change-orders", n]),
+    );
+  }
+
+  // Email updates waiting on a decision. A per-person grant, so the site team
+  // never issues this query. Before 0080 runs it errors and countOf reports
+  // zero.
+  if (canWith(role, grants, "reviewEmailUpdates")) {
+    jobs.push(
+      countOf(
+        supabase
+          .from("email_updates")
+          .select("id", { count: "exact", head: true })
+          .eq("project_id", projectId)
+          .eq("status", "proposed"),
+      ).then((n) => ["email-updates", n]),
     );
   }
 

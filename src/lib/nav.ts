@@ -24,6 +24,7 @@ import {
   FileSpreadsheet,
   FolderOpen,
   HandCoins,
+  Inbox,
   LayoutDashboard,
   NotebookPen,
   ReceiptText,
@@ -32,7 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { can, type Capability, type EffectiveRole } from "./roles";
+import { canWith, type Capability, type EffectiveRole } from "./roles";
 
 export type NavGroupKey = "overview" | "field" | "money" | "plan" | "records";
 
@@ -227,6 +228,17 @@ export const PROJECT_NAV: NavItem[] = [
     blurb: "Drawings, specs and project files",
     find: ["files", "drawings", "specs", "uploads"],
   },
+  {
+    key: "email-updates",
+    label: "Email updates",
+    group: "records",
+    path: "email-updates",
+    cap: "reviewEmailUpdates",
+    icon: Inbox,
+    blurb: "Changes the email automation made or wants to make, with approve and undo",
+    find: ["email", "inbox", "proposals", "automation", "approve", "undo"],
+    hasCount: true,
+  },
 ];
 
 export function hrefFor(item: NavItem, projectId: string): string {
@@ -235,8 +247,8 @@ export function hrefFor(item: NavItem, projectId: string): string {
 }
 
 /** Every destination this role may see, in registry order. */
-export function visibleNav(role: EffectiveRole): NavItem[] {
-  return PROJECT_NAV.filter((item) => can(role, item.cap));
+export function visibleNav(role: EffectiveRole, grants: readonly Capability[] = []): NavItem[] {
+  return PROJECT_NAV.filter((item) => canWith(role, grants, item.cap));
 }
 
 /**
@@ -245,8 +257,9 @@ export function visibleNav(role: EffectiveRole): NavItem[] {
  */
 export function visibleGroups(
   role: EffectiveRole,
+  grants: readonly Capability[] = [],
 ): { key: NavGroupKey; label: string; items: NavItem[] }[] {
-  const items = visibleNav(role);
+  const items = visibleNav(role, grants);
   return NAV_GROUPS.map((group) => ({
     ...group,
     items: items.filter((item) => item.group === group.key),
@@ -273,8 +286,8 @@ export function activeItem(pathname: string, projectId: string): NavItem | null 
  * entry from each of the first three non-empty groups, so Phil gets
  * Dashboard / Field Reports / Billing while a sub gets just Field Reports.
  */
-export function mobilePrimary(role: EffectiveRole): NavItem[] {
-  return visibleGroups(role)
+export function mobilePrimary(role: EffectiveRole, grants: readonly Capability[] = []): NavItem[] {
+  return visibleGroups(role, grants)
     .map((group) => group.items[0])
     .slice(0, 3);
 }
@@ -336,7 +349,7 @@ export const PROJECT_ACTIONS: NavAction[] = [
 ];
 
 export function visibleActions(role: EffectiveRole): NavAction[] {
-  return PROJECT_ACTIONS.filter((action) => can(role, action.cap));
+  return PROJECT_ACTIONS.filter((action) => canWith(role, [], action.cap));
 }
 
 export function actionHref(action: NavAction, projectId: string): string {

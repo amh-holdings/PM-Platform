@@ -35,7 +35,7 @@ export default async function ProjectLayout({
   params: Params;
 }) {
   const supabase = createClient();
-  const { effective, actual } = await getEffectiveRole();
+  const { effective, actual, grants } = await getEffectiveRole();
 
   const [{ data: project }, { data: projects }, counts] = await Promise.all([
     supabase
@@ -47,7 +47,7 @@ export default async function ProjectLayout({
       .from("projects")
       .select("id, name, client, status")
       .order("created_at", { ascending: false }),
-    getNavCounts(params.id, effective),
+    getNavCounts(params.id, effective, grants),
   ]);
 
   if (!project) notFound();
@@ -59,6 +59,7 @@ export default async function ProjectLayout({
       <ProjectRail
         projectId={params.id}
         role={effective}
+        grants={grants}
         counts={counts}
         projects={projects ?? []}
         defaultCollapsed={collapsed}
@@ -80,7 +81,7 @@ export default async function ProjectLayout({
         {children}
       </ProjectMain>
 
-      <MobileNav projectId={params.id} role={effective} counts={counts} />
+      <MobileNav projectId={params.id} role={effective} grants={grants} counts={counts} />
     </div>
   );
 }

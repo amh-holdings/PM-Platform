@@ -11,7 +11,8 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import {
   VIEW_AS_COOKIE,
-  can,
+  canWith,
+  grantsFor,
   toEffectiveRole,
   type Capability,
   type EffectiveRole,
@@ -34,17 +35,23 @@ export async function readDbRole(): Promise<string> {
 
 // The role the UI should render for. For a true `full` user we honor the
 // view-as cookie (preview mode); everyone else always gets their real role.
+//
+// `grants` are the per-person extras (see PERSON_GRANTS). Previewing another
+// role drops them, so "view as CM" shows exactly what the site team sees.
 export async function getEffectiveRole(): Promise<{
   effective: EffectiveRole;
   actual: EffectiveRole;
+  grants: Capability[];
 }> {
-  const actual = toEffectiveRole(await readDbRole());
-  if (actual !== "full") return { effective: actual, actual };
+  const dbRole = await readDbRole();
+  const actual = toEffectiveRole(dbRole);
+  const grants = grantsFor(dbRole);
+  if (actual !== "full") return { effective: actual, actual, grants };
   const viewAs = cookies().get(VIEW_AS_COOKIE)?.value;
   if (viewAs === "cm" || viewAs === "sub") {
-    return { effective: viewAs, actual };
+    return { effective: viewAs, actual, grants: [] };
   }
-  return { effective: "full", actual };
+  return { effective: "full", actual, grants };
 }
 
 // Server-side page guard. Use at the top of a page/server component to block
@@ -52,6 +59,6 @@ export async function getEffectiveRole(): Promise<{
 // hiding alone is cosmetic - this is the real enforcement. Renders a 404 so we
 // don't reveal that the resource exists.
 export async function guardCapability(cap: Capability): Promise<void> {
-  const { effective } = await getEffectiveRole();
-  if (!can(effective, cap)) notFound();
+  const { effective, grants } = await getEffectiveRole();
+  if (!canWith(effective, grants, cap)) notFound();
 }

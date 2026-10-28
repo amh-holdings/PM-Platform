@@ -6,7 +6,7 @@ import { useState } from "react";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import type { EffectiveRole } from "@/lib/roles";
+import type { Capability, EffectiveRole } from "@/lib/roles";
 import { activeItem, hrefFor, visibleGroups, type NavCounts } from "@/lib/nav";
 
 import { ProjectSwitcher, type ProjectOption } from "./project-switcher";
@@ -16,6 +16,7 @@ export const RAIL_COOKIE = "ahc_rail";
 type Props = {
   projectId: string;
   role: EffectiveRole;
+  grants?: Capability[];
   counts: NavCounts;
   projects: ProjectOption[];
   defaultCollapsed: boolean;
@@ -24,6 +25,7 @@ type Props = {
 export function ProjectRail({
   projectId,
   role,
+  grants = [],
   counts,
   projects,
   defaultCollapsed,
@@ -32,7 +34,7 @@ export function ProjectRail({
   // the user's last choice instead of flashing open then snapping shut.
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname() ?? "";
-  const groups = visibleGroups(role);
+  const groups = visibleGroups(role, grants);
   const active = activeItem(pathname, projectId);
 
   function toggle() {
