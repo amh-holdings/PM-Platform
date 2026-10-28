@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm ci)",
+      "Bash(npm run email:ingest:*)",
+      "Bash(npm run sync:audit:*)"
+    ]
+  }
+}
