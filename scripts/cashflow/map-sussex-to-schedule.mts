@@ -239,6 +239,21 @@ for (const c of codes ?? []) {
     : rule.fixed
       ? new Map(rule.fixed)
       : spread(est - actual, dayWeights(rule));
+  // A month that already carries an actual (ibt-sync) can't take plan too:
+  // the upsert would zero the actual, and the engine reads actual over plan
+  // anyway. That month's plan moves to the next month without one.
+  const actualMonths = new Set((existing ?? []).filter((f) => f.cost_code_id === c.id && Number(f.actual_amount ?? 0) !== 0).map((f) => f.period_month));
+  if (!rule.fixed) {
+    for (const m of [...rows.keys()].sort()) {
+      if (!actualMonths.has(m)) continue;
+      let next = m;
+      do { const d = new Date(next + "T00:00:00Z"); d.setUTCMonth(d.getUTCMonth() + 1); next = d.toISOString().slice(0, 10); } while (actualMonths.has(next));
+      rows.set(next, r2((rows.get(next) ?? 0) + rows.get(m)!));
+      rows.delete(m);
+    }
+  } else if ([...rows.keys()].some((m) => actualMonths.has(m))) {
+    throw new Error(`${c.code} has a fixed schedule and an actual in the same month - settle it by hand`);
+  }
   plan.push({ code: c, rule, rows });
 }
 

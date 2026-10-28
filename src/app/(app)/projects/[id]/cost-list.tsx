@@ -24,6 +24,8 @@ type CostCodeRow = {
   actual_cost: number | null;
   is_change_order: boolean | null;
   linked_task_wbs_codes: string[] | null;
+  /** Subcontract or signed PO the code points at; 0 when nothing is signed. */
+  signed?: number;
 };
 
 type Props = {
@@ -99,6 +101,8 @@ export function CostCodeList({ projectId, codes, transactions = null }: Props) {
               <th className="px-3 py-3 text-right font-medium">Estimated</th>
               <th className="px-3 py-3 text-right font-medium">Actual</th>
               <th className="px-3 py-3 text-right font-medium">Variance</th>
+              <th className="px-3 py-3 text-right font-medium">Signed</th>
+              <th className="px-3 py-3 text-right font-medium" title="Larger of signed and actual, less the estimate">Projected over</th>
               <th className="px-3 py-3 font-medium">Linked tasks</th>
               <th className="px-3 py-3 text-right font-medium">Actions</th>
             </tr>
@@ -126,6 +130,8 @@ export function CostCodeList({ projectId, codes, transactions = null }: Props) {
                 <td className={cn("px-3 py-2 text-right tabular-nums", baseTotals.actual > baseTotals.estimated && "text-destructive")}>
                   {formatCurrency(baseTotals.actual - baseTotals.estimated)}
                 </td>
+                <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(baseTotals.signed)}</td>
+                <OverCell value={baseTotals.over} className="py-2" />
                 <td />
                 <td />
               </tr>
@@ -133,7 +139,7 @@ export function CostCodeList({ projectId, codes, transactions = null }: Props) {
             {changeOrderCodes.length > 0 && (
               <>
                 <tr>
-                  <td colSpan={7} className="bg-muted/10 px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  <td colSpan={9} className="bg-muted/10 px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Change orders
                   </td>
                 </tr>
@@ -158,6 +164,8 @@ export function CostCodeList({ projectId, codes, transactions = null }: Props) {
                   <td className={cn("px-3 py-2 text-right tabular-nums", coTotals.actual > coTotals.estimated && "text-destructive")}>
                     {formatCurrency(coTotals.actual - coTotals.estimated)}
                   </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(coTotals.signed)}</td>
+                  <OverCell value={coTotals.over} className="py-2" />
                   <td />
                   <td />
                 </tr>
@@ -174,6 +182,8 @@ export function CostCodeList({ projectId, codes, transactions = null }: Props) {
               <td className={cn("px-3 py-2 text-right tabular-nums", grandTotals.actual > grandTotals.estimated && "text-destructive")}>
                 {formatCurrency(grandTotals.actual - grandTotals.estimated)}
               </td>
+              <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(grandTotals.signed)}</td>
+              <OverCell value={grandTotals.over} className="py-2" />
               <td />
               <td />
             </tr>
@@ -189,9 +199,27 @@ function totals(rows: CostCodeRow[]) {
     (acc, r) => {
       acc.estimated += Number(r.estimated_cost ?? 0);
       acc.actual += Number(r.actual_cost ?? 0);
+      acc.signed += Number(r.signed ?? 0);
+      acc.over += projectedOver(r);
       return acc;
     },
-    { estimated: 0, actual: 0 },
+    { estimated: 0, actual: 0, signed: 0, over: 0 },
+  );
+}
+
+// Spent alone is never over until the job ends, so a code is judged on where
+// it is headed: the larger of what is signed and what is already incurred.
+// Codes coming in under are not netted against the ones going over.
+function projectedOver(r: CostCodeRow) {
+  const est = Number(r.estimated_cost ?? 0);
+  return Math.max(0, Math.max(Number(r.signed ?? 0), Number(r.actual_cost ?? 0)) - est);
+}
+
+function OverCell({ value, className }: { value: number; className?: string }) {
+  return (
+    <td className={cn("px-3 text-right tabular-nums", className, value > 0.005 ? "font-medium text-destructive" : "text-muted-foreground")}>
+      {value > 0.005 ? formatCurrency(value) : "-"}
+    </td>
   );
 }
 
@@ -257,6 +285,10 @@ function CostRow({
       >
         {row.estimated_cost == null ? "-" : formatCurrency(variance)}
       </td>
+      <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
+        {row.signed ? formatCurrency(row.signed) : "-"}
+      </td>
+      <OverCell value={projectedOver(row)} className="py-2.5" />
       <td className="px-3 py-2.5">
         <CostLinkForm
           costCodeId={row.id}
@@ -290,7 +322,7 @@ function CostRow({
     </tr>
     {expanded && canExpand && (
       <tr className="bg-muted/10">
-        <td colSpan={7} className="px-3 py-3 pl-8">
+        <td colSpan={9} className="px-3 py-3 pl-8">
           <CodeMonths transactions={transactions!} incurredTotal={Number(row.actual_cost ?? 0)} />
         </td>
       </tr>

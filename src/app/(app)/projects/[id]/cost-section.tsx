@@ -14,12 +14,26 @@ export async function CostCodesSection({ projectId }: Props) {
   const { data: codes, error } = await supabase
     .from("cost_codes")
     .select(
-      "id, code, name, description, estimated_cost, actual_cost, is_change_order, sort_order, linked_task_wbs_codes",
+      "id, code, name, description, estimated_cost, actual_cost, is_change_order, sort_order, linked_task_wbs_codes, subcontractor_id, procurement_order_id",
     )
     .eq("project_id", projectId)
     .order("is_change_order", { ascending: true })
     .order("sort_order", { ascending: true, nullsFirst: false })
     .order("code", { ascending: true });
+
+  // Signed = the subcontract or PO the code points at. Only a PO with a
+  // signed date counts: unsigned placeholder POs stand in for buys the
+  // forecast expects, not money we are bound to.
+  const [{ data: subs }, { data: pos }] = await Promise.all([
+    supabase.from("subcontractors").select("id, contract_value, active").eq("project_id", projectId),
+    supabase.from("procurement_orders").select("id, total_value, signed_at, status").eq("project_id", projectId),
+  ]);
+  const signedOf = (c: { subcontractor_id: string | null; procurement_order_id: string | null }) => {
+    const sub = (subs ?? []).find((s) => s.id === c.subcontractor_id && s.active !== false);
+    const po = (pos ?? []).find((p) => p.id === c.procurement_order_id && p.signed_at && p.status !== "cancelled");
+    return Number(sub?.contract_value ?? 0) + Number(po?.total_value ?? 0);
+  };
+  const rows = (codes ?? []).map((c) => ({ ...c, signed: signedOf(c) }));
 
   // Month by month, from the monthly QuickBooks sync. Paid totals live in
   // cost_forecasts; the lines behind them, both bases, in cost_transactions
@@ -65,9 +79,11 @@ export async function CostCodesSection({ projectId }: Props) {
         <div>
           <h2 className="text-lg font-semibold">Cost codes</h2>
           <p className="text-xs text-muted-foreground">
-            AHC&apos;s internal cost categories for this project. Actual is
-            incurred to date from QuickBooks; open a code to see it month by
-            month, down to the bills. Change orders tracked separately.
+            Internal cost categories for this project. Actual is incurred to
+            date from the books (QuickBooks, or IBT for a JV job); open a code
+            to see it month by month. Projected over is where a code is headed
+            past its estimate - the larger of what is signed and what is
+            already incurred. Change orders tracked separately.
           </p>
         </div>
         <CostCodeFormDialog
@@ -83,7 +99,7 @@ export async function CostCodesSection({ projectId }: Props) {
       ) : (
         <CostCodesView
           projectId={projectId}
-          codes={codes ?? []}
+          codes={rows}
           paid={paid}
           transactions={transactions}
         />
