@@ -8,13 +8,25 @@
 //
 // Run with: npx tsx scripts/commodity/<script>.ts
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 /** Sweet Springs Solar. Every commodity script defaults here. */
 export const SWEET_SPRINGS_PROJECT_ID = "53cff193-21e4-45ff-833d-43813e8578a0";
 
+/**
+ * Settings from .env.local, with the process environment filling anything the
+ * file does not set. On the Mac Mini the file holds the keys; in a cloud
+ * session there is no file and the keys come from the environment's variables.
+ */
 export function loadEnvLocal(): Record<string, string> {
+  const fromProcess: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (typeof v === "string") fromProcess[k] = v;
+  if (!existsSync(".env.local")) return fromProcess;
+  return { ...fromProcess, ...readEnvFile() };
+}
+
+function readEnvFile(): Record<string, string> {
   const raw = readFileSync(".env.local", "utf8");
   const env: Record<string, string> = {};
   for (const line of raw.split("\n")) {
@@ -32,7 +44,7 @@ export function serviceClient(): SupabaseClient {
   const url = env.NEXT_PUBLIC_SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) {
-    console.error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env.local");
+    console.error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env.local or the environment");
     process.exit(1);
   }
   return createClient(url, key, {
