@@ -4,14 +4,20 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
 import { subBillingClient } from "@/lib/sub-billing-db";
-import type { TablesUpdate } from "@/lib/database.types";
+import type { Json, TablesUpdate } from "@/lib/database.types";
 import { todayIso } from "@/lib/schedule-calendar";
 import {
   canDecide,
   planApply,
   planUndo,
+  planAfpPaidApply,
+  planAfpStatusApply,
+  planComplianceApply,
   planUndoPayApp,
   readUndoData,
+  type AfpRecord,
+  type RecordPlan,
+  type SubCompliance,
   type Decision,
   type TaskSnapshot,
   type UndoData,
@@ -105,6 +111,9 @@ export async function approveEmailUpdate(
   const auth = await loadForDecision(projectId, updateId, "approve");
   if (!auth.ok) return auth;
   const { supabase, row, userId } = auth;
+  if (row.target_table === "subcontractors" || row.target_table === "pay_applications") {
+    return approveRecord(projectId, row, userId);
+  }
 
   const { task, hasChildren } = await readTask(supabase, row.target_id);
   const plan = planApply({ row, task, hasChildren, today: todayIso() });
@@ -180,6 +189,9 @@ export async function undoEmailUpdate(
   const recorded = readUndoData(row.undo_data);
   if (!recorded) return { ok: false, error: "Nothing was recorded to undo." };
   if (recorded.table === "sub_pay_apps") return undoPayApp(projectId, row.id, recorded.id, userId);
+  if (recorded.table === "subcontractors" || recorded.table === "pay_applications") {
+    return undoRecord(projectId, row.id, row.target_id, recorded, userId);
+  }
   const { task } = await readTask(supabase, row.target_id);
   const plan = planUndo({ applied: recorded.applied, undo: recorded.restore, task });
   if (!plan.ok) return { ok: false, error: plan.reason };
@@ -258,4 +270,132 @@ async function undoPayApp(
   revalidatePath(`/projects/${projectId}/sub-billing`);
   done(projectId, false);
   return { ok: true, note: `Removed application ${app!.app_number}.` };
+}
+
+// ---------------------------------------------------------------------------
+// A sub's COI or W-9, or an AFP.
+// ---------------------------------------------------------------------------
+
+type EmailUpdateRow = { id: string; kind: string; project_id: string; target_id: string | null; payload: unknown };
+
+const SUB_COLUMNS = "id, project_id, company_name, coi_status, w9_status";
+const AFP_COLUMNS = "id, project_id, app_number, status, paid_at, notes, amount_due";
+
+async function readRecord(
+  supabase: Supabase,
+  table: "subcontractors" | "pay_applications",
+  id: string | null,
+): Promise<Record<string, unknown> | null> {
+  if (!id) return null;
+  const { data } =
+    table === "subcontractors"
+      ? await supabase.from("subcontractors").select(SUB_COLUMNS).eq("id", id).maybeSingle()
+      : await supabase.from("pay_applications").select(AFP_COLUMNS).eq("id", id).maybeSingle();
+  return (data as Record<string, unknown> | null) ?? null;
+}
+
+function planRecord(row: EmailUpdateRow, record: Record<string, unknown> | null): RecordPlan {
+  if (row.kind === "compliance_doc") return planComplianceApply(row, record as SubCompliance | null);
+  if (row.kind === "afp_status") return planAfpStatusApply(row, record as AfpRecord | null, todayIso());
+  if (row.kind === "afp_paid") return planAfpPaidApply(row, record as AfpRecord | null, todayIso());
+  return { ok: false, reason: "Nothing to apply for this kind." };
+}
+
+async function writeRecord(
+  supabase: Supabase,
+  table: "subcontractors" | "pay_applications",
+  id: string,
+  patch: Record<string, unknown>,
+  entryStatus?: string | null,
+) {
+  const { error } =
+    table === "subcontractors"
+      ? await supabase.from("subcontractors").update(patch as TablesUpdate<"subcontractors">).eq("id", id)
+      : await supabase.from("pay_applications").update(patch as TablesUpdate<"pay_applications">).eq("id", id);
+  if (error) return error;
+  // Billing entries mirror their AFP's status, as setPayApplicationStatus does.
+  if (table === "pay_applications" && entryStatus) {
+    await supabase.from("billing_entries").update({ status: entryStatus }).eq("pay_application_id", id);
+  }
+  return null;
+}
+
+function recordPaths(projectId: string, table: "subcontractors" | "pay_applications", id: string) {
+  if (table === "subcontractors") {
+    revalidatePath(`/projects/${projectId}/subs`);
+    revalidatePath(`/projects/${projectId}/sub-billing`);
+  } else {
+    revalidatePath(`/projects/${projectId}/pay-apps`);
+    revalidatePath(`/projects/${projectId}/pay-apps/${id}`);
+    revalidatePath(`/projects/${projectId}/billing`);
+  }
+}
+
+async function approveRecord(projectId: string, row: EmailUpdateRow & { target_table: string | null }, userId: string): Promise<EmailUpdateResult> {
+  const supabase = createClient();
+  const table = row.target_table as "subcontractors" | "pay_applications";
+  const plan = planRecord(row, await readRecord(supabase, table, row.target_id));
+  if (!plan.ok) return { ok: false, error: plan.reason };
+
+  const undo: UndoData = { table: plan.table, applied: plan.patch, restore: plan.undo };
+  if (
+    !(await claim(supabase, row.id, "proposed", {
+      status: "applied",
+      undo_data: undo as unknown as Json,
+      decided_by: userId,
+      decided_at: new Date().toISOString(),
+    }))
+  ) {
+    return { ok: false, error: "Someone else already decided this one." };
+  }
+  const error = await writeRecord(supabase, plan.table, plan.id, plan.patch, plan.cascadeEntryStatus);
+  if (error) {
+    await supabase
+      .from("email_updates")
+      .update({ status: "proposed", undo_data: null, decided_by: null, decided_at: null })
+      .eq("id", row.id);
+    return { ok: false, error: error.message };
+  }
+  recordPaths(projectId, plan.table, plan.id);
+  done(projectId, false);
+  return { ok: true, note: "Applied." };
+}
+
+async function undoRecord(
+  projectId: string,
+  updateId: string,
+  targetId: string | null,
+  recorded: Extract<UndoData, { table: "subcontractors" | "pay_applications" }>,
+  userId: string,
+): Promise<EmailUpdateResult> {
+  const supabase = createClient();
+  const record = await readRecord(supabase, recorded.table, targetId);
+  const plan = planUndo({
+    applied: recorded.applied,
+    undo: recorded.restore,
+    task: record,
+    noun: recorded.table === "subcontractors" ? "subcontractor" : "AFP",
+  });
+  if (!plan.ok) return { ok: false, error: plan.reason };
+  if (
+    !(await claim(supabase, updateId, "applied", {
+      status: "undone",
+      undone_by: userId,
+      undone_at: new Date().toISOString(),
+    }))
+  ) {
+    return { ok: false, error: "Someone else already undid this one." };
+  }
+  const restoredStatus = "status" in plan.patch ? (plan.patch.status as string | null) : null;
+  const error = await writeRecord(supabase, recorded.table, targetId!, plan.patch, restoredStatus);
+  if (error) {
+    await supabase
+      .from("email_updates")
+      .update({ status: "applied", undone_by: null, undone_at: null })
+      .eq("id", updateId);
+    return { ok: false, error: error.message };
+  }
+  recordPaths(projectId, recorded.table, targetId!);
+  done(projectId, false);
+  return { ok: true, note: "Put back the way it was." };
 }

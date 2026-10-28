@@ -15,7 +15,12 @@
 import {
   KIND_LABEL,
   planApply,
+  planAfpPaidApply,
+  planAfpStatusApply,
+  planComplianceApply,
+  type AfpRecord,
   type EmailUpdateKind,
+  type SubCompliance,
   type TaskPatch,
   type TaskSnapshot,
   type UndoData,
@@ -23,7 +28,70 @@ import {
 import type { SubBillInput } from "./sub-bill-build";
 
 /** What the sweep hands over for one thing an email reported. */
-export type SweepEvent = ScheduleEvent | PayAppEvent;
+export type SweepEvent =
+  | ScheduleEvent
+  | PayAppEvent
+  | ComplianceEvent
+  | AfpStatusEvent
+  | AfpPaidEvent
+  | InspectionEvent
+  | ChangeOrderEvent;
+
+/** A COI or W-9 sent in for a sub. */
+export type ComplianceEvent = {
+  project: string;
+  kind: "compliance_doc";
+  subcontractor: string;
+  doc: "coi" | "w9";
+  expires_on?: string | null;
+  evidence?: string | null;
+  source: SweepSource;
+};
+
+/** The owner reporting where an AFP stands: received, under review, sent for payment. */
+export type AfpStatusEvent = {
+  project: string;
+  kind: "afp_status";
+  /** As the email writes it: "AFP 13", "Pay App #13", "13". */
+  afp_number: string;
+  note: string;
+  source: SweepSource;
+};
+
+/** The owner reporting an AFP paid. */
+export type AfpPaidEvent = {
+  project: string;
+  kind: "afp_paid";
+  afp_number: string;
+  paid_on: string;
+  amount?: number | null;
+  evidence?: string | null;
+  source: SweepSource;
+};
+
+/** A third-party or owner inspection result. */
+export type InspectionEvent = {
+  project: string;
+  kind: "inspection_result";
+  task_hint: string;
+  wbs_code?: string | null;
+  result: "passed" | "failed";
+  date: string;
+  inspector?: string | null;
+  evidence?: string | null;
+  source: SweepSource;
+};
+
+/** Something that reads like a change: new scope, a directive, a revised proposal. */
+export type ChangeOrderEvent = {
+  project: string;
+  kind: "change_order";
+  title: string;
+  description?: string | null;
+  reference?: string | null;
+  evidence?: string | null;
+  source: SweepSource;
+};
 
 export type SweepSource = {
   message_id: string;
@@ -179,7 +247,7 @@ export type PlannedRow = {
   status: "proposed" | "applied";
   auto_applied: boolean;
   summary: string;
-  target_table: "schedule_tasks" | null;
+  target_table: "schedule_tasks" | "sub_pay_apps" | "subcontractors" | "pay_applications" | null;
   target_id: string | null;
   payload: Record<string, unknown>;
   undo_data: UndoData | null;
@@ -364,6 +432,16 @@ function money(v: number): string {
 
 const COMPANY_NOISE = new Set(["llc", "inc", "co", "corp", "company", "ltd"]);
 
+/** Subs whose name holds every word of the name in the email. */
+export function matchSubs<T extends { company_name: string }>(name: string, subs: readonly T[]): T[] {
+  const want = tokens(name).filter((t) => !COMPANY_NOISE.has(t));
+  if (!want.length) return [];
+  return subs.filter((s) => {
+    const have = new Set(tokens(s.company_name));
+    return want.every((w) => have.has(w));
+  });
+}
+
 /**
  * What a pay application from email becomes.
  *
@@ -415,13 +493,7 @@ export function planPayAppIngest(input: {
   });
 
   // The sub.
-  const want = tokens(event.subcontractor ?? "").filter((t) => !COMPANY_NOISE.has(t));
-  const hits = want.length
-    ? input.subs.filter((s) => {
-        const have = new Set(tokens(s.company_name));
-        return want.every((w) => have.has(w));
-      })
-    : [];
+  const hits = matchSubs(event.subcontractor ?? "", input.subs);
   if (hits.length !== 1) {
     return park(
       hits.length
@@ -492,5 +564,283 @@ export function planPayAppIngest(input: {
       match_reason: `Sender is ${sub.company_name} (${subDomain}). G703 lines match the SOV and add up to the G702.`,
       ...src,
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// COI and W-9, AFP status and payment, inspections, change orders
+// ---------------------------------------------------------------------------
+
+/** What one of the step 4 events becomes. `apply` is set only when it is applied now. */
+export type RecordIngestPlan =
+  | { action: "skip"; reason: string }
+  | {
+      action: "insert";
+      row: PlannedRow;
+      apply: { table: "subcontractors" | "pay_applications"; id: string; patch: Record<string, unknown> } | null;
+    };
+
+type Src = Pick<PlannedRow, "source_message_id" | "source_url" | "source_from" | "source_subject" | "source_received_at">;
+
+function srcOf(source: SweepSource): Src {
+  return {
+    source_message_id: source.message_id,
+    source_url: source.url ?? null,
+    source_from: source.from,
+    source_subject: source.subject ?? null,
+    source_received_at: source.received_at ?? null,
+  };
+}
+
+function unmatchedRow(kind: EmailUpdateKind, summary: string, payload: Record<string, unknown>, src: Src, why: string | null = null): PlannedRow {
+  return {
+    kind: "unmatched",
+    status: "proposed",
+    auto_applied: false,
+    summary: `${KIND_LABEL[kind]}: ${summary}`,
+    target_table: null,
+    target_id: null,
+    payload: { ...payload, event_kind: kind },
+    undo_data: null,
+    match_reason: why,
+    ...src,
+  };
+}
+
+export type ComplianceSub = SubCompliance & { contact_email: string | null };
+
+/**
+ * A COI or W-9. Marked received now when the company matches one sub and the
+ * email came from the project's sender list or the sub's own domain. A COI
+ * usually comes from the sub's insurance broker, so one from any other
+ * address is not dropped: it waits for a person with the reason.
+ */
+export function planComplianceIngest(input: {
+  event: ComplianceEvent;
+  subs: readonly ComplianceSub[];
+  projectId: string;
+  /** The sender is on the project's list. */
+  senderOnList: boolean;
+}): RecordIngestPlan {
+  const { event } = input;
+  if (!event.source.message_id) return { action: "skip", reason: "No message id on the event." };
+  const src = srcOf(event.source);
+  const docName = event.doc === "coi" ? "COI" : "W-9";
+  const payload: Record<string, unknown> = { doc: event.doc, expires_on: event.expires_on ?? null };
+  const hits = matchSubs(event.subcontractor, input.subs);
+  if (hits.length !== 1) {
+    const why = hits.length ? `Matches ${hits.length} subs.` : "No sub on this project by that name.";
+    return { action: "insert", apply: null, row: unmatchedRow("compliance_doc", `${docName} for "${event.subcontractor}". ${why}`, { ...payload, subcontractor: event.subcontractor }, src, why) };
+  }
+  const sub = hits[0];
+  const senderDomain = (emailAddress(event.source.from) ?? "").split("@")[1] ?? "";
+  const subDomain = (emailAddress(sub.contact_email ?? "") ?? "").split("@")[1] ?? "";
+  const trusted = input.senderOnList || (subDomain !== "" && senderDomain === subDomain);
+  const plan = planComplianceApply({ project_id: input.projectId, payload }, sub);
+  if (!plan.ok) return { action: "skip", reason: plan.reason };
+  const expires = event.expires_on ? `, expires ${fmt(event.expires_on)}` : "";
+  if (!trusted) {
+    return {
+      action: "insert",
+      apply: null,
+      row: {
+        kind: "compliance_doc",
+        status: "proposed",
+        auto_applied: false,
+        summary: `${sub.company_name} ${docName} received${expires}. Sent from ${senderDomain || "an unknown address"}, check it before approving.`,
+        target_table: "subcontractors",
+        target_id: sub.id,
+        payload,
+        undo_data: null,
+        match_reason: event.evidence ?? null,
+        ...src,
+      },
+    };
+  }
+  return {
+    action: "insert",
+    apply: { table: plan.table, id: plan.id, patch: plan.patch },
+    row: {
+      kind: "compliance_doc",
+      status: "applied",
+      auto_applied: true,
+      summary: `${sub.company_name} ${docName} marked received${expires}`,
+      target_table: "subcontractors",
+      target_id: sub.id,
+      payload,
+      undo_data: { table: "subcontractors", applied: plan.patch, restore: plan.undo },
+      match_reason: event.evidence ?? `Sent from ${senderDomain}`,
+      ...src,
+    },
+  };
+}
+
+/** "AFP 13", "Pay App #13", "13" all mean AFP 13. */
+export function afpDigits(v: string | number | null | undefined): string | null {
+  const m = String(v ?? "").match(/(\d+)/);
+  return m ? String(Number(m[1])) : null;
+}
+
+export function matchAfp(afpNumber: string, afps: readonly AfpRecord[]): AfpRecord[] {
+  const want = afpDigits(afpNumber);
+  return want ? afps.filter((a) => afpDigits(a.app_number) === want) : [];
+}
+
+/**
+ * An AFP status note is added to the AFP now. A payment is proposed: marking
+ * an AFP paid moves billing, so a person confirms it, with the amount the
+ * email reports set beside the amount the AFP asked for.
+ */
+export function planAfpIngest(input: {
+  event: AfpStatusEvent | AfpPaidEvent;
+  afps: readonly AfpRecord[];
+  projectId: string;
+  today: string;
+}): RecordIngestPlan {
+  const { event } = input;
+  if (!event.source.message_id) return { action: "skip", reason: "No message id on the event." };
+  const src = srcOf(event.source);
+  const hits = matchAfp(event.afp_number, input.afps);
+  const base = { project_id: input.projectId };
+  if (hits.length !== 1) {
+    const why = hits.length ? `Matches ${hits.length} AFPs.` : `No AFP numbered "${event.afp_number}".`;
+    const what = event.kind === "afp_status" ? `"${event.note}"` : `paid on ${event.paid_on}`;
+    return { action: "insert", apply: null, row: unmatchedRow(event.kind, `${event.afp_number}: ${what}. ${why}`, { ...event, source: undefined }, src, why) };
+  }
+  const afp = hits[0];
+
+  if (event.kind === "afp_status") {
+    const payload = { note: event.note };
+    const plan = planAfpStatusApply({ ...base, payload }, afp, input.today);
+    if (!plan.ok) return { action: "skip", reason: plan.reason };
+    return {
+      action: "insert",
+      apply: { table: plan.table, id: plan.id, patch: plan.patch },
+      row: {
+        kind: "afp_status",
+        status: "applied",
+        auto_applied: true,
+        summary: `AFP ${afp.app_number}: ${event.note.slice(0, 200)}`,
+        target_table: "pay_applications",
+        target_id: afp.id,
+        payload,
+        undo_data: { table: "pay_applications", applied: plan.patch, restore: plan.undo },
+        match_reason: null,
+        ...src,
+      },
+    };
+  }
+
+  const payload = { paid_on: event.paid_on, amount: event.amount ?? null };
+  const plan = planAfpPaidApply({ ...base, payload }, afp, input.today);
+  if (!plan.ok) return { action: "skip", reason: plan.reason };
+  const due = afp.amount_due != null ? Number(afp.amount_due) : null;
+  const amountNote =
+    event.amount != null
+      ? due != null && Math.abs(event.amount - due) > PAY_APP_TOLERANCE
+        ? ` Received ${money(event.amount)} against ${money(due)} due, short ${money(due - event.amount)}.`
+        : ` Received ${money(event.amount)}.`
+      : "";
+  return {
+    action: "insert",
+    apply: null,
+    row: {
+      kind: "afp_paid",
+      status: "proposed",
+      auto_applied: false,
+      summary: `Mark AFP ${afp.app_number} paid on ${fmt(event.paid_on)}.${amountNote}`,
+      target_table: "pay_applications",
+      target_id: afp.id,
+      payload,
+      undo_data: null,
+      match_reason: event.evidence ?? null,
+      ...src,
+    },
+  };
+}
+
+/**
+ * An inspection result. Always proposed. A pass, once approved, marks the
+ * inspection task complete on the inspection date. A fail changes nothing and
+ * is there so the re-inspection gets planned.
+ */
+export function planInspectionIngest(input: {
+  event: InspectionEvent;
+  projectId: string;
+  tasks: readonly SweepTask[];
+  hasChildren: (taskId: string) => boolean;
+  today: string;
+}): IngestPlan {
+  const { event } = input;
+  if (!event.source.message_id) return { action: "skip", reason: "No message id on the event." };
+  const src = srcOf(event.source);
+  const payload = { result: event.result, date: event.date, inspector: event.inspector ?? null };
+  const word = event.result === "passed" ? "Passed" : "Failed";
+  const match = matchTask(event.task_hint, event.wbs_code, input.tasks);
+  if (match.kind !== "one") {
+    const names = match.kind === "many" ? match.candidates.map((t) => `${t.wbs_code} ${t.task_name}`) : [];
+    return {
+      action: "insert",
+      apply: null,
+      row: unmatchedRow(
+        "inspection_result",
+        `${word}: "${event.task_hint}" on ${fmt(event.date)}. ${names.length ? `Could be: ${names.join("; ")}.` : "No task matches."}`,
+        { ...payload, task_hint: event.task_hint, candidates: names },
+        src,
+        event.evidence ?? null,
+      ),
+    };
+  }
+  const task = match.task;
+  if (event.result === "passed") {
+    const plan = planApply({
+      row: { kind: "inspection_result", project_id: input.projectId, target_id: task.id, payload },
+      task,
+      hasChildren: input.hasChildren(task.id),
+      today: input.today,
+    });
+    if (!plan.ok) return { action: "skip", reason: `${task.wbs_code} ${task.task_name}: ${plan.reason}` };
+  }
+  const by = event.inspector ? ` (${event.inspector})` : "";
+  return {
+    action: "insert",
+    apply: null,
+    row: {
+      kind: "inspection_result",
+      status: "proposed",
+      auto_applied: false,
+      summary:
+        event.result === "passed"
+          ? `Passed on ${fmt(event.date)}${by}. Approve to mark complete.`
+          : `Failed on ${fmt(event.date)}${by}. Nothing changes; plan the re-inspection.`,
+      target_table: "schedule_tasks",
+      target_id: task.id,
+      payload,
+      undo_data: null,
+      match_reason: [match.reason, event.evidence ? `"${event.evidence}"` : null].filter(Boolean).join(". "),
+      ...src,
+    },
+  };
+}
+
+/**
+ * A possible change order. Always proposed and never priced: approving it
+ * records that it was handled, and the CO itself is raised by hand in Change
+ * orders with the email beside it.
+ */
+export function planChangeOrderIngest(event: ChangeOrderEvent): PlannedRow | null {
+  if (!event.source.message_id || !event.title?.trim()) return null;
+  const ref = event.reference ? ` (${event.reference})` : "";
+  return {
+    kind: "change_order",
+    status: "proposed",
+    auto_applied: false,
+    summary: `Possible change order: ${event.title.trim()}${ref}. Raise it in Change orders if it holds.`,
+    target_table: null,
+    target_id: null,
+    payload: { title: event.title, description: event.description ?? null, reference: event.reference ?? null },
+    undo_data: null,
+    match_reason: event.evidence ?? null,
+    ...srcOf(event.source),
   };
 }

@@ -6,6 +6,12 @@ import {
   planIngest,
   planPayAppIngest,
   senderAllowed,
+  afpDigits,
+  planAfpIngest,
+  planChangeOrderIngest,
+  planComplianceIngest,
+  planInspectionIngest,
+  type ComplianceSub,
   type PayAppEvent,
   type ScheduleEvent,
   type SweepTask,
@@ -142,6 +148,93 @@ check("bad period end is parked", payPlan(pa({}, { period_end: "Oct 31" })).acti
   const p = payPlan(pa({}, { billed_this_period: 13000 }));
   check("parked row says why and to enter by hand",
     p.action === "unmatched" && p.row.summary.includes("$13,000.00") && p.row.summary.includes("Enter it by hand"));
+}
+
+// --- COI and W-9 ---
+const csubs: ComplianceSub[] = [
+  { id: "scs", project_id: "p1", company_name: "Southern Commercial Solutions LLC", coi_status: "expired", w9_status: "received", contact_email: "rpounds@scsofga.com" },
+  { id: "pyr", project_id: "p1", company_name: "Pyramid Excavation", coi_status: "received", w9_status: "pending", contact_email: null },
+];
+const coi = (over: Record<string, unknown> = {}, onList = false) => planComplianceIngest({
+  event: { project: "Sussex", kind: "compliance_doc", subcontractor: "Southern Commercial", doc: "coi", expires_on: "2027-10-01",
+    source: { message_id: "c1", from: "rpounds@scsofga.com" }, ...over } as never,
+  subs: csubs, projectId: "p1", senderOnList: onList,
+});
+{
+  const p = coi();
+  check("COI from the sub's domain is applied", p.action === "insert" && !!p.apply && p.row.status === "applied");
+  if (p.action === "insert" && p.apply) {
+    check("COI sets received", p.apply.patch.coi_status === "received");
+    check("COI undo keeps expired", p.row.undo_data?.table === "subcontractors" && p.row.undo_data.restore.coi_status === "expired");
+    check("COI summary shows expiry", p.row.summary.includes("expires Oct 1, 2027"));
+  }
+}
+{
+  const p = coi({ source: { message_id: "c1", from: "certs@brokerinsurance.com" } });
+  check("COI from a broker waits for a person", p.action === "insert" && !p.apply && p.row.status === "proposed" && p.row.target_id === "scs");
+}
+check("COI from a listed sender is applied", (() => { const p = coi({ source: { message_id: "c1", from: "keyvan@ibtgroup.com" } }, true); return p.action === "insert" && !!p.apply; })());
+check("W-9 already received is skipped", coi({ doc: "w9" }).action === "skip");
+check("COI already received is skipped", coi({ subcontractor: "Pyramid Excavation" }).action === "skip");
+check("unknown sub is unmatched", (() => { const p = coi({ subcontractor: "Acme" }); return p.action === "insert" && p.row.kind === "unmatched"; })());
+
+// --- AFPs ---
+const afps = [
+  { id: "a12", project_id: "p1", app_number: "12", status: "paid", paid_at: "2026-09-20T12:00:00Z", notes: null, amount_due: 100000 },
+  { id: "a13", project_id: "p1", app_number: "AFP-13", status: "submitted", paid_at: null, notes: "Sent 10/1", amount_due: 212400 },
+  { id: "a14", project_id: "p1", app_number: "14", status: "draft", paid_at: null, notes: null, amount_due: 50000 },
+];
+check("AFP numbers normalise", afpDigits("Pay App #013") === "13" && afpDigits("AFP-13") === "13");
+const afp = (over: Record<string, unknown>) => planAfpIngest({
+  event: { project: "Sussex", source: { message_id: "f1", from: "keyvan@ibtgroup.com" }, ...over } as never,
+  afps, projectId: "p1", today: "2026-10-28",
+});
+{
+  const p = afp({ kind: "afp_status", afp_number: "AFP 13", note: "Received, under review by Christian" });
+  check("AFP status note applied", p.action === "insert" && !!p.apply && p.row.status === "applied");
+  if (p.action === "insert" && p.apply) check("note appended under the old one", String(p.apply.patch.notes).startsWith("Sent 10/1\n2026-10-28 from email:"));
+}
+{
+  const p = afp({ kind: "afp_paid", afp_number: "13", paid_on: "2026-10-24", amount: 212400 });
+  check("AFP paid is proposed, never applied", p.action === "insert" && !p.apply && p.row.status === "proposed" && p.row.target_id === "a13");
+}
+{
+  const p = afp({ kind: "afp_paid", afp_number: "13", paid_on: "2026-10-24", amount: 200000 });
+  check("short pay is called out", p.action === "insert" && p.row.summary.includes("short $12,400.00"));
+}
+check("already paid AFP skipped", afp({ kind: "afp_paid", afp_number: "12", paid_on: "2026-10-24" }).action === "skip");
+check("draft AFP cannot be paid", afp({ kind: "afp_paid", afp_number: "14", paid_on: "2026-10-24" }).action === "skip");
+check("future payment date skipped", afp({ kind: "afp_paid", afp_number: "13", paid_on: "2026-11-02" }).action === "skip");
+check("unknown AFP is unmatched", (() => { const p = afp({ kind: "afp_status", afp_number: "99", note: "x" }); return p.action === "insert" && p.row.kind === "unmatched"; })());
+
+// --- inspections ---
+const itasks: SweepTask[] = [
+  ...tasks,
+  T("4", "Inspections"),
+  T("4.1", "Electrical rough inspection", { task_type: "inspection" }),
+];
+const insp = (over: Record<string, unknown>) => planInspectionIngest({
+  event: { project: "Sussex", kind: "inspection_result", task_hint: "electrical rough inspection", date: "2026-10-27",
+    result: "passed", source: { message_id: "i1", from: "landmark@sussexcountyde.gov" }, ...over } as never,
+  projectId: "p1", tasks: itasks, hasChildren: (id) => ["t-1", "t-2", "t-4"].includes(id), today: "2026-10-28",
+});
+{
+  const p = insp({});
+  check("passed inspection is proposed on the task", p.action === "insert" && p.row.status === "proposed" && p.row.target_id === "t-4.1" && !p.apply);
+}
+{
+  const p = insp({ result: "failed", inspector: "County" });
+  check("failed inspection is a heads-up", p.action === "insert" && p.row.summary.startsWith("Failed on Oct 27, 2026 (County)"));
+}
+check("passed in the future is skipped", insp({ date: "2026-11-01" }).action === "skip");
+check("unmatched inspection parks", (() => { const p = insp({ task_hint: "fire marshal walkthrough" }); return p.action === "insert" && p.row.kind === "unmatched"; })());
+
+// --- change orders ---
+{
+  const r = planChangeOrderIngest({ project: "Sussex", kind: "change_order", title: "Fence relocation", reference: "RFP-07",
+    source: { message_id: "co1", from: "keyvan@ibtgroup.com" } });
+  check("change order is proposed with no price", !!r && r.status === "proposed" && r.kind === "change_order" && !("co_value" in (r.payload ?? {})));
+  check("change order with no title is dropped", planChangeOrderIngest({ project: "Sussex", kind: "change_order", title: " ", source: { message_id: "co2", from: "x@ibtgroup.com" } }) === null);
 }
 
 // --- chat notice ---

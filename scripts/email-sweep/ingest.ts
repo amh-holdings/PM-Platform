@@ -23,11 +23,17 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
   chatNotice,
+  planAfpIngest,
+  planChangeOrderIngest,
+  planComplianceIngest,
   planIngest,
+  planInspectionIngest,
   planPayAppIngest,
   senderAllowed,
   type PayAppEvent,
+  type ComplianceSub,
   type PayAppSub,
+  type RecordIngestPlan,
   type SweepConfig,
   type SweepEvent,
   type SweepTask,
@@ -35,6 +41,7 @@ import {
 import { acceptedHistory, buildSubBill, lineRows } from "@/lib/sub-bill-build";
 import { runVerificationCore } from "@/lib/sub-billing-run";
 import type { SubBillingClient } from "@/lib/sub-billing.types";
+import type { AfpRecord } from "@/lib/email-updates";
 import { summaryStatusChanges } from "@/lib/schedule-summary-status";
 import { todayIso } from "@/lib/schedule-calendar";
 import { loadEnvLocal, parseArgs, serviceClient } from "../commodity/lib";
@@ -112,10 +119,19 @@ async function main() {
     );
     let appliedAny = false;
     const payAppCache: { ctx: PayAppContext | null } = { ctx: null };
+    const recordCache: RecordCache = { subs: null, afps: null };
 
     for (const event of list) {
       const id = event.source?.message_id ?? "";
       const sender = senderAllowed(event.source?.from ?? "", cfg.senderDomains, config.forwarders);
+      // A COI usually comes from the sub's broker, off the sender list. It is
+      // not dropped: the planner holds it for a person instead of applying it.
+      if (event.kind === "compliance_doc") {
+        recordCache.subs ??= await loadSubs(supabase, projectId);
+        const plan = planComplianceIngest({ event, subs: recordCache.subs, projectId, senderOnList: sender.ok });
+        await carryOutRecordPlan(supabase, projectId, id, plan, report, args.dryRun, recordCache);
+        continue;
+      }
       if (!sender.ok) {
         report.skipped.push({ message_id: id, reason: sender.reason });
         continue;
@@ -124,7 +140,25 @@ async function main() {
         await ingestPayApp(supabase, projectId, event, report, args.dryRun, payAppCache);
         continue;
       }
-      const plan = planIngest({ event, projectId, tasks, hasChildren: (tid) => parents.has(tid), today });
+      if (event.kind === "afp_status" || event.kind === "afp_paid") {
+        recordCache.afps ??= await loadAfps(supabase, projectId);
+        const plan = planAfpIngest({ event, afps: recordCache.afps, projectId, today });
+        await carryOutRecordPlan(supabase, projectId, id, plan, report, args.dryRun, recordCache);
+        continue;
+      }
+      if (event.kind === "change_order") {
+        const row = planChangeOrderIngest(event);
+        const plan: RecordIngestPlan = row
+          ? { action: "insert", row, apply: null }
+          : { action: "skip", reason: "No title or message id on the change order event." };
+        await carryOutRecordPlan(supabase, projectId, id, plan, report, args.dryRun, recordCache);
+        continue;
+      }
+      const hasChildren = (tid: string) => parents.has(tid);
+      const plan =
+        event.kind === "inspection_result"
+          ? planInspectionIngest({ event, projectId, tasks, hasChildren, today })
+          : planIngest({ event, projectId, tasks, hasChildren, today });
       if (plan.action === "skip") {
         report.skipped.push({ message_id: id, reason: plan.reason });
         continue;
@@ -323,6 +357,76 @@ async function ingestPayApp(
   }).eq("id", rowId);
   ctx.liveAppNumbers.set(subId, [...(ctx.liveAppNumbers.get(subId) ?? []), built.appNumber]);
   report.applied.push(label);
+}
+
+// ---------------------------------------------------------------------------
+// COI and W-9, AFPs, change orders
+// ---------------------------------------------------------------------------
+
+type RecordCache = { subs: ComplianceSub[] | null; afps: AfpRecord[] | null };
+
+async function loadSubs(db: SupabaseClient, projectId: string): Promise<ComplianceSub[]> {
+  const { data } = await db
+    .from("subcontractors")
+    .select("id, project_id, company_name, coi_status, w9_status, contact_email")
+    .eq("project_id", projectId);
+  return (data ?? []) as ComplianceSub[];
+}
+
+async function loadAfps(db: SupabaseClient, projectId: string): Promise<AfpRecord[]> {
+  const { data } = await db
+    .from("pay_applications")
+    .select("id, project_id, app_number, status, paid_at, notes, amount_due")
+    .eq("project_id", projectId);
+  return (data ?? []) as AfpRecord[];
+}
+
+/**
+ * Insert the row, then apply its change if it has one. The row goes in first
+ * so a re-run is a no-op; a failed apply turns the row into a proposal.
+ */
+async function carryOutRecordPlan(
+  db: SupabaseClient,
+  projectId: string,
+  messageId: string,
+  plan: RecordIngestPlan,
+  report: Report,
+  dryRun: boolean,
+  cache: RecordCache,
+) {
+  if (plan.action === "skip") {
+    report.skipped.push({ message_id: messageId, reason: plan.reason });
+    return;
+  }
+  const { row, apply } = plan;
+  const bucket = apply ? report.applied : row.kind === "unmatched" ? report.unmatched : report.proposed;
+  if (dryRun) {
+    bucket.push(row.summary);
+    return;
+  }
+  const { data: inserted, error: iErr } = await db
+    .from("email_updates").insert({ project_id: projectId, ...row }).select("id").maybeSingle();
+  if (iErr) {
+    if (iErr.code === "23505") report.alreadyRecorded.push(row.summary);
+    else report.errors.push(`${messageId}: ${iErr.message}`);
+    return;
+  }
+  if (apply) {
+    const { error: aErr } = await db.from(apply.table).update(apply.patch).eq("id", apply.id);
+    if (aErr) {
+      await db.from("email_updates").update({
+        status: "proposed", auto_applied: false, undo_data: null,
+        summary: `${row.summary} (automatic apply failed: ${aErr.message})`,
+      }).eq("id", (inserted as { id: string }).id);
+      report.proposed.push(row.summary);
+      return;
+    }
+    // Later events in this run see the change.
+    const list = (apply.table === "subcontractors" ? cache.subs : cache.afps) as Record<string, unknown>[] | null;
+    const rec = list?.find((r) => r.id === apply.id);
+    if (rec) Object.assign(rec, apply.patch);
+  }
+  bucket.push(row.summary);
 }
 
 main().catch((err) => {
