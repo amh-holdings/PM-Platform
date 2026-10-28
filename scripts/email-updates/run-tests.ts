@@ -3,6 +3,8 @@ import {
   canDecide,
   planApply,
   planUndo,
+  planUndoPayApp,
+  readUndoData,
   type TaskSnapshot,
 } from "../../src/lib/email-updates";
 
@@ -114,6 +116,15 @@ check("future constraint date is fine",
   check("undo refused with no record", !planUndo({ applied, undo: null, task: now }).ok);
   check("undo refused when task gone", !planUndo({ applied, undo, task: null }).ok);
 }
+
+// --- undo for a bill entered from email ---
+check("received bill can be undone", planUndoPayApp({ status: "received" }).ok);
+check("under review bill can be undone", planUndoPayApp({ status: "under_review" }).ok);
+check("recommended bill cannot", !planUndoPayApp({ status: "cm_recommended" }).ok);
+check("approved bill cannot", !planUndoPayApp({ status: "approved" }).ok);
+check("gone bill cannot", !planUndoPayApp(null).ok);
+check("reads pay app undo data", readUndoData({ table: "sub_pay_apps", id: "a1" })?.table === "sub_pay_apps");
+check("rejects pay app undo with no id", readUndoData({ table: "sub_pay_apps" }) === null);
 
 console.log(failures ? `\n${failures} failing` : "\nall passing");
 process.exit(failures ? 1 : 0);

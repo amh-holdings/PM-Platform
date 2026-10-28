@@ -3,12 +3,14 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import { subBillingClient } from "@/lib/sub-billing-db";
 import type { TablesUpdate } from "@/lib/database.types";
 import { todayIso } from "@/lib/schedule-calendar";
 import {
   canDecide,
   planApply,
   planUndo,
+  planUndoPayApp,
   readUndoData,
   type Decision,
   type TaskSnapshot,
@@ -177,6 +179,7 @@ export async function undoEmailUpdate(
 
   const recorded = readUndoData(row.undo_data);
   if (!recorded) return { ok: false, error: "Nothing was recorded to undo." };
+  if (recorded.table === "sub_pay_apps") return undoPayApp(projectId, row.id, recorded.id, userId);
   const { task } = await readTask(supabase, row.target_id);
   const plan = planUndo({ applied: recorded.applied, undo: recorded.restore, task });
   if (!plan.ok) return { ok: false, error: plan.reason };
@@ -206,4 +209,53 @@ export async function undoEmailUpdate(
   await syncSummaryStatuses(supabase, projectId);
   done(projectId, true);
   return { ok: true, note: `Put ${task?.task_name ?? "the task"} back the way it was.` };
+}
+
+/**
+ * Take back a sub bill the sweep entered from email. Removing the bill takes
+ * its lines and checks with it. Refused once anyone has acted on the bill.
+ */
+async function undoPayApp(
+  projectId: string,
+  updateId: string,
+  appId: string,
+  userId: string,
+): Promise<EmailUpdateResult> {
+  const db = subBillingClient();
+  const { data: app } = await db
+    .from("sub_pay_apps")
+    .select("id, status, app_number, subcontractor_id")
+    .eq("id", appId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  const plan = planUndoPayApp(app);
+  if (!plan.ok) return { ok: false, error: plan.reason };
+
+  const supabase = createClient();
+  if (
+    !(await claim(supabase, updateId, "applied", {
+      status: "undone",
+      undone_by: userId,
+      undone_at: new Date().toISOString(),
+    }))
+  ) {
+    return { ok: false, error: "Someone else already undid this one." };
+  }
+
+  const { error } = await db
+    .from("sub_pay_apps")
+    .delete()
+    .eq("id", appId)
+    .in("status", ["received", "under_review"]);
+  if (error) {
+    await supabase
+      .from("email_updates")
+      .update({ status: "applied", undone_by: null, undone_at: null })
+      .eq("id", updateId);
+    return { ok: false, error: error.message };
+  }
+
+  revalidatePath(`/projects/${projectId}/sub-billing`);
+  done(projectId, false);
+  return { ok: true, note: `Removed application ${app!.app_number}.` };
 }

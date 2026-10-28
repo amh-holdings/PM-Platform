@@ -4,8 +4,10 @@ import {
   emailAddress,
   matchTask,
   planIngest,
+  planPayAppIngest,
   senderAllowed,
-  type SweepEvent,
+  type PayAppEvent,
+  type ScheduleEvent,
   type SweepTask,
 } from "../../src/lib/email-sweep";
 
@@ -60,20 +62,20 @@ check("near miss offers candidates, never picks", m5.kind === "many");
 check("nothing close is none", matchTask("transformer delivery", null, tasks).kind === "none");
 
 // --- planIngest ---
-const ev = (over: Partial<SweepEvent> = {}): SweepEvent => ({
+const ev = (over: Partial<ScheduleEvent> = {}): ScheduleEvent => ({
   project: "Sussex", kind: "schedule_complete", task_hint: "building permit", date: "2026-10-27",
   evidence: "Permit BP-0412 has been issued.",
   source: { message_id: "m1", from: "landmark@sussexcountyde.gov", subject: "Permit issued" },
   ...over,
 });
 const hasChildren = (id: string) => ["t-1", "t-2"].includes(id);
-const plan = (e: SweepEvent) => planIngest({ event: e, projectId: "p1", tasks, hasChildren, today: "2026-10-28" });
+const plan = (e: ScheduleEvent) => planIngest({ event: e, projectId: "p1", tasks, hasChildren, today: "2026-10-28" });
 
 {
   const p = plan(ev());
   check("completion auto-applies", p.action === "insert" && p.row.status === "applied" && p.row.auto_applied && !!p.apply);
   if (p.action === "insert") {
-    check("applied row carries undo", p.row.undo_data?.restore.status === "In Progress");
+    check("applied row carries undo", p.row.undo_data?.table === "schedule_tasks" && p.row.undo_data.restore.status === "In Progress");
     check("applied row targets the task", p.row.target_id === "t-1.1");
     check("match reason quotes the email", (p.row.match_reason ?? "").includes("BP-0412"));
   }
@@ -96,6 +98,51 @@ check("already complete skipped",
 check("bad constraint type skipped",
   plan(ev({ kind: "schedule_constraint", task_hint: "civil IFC page turn", constraint_type: "ASAP" })).action === "skip");
 check("missing message id skipped", plan(ev({ source: { message_id: "", from: "landmark@sussexcountyde.gov" } })).action === "skip");
+
+// --- pay applications ---
+const subs = [
+  { id: "scs", company_name: "Southern Commercial Solutions LLC", contact_email: "rpounds@scsofga.com" },
+  { id: "pyr", company_name: "Pyramid Excavation", contact_email: "office@pyramidexc.com" },
+  { id: "nomail", company_name: "Delmarva Fence Co", contact_email: null },
+];
+const sovItems = new Map([["scs", ["1", "2", "3"]], ["pyr", ["10"]], ["nomail", ["1"]]]);
+const live = new Map([["scs", [1, 2]]]);
+const pa = (over: Partial<PayAppEvent> = {}, bill: Partial<PayAppEvent["bill"]> = {}): PayAppEvent => ({
+  project: "Sussex", kind: "sub_pay_app", subcontractor: "Southern Commercial Solutions",
+  bill: { period_end: "2026-10-31", app_number: 3, billed_this_period: 12500, ...bill },
+  lines: [{ item_number: "1", this_period: 10000 }, { item_number: "2", this_period: 2500 }],
+  source: { message_id: "pa1", from: "Rebekah <redwards@scsofga.com>", subject: "SCS Pay App 3" },
+  ...over,
+});
+const payPlan = (e: PayAppEvent) => planPayAppIngest({ event: e, subs, sovItems, liveAppNumbers: live });
+
+{
+  const p = payPlan(pa());
+  check("clean pay app is entered", p.action === "enter" && p.sub.id === "scs" && p.row.status === "applied");
+  if (p.action === "enter") {
+    check("bill carries the G703 by item", p.bill.this_period["1"] === 10000 && p.bill.this_period["2"] === 2500);
+    check("entered row says Received", p.row.summary.includes("entered as Received"));
+  }
+}
+check("rounding within a dollar is fine", payPlan(pa({}, { billed_this_period: 12500.6 })).action === "enter");
+check("lines not adding up are parked", payPlan(pa({}, { billed_this_period: 13000 })).action === "unmatched");
+check("missing G702 total is parked", payPlan(pa({}, { billed_this_period: null })).action === "unmatched");
+check("unknown item is parked", payPlan(pa({ lines: [{ item_number: "9", this_period: 12500 }] })).action === "unmatched");
+check("duplicate item is parked", payPlan(pa({ lines: [{ item_number: "1", this_period: 6250 }, { item_number: "1", this_period: 6250 }] })).action === "unmatched");
+check("negative line is parked", payPlan(pa({ lines: [{ item_number: "1", this_period: 15000 }, { item_number: "2", this_period: -2500 }] })).action === "unmatched");
+check("no lines is parked", payPlan(pa({ lines: [] })).action === "unmatched");
+check("unknown sub is parked", payPlan(pa({ subcontractor: "Acme Paving" })).action === "unmatched");
+check("sender not the sub is parked", payPlan(pa({ source: { message_id: "pa1", from: "mwooley@americanhelios.com" } })).action === "unmatched");
+check("sub with no contact email is parked",
+  payPlan(pa({ subcontractor: "Delmarva Fence", lines: [{ item_number: "1", this_period: 12500 }] })).action === "unmatched");
+check("app number already on file is skipped", payPlan(pa({}, { app_number: 2 })).action === "skip");
+check("no app number still enters (next number)", payPlan(pa({}, { app_number: null })).action === "enter");
+check("bad period end is parked", payPlan(pa({}, { period_end: "Oct 31" })).action === "unmatched");
+{
+  const p = payPlan(pa({}, { billed_this_period: 13000 }));
+  check("parked row says why and to enter by hand",
+    p.action === "unmatched" && p.row.summary.includes("$13,000.00") && p.row.summary.includes("Enter it by hand"));
+}
 
 // --- chat notice ---
 check("nothing waiting, no message", chatNotice({ projectName: "Sussex", waiting: [], appliedThisRun: 2 }) === null);

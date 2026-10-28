@@ -260,13 +260,36 @@ export const EMAIL_UPDATE_TABS = [
  * What an applied row stores in undo_data. The sweep writes the same shape
  * when it applies a change itself, so undo works the same either way.
  */
-export type UndoData = { table: "schedule_tasks"; applied: TaskPatch; restore: TaskPatch };
+export type UndoData =
+  | { table: "schedule_tasks"; applied: TaskPatch; restore: TaskPatch }
+  /** A sub bill the sweep entered from email. Undo removes it. */
+  | { table: "sub_pay_apps"; id: string };
 
 export function readUndoData(v: unknown): UndoData | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
+  if (o.table === "sub_pay_apps") {
+    return typeof o.id === "string" && o.id ? { table: "sub_pay_apps", id: o.id } : null;
+  }
   if (o.table !== "schedule_tasks") return null;
   if (!o.applied || typeof o.applied !== "object") return null;
   if (!o.restore || typeof o.restore !== "object") return null;
   return o as unknown as UndoData;
+}
+
+/**
+ * Whether a sub bill entered from email can still be taken back out. Only
+ * while nobody has acted on it: once the CM has recommended it or it has been
+ * decided, removing it would erase that work, so it is rejected in Sub billing
+ * instead.
+ */
+export function planUndoPayApp(
+  app: { status: string } | null,
+): { ok: true } | { ok: false; reason: string } {
+  if (!app) return { ok: false, reason: "The bill is already gone." };
+  if (app.status === "received" || app.status === "under_review") return { ok: true };
+  return {
+    ok: false,
+    reason: "The bill has been recommended or decided since. Reject it in Sub billing instead.",
+  };
 }
