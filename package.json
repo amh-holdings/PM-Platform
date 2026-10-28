@@ -61,7 +61,9 @@
     "test:po-item-ledger": "tsx scripts/procurement/run-po-item-ledger-tests.ts",
     "test:bill-po-detail": "tsx scripts/billing/run-bill-po-detail-tests.ts",
     "test:schedule-insert": "tsx scripts/schedule/run-insert-tests.ts",
-    "test:email-updates": "tsx scripts/email-updates/run-tests.ts"
+    "test:email-updates": "tsx scripts/email-updates/run-tests.ts",
+    "test:email-sweep": "tsx scripts/email-sweep/run-tests.ts",
+    "email:ingest": "tsx scripts/email-sweep/ingest.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",

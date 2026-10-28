@@ -1,0 +1,26 @@
+{
+  "_readme": "Senders the email sweep accepts, per project. A sender outside its project's list is skipped and reported, never written. Domains match the address after @, including subdomains. forwarders are transport only: mail they forward is judged by the original sender inside it. appUrl is the live app's base URL for the link in the Chat message; leave it empty and the message goes out without a link.",
+  "appUrl": "",
+  "forwarders": [
+    "phorwitch@americanhelios.com"
+  ],
+  "projects": [
+    {
+      "match": "Sussex",
+      "senderDomains": [
+        "ibtgroup.com",
+        "dimension-energy.com",
+        "tvigroup.com",
+        "americanhelios.com",
+        "amh.holdings",
+        "exactusenergy.com",
+        "ampacity.com",
+        "purepower.com",
+        "scsofga.com",
+        "sussexcountyde.gov",
+        "state.de.us",
+        "delaware.gov"
+      ]
+    }
+  ]
+}
