@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
 import { guardCapability, readDbRole } from "@/lib/roles-server";
@@ -8,7 +9,6 @@ import {
   EMAIL_UPDATE_TABS,
   KIND_LABEL,
   canDecide,
-  requiresPhil,
   type EmailUpdateKind,
 } from "@/lib/email-updates";
 
@@ -41,16 +41,12 @@ export default async function EmailUpdatesPage({
   params: Params;
   searchParams: { tab?: string };
 }) {
+  // The guard 404s for anyone without the per-person grant, so the site team
+  // gets the same answer as for a page that does not exist. The role check
+  // under it is belt and braces for a grant that drifts from the decider list.
   await guardCapability("reviewEmailUpdates");
   const dbRole = await readDbRole();
-
-  if (!(DECIDER_ROLES as readonly string[]).includes(dbRole)) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Email updates go to Phil and Zarina. Nothing here needs you.
-      </p>
-    );
-  }
+  if (!(DECIDER_ROLES as readonly string[]).includes(dbRole)) notFound();
 
   const tab = EMAIL_UPDATE_TABS.find((t) => t.key === searchParams.tab) ?? EMAIL_UPDATE_TABS[0];
   const supabase = createClient();
@@ -111,8 +107,8 @@ export default async function EmailUpdatesPage({
         <h1 className="text-xl font-semibold">Email updates</h1>
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
           Changes the email automation made or wants to make on this project. Applied changes
-          can be undone. Proposed ones wait for Zarina or Phil. Percent complete, owner
-          disputes and change orders wait for Phil. Every row links to the email it came from.
+          can be undone. Proposed ones wait for a decision here. Every row links to the email
+          it came from.
         </p>
       </div>
 
@@ -142,11 +138,11 @@ export default async function EmailUpdatesPage({
               <tr>
                 <th className="px-3 py-2">Received</th>
                 <th className="px-3 py-2">Email</th>
+                <th className="px-3 py-2">Decide</th>
                 <th className="px-3 py-2">Type</th>
                 <th className="px-3 py-2">What changes</th>
                 <th className="px-3 py-2">Matched to</th>
                 <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
@@ -181,10 +177,18 @@ export default async function EmailUpdatesPage({
                       <div className="text-xs text-muted-foreground">{r.source_from}</div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-2">
-                      {KIND_LABEL[r.kind as EmailUpdateKind] ?? r.kind}
-                      {requiresPhil(r) && (
-                        <div className="text-xs text-amber-700 dark:text-amber-400">Phil only</div>
+                      {(r.status === "proposed" || r.status === "applied") && (
+                        <DecisionButtons
+                          projectId={params.id}
+                          updateId={r.id}
+                          status={r.status}
+                          canApprove={r.kind !== "unmatched"}
+                          blockedReason={blocked}
+                        />
                       )}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      {KIND_LABEL[r.kind as EmailUpdateKind] ?? r.kind}
                     </td>
                     <td className="px-3 py-2">{r.summary}</td>
                     <td className="px-3 py-2">
@@ -201,17 +205,6 @@ export default async function EmailUpdatesPage({
                       )}
                       {r.decision_note && (
                         <div className="text-xs text-muted-foreground">{r.decision_note}</div>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      {(r.status === "proposed" || r.status === "applied") && (
-                        <DecisionButtons
-                          projectId={params.id}
-                          updateId={r.id}
-                          status={r.status}
-                          canApprove={r.kind !== "unmatched"}
-                          blockedReason={blocked}
-                        />
                       )}
                     </td>
                   </tr>

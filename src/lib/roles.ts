@@ -69,7 +69,7 @@ export type Capability =
   | "viewCosts" // Costs tab + all internal cost/profit/margin figures (Phil-only)
   | "viewContractValue" // project contract $ totals; hidden from subs
   | "viewDocuments" // Documents tab
-  | "reviewEmailUpdates" // Email updates page; RLS narrows the rows to Phil and Zarina
+  | "reviewEmailUpdates" // Email updates page. Granted per person, never by role - see PERSON_GRANTS
   | "viewAsToggle" // the Phil-only "view as" switcher
   // --- business development ---
   | "viewBD" // the BD section: clients, pipeline, bids, follow-ups, dashboard
@@ -101,7 +101,6 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewCosts",
     "viewContractValue",
     "viewDocuments",
-    "reviewEmailUpdates",
     "viewAsToggle",
     "viewBD",
     "viewProjects",
@@ -132,7 +131,6 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewProcurement",
     "viewContractValue",
     "viewDocuments",
-    "reviewEmailUpdates",
     "viewProjects",
   ]),
   // Subcontractor: files field reports only. Commodity production is AHC's
@@ -146,4 +144,28 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
 
 export function can(role: EffectiveRole, cap: Capability): boolean {
   return MATRIX[role].has(cap);
+}
+
+// ---- Per-person grants. ----
+// A few things follow the person, not the effective role. Zarina and the
+// construction manager share the `cm` role, but email updates belong to the
+// office (Phil and Zarina, treated as one) and must not exist for the site
+// team at all - not in the nav, not by URL. The matrix cannot say that, so
+// these are granted by DB role on top of it.
+const PERSON_GRANTS: Record<string, Capability[]> = {
+  phil: ["reviewEmailUpdates"],
+  zarina: ["reviewEmailUpdates"],
+};
+
+export function grantsFor(dbRole: string | null | undefined): Capability[] {
+  return (dbRole && PERSON_GRANTS[dbRole]) || [];
+}
+
+/** `can`, plus the per-person grants. */
+export function canWith(
+  role: EffectiveRole,
+  grants: readonly Capability[] | undefined,
+  cap: Capability,
+): boolean {
+  return can(role, cap) || (grants ?? []).includes(cap);
 }

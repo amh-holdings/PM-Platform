@@ -10,7 +10,7 @@ import {
   visibleGroups,
   visibleNav,
 } from "../../src/lib/nav";
-import type { EffectiveRole } from "../../src/lib/roles";
+import { grantsFor, type EffectiveRole } from "../../src/lib/roles";
 
 const PID = "abc-123";
 let failures = 0;
@@ -93,6 +93,16 @@ check("search 'gantt' finds Schedule",
 check("search 'zzz' finds nothing",
   !PROJECT_NAV.some((i) => matchesQuery(i, "zzz")));
 check("empty search matches everything", PROJECT_NAV.every((i) => matchesQuery(i, "  ")));
+
+// 10. Email updates are a per-person grant: the office sees them, the site
+// team never does, and previewing a role drops the grant.
+const hasEmail = (role: EffectiveRole, dbRole: string) =>
+  visibleNav(role, grantsFor(dbRole)).some((i) => i.key === "email-updates");
+check("phil sees email updates", hasEmail("full", "phil"));
+check("zarina sees email updates", hasEmail("cm", "zarina"));
+check("ahc_super (site CM) never sees email updates", !hasEmail("cm", "ahc_super"));
+check("sub never sees email updates", !hasEmail("sub", "sub_pm"));
+check("no grant, no email updates, even for full", !visibleNav("full").some((i) => i.key === "email-updates"));
 
 console.log(failures === 0 ? "\nAll nav checks passed." : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

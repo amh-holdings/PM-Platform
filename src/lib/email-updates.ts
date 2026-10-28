@@ -1,7 +1,7 @@
 // Email updates: the rules every change from the email automation runs under.
 //
 // The sweep reads project email and either applies a change itself or proposes
-// it here for Zarina or Phil. This module is the pure half: which kinds exist,
+// it here for the office to decide. This module is the pure half: which kinds exist,
 // who may decide each one, what a change writes, and whether it can still be
 // undone. The server actions and the sweep both call it, so the page and the
 // automation can never disagree about a rule.
@@ -51,22 +51,11 @@ export const KIND_LABEL: Record<EmailUpdateKind, string> = {
 };
 
 /**
- * The carve-outs that stay with Phil whoever else can approve: percent
- * complete, disputes with the Owner, and change orders. Read off the kind as
- * well as the row's flag, so a sweep that forgets the flag cannot route one of
- * these to Zarina.
+ * The DB roles that see and decide email updates. Phil and Zarina are one
+ * decider here: either can decide any row, and the app never names either.
+ * The site team is not on the list. The table's requires_phil column is kept
+ * for the record but nothing reads it.
  */
-const PHIL_ONLY: ReadonlySet<EmailUpdateKind> = new Set<EmailUpdateKind>([
-  "percent_complete",
-  "owner_dispute",
-  "change_order",
-]);
-
-export function requiresPhil(row: { kind: string; requires_phil?: boolean | null }): boolean {
-  return row.requires_phil === true || PHIL_ONLY.has(row.kind as EmailUpdateKind);
-}
-
-/** The DB roles that see and decide email updates. Mark is not one of them. */
 export const DECIDER_ROLES = ["phil", "zarina"] as const;
 
 export type Decision = "approve" | "reject" | "undo";
@@ -76,15 +65,12 @@ export type Decision = "approve" | "reject" | "undo";
  * the reason when not, worded for the page.
  */
 export function canDecide(
-  row: { kind: string; status: string; requires_phil?: boolean | null },
+  row: { kind: string; status: string },
   dbRole: string | null | undefined,
   decision: Decision,
 ): { ok: true } | { ok: false; reason: string } {
   if (!dbRole || !(DECIDER_ROLES as readonly string[]).includes(dbRole)) {
-    return { ok: false, reason: "Only Phil and Zarina decide email updates." };
-  }
-  if (requiresPhil(row) && dbRole !== "phil") {
-    return { ok: false, reason: "Phil decides this one." };
+    return { ok: false, reason: "You do not have access to email updates." };
   }
   if (decision === "undo") {
     return row.status === "applied"

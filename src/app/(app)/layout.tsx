@@ -10,7 +10,7 @@ import { getEffectiveRole } from "@/lib/roles-server";
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
-  const { effective } = await getEffectiveRole();
+  const { effective, grants } = await getEffectiveRole();
 
   // Powers the palette's project rows. RLS already limits this to projects the
   // user can open, so there is nothing to filter here.
@@ -23,7 +23,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <div className="min-h-screen bg-background">
       <SiteNav />
       {children}
-      <CommandPalette role={effective} projects={projects ?? []} />
+      <CommandPalette role={effective} grants={grants} projects={projects ?? []} />
     </div>
   );
 }

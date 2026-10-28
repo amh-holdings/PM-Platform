@@ -24,7 +24,7 @@ export function DecisionButtons({
   status: string;
   /** False for a row that can only be dismissed, like an unmatched email. */
   canApprove: boolean;
-  /** Set when this person cannot decide the row at all, e.g. Phil-only. */
+  /** Set when this person cannot decide the row at all. */
   blockedReason: string | null;
 }) {
   const router = useRouter();

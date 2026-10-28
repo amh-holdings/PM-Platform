@@ -3,7 +3,6 @@ import {
   canDecide,
   planApply,
   planUndo,
-  requiresPhil,
   type TaskSnapshot,
 } from "../../src/lib/email-updates";
 
@@ -37,13 +36,15 @@ check("zarina approves a schedule proposal", canDecide(row("schedule_constraint"
 check("phil approves", canDecide(row("schedule_constraint", {}), "phil", "approve").ok);
 check("mark (ahc_super) cannot decide", !canDecide(row("schedule_constraint", {}), "ahc_super", "approve").ok);
 check("sub cannot decide", !canDecide(row("schedule_constraint", {}), "sub_pm", "reject").ok);
-check("change order is Phil only by kind", requiresPhil({ kind: "change_order" }));
-check("percent complete is Phil only", requiresPhil({ kind: "percent_complete" }));
-check("owner dispute is Phil only", requiresPhil({ kind: "owner_dispute" }));
-check("flag makes any kind Phil only", requiresPhil({ kind: "afp_paid", requires_phil: true }));
-check("zarina cannot approve a CO", !canDecide(row("change_order", {}), "zarina", "approve").ok);
-check("zarina cannot reject a CO either", !canDecide(row("change_order", {}), "zarina", "reject").ok);
+// Phil and Zarina decide as one: either can take any kind, flag or not.
+check("zarina approves a CO", canDecide(row("change_order", {}), "zarina", "approve").ok);
+check("zarina approves percent complete", canDecide(row("percent_complete", {}), "zarina", "approve").ok);
+check("requires_phil flag is ignored", canDecide(row("afp_paid", {}, { requires_phil: true }), "zarina", "approve").ok);
 check("phil approves a CO", canDecide(row("change_order", {}), "phil", "approve").ok);
+check("refusal names nobody", (() => {
+  const r = canDecide(row("afp_paid", {}), "ahc_super", "approve");
+  return !r.ok && !/phil|zarina|mark/i.test(r.reason);
+})());
 check("cannot approve twice", !canDecide(row("schedule_constraint", {}, { status: "applied" }), "phil", "approve").ok);
 check("undo needs applied", !canDecide(row("schedule_constraint", {}), "phil", "undo").ok);
 check("undo on applied ok", canDecide(row("schedule_constraint", {}, { status: "applied" }), "zarina", "undo").ok);

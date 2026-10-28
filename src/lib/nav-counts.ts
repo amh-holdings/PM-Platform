@@ -13,7 +13,7 @@ import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
 import { subBillingClient } from "@/lib/sub-billing-db";
-import { can, type EffectiveRole } from "@/lib/roles";
+import { can, canWith, type Capability, type EffectiveRole } from "@/lib/roles";
 import type { NavCounts } from "@/lib/nav";
 
 async function countOf(promise: PromiseLike<{ count: number | null }>): Promise<number> {
@@ -30,6 +30,7 @@ async function countOf(promise: PromiseLike<{ count: number | null }>): Promise<
 export async function getNavCounts(
   projectId: string,
   role: EffectiveRole,
+  grants: readonly Capability[] = [],
 ): Promise<NavCounts> {
   const supabase = createClient();
   const jobs: Promise<[string, number]>[] = [];
@@ -89,10 +90,10 @@ export async function getNavCounts(
     );
   }
 
-  // Email updates waiting on a decision. RLS returns rows to Phil and Zarina
-  // only, so for anyone else this reads zero and no badge shows. Before 0080
-  // runs the query errors and countOf reports zero.
-  if (can(role, "reviewEmailUpdates")) {
+  // Email updates waiting on a decision. A per-person grant, so the site team
+  // never issues this query. Before 0080 runs it errors and countOf reports
+  // zero.
+  if (canWith(role, grants, "reviewEmailUpdates")) {
     jobs.push(
       countOf(
         supabase

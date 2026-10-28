@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import type { EffectiveRole } from "@/lib/roles";
+import type { Capability, EffectiveRole } from "@/lib/roles";
 import {
   activeItem,
   hrefFor,
@@ -19,6 +19,7 @@ import {
 type Props = {
   projectId: string;
   role: EffectiveRole;
+  grants?: Capability[];
   counts: NavCounts;
 };
 
@@ -30,11 +31,11 @@ type Props = {
  * three comes from the registry by role, so a sub gets one slot and no menu
  * while Phil gets Dashboard / Field Reports / Billing.
  */
-export function MobileNav({ projectId, role, counts }: Props) {
+export function MobileNav({ projectId, role, grants = [], counts }: Props) {
   const pathname = usePathname() ?? "";
   const [open, setOpen] = useState(false);
-  const primary = mobilePrimary(role);
-  const groups = visibleGroups(role);
+  const primary = mobilePrimary(role, grants);
+  const groups = visibleGroups(role, grants);
   const active = activeItem(pathname, projectId);
   const primaryKeys = new Set(primary.map((item) => item.key));
 

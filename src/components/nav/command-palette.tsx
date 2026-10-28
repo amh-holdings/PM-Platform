@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CornerDownLeft, Search } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import type { EffectiveRole } from "@/lib/roles";
+import type { Capability, EffectiveRole } from "@/lib/roles";
 import {
   actionHref,
   hrefFor,
@@ -23,6 +23,7 @@ type Row = { id: string; label: string; hint: string; href: string };
 
 type Props = {
   role: EffectiveRole;
+  grants?: Capability[];
   projects: ProjectOption[];
 };
 
@@ -32,7 +33,7 @@ type Props = {
  * people type instead of scanning, and this is the cheapest place to put
  * actions next to pages.
  */
-export function CommandPalette({ role, projects }: Props) {
+export function CommandPalette({ role, grants, projects }: Props) {
   const router = useRouter();
   const pathname = usePathname() ?? "";
   const projectId = projectIdFromPath(pathname);
@@ -74,7 +75,7 @@ export function CommandPalette({ role, projects }: Props) {
     const out: { label: string; rows: Row[] }[] = [];
 
     if (projectId) {
-      const goTo = visibleNav(role)
+      const goTo = visibleNav(role, grants)
         .filter((item) => matchesQuery(item, query))
         .map<Row>((item) => ({
           id: `nav:${item.key}`,
@@ -108,7 +109,7 @@ export function CommandPalette({ role, projects }: Props) {
     if (jump.length) out.push({ label: "Projects", rows: jump });
 
     return out;
-  }, [projectId, projects, query, role]);
+  }, [projectId, projects, query, role, grants]);
 
   const flat = useMemo(() => groups.flatMap((group) => group.rows), [groups]);
   const activeRow = flat[Math.min(cursor, flat.length - 1)];
