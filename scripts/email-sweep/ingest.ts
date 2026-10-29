@@ -47,7 +47,7 @@ import { todayIso } from "@/lib/schedule-calendar";
 import { loadEnvLocal, parseArgs, serviceClient } from "../commodity/lib";
 
 const TASK_COLUMNS =
-  "id, project_id, task_name, task_type, status, pct_complete, end_date, status_source, date_constraint_type, date_constraint_date, wbs_code";
+  "id, project_id, task_name, task_type, status, pct_complete, start_date, end_date, status_source, date_constraint_type, date_constraint_date, wbs_code";
 
 type Report = {
   project: string;
@@ -148,9 +148,8 @@ async function main() {
       }
       if (event.kind === "change_order") {
         const row = planChangeOrderIngest(event);
-        const plan: RecordIngestPlan = row
-          ? { action: "insert", row, apply: null }
-          : { action: "skip", reason: "No title or message id on the change order event." };
+        const plan: RecordIngestPlan =
+          "skip" in row ? { action: "skip", reason: row.skip } : { action: "insert", row, apply: null };
         await carryOutRecordPlan(supabase, projectId, id, plan, report, args.dryRun, recordCache);
         continue;
       }

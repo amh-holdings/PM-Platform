@@ -21,7 +21,7 @@ Google Chat DM. If the exit code is not 0, log the run as failed.
 
 ## Event format
 
-One event per thing an email reports. Eight kinds today: two schedule kinds, sub pay applications, COI and W-9, AFP status, AFP paid, inspection results and possible change orders.
+One event per thing an email reports. Nine kinds today: three schedule kinds (completed, started, planned date), sub pay applications, COI and W-9, AFP status, AFP paid, inspection results and change orders.
 
 ```json
 {
@@ -48,6 +48,26 @@ One event per thing an email reports. Eight kinds today: two schedule kinds, sub
       "constraint_type": "FNLT",
       "evidence": "We will hold the electrical IFC page turn no later than 11/14.",
       "source": { "message_id": "...", "from": "mhopwood@purepower.com", "subject": "RE: Page turn" }
+    },
+    {
+      "project": "Sussex",
+      "kind": "schedule_complete",
+      "basis": "invite",
+      "task_hint": "90% page turn",
+      "wbs_code": "1.2.1.3.3",
+      "date": "2026-10-28",
+      "evidence": "Civil 90% Page Turn - Sussex CSG 1 LLC (DE), Wed Oct 28 1:00-2:00 PM",
+      "source": { "message_id": "1a1559f9657556de", "from": "jmerriman@dimension-energy.com", "subject": "Civil 90% Page Turn - Sussex CSG 1 LLC (DE)" }
+    },
+    {
+      "project": "Sussex",
+      "kind": "schedule_start",
+      "basis": "invite",
+      "task_hint": "90% design internal review",
+      "wbs_code": "1.2.1.3.2",
+      "date": "2026-10-29",
+      "evidence": "Civil 90% page turn held 10/28, internal review starts the next business day",
+      "source": { "message_id": "1a1559f9657556de", "from": "jmerriman@dimension-energy.com", "subject": "Civil 90% Page Turn - Sussex CSG 1 LLC (DE)" }
     }
   ]
 }
@@ -126,8 +146,14 @@ attachment and write one `sub_pay_app` event.
   date and `amount` is the amount paid, if the email gives one.
 - **inspection_result**: a third-party or owner inspection, `passed` or
   `failed`, on the date of the inspection.
-- **change_order**: anything that reads like new scope, a directive or a
-  revised proposal. Never include a price. CO pricing stays manual.
+- **change_order**: only when there is documentation that calls it a change
+  order: a change order request, a CO proposal, a signed CO, or a directive
+  issued as a CO. Put the document's name or number in `reference` and the
+  sentence that names it in `evidence`. New scope, extra work that "may be
+  required", a revised proposal or an offer to draft a CO is **not** a change
+  order yet: write nothing. The script refuses a change order whose reference
+  and evidence never say "change order" or CO. Never include a price. CO
+  pricing stays manual.
 
 ## Rules for writing events
 
@@ -136,6 +162,24 @@ attachment and write one `sub_pay_app` event.
   NTP or LNTP issued, equipment delivered to site, an inspection passed.
   The date is the day it happened, as the email states it. If there's no
   date in the email, use the date the email was received.
+- **Page turns from meeting invites.** Every run also searches Gmail for
+  `subject:"page turn" newer_than:30d`, because the invite usually arrives a
+  week or more before the meeting. Read the invite's "When:" line (forwards
+  carry it inside the forwarded message). A page turn whose meeting ended in
+  the last 2 days is a `schedule_complete` with `"basis": "invite"`, dated
+  the meeting day, `source.message_id` the invite's message id and
+  `source.from` the organizer from the forwarded "From:" line. Skip
+  "Canceled:" invites, automatic replies and accept/decline notices, and use
+  the latest invite when a meeting was moved. It is only proposed: an invite
+  does not prove the meeting was held. Use the subject's discipline and
+  package (civil 90%, electrical IFP) and set `wbs_code` to the matching DE
+  Page Turn or IFP Page Turn task under that discipline and package.
+- **schedule_start** when work on a task has begun. A page turn held starts
+  that package's internal review the next business day: write a
+  `schedule_start` for the review task in the same package (for the civil
+  90% page turn, `1.2.1.3.2 90% Design - Internal Review`), dated the next
+  business day after the page turn, or today if that is earlier. Same basis
+  and source as the page turn. Only proposed.
 - **schedule_constraint** when the email commits to a future date, such as a
   page turn set for a date or a permit expected by a date. Pick the
   constraint type that fits the wording: "no later than" is FNLT, "on" is
@@ -161,6 +205,9 @@ attachment and write one `sub_pay_app` event.
 | No single task matches | Unmatched row, waits for a person |
 | Completion, one match, passes the checks | Applied now, with Undo |
 | Completion on a construction task, a future date, or already done | Skipped, reported |
+| Completion read from a meeting invite | Proposed, waits for a person to confirm it was held |
+| Start, one match | Proposed. Approving it marks the task In Progress from that date |
+| Start on a task already started or complete | Skipped, reported |
 | Planned date, one match | Proposed, waits for a person |
 | Pay app, all checks pass | Entered as Received, checks run, with Undo |
 | Pay app, any check fails | Needs a match, with the reason |
@@ -172,5 +219,6 @@ attachment and write one `sub_pay_app` event.
 | AFP paid | Waits for a person, with any short pay called out. Approving it marks the AFP and its billing entries paid |
 | Inspection passed | Waits for a person. Approving it marks the inspection task complete |
 | Inspection failed | Waits as a heads-up. Nothing changes |
-| Possible change order | Waits for a person. Raise the CO by hand in Change orders |
+| Change order with CO documentation | Waits for a person. Raise the CO by hand in Change orders |
+| Change order with no CO documentation | Skipped, reported |
 | Same email and change already recorded | No-op |
