@@ -108,11 +108,11 @@ export type ScheduleEvent = {
   project: string;
   kind: "schedule_complete" | "schedule_constraint" | "schedule_start";
   /**
-   * Where the fact came from. "calendar" is a meeting on the calendar, such as
-   * a page turn, whose time has passed: likely held, not confirmed, so it is
+   * Where the fact came from. "invite" is a meeting invite, such as a page
+   * turn, whose time has passed: likely held, not confirmed, so it is
    * proposed rather than applied. Defaults to "email".
    */
-  basis?: "email" | "calendar" | null;
+  basis?: "email" | "invite" | null;
   /** The task in the email's words: "building permit", "electrical IFC page turn". */
   task_hint: string;
   /** Only when the email itself quotes the WBS code. */
@@ -293,7 +293,7 @@ const CONSTRAINT_WORDS: Record<string, string> = {
  *
  * - A completion that matches one deliverable, procurement or inspection task
  *   and passes planApply is applied now, with undo recorded.
- * - A completion read from the calendar, a start, and a planned date are
+ * - A completion read from a meeting invite, a start, and a planned date are
  *   never applied on their own. They are proposed.
  * - No single match, and the email is parked as unmatched for a person.
  * - A refusal from planApply (construction task, future date, already done) is
@@ -355,9 +355,9 @@ export function planIngest(input: {
   const reason = [match.reason, event.evidence ? `"${event.evidence}"` : null].filter(Boolean).join(". ");
   // planApply has already refused a completion on anything but a deliverable,
   // procurement or inspection task, so a completion that gets here is safe to
-  // apply. A meeting on the calendar is not proof it was held, so a completion
-  // read from the calendar waits for a person.
-  if (event.kind === "schedule_complete" && event.basis !== "calendar") {
+  // apply. An invite is not proof the meeting was held, so a completion read
+  // from an invite waits for a person.
+  if (event.kind === "schedule_complete" && event.basis !== "invite") {
     return {
       action: "insert",
       apply: { id: plan.id, patch: plan.patch },
@@ -384,7 +384,7 @@ export function planIngest(input: {
       auto_applied: false,
       summary:
         event.kind === "schedule_complete"
-          ? `Mark complete on ${fmt(event.date)} (meeting on the calendar, confirm it was held)`
+          ? `Mark complete on ${fmt(event.date)} (meeting invite, confirm it was held)`
           : event.kind === "schedule_start"
             ? `Mark started on ${fmt(event.date)}`
             : `${CONSTRAINT_WORDS[String(payload.type)] ?? String(payload.type)} ${fmt(event.date)}`,

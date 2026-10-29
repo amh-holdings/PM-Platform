@@ -105,9 +105,9 @@ check("already complete skipped",
 check("bad constraint type skipped",
   plan(ev({ kind: "schedule_constraint", task_hint: "civil IFC page turn", constraint_type: "ASAP" })).action === "skip");
 {
-  const p = plan(ev({ task_hint: "civil IFC page turn", basis: "calendar", evidence: "Civil IFC Page Turn, Wed Oct 27 1-2 PM" }));
-  check("calendar completion is proposed, never applied", p.action === "insert" && p.row.status === "proposed" && !p.apply && p.row.kind === "schedule_complete");
-  if (p.action === "insert") check("calendar summary asks for confirmation", p.row.summary.includes("confirm it was held"));
+  const p = plan(ev({ task_hint: "civil IFC page turn", basis: "invite", evidence: "Civil IFC Page Turn, Wed Oct 27 1-2 PM" }));
+  check("invite completion is proposed, never applied", p.action === "insert" && p.row.status === "proposed" && !p.apply && p.row.kind === "schedule_complete");
+  if (p.action === "insert") check("invite summary asks for confirmation", p.row.summary.includes("confirm it was held"));
 }
 {
   const p = plan(ev({ kind: "schedule_start", task_hint: "civil IFC internal review", date: "2026-10-28" }));

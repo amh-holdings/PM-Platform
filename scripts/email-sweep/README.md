@@ -52,22 +52,22 @@ One event per thing an email reports. Nine kinds today: three schedule kinds (co
     {
       "project": "Sussex",
       "kind": "schedule_complete",
-      "basis": "calendar",
+      "basis": "invite",
       "task_hint": "90% page turn",
       "wbs_code": "1.2.1.3.3",
       "date": "2026-10-28",
       "evidence": "Civil 90% Page Turn - Sussex CSG 1 LLC (DE), Wed Oct 28 1:00-2:00 PM",
-      "source": { "message_id": "<calendar event id>", "url": "<event link>", "from": "jmerriman@dimension-energy.com", "subject": "Civil 90% Page Turn - Sussex CSG 1 LLC (DE)" }
+      "source": { "message_id": "1a1559f9657556de", "from": "jmerriman@dimension-energy.com", "subject": "Civil 90% Page Turn - Sussex CSG 1 LLC (DE)" }
     },
     {
       "project": "Sussex",
       "kind": "schedule_start",
-      "basis": "calendar",
+      "basis": "invite",
       "task_hint": "90% design internal review",
       "wbs_code": "1.2.1.3.2",
       "date": "2026-10-29",
       "evidence": "Civil 90% page turn held 10/28, internal review starts the next business day",
-      "source": { "message_id": "<calendar event id>", "from": "jmerriman@dimension-energy.com", "subject": "Civil 90% Page Turn - Sussex CSG 1 LLC (DE)" }
+      "source": { "message_id": "1a1559f9657556de", "from": "jmerriman@dimension-energy.com", "subject": "Civil 90% Page Turn - Sussex CSG 1 LLC (DE)" }
     }
   ]
 }
@@ -162,12 +162,16 @@ attachment and write one `sub_pay_app` event.
   NTP or LNTP issued, equipment delivered to site, an inspection passed.
   The date is the day it happened, as the email states it. If there's no
   date in the email, use the date the email was received.
-- **Page turns from the calendar.** Every run also reads the calendar for
-  meetings in the last 2 days with "page turn" in the title. A page turn
-  whose end time has passed is a `schedule_complete` with `"basis": "calendar"`,
-  dated the meeting day, `source.message_id` the calendar event id and
-  `source.from` the organizer. It is only proposed: the meeting being on the
-  calendar does not prove it was held. Use the title's discipline and
+- **Page turns from meeting invites.** Every run also searches Gmail for
+  `subject:"page turn" newer_than:30d`, because the invite usually arrives a
+  week or more before the meeting. Read the invite's "When:" line (forwards
+  carry it inside the forwarded message). A page turn whose meeting ended in
+  the last 2 days is a `schedule_complete` with `"basis": "invite"`, dated
+  the meeting day, `source.message_id` the invite's message id and
+  `source.from` the organizer from the forwarded "From:" line. Skip
+  "Canceled:" invites, automatic replies and accept/decline notices, and use
+  the latest invite when a meeting was moved. It is only proposed: an invite
+  does not prove the meeting was held. Use the subject's discipline and
   package (civil 90%, electrical IFP) and set `wbs_code` to the matching DE
   Page Turn or IFP Page Turn task under that discipline and package.
 - **schedule_start** when work on a task has begun. A page turn held starts
@@ -201,7 +205,7 @@ attachment and write one `sub_pay_app` event.
 | No single task matches | Unmatched row, waits for a person |
 | Completion, one match, passes the checks | Applied now, with Undo |
 | Completion on a construction task, a future date, or already done | Skipped, reported |
-| Completion read from the calendar | Proposed, waits for a person to confirm it was held |
+| Completion read from a meeting invite | Proposed, waits for a person to confirm it was held |
 | Start, one match | Proposed. Approving it marks the task In Progress from that date |
 | Start on a task already started or complete | Skipped, reported |
 | Planned date, one match | Proposed, waits for a person |
