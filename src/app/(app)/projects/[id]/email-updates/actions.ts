@@ -29,7 +29,7 @@ export type EmailUpdateResult = { ok: true; note?: string } | { ok: false; error
 type Supabase = ReturnType<typeof createClient>;
 
 const TASK_COLUMNS =
-  "id, project_id, task_name, task_type, status, pct_complete, end_date, status_source, date_constraint_type, date_constraint_date, wbs_code";
+  "id, project_id, task_name, task_type, status, pct_complete, start_date, end_date, status_source, date_constraint_type, date_constraint_date, wbs_code";
 
 async function loadForDecision(projectId: string, updateId: string, decision: Decision) {
   const supabase = createClient();

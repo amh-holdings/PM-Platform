@@ -39,7 +39,7 @@ check("other AHC staff allowed", senderAllowed("mwooley@americanhelios.com", [..
 // --- tasks ---
 const T = (wbs: string, name: string, over: Partial<SweepTask> = {}): SweepTask => ({
   id: `t-${wbs}`, project_id: "p1", task_name: name, wbs_code: wbs,
-  task_type: "deliverable", status: "In Progress", pct_complete: 0, end_date: "2026-11-30",
+  task_type: "deliverable", status: "In Progress", pct_complete: 0, start_date: "2026-11-01", end_date: "2026-11-30",
   status_source: "manual", date_constraint_type: null, date_constraint_date: null, ...over,
 });
 const tasks: SweepTask[] = [
@@ -50,6 +50,7 @@ const tasks: SweepTask[] = [
   T("2", "Engineering"),
   T("2.1", "Electrical IFC page turn"),
   T("2.2", "Civil IFC page turn"),
+  T("2.3", "Civil IFC internal review", { status: "Not Started", start_date: null }),
   T("3", "Piles installed", { task_type: "construction" }),
 ];
 
@@ -103,6 +104,17 @@ check("already complete skipped",
     tasks: tasks.map((t) => t.wbs_code === "1.1" ? { ...t, status: "Complete", pct_complete: 100 } : t) }).action === "skip");
 check("bad constraint type skipped",
   plan(ev({ kind: "schedule_constraint", task_hint: "civil IFC page turn", constraint_type: "ASAP" })).action === "skip");
+{
+  const p = plan(ev({ task_hint: "civil IFC page turn", basis: "calendar", evidence: "Civil IFC Page Turn, Wed Oct 27 1-2 PM" }));
+  check("calendar completion is proposed, never applied", p.action === "insert" && p.row.status === "proposed" && !p.apply && p.row.kind === "schedule_complete");
+  if (p.action === "insert") check("calendar summary asks for confirmation", p.row.summary.includes("confirm it was held"));
+}
+{
+  const p = plan(ev({ kind: "schedule_start", task_hint: "civil IFC internal review", date: "2026-10-28" }));
+  check("start is proposed, never applied", p.action === "insert" && p.row.status === "proposed" && !p.apply && p.row.target_id === "t-2.3");
+  if (p.action === "insert") check("start summary reads plainly", p.row.summary === "Mark started on Oct 28, 2026");
+}
+check("start on a task already in progress skipped", plan(ev({ kind: "schedule_start", task_hint: "civil IFC page turn" })).action === "skip");
 check("missing message id skipped", plan(ev({ source: { message_id: "", from: "landmark@sussexcountyde.gov" } })).action === "skip");
 
 // --- pay applications ---
@@ -231,10 +243,17 @@ check("unmatched inspection parks", (() => { const p = insp({ task_hint: "fire m
 
 // --- change orders ---
 {
-  const r = planChangeOrderIngest({ project: "Sussex", kind: "change_order", title: "Fence relocation", reference: "RFP-07",
+  const r = planChangeOrderIngest({ project: "Sussex", kind: "change_order", title: "Fence relocation", reference: "Change Order Request 07",
     source: { message_id: "co1", from: "keyvan@ibtgroup.com" } });
-  check("change order is proposed with no price", !!r && r.status === "proposed" && r.kind === "change_order" && !("co_value" in (r.payload ?? {})));
-  check("change order with no title is dropped", planChangeOrderIngest({ project: "Sussex", kind: "change_order", title: " ", source: { message_id: "co2", from: "x@ibtgroup.com" } }) === null);
+  check("documented change order is proposed with no price", !("skip" in r) && r.status === "proposed" && r.kind === "change_order" && !("co_value" in (r.payload ?? {})));
+  check("change order with no title is dropped", "skip" in planChangeOrderIngest({ project: "Sussex", kind: "change_order", title: " ", source: { message_id: "co2", from: "x@ibtgroup.com" } }));
+  const maybe = planChangeOrderIngest({ project: "Sussex", kind: "change_order", title: "Supplemental DNREC stormwater worksheets",
+    reference: "Exactus email 10/28",
+    evidence: "These documents outline the additional worksheets and supporting information that may be required as part of the stormwater permitting process.",
+    source: { message_id: "co3", from: "amin.heidari@exactusenergy.com" } });
+  check("extra work with no CO in writing is not a change order", "skip" in maybe);
+  check("PCO number counts as documented", !("skip" in planChangeOrderIngest({ project: "Sussex", kind: "change_order", title: "Fence", reference: "PCO 3", source: { message_id: "co4", from: "x@ibtgroup.com" } })));
+  check("'co-ordinate' is not a CO", "skip" in planChangeOrderIngest({ project: "Sussex", kind: "change_order", title: "Fence", evidence: "We will co-ordinate the fence.", source: { message_id: "co5", from: "x@ibtgroup.com" } }));
 }
 
 // --- chat notice ---

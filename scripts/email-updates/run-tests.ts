@@ -26,6 +26,7 @@ const task = (over: Partial<TaskSnapshot> = {}): TaskSnapshot => ({
   task_type: "deliverable",
   status: "In Progress",
   pct_complete: 0,
+  start_date: null,
   end_date: "2026-11-15",
   status_source: "manual",
   date_constraint_type: null,
@@ -98,6 +99,21 @@ check("same constraint refused",
   !planApply({ row: row("schedule_constraint", { type: "MFO", date: "2026-12-01" }), task: task({ date_constraint_type: "MFO", date_constraint_date: "2026-12-01" }), hasChildren: false, today: TODAY }).ok);
 check("future constraint date is fine",
   planApply({ row: row("schedule_constraint", { type: "MSO", date: "2027-03-01" }), task: task(), hasChildren: false, today: TODAY }).ok);
+
+// --- schedule_start ---
+{
+  const p = planApply({ row: row("schedule_start", { date: "2026-10-29" }), task: task({ status: "Not Started" }), hasChildren: false, today: "2026-10-29" });
+  check("start sets In Progress and the start date", p.ok && p.table === "schedule_tasks" && p.patch.status === "In Progress" && p.patch.start_date === "2026-10-29" && p.patch.pct_complete === undefined);
+  if (p.ok && p.table) check("start undo restores status and start", p.undo.status === "Not Started" && p.undo.start_date === null);
+}
+check("start refused when already in progress",
+  !planApply({ row: row("schedule_start", { date: "2026-10-27" }), task: task(), hasChildren: false, today: TODAY }).ok);
+check("start refused when complete",
+  !planApply({ row: row("schedule_start", { date: "2026-10-27" }), task: task({ status: "Complete", pct_complete: 100 }), hasChildren: false, today: TODAY }).ok);
+check("start refused in the future",
+  !planApply({ row: row("schedule_start", { date: "2026-11-02" }), task: task({ status: "Not Started" }), hasChildren: false, today: TODAY }).ok);
+check("start refused on construction",
+  !planApply({ row: row("schedule_start", { date: "2026-10-27" }), task: task({ status: "Not Started", task_type: "construction" }), hasChildren: false, today: TODAY }).ok);
 
 // --- kinds without an applier ---
 {

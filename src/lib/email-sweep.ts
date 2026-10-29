@@ -102,16 +102,22 @@ export type SweepSource = {
   received_at?: string | null;
 };
 
-/** A schedule fact: something happened, or a date was committed to. */
+/** A schedule fact: something happened, started, or a date was committed to. */
 export type ScheduleEvent = {
   /** Project name or part of it, e.g. "Sussex". */
   project: string;
-  kind: "schedule_complete" | "schedule_constraint";
+  kind: "schedule_complete" | "schedule_constraint" | "schedule_start";
+  /**
+   * Where the fact came from. "calendar" is a meeting on the calendar, such as
+   * a page turn, whose time has passed: likely held, not confirmed, so it is
+   * proposed rather than applied. Defaults to "email".
+   */
+  basis?: "email" | "calendar" | null;
   /** The task in the email's words: "building permit", "electrical IFC page turn". */
   task_hint: string;
   /** Only when the email itself quotes the WBS code. */
   wbs_code?: string | null;
-  /** YYYY-MM-DD. For a completion, the day it happened; for a constraint, the committed date. */
+  /** YYYY-MM-DD. The day it happened or started; for a constraint, the committed date. */
   date: string;
   /** SNET, SNLT, FNET, FNLT, MSO or MFO. Constraints only. */
   constraint_type?: string | null;
@@ -287,7 +293,8 @@ const CONSTRAINT_WORDS: Record<string, string> = {
  *
  * - A completion that matches one deliverable, procurement or inspection task
  *   and passes planApply is applied now, with undo recorded.
- * - A planned date is never applied on its own. It is proposed.
+ * - A completion read from the calendar, a start, and a planned date are
+ *   never applied on their own. They are proposed.
  * - No single match, and the email is parked as unmatched for a person.
  * - A refusal from planApply (construction task, future date, already done) is
  *   skipped and reported, because approving it would be refused the same way.
@@ -347,8 +354,10 @@ export function planIngest(input: {
 
   const reason = [match.reason, event.evidence ? `"${event.evidence}"` : null].filter(Boolean).join(". ");
   // planApply has already refused a completion on anything but a deliverable,
-  // procurement or inspection task, so a completion that gets here is safe to apply.
-  if (event.kind === "schedule_complete") {
+  // procurement or inspection task, so a completion that gets here is safe to
+  // apply. A meeting on the calendar is not proof it was held, so a completion
+  // read from the calendar waits for a person.
+  if (event.kind === "schedule_complete" && event.basis !== "calendar") {
     return {
       action: "insert",
       apply: { id: plan.id, patch: plan.patch },
@@ -373,7 +382,12 @@ export function planIngest(input: {
       kind: event.kind,
       status: "proposed",
       auto_applied: false,
-      summary: `${CONSTRAINT_WORDS[String(payload.type)] ?? String(payload.type)} ${fmt(event.date)}`,
+      summary:
+        event.kind === "schedule_complete"
+          ? `Mark complete on ${fmt(event.date)} (meeting on the calendar, confirm it was held)`
+          : event.kind === "schedule_start"
+            ? `Mark started on ${fmt(event.date)}`
+            : `${CONSTRAINT_WORDS[String(payload.type)] ?? String(payload.type)} ${fmt(event.date)}`,
       target_table: "schedule_tasks",
       target_id: task.id,
       payload,
@@ -824,18 +838,37 @@ export function planInspectionIngest(input: {
 }
 
 /**
- * A possible change order. Always proposed and never priced: approving it
- * records that it was handled, and the CO itself is raised by hand in Change
- * orders with the email beside it.
+ * Whether the email itself calls this a change order. Talk of extra work that
+ * "may be required" is not one until somebody puts a change order in writing:
+ * a CO request, a CO proposal, a signed CO or a directive issued as a CO.
  */
-export function planChangeOrderIngest(event: ChangeOrderEvent): PlannedRow | null {
-  if (!event.source.message_id || !event.title?.trim()) return null;
+const CO_PHRASE = /\bchange[\s-]+orders?\b/i;
+// Capitals only, so "co-ordinate" or "co." is not read as a CO.
+const CO_ABBREVIATION = /\b(?:P?CO|COR|CCD)\b/;
+export function changeOrderDocumented(event: ChangeOrderEvent): boolean {
+  const text = `${event.reference ?? ""} ${event.evidence ?? ""}`;
+  return CO_PHRASE.test(text) || CO_ABBREVIATION.test(text);
+}
+
+/**
+ * A change order the email documents. Always proposed and never priced:
+ * approving it records that it was handled, and the CO itself is raised by
+ * hand in Change orders with the email beside it. Returns the reason instead
+ * when there is nothing to record.
+ */
+export function planChangeOrderIngest(event: ChangeOrderEvent): PlannedRow | { skip: string } {
+  if (!event.source.message_id || !event.title?.trim()) {
+    return { skip: "No title or message id on the change order event." };
+  }
+  if (!changeOrderDocumented(event)) {
+    return { skip: `"${event.title.trim()}": the email does not call it a change order, so it is not one yet.` };
+  }
   const ref = event.reference ? ` (${event.reference})` : "";
   return {
     kind: "change_order",
     status: "proposed",
     auto_applied: false,
-    summary: `Possible change order: ${event.title.trim()}${ref}. Raise it in Change orders if it holds.`,
+    summary: `Change order: ${event.title.trim()}${ref}. Raise it in Change orders.`,
     target_table: null,
     target_id: null,
     payload: { title: event.title, description: event.description ?? null, reference: event.reference ?? null },

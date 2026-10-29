@@ -15,6 +15,7 @@ import { DATE_CONSTRAINT_TYPES, type DateConstraintType } from "./schedule-cpm";
 export const EMAIL_UPDATE_KINDS = [
   "schedule_complete",
   "schedule_constraint",
+  "schedule_start",
   "sub_pay_app",
   "compliance_doc",
   "afp_status",
@@ -39,6 +40,7 @@ export type EmailUpdateStatus = (typeof EMAIL_UPDATE_STATUSES)[number];
 export const KIND_LABEL: Record<EmailUpdateKind, string> = {
   schedule_complete: "Schedule - completed",
   schedule_constraint: "Schedule - planned date",
+  schedule_start: "Schedule - started",
   sub_pay_app: "Sub pay app",
   compliance_doc: "COI / W-9",
   afp_status: "AFP status",
@@ -103,6 +105,7 @@ export type TaskSnapshot = {
   task_type: string | null;
   status: string | null;
   pct_complete: number | null;
+  start_date: string | null;
   end_date: string | null;
   status_source: string | null;
   date_constraint_type: string | null;
@@ -114,6 +117,7 @@ export type TaskPatch = Partial<
     TaskSnapshot,
     | "status"
     | "pct_complete"
+    | "start_date"
     | "end_date"
     | "status_source"
     | "date_constraint_type"
@@ -129,8 +133,11 @@ export type ApplyPlan =
 export const KINDS_WITH_APPLIER: ReadonlySet<EmailUpdateKind> = new Set<EmailUpdateKind>([
   "schedule_complete",
   "schedule_constraint",
+  "schedule_start",
   "inspection_result",
 ]);
+
+const IN_PROGRESS_STATUS = "In Progress";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -202,6 +209,33 @@ export function planApply(input: {
       id: task.id,
       patch: { status: COMPLETE_STATUS, pct_complete: 100, end_date: payload.date, status_source: "email" },
       undo: pick(task, keys),
+    };
+  }
+
+  // schedule_start: work on a task has begun, such as a package's internal
+  // review once its page turn is held. Started, not finished: no percent.
+  if (kind === "schedule_start") {
+    if (!progressCanBeSetByHand(task.task_type)) {
+      return {
+        ok: false,
+        reason:
+          task.task_type === "construction"
+            ? "Construction progress comes from approved field reports, never from email."
+            : "Set the task's Type to Deliverable, Procurement or Inspection first.",
+      };
+    }
+    if (!isIsoDate(payload.date)) return { ok: false, reason: "No usable start date." };
+    if (payload.date > input.today) {
+      return { ok: false, reason: `The start date ${payload.date} is in the future.` };
+    }
+    if (task.status === COMPLETE_STATUS) return { ok: false, reason: "The task is already complete." };
+    if (task.status === IN_PROGRESS_STATUS) return { ok: false, reason: "The task is already in progress." };
+    return {
+      ok: true,
+      table: "schedule_tasks",
+      id: task.id,
+      patch: { status: IN_PROGRESS_STATUS, start_date: payload.date, status_source: "email" },
+      undo: pick(task, ["status", "start_date", "status_source"]),
     };
   }
 
