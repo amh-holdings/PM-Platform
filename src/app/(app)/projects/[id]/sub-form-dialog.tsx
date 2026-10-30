@@ -30,6 +30,7 @@ export type SubFormValues = {
   coi_status: string | null;
   w9_status: string | null;
   payment_terms_days: number | null;
+  bills_by_invoice: boolean;
 };
 
 type Props = {
@@ -49,6 +50,7 @@ const EMPTY_VALUES: SubFormValues = {
   coi_status: "pending",
   w9_status: "pending",
   payment_terms_days: 30,
+  bills_by_invoice: false,
 };
 
 export function SubFormDialog({ projectId, initial, trigger }: Props) {
@@ -251,6 +253,21 @@ export function SubFormDialog({ projectId, initial, trigger }: Props) {
                   </p>
                 </div>
               </div>
+
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  name="bills_by_invoice"
+                  defaultChecked={values.bills_by_invoice}
+                  className="mt-0.5"
+                />
+                <span>
+                  Bills by invoice, no pay application
+                  <span className="block text-[10px] text-muted-foreground">
+                    For engineering and other subs that send an invoice only. Each bill is the invoice put on the SOV line it covers.
+                  </span>
+                </span>
+              </label>
 
               {error && (
                 <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
