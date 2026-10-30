@@ -2851,6 +2851,7 @@ export type Database = {
       subcontractors: {
         Row: {
           active: boolean | null
+          bills_by_invoice: boolean
           coi_status: string | null
           company_name: string
           contact_email: string | null
@@ -2869,6 +2870,7 @@ export type Database = {
         }
         Insert: {
           active?: boolean | null
+          bills_by_invoice?: boolean
           coi_status?: string | null
           company_name: string
           contact_email?: string | null
@@ -2887,6 +2889,7 @@ export type Database = {
         }
         Update: {
           active?: boolean | null
+          bills_by_invoice?: boolean
           coi_status?: string | null
           company_name?: string
           contact_email?: string | null

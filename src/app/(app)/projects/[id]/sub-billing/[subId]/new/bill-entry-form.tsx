@@ -22,6 +22,8 @@ type Props = {
   appNumber: number;
   retainagePct: number;
   paymentTermsDays: number | null;
+  /** Invoice only, no G702/G703: no application date or stored materials. */
+  billsByInvoice?: boolean;
   priorAppNumber: number | null;
   priorBilledToDate: number;
   lines: Line[];
@@ -33,6 +35,7 @@ export function BillEntryForm({
   appNumber,
   retainagePct,
   paymentTermsDays,
+  billsByInvoice = false,
   priorAppNumber,
   priorBilledToDate,
   lines,
@@ -72,7 +75,7 @@ export function BillEntryForm({
 
       {/* ------------------------------ Header ------------------------------ */}
       <section className="grid gap-3 rounded-md border bg-card p-4 sm:grid-cols-3">
-        <Field label="Application date" name="app_date" type="date" />
+        {!billsByInvoice && <Field label="Application date" name="app_date" type="date" />}
         <Field label="Period start (leave blank if billed through a date)" name="period_start" type="date" />
         <Field label="Period end" name="period_end" type="date" required />
         <Field label="Invoice number" name="invoice_number" />
@@ -81,6 +84,7 @@ export function BillEntryForm({
           label="Invoice total (as stated)"
           name="invoice_total"
           placeholder="Checked against the line total"
+          required={billsByInvoice}
         />
         <Field label="Retainage %" name="retainage_pct" defaultValue={String(retainagePct)} />
         <Field
@@ -93,7 +97,9 @@ export function BillEntryForm({
 
       {/* ------------------------------- Lines ------------------------------ */}
       <section className="space-y-2">
-        <h3 className="text-sm font-semibold">Billed this period, by line</h3>
+        <h3 className="text-sm font-semibold">
+          {billsByInvoice ? "Put the invoice on the SOV line it covers" : "Billed this period, by line"}
+        </h3>
         <div className="overflow-x-auto rounded-md border">
           <table className="w-full min-w-[820px] text-sm">
             <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">

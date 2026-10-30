@@ -93,6 +93,7 @@ export async function createSubcontractor(
     coi_status: getStr(formData.get("coi_status")) ?? "pending",
     w9_status: getStr(formData.get("w9_status")) ?? "pending",
     ...paymentTermsFields(formData),
+    bills_by_invoice: formData.get("bills_by_invoice") === "on",
     active: true,
   };
 
@@ -139,6 +140,7 @@ export async function updateSubcontractor(
     coi_status: getStr(formData.get("coi_status")),
     w9_status: getStr(formData.get("w9_status")),
     ...paymentTermsFields(formData),
+    bills_by_invoice: formData.get("bills_by_invoice") === "on",
   };
 
   const { error } = await auth.supabase

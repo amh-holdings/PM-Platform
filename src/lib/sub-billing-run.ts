@@ -218,7 +218,7 @@ export async function runVerificationCore(
   const { data: sub } = await db
     .from("subcontractors")
     .select(
-      "company_name, contract_value, retainage_pct, payment_terms, payment_terms_days, coi_status, w9_status",
+      "company_name, contract_value, retainage_pct, payment_terms, payment_terms_days, coi_status, w9_status, bills_by_invoice",
     )
     .eq("id", app.subcontractor_id)
     .single();

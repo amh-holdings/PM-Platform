@@ -15,7 +15,7 @@ export default async function NewSubBillPage({ params }: { params: Params }) {
 
   const { data: sub } = await db
     .from("subcontractors")
-    .select("id, company_name, retainage_pct, payment_terms_days")
+    .select("id, company_name, retainage_pct, payment_terms_days, bills_by_invoice")
     .eq("id", params.subId)
     .single();
   if (!sub) notFound();
@@ -59,7 +59,7 @@ export default async function NewSubBillPage({ params }: { params: Params }) {
           {sub.company_name}
         </Link>
         <h2 className="text-lg font-semibold">
-          Record application #{appNumber}
+          {sub.bills_by_invoice ? `Record invoice #${appNumber}` : `Record application #${appNumber}`}
         </h2>
         {isResubmission && (
           <p className="text-xs text-amber-800">
@@ -68,12 +68,20 @@ export default async function NewSubBillPage({ params }: { params: Params }) {
             form. The rejected one stays on file, marked superseded.
           </p>
         )}
+        {sub.bills_by_invoice ? (
+          <p className="text-xs text-muted-foreground">
+            {sub.company_name} bills by invoice, with no pay application. Enter
+            the invoice, then put its amount on the SOV line it covers. The
+            lines must add up to the invoice.
+          </p>
+        ) : (
         <p className="text-xs text-muted-foreground">
           Enter what the sub billed on each line this period. Completed to date,
           percent, balance and retainage are computed from our SOV and the last
           application, not taken from their form, so any disagreement shows up
           as a failed check instead of overwriting our numbers.
         </p>
+        )}
       </div>
 
       <BillEntryForm
@@ -82,6 +90,7 @@ export default async function NewSubBillPage({ params }: { params: Params }) {
         appNumber={appNumber}
         retainagePct={Number(sub.retainage_pct ?? 0)}
         paymentTermsDays={sub.payment_terms_days}
+        billsByInvoice={sub.bills_by_invoice}
         priorAppNumber={prior?.app_number ?? null}
         priorBilledToDate={Number(prior?.billed_to_date ?? 0)}
         lines={sovLines.map((l) => ({

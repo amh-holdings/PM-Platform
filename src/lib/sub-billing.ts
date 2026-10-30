@@ -126,6 +126,8 @@ export type SubContext = {
   payment_terms_days: number | null;
   coi_status: string | null;
   w9_status: string | null;
+  /** Sends an invoice only, no G702/G703: AHC puts the invoice on the SOV line it covers. */
+  bills_by_invoice?: boolean | null;
 };
 
 // -------------------------------- helpers --------------------------------
@@ -506,14 +508,20 @@ export function runBillChecks(args: {
   }
 
   // --- The invoice and the pay app are two documents saying one number. ---
+  // A sub that bills by invoice sends no pay app: the lines are the invoice
+  // as AHC put it on the SOV, so the check is that nothing was left off.
   if (header.invoice_total != null) {
+    const byInvoice = Boolean(sub.bills_by_invoice);
+    const title = byInvoice ? "Invoice is on the SOV lines" : "Invoice ties to the pay application";
     out.push(
       near(n(header.invoice_total), n(header.billed_this_period), ROUNDING_TOLERANCE)
-        ? check("invoice_match", "Invoice ties to the pay application", "error", "pass",
+        ? check("invoice_match", title, "error", "pass",
             `Invoice ${money(n(header.invoice_total))} matches the period total.`,
             { expected: n(header.billed_this_period), actual: n(header.invoice_total) })
-        : check("invoice_match", "Invoice ties to the pay application", "error", "fail",
-            `Invoice is ${money(n(header.invoice_total))}, the pay application bills ${money(n(header.billed_this_period))}.`,
+        : check("invoice_match", title, "error", "fail",
+            byInvoice
+              ? `Invoice is ${money(n(header.invoice_total))}, the SOV lines carry ${money(n(header.billed_this_period))}. Put the invoice on the line it covers.`
+              : `Invoice is ${money(n(header.invoice_total))}, the pay application bills ${money(n(header.billed_this_period))}.`,
             { expected: n(header.billed_this_period), actual: n(header.invoice_total) }),
     );
   }

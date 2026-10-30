@@ -60,7 +60,7 @@ export async function recordSubBill(
 
   const { data: sub } = await db
     .from("subcontractors")
-    .select("id, company_name, contract_value, retainage_pct, payment_terms, payment_terms_days, coi_status, w9_status")
+    .select("id, company_name, contract_value, retainage_pct, payment_terms, payment_terms_days, coi_status, w9_status, bills_by_invoice")
     .eq("id", subcontractorId)
     .single();
   if (!sub) return { ok: false, error: "Subcontractor not found" };
@@ -121,6 +121,22 @@ export async function recordSubBill(
     thisPeriod[sov.item_number] = num(formData.get(`this_period__${sov.item_number}`));
     stored[sov.item_number] = num(formData.get(`stored__${sov.item_number}`));
   }
+  // A sub that bills by invoice sends no pay app, so the lines are AHC's
+  // reading of the invoice. Saving them blank, or short of the invoice, only
+  // produces a bill nobody can approve.
+  if (sub.bills_by_invoice) {
+    const invoiceTotal = optNum(formData.get("invoice_total"));
+    if (invoiceTotal == null) return { ok: false, error: "Enter the invoice total" };
+    const onLines = Object.values(thisPeriod).reduce((s, v) => s + v, 0)
+      + Object.values(stored).reduce((s, v) => s + v, 0);
+    if (Math.abs(onLines - invoiceTotal) > 0.01) {
+      return {
+        ok: false,
+        error: `The invoice is $${invoiceTotal.toFixed(2)} but the lines carry $${onLines.toFixed(2)}. Put the invoice on the SOV line it covers.`,
+      };
+    }
+  }
+
   const built = buildSubBill({
     bill: {
       period_end: periodEnd,

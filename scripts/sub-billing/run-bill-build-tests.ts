@@ -1,5 +1,6 @@
 // buildSubBill: the one bill calculation shared by Record a bill and the email sweep.
 import { acceptedHistory, buildSubBill, lineRows } from "../../src/lib/sub-bill-build";
+import { runBillChecks } from "../../src/lib/sub-billing";
 
 let failures = 0;
 function eq(name: string, got: unknown, want: unknown) {
@@ -67,6 +68,25 @@ const sov = [
 eq("line rows carry the app id", lineRows("APP", buildSubBill({
   bill: { period_end: "2026-10-31", this_period: { "1": 1 } }, subRetainagePct: 0, sovLines: sov, history: [], priorLines: [],
 }).lines)[0].sub_pay_app_id, "APP");
+
+// A sub that bills by invoice: the invoice check speaks of SOV lines, not a pay app.
+{
+  const sub = { company_name: "Exactus", contract_value: 60000, retainage_pct: 0, payment_terms: "Net 30",
+    payment_terms_days: 30, coi_status: "current", w9_status: "current", bills_by_invoice: true };
+  const build = (thisPeriod: Record<string, number>) => buildSubBill({
+    bill: { period_end: "2026-10-28", invoice_total: 4987.5, this_period: thisPeriod },
+    subRetainagePct: 0, sovLines: sov, history: [], priorLines: [],
+  });
+  const checksFor = (b: ReturnType<typeof build>) =>
+    runBillChecks({ header: b.header, lines: b.lines, sovLines: sov as never, sub }).find((c) => c.key === "invoice_match");
+  const blank = checksFor(build({}));
+  eq("invoice-only blank lines fail", blank?.status, "fail");
+  eq("invoice-only names the SOV lines", blank?.label, "Invoice is on the SOV lines");
+  eq("invoice-only on the line passes", checksFor(build({ "1": 4987.5 }))?.status, "pass");
+  const payApp = runBillChecks({ header: build({}).header, lines: build({}).lines, sovLines: sov as never, sub: { ...sub, bills_by_invoice: false } })
+    .find((c) => c.key === "invoice_match");
+  eq("pay-app sub keeps the pay app wording", payApp?.label, "Invoice ties to the pay application");
+}
 
 console.log(failures ? `\n${failures} failing` : "\nall passing");
 process.exit(failures ? 1 : 0);

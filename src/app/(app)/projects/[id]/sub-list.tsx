@@ -27,6 +27,7 @@ type SubRow = {
   w9_status: string | null;
   payment_terms: string | null;
   payment_terms_days: number | null;
+  bills_by_invoice: boolean;
   active: boolean | null;
   contract_doc: SubContractDoc | null;
 };
@@ -244,5 +245,6 @@ function subFormFromRow(s: SubRow): SubFormValues {
     coi_status: s.coi_status,
     w9_status: s.w9_status,
     payment_terms_days: s.payment_terms_days,
+    bills_by_invoice: s.bills_by_invoice,
   };
 }
