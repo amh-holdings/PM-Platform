@@ -125,6 +125,10 @@ attachment and write one `sub_pay_app` event.
 { "kind": "afp_status", "project": "Sussex", "afp_number": "AFP 13",
   "note": "Received, under review", "source": { "...": "..." } }
 
+{ "kind": "afp_status", "project": "Sussex", "afp_number": "Pay App #03",
+  "note": "Sent to Dimension (John Merriman) by IBT", "submitted_on": "2026-10-30",
+  "source": { "...": "..." } }
+
 { "kind": "afp_paid", "project": "Sussex", "afp_number": "AFP 13",
   "paid_on": "2026-10-24", "amount": 212400.00,
   "evidence": "Payment for AFP 13 was released 10/24.", "source": { "...": "..." } }
@@ -140,8 +144,20 @@ attachment and write one `sub_pay_app` event.
 - **compliance_doc**: a COI or W-9 sent for a sub. `doc` is `coi` or `w9`.
   Write it even when it comes from an insurance broker. The script holds a
   broker's email for a person rather than dropping it.
-- **afp_status**: the owner saying where an AFP stands. `note` is their words,
-  one line.
+- **afp_status**: where one of our AFPs to the owner stands. An AFP is the
+  owner billing: on Sussex, IBT's "Pay App #03" to Dimension is AFP 3. Write
+  one for each of these:
+  - **Sent to the owner.** Our side (IBT, AHC, TVIG) emails the AFP or pay app
+    to the owner. Set `submitted_on` to the date it was sent, and `note` to
+    who sent it to whom.
+  - **The owner's answer.** The owner says it was received, is under review,
+    is approved, is missing something (a lien waiver, a backup document), or
+    went for payment. `note` is their words, one line, with anything missing
+    named.
+  This is not a `sub_pay_app`: that kind is only a sub billing us. Never skip
+  an owner pay app because it is not a sub pay app. If the AFP is not in the
+  app yet, still write the event: it lands as Needs a match, telling a person
+  to create the AFP.
 - **afp_paid**: the owner saying an AFP was paid. `paid_on` is the payment
   date and `amount` is the amount paid, if the email gives one.
 - **inspection_result**: a third-party or owner inspection, `passed` or
@@ -216,6 +232,8 @@ attachment and write one `sub_pay_app` event.
 | COI or W-9 from anyone else (a broker) | Waits for a person, saying who sent it |
 | COI or W-9 already on file | Skipped, reported |
 | AFP status note | Added to the AFP's notes, with Undo |
+| AFP sent to the owner, AFP still a draft in the app | Proposed. Approving it marks the AFP and its billing entries Submitted on that date |
+| AFP sent to the owner, AFP not in the app | Needs a match, saying to create it in Billing |
 | AFP paid | Waits for a person, with any short pay called out. Approving it marks the AFP and its billing entries paid |
 | Inspection passed | Waits for a person. Approving it marks the inspection task complete |
 | Inspection failed | Waits as a heads-up. Nothing changes |

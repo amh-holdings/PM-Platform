@@ -375,7 +375,7 @@ async function loadSubs(db: SupabaseClient, projectId: string): Promise<Complian
 async function loadAfps(db: SupabaseClient, projectId: string): Promise<AfpRecord[]> {
   const { data } = await db
     .from("pay_applications")
-    .select("id, project_id, app_number, status, paid_at, notes, amount_due")
+    .select("id, project_id, app_number, status, submitted_at, paid_at, notes, amount_due")
     .eq("project_id", projectId);
   return (data ?? []) as AfpRecord[];
 }

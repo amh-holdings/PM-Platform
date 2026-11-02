@@ -279,7 +279,7 @@ async function undoPayApp(
 type EmailUpdateRow = { id: string; kind: string; project_id: string; target_id: string | null; payload: unknown };
 
 const SUB_COLUMNS = "id, project_id, company_name, coi_status, w9_status";
-const AFP_COLUMNS = "id, project_id, app_number, status, paid_at, notes, amount_due";
+const AFP_COLUMNS = "id, project_id, app_number, status, submitted_at, paid_at, notes, amount_due";
 
 async function readRecord(
   supabase: Supabase,

@@ -192,9 +192,9 @@ check("unknown sub is unmatched", (() => { const p = coi({ subcontractor: "Acme"
 
 // --- AFPs ---
 const afps = [
-  { id: "a12", project_id: "p1", app_number: "12", status: "paid", paid_at: "2026-09-20T12:00:00Z", notes: null, amount_due: 100000 },
-  { id: "a13", project_id: "p1", app_number: "AFP-13", status: "submitted", paid_at: null, notes: "Sent 10/1", amount_due: 212400 },
-  { id: "a14", project_id: "p1", app_number: "14", status: "draft", paid_at: null, notes: null, amount_due: 50000 },
+  { id: "a12", project_id: "p1", app_number: "12", status: "paid", submitted_at: "2026-09-01T12:00:00Z", paid_at: "2026-09-20T12:00:00Z", notes: null, amount_due: 100000 },
+  { id: "a13", project_id: "p1", app_number: "AFP-13", status: "submitted", submitted_at: "2026-10-01T12:00:00Z", paid_at: null, notes: "Sent 10/1", amount_due: 212400 },
+  { id: "a14", project_id: "p1", app_number: "14", status: "draft", submitted_at: null, paid_at: null, notes: null, amount_due: 50000 },
 ];
 check("AFP numbers normalise", afpDigits("Pay App #013") === "13" && afpDigits("AFP-13") === "13");
 const afp = (over: Record<string, unknown>) => planAfpIngest({
@@ -217,6 +217,20 @@ const afp = (over: Record<string, unknown>) => planAfpIngest({
 check("already paid AFP skipped", afp({ kind: "afp_paid", afp_number: "12", paid_on: "2026-10-24" }).action === "skip");
 check("draft AFP cannot be paid", afp({ kind: "afp_paid", afp_number: "14", paid_on: "2026-10-24" }).action === "skip");
 check("future payment date skipped", afp({ kind: "afp_paid", afp_number: "13", paid_on: "2026-11-02" }).action === "skip");
+{
+  const p = afp({ kind: "afp_status", afp_number: "Pay App #14", note: "Pay App 14 sent to the owner", submitted_on: "2026-10-27" });
+  check("draft AFP sent to owner is proposed", p.action === "insert" && !p.apply && p.row.status === "proposed" && p.row.target_id === "a14");
+  if (p.action === "insert") check("submission summary reads plainly", p.row.summary === "Mark AFP 14 submitted to the owner on Oct 27, 2026");
+}
+{
+  const p = afp({ kind: "afp_status", afp_number: "AFP 13", note: "Owner: looks perfect, missing F-2 waivers", submitted_on: "2026-10-27" });
+  check("already submitted AFP just takes the note", p.action === "insert" && !!p.apply && p.row.status === "applied" && !("status" in (p.apply?.patch ?? {})));
+}
+{
+  const p = afp({ kind: "afp_status", afp_number: "Pay App #03", note: "Submitted to Dimension", submitted_on: "2026-10-27" });
+  check("AFP sent but not in the app says to create it", p.action === "insert" && p.row.kind === "unmatched" && p.row.summary.includes("Create it in Billing"));
+}
+check("future submission skipped", afp({ kind: "afp_status", afp_number: "14", note: "x", submitted_on: "2026-11-05" }).action === "skip");
 check("unknown AFP is unmatched", (() => { const p = afp({ kind: "afp_status", afp_number: "99", note: "x" }); return p.action === "insert" && p.row.kind === "unmatched"; })());
 
 // --- inspections ---
