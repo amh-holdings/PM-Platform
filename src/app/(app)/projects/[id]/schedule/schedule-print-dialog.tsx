@@ -9,11 +9,11 @@ import {
   printRowClass,
   printSheetStamp,
   printSheetTitle,
-  rangeSelect,
   selectedPrintRows,
   type PrintCpmLike,
   type PrintableTask,
 } from "@/lib/schedule-print";
+import { rangeSelect } from "@/lib/range-select";
 
 export type PrintSelection = ReadonlySet<string> | null;
 
@@ -124,7 +124,15 @@ export function SchedulePrintDialog({
   const anchor = useRef<string | null>(null);
 
   function clickRow(e: React.MouseEvent<HTMLInputElement>, wbs: string) {
-    setSelection(rangeSelect(rows, selection, anchor.current, wbs, e.shiftKey));
+    setSelection(
+      rangeSelect(
+        rows.map((r) => r.wbs),
+        selection,
+        anchor.current,
+        wbs,
+        e.shiftKey,
+      ),
+    );
     anchor.current = wbs;
   }
 

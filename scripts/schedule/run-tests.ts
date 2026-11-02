@@ -26,9 +26,9 @@ import {
   printSheetStamp,
   printRowClass,
   printSheetTitle,
-  rangeSelect,
   selectedPrintRows,
 } from "@/lib/schedule-print";
+import { rangeSelect } from "@/lib/range-select";
 import { nameByWbs, scopeOf } from "@/lib/schedule-scope";
 import {
   branchLabel,
@@ -4167,9 +4167,7 @@ check(
 
 // Shift-click. The anchor is the last box clicked; shift-clicking a second box
 // carries ONE state across the run between them.
-const RANGE = [
-  { wbs: "1" }, { wbs: "2" }, { wbs: "3" }, { wbs: "4" }, { wbs: "5" },
-];
+const RANGE = ["1", "2", "3", "4", "5"];
 const all5 = () => new Set(["1", "2", "3", "4", "5"]);
 const list = (set: Set<string>) => Array.from(set).sort().join(",");
 

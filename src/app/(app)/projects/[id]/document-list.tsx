@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { deleteDocument, moveDocument } from "./documents-actions";
+import { deleteDocument, moveDocuments } from "./documents-actions";
+import { rangeSelect } from "@/lib/range-select";
 import {
   DOCUMENT_CATEGORY_LABEL,
   DOCUMENT_CATEGORY_OPTIONS,
@@ -74,7 +75,20 @@ export function DocumentList({ projectId, groups }: Props) {
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const [bulkCategory, setBulkCategory] = useState<DocumentCategory>("drawing");
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [, startTransition] = useTransition();
+
+  // Every row on the page, in the order it is drawn, so shift-click can range
+  // across a group boundary the way the eye expects.
+  const orderedIds = useMemo(
+    () => groups.flatMap((g) => g.documents.map((d) => d.id)),
+    [groups],
+  );
+  // The last box clicked, which shift-click ranges from. A ref, so moving it
+  // does not re-render the table mid-click.
+  const anchor = useRef<string | null>(null);
 
   if (groups.length === 0) {
     return (
@@ -89,27 +103,47 @@ export function DocumentList({ projectId, groups }: Props) {
   // only way back was to delete and re-upload, which loses the upload date
   // and, on a 32 MB plan set, several minutes.
   const handleMove = async (
-    id: string,
-    fileName: string,
+    ids: string[],
+    label: string,
     category: DocumentCategory,
   ) => {
-    setPendingId(id);
+    if (ids.length === 0) return;
+    if (ids.length === 1) setPendingId(ids[0]);
+    else setBulkBusy(true);
     setError(null);
     setNote(null);
-    const result = await moveDocument(id, projectId, category);
+    const result = await moveDocuments(ids, projectId, category);
     setPendingId(null);
+    setBulkBusy(false);
     if (!result.ok) {
       setError(result.error);
       return;
     }
-    // The row is about to jump to another group, so say where it went. A row
-    // that silently vanishes from under the cursor reads as a delete.
-    setNote(
-      `${fileName} moved to ${DOCUMENT_CATEGORY_LABEL[result.category]}.`,
-    );
+    // The rows are about to jump to another group, so say where they went. A
+    // row that silently vanishes from under the cursor reads as a delete.
+    setNote(`${label} moved to ${DOCUMENT_CATEGORY_LABEL[result.category]}.`);
+    setPicked(new Set());
+    anchor.current = null;
     startTransition(() => {
       router.refresh();
     });
+  };
+
+  const clickRow = (e: React.MouseEvent<HTMLInputElement>, id: string) => {
+    setPicked(rangeSelect(orderedIds, picked, anchor.current, id, e.shiftKey));
+    anchor.current = id;
+  };
+
+  // The header box ticks or clears this group, not the whole page: a group is
+  // the unit somebody is looking at when they reach for it.
+  const toggleGroup = (ids: string[], on: boolean) => {
+    const next = new Set(picked);
+    for (const id of ids) {
+      if (on) next.add(id);
+      else next.delete(id);
+    }
+    setPicked(next);
+    anchor.current = null;
   };
 
   const handleDelete = async (id: string, fileName: string) => {
@@ -141,6 +175,55 @@ export function DocumentList({ projectId, groups }: Props) {
           {note}
         </div>
       )}
+      {picked.size > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-primary/30 bg-muted/40 p-3 text-sm">
+          <span className="font-medium">
+            {picked.size} file{picked.size === 1 ? "" : "s"} selected
+          </span>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            Move to
+            <select
+              value={bulkCategory}
+              onChange={(e) =>
+                setBulkCategory(e.target.value as DocumentCategory)
+              }
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+            >
+              {DOCUMENT_CATEGORY_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button
+            size="sm"
+            disabled={bulkBusy}
+            onClick={() =>
+              handleMove(
+                Array.from(picked),
+                `${picked.size} file${picked.size === 1 ? "" : "s"}`,
+                bulkCategory,
+              )
+            }
+          >
+            {bulkBusy ? "Moving..." : "Move"}
+          </Button>
+          <button
+            type="button"
+            onClick={() => {
+              setPicked(new Set());
+              anchor.current = null;
+            }}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            Clear
+          </button>
+          <span className="ml-auto text-xs text-muted-foreground">
+            Shift-click to take a run of rows.
+          </span>
+        </div>
+      )}
       {groups.map((group) => (
         <details
           key={group.category}
@@ -167,6 +250,19 @@ export function DocumentList({ projectId, groups }: Props) {
             <table className="w-full text-sm">
               <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <tr className="border-b">
+                  <th className="w-10 px-4 py-2">
+                    <input
+                      type="checkbox"
+                      aria-label={`Select all ${DOCUMENT_CATEGORY_LABEL[group.category]}`}
+                      checked={group.documents.every((d) => picked.has(d.id))}
+                      onChange={(e) =>
+                        toggleGroup(
+                          group.documents.map((d) => d.id),
+                          e.target.checked,
+                        )
+                      }
+                    />
+                  </th>
                   <th className="px-4 py-2 font-medium">File</th>
                   <th className="px-4 py-2 font-medium">Size</th>
                   <th className="px-4 py-2 font-medium">Text</th>
@@ -177,7 +273,25 @@ export function DocumentList({ projectId, groups }: Props) {
               </thead>
               <tbody className="divide-y">
                 {group.documents.map((doc) => (
-                  <tr key={doc.id} className="hover:bg-muted/30">
+                  <tr
+                    key={doc.id}
+                    className={cn(
+                      "hover:bg-muted/30",
+                      picked.has(doc.id) && "bg-primary/5",
+                    )}
+                  >
+                    <td className="px-4 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={picked.has(doc.id)}
+                        aria-label={`Select ${doc.file_name}`}
+                        // onClick, not onChange: a React change event on a
+                        // checkbox carries no shiftKey. onChange stays a no-op
+                        // so the controlled input does not warn.
+                        onClick={(e) => clickRow(e, doc.id)}
+                        onChange={() => {}}
+                      />
+                    </td>
                     <td className="px-4 py-2.5 font-medium">
                       {doc.file_name}
                     </td>
@@ -203,7 +317,7 @@ export function DocumentList({ projectId, groups }: Props) {
                         disabled={pendingId === doc.id}
                         onChange={(e) =>
                           handleMove(
-                            doc.id,
+                            [doc.id],
                             doc.file_name,
                             e.target.value as DocumentCategory,
                           )
