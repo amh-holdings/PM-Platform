@@ -18,15 +18,43 @@ export async function DocumentsSection({ projectId }: Props) {
   // The list was written and never mounted, so a file uploaded here vanished
   // into a count. "once uploaded it will be automatically recorded in the
   // Documents Page" needs the page to actually show the record.
-  const { data: documents } = await supabase
+  const BASE_COLS =
+    "id, file_name, category, size_bytes, mime_type, text_status, uploaded_at, pages_count";
+
+  // 0083's columns are asked for first and the query falls back without them,
+  // because migrations here are applied by hand: selecting a column that does
+  // not exist yet 400s and takes the whole documents page down with it.
+  const withCompliance = await supabase
     .from("project_documents")
-    .select(
-      "id, file_name, category, size_bytes, mime_type, text_status, uploaded_at, pages_count",
-    )
+    .select(`${BASE_COLS}, subcontractor_id, valid_until`)
     .eq("project_id", projectId)
     .order("uploaded_at", { ascending: false, nullsFirst: false });
 
-  const rows = documents ?? [];
+  const complianceEnabled = !withCompliance.error;
+  const documents = complianceEnabled
+    ? withCompliance.data
+    : (
+        await supabase
+          .from("project_documents")
+          .select(BASE_COLS)
+          .eq("project_id", projectId)
+          .order("uploaded_at", { ascending: false, nullsFirst: false })
+      ).data;
+
+  const rows = (documents ?? []) as Array<
+    NonNullable<typeof withCompliance.data>[number]
+  >;
+
+  // The roster, for the Sub dropdown. Active only: a COI belongs to a sub who
+  // is still on the job, and a dropdown of everyone who ever was buries them.
+  const { data: subRoster } = complianceEnabled
+    ? await supabase
+        .from("subcontractors")
+        .select("id, company_name")
+        .eq("project_id", projectId)
+        .neq("active", false)
+        .order("company_name", { ascending: true })
+    : { data: null };
 
   // Grouped in the fixed category order rather than by whatever came back
   // first, so the same category sits in the same place on every project.
@@ -67,7 +95,12 @@ export async function DocumentsSection({ projectId }: Props) {
 
       <DocumentUploader projectId={projectId} />
 
-      <DocumentList projectId={projectId} groups={groups} />
+      <DocumentList
+        projectId={projectId}
+        groups={groups}
+        subs={subRoster ?? []}
+        complianceEnabled={complianceEnabled}
+      />
     </section>
   );
 }

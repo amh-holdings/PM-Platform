@@ -5,19 +5,29 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { deleteDocument, moveDocuments } from "./documents-actions";
+import {
+  attachDocument,
+  deleteDocument,
+  moveDocuments,
+} from "./documents-actions";
 import { rangeSelect } from "@/lib/range-select";
 import {
   DOCUMENT_CATEGORY_LABEL,
   DOCUMENT_CATEGORY_OPTIONS,
+  EXPIRING_DOCUMENT_CATEGORIES,
+  SUBCONTRACTOR_DOCUMENT_CATEGORIES,
   type DocumentCategory,
   type DocumentTextStatus,
 } from "./documents-constants";
+
+export type SubOption = { id: string; company_name: string };
 
 type DocumentRow = {
   id: string;
   file_name: string;
   category: DocumentCategory;
+  subcontractor_id?: string | null;
+  valid_until?: string | null;
   size_bytes: number | null;
   mime_type: string | null;
   text_status: DocumentTextStatus;
@@ -34,6 +44,9 @@ type DocumentGroup = {
 type Props = {
   projectId: string;
   groups: DocumentGroup[];
+  /** Empty until migration 0083 lands, which hides the Sub and Expires cells. */
+  subs?: SubOption[];
+  complianceEnabled?: boolean;
 };
 
 function formatBytes(bytes: number | null): string {
@@ -70,7 +83,12 @@ const TEXT_STATUS_TONE: Record<DocumentTextStatus, string> = {
   skipped: "bg-muted text-muted-foreground",
 };
 
-export function DocumentList({ projectId, groups }: Props) {
+export function DocumentList({
+  projectId,
+  groups,
+  subs = [],
+  complianceEnabled = false,
+}: Props) {
   const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +142,30 @@ export function DocumentList({ projectId, groups }: Props) {
     setNote(`${label} moved to ${DOCUMENT_CATEGORY_LABEL[result.category]}.`);
     setPicked(new Set());
     anchor.current = null;
+    startTransition(() => {
+      router.refresh();
+    });
+  };
+
+  const handleAttach = async (
+    doc: DocumentRow,
+    subcontractorId: string | null,
+    validUntil: string | null,
+  ) => {
+    setPendingId(doc.id);
+    setError(null);
+    setNote(null);
+    const result = await attachDocument(
+      doc.id,
+      projectId,
+      subcontractorId,
+      validUntil,
+    );
+    setPendingId(null);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
     startTransition(() => {
       router.refresh();
     });
@@ -268,6 +310,12 @@ export function DocumentList({ projectId, groups }: Props) {
                   <th className="px-4 py-2 font-medium">Text</th>
                   <th className="px-4 py-2 font-medium">Uploaded</th>
                   <th className="px-4 py-2 font-medium">Type</th>
+                  {complianceEnabled && (
+                    <>
+                      <th className="px-4 py-2 font-medium">Sub</th>
+                      <th className="px-4 py-2 font-medium">Expires</th>
+                    </>
+                  )}
                   <th className="px-4 py-2 text-right font-medium">Actions</th>
                 </tr>
               </thead>
@@ -340,6 +388,72 @@ export function DocumentList({ projectId, groups }: Props) {
                         )}
                       </select>
                     </td>
+                    {complianceEnabled && (
+                      <>
+                        <td className="px-4 py-2.5">
+                          {/* Only where it means something. A drawing has no
+                              subcontractor, and an empty dropdown on every row
+                              is noise that hides the ones that matter. */}
+                          {SUBCONTRACTOR_DOCUMENT_CATEGORIES.includes(
+                            doc.category,
+                          ) ? (
+                            <select
+                              value={doc.subcontractor_id ?? ""}
+                              disabled={pendingId === doc.id}
+                              onChange={(e) =>
+                                handleAttach(
+                                  doc,
+                                  e.target.value || null,
+                                  doc.valid_until ?? null,
+                                )
+                              }
+                              aria-label={`Subcontractor for ${doc.file_name}`}
+                              className="h-8 rounded-md border border-input bg-background px-2 text-xs disabled:opacity-50"
+                            >
+                              <option value="">Not assigned</option>
+                              {subs.map((s) => (
+                                <option key={s.id} value={s.id}>
+                                  {s.company_name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">
+                              -
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          {EXPIRING_DOCUMENT_CATEGORIES.includes(
+                            doc.category,
+                          ) ? (
+                            <input
+                              type="date"
+                              defaultValue={doc.valid_until ?? ""}
+                              disabled={pendingId === doc.id}
+                              // On blur, not on change: a date input fires on
+                              // every keystroke, and a half-typed year would
+                              // save 0202 before it ever reached 2027.
+                              onBlur={(e) => {
+                                const next = e.target.value || null;
+                                if (next === (doc.valid_until ?? null)) return;
+                                handleAttach(
+                                  doc,
+                                  doc.subcontractor_id ?? null,
+                                  next,
+                                );
+                              }}
+                              aria-label={`Expiry for ${doc.file_name}`}
+                              className="h-8 rounded-md border border-input bg-background px-2 text-xs disabled:opacity-50"
+                            />
+                          ) : (
+                            <span className="text-xs text-muted-foreground">
+                              -
+                            </span>
+                          )}
+                        </td>
+                      </>
+                    )}
                     <td className="px-4 py-2.5 text-right">
                       <Button
                         variant="ghost"
