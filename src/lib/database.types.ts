@@ -3278,6 +3278,11 @@ export type Database = {
         | "daily_log"
         | "email"
         | "other"
+        | "coi"
+        | "w9"
+        | "bond"
+        | "lien_waiver"
+        | "invoice"
       document_text_status:
         | "pending"
         | "processing"
@@ -3446,6 +3451,11 @@ export const Constants = {
         "daily_log",
         "email",
         "other",
+        "coi",
+        "w9",
+        "bond",
+        "lien_waiver",
+        "invoice",
       ],
       document_text_status: [
         "pending",

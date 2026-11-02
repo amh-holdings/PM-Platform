@@ -9,6 +9,19 @@ import {
   type DocumentCategory,
 } from "./documents-constants";
 
+/**
+ * Postgres rejects an enum value the database does not have yet, which is what
+ * happens when the app ships ahead of migration 0083. Raw, that reads
+ * `invalid input value for enum document_category: "coi"`, which tells the
+ * person nothing they can act on.
+ */
+function friendlyCategoryError(message: string): string {
+  if (/invalid input value for enum document_category/i.test(message)) {
+    return "That document type is not in the database yet. Run migration 0083 in the Supabase SQL Editor.";
+  }
+  return message;
+}
+
 export type RecordDocumentInput = {
   projectId: string;
   storagePath: string;
@@ -56,7 +69,7 @@ export async function recordDocument(
     // Best-effort cleanup of the uploaded blob so we don't leak orphan files
     // when the metadata insert fails (RLS rejection, FK violation, etc).
     await supabase.storage.from(DOCUMENT_BUCKET).remove([input.storagePath]);
-    return { ok: false, error: error.message };
+    return { ok: false, error: friendlyCategoryError(error.message) };
   }
 
   revalidatePath(`/projects/${input.projectId}`);
@@ -152,7 +165,7 @@ export async function moveDocuments(
     .eq("project_id", projectId)
     .select("id");
 
-  if (error) return { ok: false, error: error.message };
+  if (error) return { ok: false, error: friendlyCategoryError(error.message) };
 
   const moved = data?.length ?? 0;
   if (moved === 0) {
