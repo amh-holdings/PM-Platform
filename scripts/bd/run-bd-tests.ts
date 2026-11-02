@@ -16,6 +16,7 @@ import {
   needsOutcome,
   pipeline,
   queueBucket,
+  rollUpCostLines,
   winRate,
   type BidLite,
   type OppLite,
@@ -116,6 +117,15 @@ eq("a bid leaves an active client active", accountStageAfterBid("active_client")
 eq("monday of a Monday", mondayOf("2026-11-02"), "2026-11-02");
 eq("monday of a Sunday", mondayOf("2026-11-08"), "2026-11-02");
 eq("monday across a month", mondayOf("2026-11-01"), "2026-10-26");
+
+const rolled = rollUpCostLines([
+  { category: "gc", amount: "100.50" },
+  { category: "gc", amount: 50 },
+  { category: "bonds_insurance", amount: 25 },
+]);
+eq("cost lines roll up by category", rolled.byCategory.gc, 150.5);
+eq("cost lines total across categories", rolled.total, 175.5);
+eq("an empty category is zero", rolled.byCategory.ohp, 0);
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {

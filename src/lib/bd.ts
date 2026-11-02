@@ -144,6 +144,33 @@ export const ACCOUNT_TIER_LABEL: Record<(typeof ACCOUNT_TIERS)[number], string> 
 // emails get a follow-up about two weeks later.
 export const ACCOUNT_TOUCH_DAYS = 14;
 
+// Cost history categories (0081). Sell prices off the bid forms.
+export const COST_CATEGORIES = ["gc", "civil", "mechanical", "electrical", "ohp", "bonds_insurance"] as const;
+export type CostCategory = (typeof COST_CATEGORIES)[number];
+export const COST_CATEGORY_LABEL: Record<CostCategory, string> = {
+  gc: "GC",
+  civil: "Civil",
+  mechanical: "Mechanical",
+  electrical: "Electrical",
+  ohp: "OH&P",
+  bonds_insurance: "Bonds & insurance",
+};
+
+/** Numeric columns arrive as strings from PostgREST, so amount may be either. */
+export function rollUpCostLines(lines: { category: string; amount: number | string }[]): {
+  byCategory: Record<CostCategory, number>;
+  total: number;
+} {
+  const byCategory = Object.fromEntries(COST_CATEGORIES.map((c) => [c, 0])) as Record<CostCategory, number>;
+  let total = 0;
+  for (const l of lines) {
+    const amount = Number(l.amount);
+    total += amount;
+    if (l.category in byCategory) byCategory[l.category as CostCategory] += amount;
+  }
+  return { byCategory, total };
+}
+
 // A contact who bounced or left stays on file but out of the pickers (0080).
 export const CONTACT_STATUSES = ["active", "bounced", "left"] as const;
 export const CONTACT_STATUS_LABEL: Record<(typeof CONTACT_STATUSES)[number], string> = {

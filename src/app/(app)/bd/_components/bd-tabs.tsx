@@ -13,6 +13,7 @@ const TABS = [
     match: (p: string) => p.startsWith("/bd/pipeline") || p.startsWith("/bd/opportunities"),
   },
   { href: "/bd/clients", label: "Clients", match: (p: string) => p.startsWith("/bd/clients") },
+  { href: "/bd/costs", label: "Costs", match: (p: string) => p.startsWith("/bd/costs") },
   { href: "/bd/weekly", label: "Weekly", match: (p: string) => p.startsWith("/bd/weekly") },
   { href: "/bd/dashboard", label: "Dashboard", match: (p: string) => p.startsWith("/bd/dashboard") },
   { href: "/bd/owners", label: "Owners", match: (p: string) => p.startsWith("/bd/owners") },

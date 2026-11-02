@@ -128,6 +128,18 @@ export type BdStageChange = {
   changed_at: string;
 };
 
+/** One priced line of a bid form, sorted into a category (0081). */
+export type BdCostLine = {
+  id: string;
+  bid_id: string;
+  category: string;
+  label: string;
+  amount: number;
+  source_file: string;
+  source_row: number;
+  created_at: string;
+};
+
 type Table<Row, Required extends keyof Row> = {
   Row: Row;
   Insert: Omit<Optional<Row>, Required> & Pick<Row, Required>;
@@ -144,6 +156,7 @@ export type DatabaseWithBd = Omit<Database, "public"> & {
       bd_opportunities: Table<BdOpportunity, "company_id" | "name">;
       bd_bids: Table<BdBid, "opportunity_id" | "submitted_on" | "price">;
       bd_activities: Table<BdActivity, "company_id">;
+      bd_bid_cost_lines: Table<BdCostLine, "bid_id" | "category" | "label" | "amount" | "source_file" | "source_row">;
       bd_stage_history: Table<BdStageChange, "company_id" | "from_stage" | "to_stage">;
     };
   };
