@@ -171,6 +171,26 @@ export function rollUpCostLines(lines: { category: string; amount: number | stri
   return { byCategory, total };
 }
 
+/** Marks the lines a person typed, as opposed to lines imported off a bid form. */
+export const MANUAL_COST_SOURCE = "Manual adjustment";
+
+/**
+ * Editing a category leaves the imported form lines alone and records the
+ * difference, so the form's numbers can still be checked later. Given the form
+ * lines and what each category should now total, returns the adjustment each
+ * category needs, to the cent. A category already on target needs none.
+ */
+export function costAdjustments(
+  formLines: { category: string; amount: number | string }[],
+  targets: Record<CostCategory, number>,
+): { category: CostCategory; amount: number }[] {
+  const { byCategory } = rollUpCostLines(formLines);
+  return COST_CATEGORIES.map((category) => ({
+    category,
+    amount: Math.round((targets[category] - byCategory[category]) * 100) / 100,
+  })).filter((a) => a.amount !== 0);
+}
+
 // A contact who bounced or left stays on file but out of the pickers (0080).
 export const CONTACT_STATUSES = ["active", "bounced", "left"] as const;
 export const CONTACT_STATUS_LABEL: Record<(typeof CONTACT_STATUSES)[number], string> = {

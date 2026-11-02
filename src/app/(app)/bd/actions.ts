@@ -14,6 +14,11 @@ import {
   COMPANY_TYPES,
   CONTACT_STATUSES,
   EQUIPMENT_BASES,
+  COST_CATEGORIES,
+  COST_CATEGORY_LABEL,
+  MANUAL_COST_SOURCE,
+  costAdjustments,
+  type CostCategory,
   FIRST_FOLLOW_UP_AFTER_BID_DAYS,
   FOLLOW_UP_DAYS,
   LOSS_REASONS,
@@ -538,6 +543,80 @@ export async function updateBid(
 
   bump(`/bd/opportunities/${oppId}`);
   redirect(`/bd/opportunities/${oppId}#bids`);
+}
+
+/**
+ * Sets what each category of a bid's price breakdown totals. The form lines stay
+ * as imported; the difference goes in as one manual line per category. The new
+ * lines go in before the old ones come out, so a failed save changes nothing.
+ */
+export async function updateBreakdown(
+  bidId: string,
+  oppId: string,
+  _p: BdFormState,
+  fd: FormData,
+): Promise<BdFormState> {
+  const denied = await requireBd();
+  if (denied) return { error: denied };
+
+  const targets = {} as Record<CostCategory, number>;
+  for (const c of COST_CATEGORIES) {
+    const amount = num(fd, `cat_${c}`);
+    if (amount === "invalid") return { error: `${COST_CATEGORY_LABEL[c]} must be a dollar amount.` };
+    targets[c] = amount ?? 0;
+  }
+  const total = COST_CATEGORIES.reduce((sum, c) => sum + targets[c], 0);
+  const syncPrice = fd.get("sync_price") === "on";
+  if (syncPrice && total < 0) return { error: "The overall price cannot be negative." };
+
+  const db = bdClient(createClient());
+  const { data: bid, error: bidError } = await db
+    .from("bd_bids")
+    .select("id")
+    .eq("id", bidId)
+    .eq("opportunity_id", oppId)
+    .single();
+  if (bidError) return { error: bidError.message };
+
+  const { data: lines, error: linesError } = await db
+    .from("bd_bid_cost_lines")
+    .select("*")
+    .eq("bid_id", bid.id);
+  if (linesError) return { error: linesError.message };
+  const oldManual = (lines ?? []).filter((l) => l.source_file === MANUAL_COST_SOURCE);
+  const formLines = (lines ?? []).filter((l) => l.source_file !== MANUAL_COST_SOURCE);
+
+  const adjustments = costAdjustments(formLines, targets);
+  if (adjustments.length) {
+    const { error } = await db.from("bd_bid_cost_lines").insert(
+      adjustments.map((a) => ({
+        bid_id: bid.id,
+        category: a.category,
+        label: MANUAL_COST_SOURCE,
+        amount: a.amount,
+        source_file: MANUAL_COST_SOURCE,
+        source_row: 0,
+      })),
+    );
+    if (error) return { error: error.message };
+  }
+  if (oldManual.length) {
+    const { error } = await db
+      .from("bd_bid_cost_lines")
+      .delete()
+      .in("id", oldManual.map((l) => l.id));
+    if (error) return { error: error.message };
+  }
+  if (syncPrice) {
+    const { error } = await db
+      .from("bd_bids")
+      .update({ price: Math.round(total * 100) / 100 })
+      .eq("id", bid.id);
+    if (error) return { error: error.message };
+  }
+
+  bump(`/bd/opportunities/${oppId}`);
+  redirect(`/bd/opportunities/${oppId}#breakdown`);
 }
 
 export async function deleteBid(bidId: string, oppId: string): Promise<void> {

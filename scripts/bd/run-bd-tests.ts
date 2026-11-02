@@ -7,6 +7,7 @@
 import {
   accountStageAfterBid,
   addDays,
+  costAdjustments,
   dollarsPerWatt,
   firstBidDateByOpp,
   latestBidByOpp,
@@ -126,6 +127,26 @@ const rolled = rollUpCostLines([
 eq("cost lines roll up by category", rolled.byCategory.gc, 150.5);
 eq("cost lines total across categories", rolled.total, 175.5);
 eq("an empty category is zero", rolled.byCategory.ohp, 0);
+
+const targets = { gc: 150.5, civil: 80, mechanical: 0, electrical: 0, ohp: 0, bonds_insurance: 0 };
+const adjusted = costAdjustments(
+  [
+    { category: "gc", amount: "100.50" },
+    { category: "gc", amount: 50 },
+    { category: "civil", amount: 100 },
+    { category: "ohp", amount: 10 },
+  ],
+  targets,
+);
+eq("a category on target needs no adjustment", adjusted.some((a) => a.category === "gc"), false);
+eq("lowering a category adjusts by the difference", adjusted.find((a) => a.category === "civil")?.amount, -20);
+eq("zeroing a category backs out its lines", adjusted.find((a) => a.category === "ohp")?.amount, -10);
+eq("form lines plus adjustments land on the targets", rollUpCostLines([
+  { category: "gc", amount: 150.5 },
+  { category: "civil", amount: 100 },
+  { category: "ohp", amount: 10 },
+  ...adjusted,
+]).total, 230.5);
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {

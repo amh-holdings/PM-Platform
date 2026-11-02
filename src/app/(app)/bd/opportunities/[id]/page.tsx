@@ -8,6 +8,8 @@ import { MoneyInput } from "@/components/ui/money-input";
 import { createClient } from "@/lib/supabase/server";
 import {
   ACTIVITY_LABEL,
+  COST_CATEGORIES,
+  COST_CATEGORY_LABEL,
   EQUIPMENT_LABEL,
   FOLLOW_UP_DAYS,
   LOSS_REASONS,
@@ -38,6 +40,7 @@ import {
   logActivity,
   recordOutcome,
   updateBid,
+  updateBreakdown,
   updateOpportunity,
 } from "../../actions";
 import { ActionForm } from "../../_components/action-form";
@@ -52,7 +55,7 @@ export default async function OpportunityPage({
   searchParams,
 }: {
   params: { id: string };
-  searchParams: { editBid?: string };
+  searchParams: { editBid?: string; editBreakdown?: string };
 }) {
   const supabase = createClient();
   const db = bdClient(supabase);
@@ -90,7 +93,8 @@ export default async function OpportunityPage({
     : { data: null };
   const today = todayIso();
   const canTransfer = can(effective, "transferBdToProject");
-  const breakdownTotal = rollUpCostLines(costLines ?? []).total;
+  const breakdown = rollUpCostLines(costLines ?? []);
+  const breakdownMatchesPrice = !!latest && Math.round(breakdown.total) === Math.round(latest.price);
 
   return (
     <div className="space-y-6">
@@ -299,20 +303,61 @@ export default async function OpportunityPage({
         </details>
       </Card>
 
-      {costLines?.length ? (
-        <Card title="Price breakdown">
+      {latest && (
+        <Card
+          id="breakdown"
+          title="Price breakdown"
+          action={
+            searchParams.editBreakdown ? undefined : (
+              <Link
+                href={`/bd/opportunities/${opp.id}?editBreakdown=1#breakdown`}
+                scroll={false}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Edit
+              </Link>
+            )
+          }
+        >
           <p className="mb-3 text-xs text-muted-foreground">
-            From the latest bid. Sell prices off the bid form, not what the work cost.
+            From the latest bid. Sell prices, not what the work cost.
           </p>
-          {latest && Math.round(breakdownTotal) !== Math.round(latest.price) && (
+          {!!costLines?.length && !breakdownMatchesPrice && (
             <p className="mb-3 text-xs text-destructive">
-              This breakdown totals {formatCurrency(breakdownTotal)} off the bid form. The bid price on file is{" "}
+              This breakdown totals {formatCurrency(breakdown.total)}. The bid price on file is{" "}
               {formatCurrency(latest.price)}.
             </p>
           )}
-          <PriceBreakdown lines={costLines} size={lite.size_mw_dc} />
+          {searchParams.editBreakdown ? (
+            <>
+              <ActionForm action={updateBreakdown.bind(null, latest.id, opp.id)} submitLabel="Save breakdown">
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {COST_CATEGORIES.map((c) => (
+                    <Field key={c} label={COST_CATEGORY_LABEL[c]} htmlFor={`cat_${c}`}>
+                      <MoneyInput id={`cat_${c}`} name={`cat_${c}`} defaultValue={breakdown.byCategory[c]} />
+                    </Field>
+                  ))}
+                </div>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" name="sync_price" defaultChecked={breakdownMatchesPrice || !costLines?.length} />
+                  Set the bid price to the new total
+                </label>
+              </ActionForm>
+              <Link
+                href={`/bd/opportunities/${opp.id}#breakdown`}
+                scroll={false}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </Link>
+            </>
+          ) : costLines?.length ? (
+            <PriceBreakdown lines={costLines} size={lite.size_mw_dc} />
+          ) : (
+            <Empty>No breakdown on this bid yet.</Empty>
+          )}
         </Card>
-      ) : null}
+      )}
 
       <Card id="outcome" title={open ? "Record outcome" : "Outcome"}>
         {open ? (

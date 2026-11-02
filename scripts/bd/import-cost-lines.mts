@@ -126,7 +126,7 @@ async function main() {
     console.log(`${f.opp} | ${lines.length} lines | form ${Math.round(sum).toLocaleString()} | bid record ${Math.round(Number(bid.price)).toLocaleString()}${gap ? ` | DIFF ${gap.toLocaleString()}` : ""}`);
     if (!APPLY) continue;
 
-    const { error: de } = await db.from("bd_bid_cost_lines").delete().eq("bid_id", bid.id);
+    const { error: de } = await db.from("bd_bid_cost_lines").delete().eq("bid_id", bid.id).neq("source_file", "Manual adjustment");
     if (de) throw new Error(`${f.opp}: ${de.message}`);
     const { error: ie } = await db.from("bd_bid_cost_lines").insert(lines.map((l) => ({ ...l, bid_id: bid.id })));
     if (ie) throw new Error(`${f.opp}: ${ie.message}`);
