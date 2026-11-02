@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { deleteDocument } from "./documents-actions";
+import { deleteDocument, moveDocument } from "./documents-actions";
 import {
   DOCUMENT_CATEGORY_LABEL,
+  DOCUMENT_CATEGORY_OPTIONS,
   type DocumentCategory,
   type DocumentTextStatus,
 } from "./documents-constants";
@@ -72,6 +73,7 @@ export function DocumentList({ projectId, groups }: Props) {
   const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
   if (groups.length === 0) {
@@ -81,6 +83,34 @@ export function DocumentList({ projectId, groups }: Props) {
       </div>
     );
   }
+
+  // The category is picked from a dropdown before the file is even in the
+  // app, which is the moment the person knows least about it. Until now the
+  // only way back was to delete and re-upload, which loses the upload date
+  // and, on a 32 MB plan set, several minutes.
+  const handleMove = async (
+    id: string,
+    fileName: string,
+    category: DocumentCategory,
+  ) => {
+    setPendingId(id);
+    setError(null);
+    setNote(null);
+    const result = await moveDocument(id, projectId, category);
+    setPendingId(null);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    // The row is about to jump to another group, so say where it went. A row
+    // that silently vanishes from under the cursor reads as a delete.
+    setNote(
+      `${fileName} moved to ${DOCUMENT_CATEGORY_LABEL[result.category]}.`,
+    );
+    startTransition(() => {
+      router.refresh();
+    });
+  };
 
   const handleDelete = async (id: string, fileName: string) => {
     if (!confirm(`Delete "${fileName}"? This removes the file and its extracted text.`)) {
@@ -104,6 +134,11 @@ export function DocumentList({ projectId, groups }: Props) {
       {error && (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
           {error}
+        </div>
+      )}
+      {note && (
+        <div className="rounded-md border border-emerald-500/40 bg-emerald-50 p-3 text-sm text-emerald-900">
+          {note}
         </div>
       )}
       {groups.map((group) => (
@@ -136,6 +171,7 @@ export function DocumentList({ projectId, groups }: Props) {
                   <th className="px-4 py-2 font-medium">Size</th>
                   <th className="px-4 py-2 font-medium">Text</th>
                   <th className="px-4 py-2 font-medium">Uploaded</th>
+                  <th className="px-4 py-2 font-medium">Type</th>
                   <th className="px-4 py-2 text-right font-medium">Actions</th>
                 </tr>
               </thead>
@@ -160,6 +196,35 @@ export function DocumentList({ projectId, groups }: Props) {
                     </td>
                     <td className="px-4 py-2.5 text-muted-foreground">
                       {formatTimestamp(doc.uploaded_at)}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <select
+                        value={doc.category}
+                        disabled={pendingId === doc.id}
+                        onChange={(e) =>
+                          handleMove(
+                            doc.id,
+                            doc.file_name,
+                            e.target.value as DocumentCategory,
+                          )
+                        }
+                        aria-label={`Document type for ${doc.file_name}`}
+                        className="h-8 rounded-md border border-input bg-background px-2 text-xs disabled:opacity-50"
+                      >
+                        {DOCUMENT_CATEGORY_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                        {/* A row whose category predates the option list would
+                            otherwise render with the first option selected,
+                            which looks like the type was silently changed. */}
+                        {!DOCUMENT_CATEGORY_OPTIONS.some(
+                          (o) => o.value === doc.category,
+                        ) && (
+                          <option value={doc.category}>{doc.category}</option>
+                        )}
+                      </select>
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       <Button
