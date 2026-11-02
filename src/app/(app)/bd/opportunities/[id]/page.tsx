@@ -43,6 +43,7 @@ import { ActionForm } from "../../_components/action-form";
 import { Card, Empty, Field, Select, StagePill, TextArea, TextLink, tdClass, thClass } from "../../_components/fields";
 import { LogTouchFields } from "../../_components/log-touch-fields";
 import { OpportunityFields } from "../../_components/opportunity-fields";
+import { PriceBreakdown } from "../../_components/price-breakdown";
 
 export default async function OpportunityPage({ params }: { params: { id: string } }) {
   const supabase = createClient();
@@ -76,6 +77,9 @@ export default async function OpportunityPage({ params }: { params: { id: string
   const open = isOpenStage(opp.stage);
   const stageLabel = STAGE_LABEL[opp.stage as BdStage] ?? opp.stage;
   const lastTouch = activities.data?.[0]?.occurred_on ?? null;
+  const { data: costLines } = latest
+    ? await db.from("bd_bid_cost_lines").select("*").eq("bid_id", latest.id).order("source_row")
+    : { data: null };
   const today = todayIso();
   const canTransfer = can(effective, "transferBdToProject");
 
@@ -271,6 +275,15 @@ export default async function OpportunityPage({ params }: { params: { id: string
           </ActionForm>
         </details>
       </Card>
+
+      {costLines?.length ? (
+        <Card title="Price breakdown">
+          <p className="mb-3 text-xs text-muted-foreground">
+            From the latest bid. Sell prices off the bid form, not what the work cost.
+          </p>
+          <PriceBreakdown lines={costLines} size={lite.size_mw_dc} />
+        </Card>
+      ) : null}
 
       <Card id="outcome" title={open ? "Record outcome" : "Outcome"}>
         {open ? (

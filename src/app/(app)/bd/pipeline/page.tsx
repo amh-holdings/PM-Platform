@@ -2,6 +2,8 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import {
+  COST_CATEGORIES,
+  COST_CATEGORY_LABEL,
   OPEN_STAGES,
   STAGE_LABEL,
   dollarsPerWatt,
@@ -12,11 +14,13 @@ import {
   opportunityValue,
   pipeline,
   probabilityOf,
+  rollUpCostLines,
   type BdStage,
 } from "@/lib/bd";
-import { ownerLabel } from "@/lib/bd-db";
+import { bdClient, ownerLabel } from "@/lib/bd-db";
 import { loadPipeline, oppLite } from "@/lib/bd-load";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { Card, Empty, StagePill, TextLink, tdClass, thClass } from "../_components/fields";
 
@@ -31,11 +35,12 @@ const VIEWS = [
 export default async function PipelinePage({
   searchParams,
 }: {
-  searchParams: { view?: string; owner?: string };
+  searchParams: { view?: string; owner?: string; breakdown?: string };
 }) {
   const data = await loadPipeline();
   const view = searchParams.view ?? "open";
   const owner = searchParams.owner ?? "";
+  const showBreakdown = searchParams.breakdown === "1";
   const latest = latestBidByOpp(data.bids);
 
   const rows = data.opps.filter((o) => {
@@ -54,9 +59,13 @@ export default async function PipelinePage({
   if (view === "open") rows.sort((a, b) => stageOrder(a.stage) - stageOrder(b.stage));
 
   const totals = pipeline(rows.map(oppLite), latest);
-  const href = (patch: { view?: string; owner?: string }) => {
-    const q = new URLSearchParams({ view, owner, ...patch });
+  const { data: costLines } = showBreakdown
+    ? await bdClient(createClient()).from("bd_bid_cost_lines").select("bid_id, category, amount")
+    : { data: null };
+  const href = (patch: { view?: string; owner?: string; breakdown?: string }) => {
+    const q = new URLSearchParams({ view, owner, breakdown: showBreakdown ? "1" : "", ...patch });
     if (!q.get("owner")) q.delete("owner");
+    if (!q.get("breakdown")) q.delete("breakdown");
     return `/bd/pipeline?${q.toString()}`;
   };
 
@@ -102,6 +111,16 @@ export default async function PipelinePage({
             {p.name}
           </Link>
         ))}
+        <span className="mx-1 self-center text-muted-foreground">|</span>
+        <Link
+          href={href({ breakdown: showBreakdown ? "" : "1" })}
+          className={cn(
+            "rounded-full border px-3 py-1",
+            showBreakdown ? "border-foreground bg-foreground text-background" : "text-muted-foreground",
+          )}
+        >
+          Price breakdown
+        </Link>
       </div>
 
       <Card>
@@ -116,6 +135,12 @@ export default async function PipelinePage({
                   <th className={cn(thClass, "text-right")}>MW DC</th>
                   <th className={cn(thClass, "text-right")}>Latest bid</th>
                   <th className={cn(thClass, "text-right")}>$/W</th>
+                  {showBreakdown &&
+                    COST_CATEGORIES.map((c) => (
+                      <th key={c} className={cn(thClass, "text-right")}>
+                        {COST_CATEGORY_LABEL[c]}
+                      </th>
+                    ))}
                   <th className={cn(thClass, "text-right")}>Prob.</th>
                   <th className={thClass}>{view === "open" ? "Follow up" : "Decided"}</th>
                   <th className={thClass}>Owner</th>
@@ -126,6 +151,8 @@ export default async function PipelinePage({
                   const lite = oppLite(o);
                   const bid = latest.get(o.id);
                   const value = opportunityValue(lite, bid);
+                  const own = bid ? (costLines ?? []).filter((l) => l.bid_id === bid.id) : [];
+                  const parts = rollUpCostLines(own).byCategory;
                   return (
                     <tr key={o.id} className="border-b last:border-0">
                       <td className={tdClass}>
@@ -147,6 +174,12 @@ export default async function PipelinePage({
                       <td className={cn(tdClass, "text-right tabular-nums")}>
                         {formatPerWatt(bid ? dollarsPerWatt(bid.price, lite.size_mw_dc) : null)}
                       </td>
+                      {showBreakdown &&
+                        COST_CATEGORIES.map((c) => (
+                          <td key={c} className={cn(tdClass, "text-right tabular-nums")}>
+                            {own.length ? formatCurrency(parts[c]) : "-"}
+                          </td>
+                        ))}
                       <td className={cn(tdClass, "text-right tabular-nums")}>
                         {isOpenStage(o.stage) ? `${probabilityOf(lite)}%` : "-"}
                       </td>
