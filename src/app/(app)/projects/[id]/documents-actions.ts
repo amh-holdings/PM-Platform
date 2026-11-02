@@ -183,3 +183,56 @@ export async function moveDocuments(
   revalidatePath(`/projects/${projectId}`);
   return { ok: true, moved, category };
 }
+
+export type AttachDocumentResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Say which sub a document belongs to, and when it stops being valid.
+ *
+ * Both are nullable on purpose. Most documents are the project's, not a sub's,
+ * and a W-9 has no expiry. A compliance check has to read a null date as "does
+ * not expire" rather than "expired", which is why this never writes a
+ * placeholder date to keep the column full.
+ */
+export async function attachDocument(
+  documentId: string,
+  projectId: string,
+  subcontractorId: string | null,
+  validUntil: string | null,
+): Promise<AttachDocumentResult> {
+  const supabase = createClient();
+
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+  if (userError || !user) {
+    return { ok: false, error: "Not authenticated" };
+  }
+
+  const { data, error } = await supabase
+    .from("project_documents")
+    .update({
+      subcontractor_id: subcontractorId || null,
+      valid_until: validUntil || null,
+    })
+    .eq("id", documentId)
+    .eq("project_id", projectId)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    if (/column .*(subcontractor_id|valid_until)/i.test(error.message)) {
+      return {
+        ok: false,
+        error:
+          "Run migration 0083 in the Supabase SQL Editor to attach documents to a sub.",
+      };
+    }
+    return { ok: false, error: error.message };
+  }
+  if (!data) return { ok: false, error: "Document not found on this project" };
+
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
+}

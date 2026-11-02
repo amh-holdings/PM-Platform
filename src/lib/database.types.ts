@@ -2227,6 +2227,8 @@ export type Database = {
       }
       project_documents: {
         Row: {
+          subcontractor_id: string | null
+          valid_until: string | null
           category: Database["public"]["Enums"]["document_category"]
           description: string | null
           extracted_text: string | null
@@ -2243,6 +2245,8 @@ export type Database = {
           uploaded_by_id: string | null
         }
         Insert: {
+          subcontractor_id?: string | null
+          valid_until?: string | null
           category?: Database["public"]["Enums"]["document_category"]
           description?: string | null
           extracted_text?: string | null
@@ -2259,6 +2263,8 @@ export type Database = {
           uploaded_by_id?: string | null
         }
         Update: {
+          subcontractor_id?: string | null
+          valid_until?: string | null
           category?: Database["public"]["Enums"]["document_category"]
           description?: string | null
           extracted_text?: string | null

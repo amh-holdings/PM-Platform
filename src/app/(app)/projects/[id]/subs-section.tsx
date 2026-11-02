@@ -2,9 +2,11 @@ import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
 
 import { DOCUMENT_BUCKET } from "./documents-constants";
+import { SubCompliancePanel, type SubCompliance } from "./sub-compliance-panel";
 import { SubFormDialog } from "./sub-form-dialog";
 import { SubList } from "./sub-list";
 import type { SubContractDoc } from "./sub-contract-dialog";
+import { complianceFor, type ComplianceDoc } from "@/lib/sub-compliance";
 
 type Props = {
   projectId: string;
@@ -68,6 +70,29 @@ export async function SubcontractorsSection({ projectId }: Props) {
     ]),
   );
 
+  // Compliance reads the documents attached to each sub. Its own query, and
+  // its own failure, because 0083 is applied by hand like every migration
+  // here: folding these columns into a select that already works would take
+  // the whole roster down on a database that has not had it yet.
+  const complianceRes = await supabase
+    .from("project_documents")
+    .select("id, file_name, category, subcontractor_id, valid_until, uploaded_at")
+    .eq("project_id", projectId)
+    .not("subcontractor_id", "is", null);
+  const complianceEnabled = !complianceRes.error;
+  const complianceDocs = (complianceRes.data ?? []) as ComplianceDoc[];
+
+  const today = new Date().toISOString().slice(0, 10);
+  const compliance: SubCompliance[] = complianceEnabled
+    ? (subs ?? [])
+        .filter((s) => s.active !== false)
+        .map((s) => ({
+          subId: s.id,
+          companyName: s.company_name,
+          rows: complianceFor(s.id, complianceDocs, today),
+        }))
+    : [];
+
   const rows = (subs ?? []).map((s) => {
     const docId = docIdBySub.get(s.id);
     return {
@@ -92,6 +117,8 @@ export async function SubcontractorsSection({ projectId }: Props) {
           trigger={<Button>Add subcontractor</Button>}
         />
       </div>
+
+      <SubCompliancePanel subs={compliance} enabled={complianceEnabled} />
 
       {error ? (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
