@@ -2450,6 +2450,23 @@ export type Database = {
       }
       rfis: {
         Row: {
+          answer_document_id: string | null
+          closed_at: string | null
+          cost_impact: boolean
+          created_by_id: string | null
+          discipline: string | null
+          eor_contact: string | null
+          eor_firm: string | null
+          impact_note: string | null
+          notes: string | null
+          question_document_id: string | null
+          raised_by: string | null
+          received_at: string | null
+          schedule_impact: boolean
+          sent_to_eor_at: string | null
+          subcontractor_id: string | null
+          subject: string | null
+          wbs_code: string | null
           created_at: string | null
           date_answered: string | null
           date_issued: string | null
@@ -2465,6 +2482,23 @@ export type Database = {
           wbs_sov_id: string | null
         }
         Insert: {
+          answer_document_id?: string | null
+          closed_at?: string | null
+          cost_impact?: boolean
+          created_by_id?: string | null
+          discipline?: string | null
+          eor_contact?: string | null
+          eor_firm?: string | null
+          impact_note?: string | null
+          notes?: string | null
+          question_document_id?: string | null
+          raised_by?: string | null
+          received_at?: string | null
+          schedule_impact?: boolean
+          sent_to_eor_at?: string | null
+          subcontractor_id?: string | null
+          subject?: string | null
+          wbs_code?: string | null
           created_at?: string | null
           date_answered?: string | null
           date_issued?: string | null
@@ -2480,6 +2514,23 @@ export type Database = {
           wbs_sov_id?: string | null
         }
         Update: {
+          answer_document_id?: string | null
+          closed_at?: string | null
+          cost_impact?: boolean
+          created_by_id?: string | null
+          discipline?: string | null
+          eor_contact?: string | null
+          eor_firm?: string | null
+          impact_note?: string | null
+          notes?: string | null
+          question_document_id?: string | null
+          raised_by?: string | null
+          received_at?: string | null
+          schedule_impact?: boolean
+          sent_to_eor_at?: string | null
+          subcontractor_id?: string | null
+          subject?: string | null
+          wbs_code?: string | null
           created_at?: string | null
           date_answered?: string | null
           date_issued?: string | null

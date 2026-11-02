@@ -16,14 +16,15 @@
 // server-side in `nav-counts.ts` and passed in as plain data.
 
 import {
-  ClipboardList,
   CalendarRange,
+  ClipboardList,
   Coins,
   FileBarChart,
   FileDiff,
   FileSpreadsheet,
   FolderOpen,
   HandCoins,
+  HelpCircle,
   Inbox,
   LayoutDashboard,
   NotebookPen,
@@ -217,6 +218,16 @@ export const PROJECT_NAV: NavItem[] = [
     icon: Truck,
     blurb: "Purchase orders, deliveries and payment terms",
     find: ["po", "purchase orders", "deliveries", "equipment"],
+  },
+  {
+    key: "rfis",
+    label: "RFIs",
+    group: "records",
+    path: "rfis",
+    cap: "viewRfis",
+    icon: HelpCircle,
+    blurb: "Questions from subs, and what the engineer answered",
+    find: ["rfi", "questions", "eor", "engineer", "clarification"],
   },
   {
     key: "documents",

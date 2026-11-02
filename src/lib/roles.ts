@@ -69,6 +69,7 @@ export type Capability =
   | "viewCosts" // Costs tab + all internal cost/profit/margin figures (Phil-only)
   | "viewContractValue" // project contract $ totals; hidden from subs
   | "viewDocuments" // Documents tab
+  | "viewRfis" // RFI log
   | "reviewEmailUpdates" // Email updates page. Granted per person, never by role - see PERSON_GRANTS
   | "viewAsToggle" // the Phil-only "view as" switcher
   // --- business development ---
@@ -101,6 +102,7 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewCosts",
     "viewContractValue",
     "viewDocuments",
+    "viewRfis",
     "viewAsToggle",
     "viewBD",
     "viewProjects",
@@ -131,6 +133,9 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewProcurement",
     "viewContractValue",
     "viewDocuments",
+    // The CM is the one fielding the question on site and the one chasing the
+    // engineer for the answer. A log he cannot see is a log he works around.
+    "viewRfis",
     "viewProjects",
   ]),
   // Subcontractor: files field reports only. Commodity production is AHC's
