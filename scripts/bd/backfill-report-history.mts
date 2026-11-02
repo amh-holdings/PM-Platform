@@ -23,8 +23,8 @@ const TOUCHES = [
 ];
 
 const INACTIVE_CONTACTS = [
-  { client: "Leeward Renewable Energy", name: "Paul Platt", status: "bounced", notes: `Address undeliverable, 10/7. ${SOURCE}.` },
-  { client: "Engie", name: "Al Varshoi", status: "left", notes: `Left Engie; Maite Robyn is the contact now. ${SOURCE}.` },
+  { client: "Leeward Renewable Energy", name: "Paul Platt", email: "paul.platt@leewardenergy.com", status: "bounced", notes: `Address undeliverable, 10/7. ${SOURCE}.` },
+  { client: "Engie", name: "Al Varshoi", email: "alireza.varshoi@engie.com", status: "left", notes: `Left Engie; Maite Robyn is the contact now. ${SOURCE}.` },
 ];
 
 const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
@@ -78,6 +78,7 @@ for (const c of INACTIVE_CONTACTS) {
     const { error: e } = await db.from("bd_contacts").insert({
       company_id,
       name: c.name,
+      email: c.email,
       status: c.status,
       notes: c.notes,
     });
