@@ -81,6 +81,7 @@ export default async function BdCostsPage({ searchParams }: { searchParams: { vi
               <thead>
                 <tr className="border-b">
                   <th className={thClass}>Project</th>
+                  <th className={cn(thClass, "text-right")}>Overall price</th>
                   <th className={thClass}>Client</th>
                   <th className={thClass}>Bid date</th>
                   <th className={cn(thClass, "text-right")}>MW DC</th>
@@ -89,7 +90,6 @@ export default async function BdCostsPage({ searchParams }: { searchParams: { vi
                       {COST_CATEGORY_LABEL[c]}
                     </th>
                   ))}
-                  <th className={cn(thClass, "text-right")}>Total</th>
                 </tr>
               </thead>
               <tbody>
@@ -100,6 +100,14 @@ export default async function BdCostsPage({ searchParams }: { searchParams: { vi
                       <td className={tdClass}>
                         {opp ? <TextLink href={`/bd/opportunities/${opp.id}`}>{opp.name}</TextLink> : "-"}
                       </td>
+                      <td className={cn(tdClass, "whitespace-nowrap text-right font-medium tabular-nums")}>
+                        {cell(rollup.total, size)}
+                        {differs && (
+                          <div className="text-xs font-normal text-destructive">
+                            Bid record: {formatCurrency(bid.price)}
+                          </div>
+                        )}
+                      </td>
                       <td className={tdClass}>{client}</td>
                       <td className={cn(tdClass, "whitespace-nowrap")}>{formatDate(bid.submitted_on)}</td>
                       <td className={cn(tdClass, "text-right tabular-nums")}>{size ?? "-"}</td>
@@ -108,14 +116,6 @@ export default async function BdCostsPage({ searchParams }: { searchParams: { vi
                           {cell(rollup.byCategory[c], size)}
                         </td>
                       ))}
-                      <td className={cn(tdClass, "text-right font-medium tabular-nums")}>
-                        {cell(rollup.total, size)}
-                        {differs && (
-                          <div className="text-xs font-normal text-destructive">
-                            Bid record: {formatCurrency(bid.price)}
-                          </div>
-                        )}
-                      </td>
                     </tr>
                   );
                 })}
@@ -130,17 +130,23 @@ export default async function BdCostsPage({ searchParams }: { searchParams: { vi
       {rows.length > 0 && (
         <Card title="Lines behind each number">
           <div className="space-y-2">
-            {rows.map(({ bid, opp, own, size }) => (
+            {rows.map(({ bid, opp, own, size, rollup }) => (
               <details key={bid.id} className="rounded-md border p-3">
-                <summary className="cursor-pointer text-sm font-medium">{opp?.name ?? "-"}</summary>
+                <summary className="cursor-pointer text-sm font-medium">
+                  {opp?.name ?? "-"}
+                  <span className="ml-2 tabular-nums text-muted-foreground">
+                    Overall price: {cell(rollup.total, size)}
+                  </span>
+                </summary>
                 <p className="mt-2 text-xs text-muted-foreground">Source: {own[0]?.source_file}</p>
                 {COST_CATEGORIES.map((c) => {
                   const list = own.filter((l) => l.category === c);
                   if (!list.length) return null;
                   return (
                     <div key={c} className="mt-3">
-                      <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                        {COST_CATEGORY_LABEL[c]}
+                      <h3 className="flex justify-between text-xs font-semibold uppercase text-muted-foreground">
+                        <span>{COST_CATEGORY_LABEL[c]}</span>
+                        <span className="tabular-nums">{cell(rollup.byCategory[c], size)}</span>
                       </h3>
                       <table className="mt-1 w-full text-sm">
                         <tbody>
