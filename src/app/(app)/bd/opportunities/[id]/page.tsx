@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -7,13 +8,11 @@ import { MoneyInput } from "@/components/ui/money-input";
 import { createClient } from "@/lib/supabase/server";
 import {
   ACTIVITY_LABEL,
-  EQUIPMENT_BASES,
   EQUIPMENT_LABEL,
   FOLLOW_UP_DAYS,
   LOSS_REASONS,
   LOSS_REASON_LABEL,
   REVISION_LABEL,
-  REVISION_TYPES,
   STAGE_LABEL,
   addDays,
   dollarsPerWatt,
@@ -21,6 +20,7 @@ import {
   isOpenStage,
   latestBidByOpp,
   probabilityOf,
+  rollUpCostLines,
   todayIso,
   type BdStage,
   type LossReason,
@@ -37,15 +37,23 @@ import {
   deleteOpportunity,
   logActivity,
   recordOutcome,
+  updateBid,
   updateOpportunity,
 } from "../../actions";
 import { ActionForm } from "../../_components/action-form";
+import { BidFields } from "../../_components/bid-fields";
 import { Card, Empty, Field, Select, StagePill, TextArea, TextLink, tdClass, thClass } from "../../_components/fields";
 import { LogTouchFields } from "../../_components/log-touch-fields";
 import { OpportunityFields } from "../../_components/opportunity-fields";
 import { PriceBreakdown } from "../../_components/price-breakdown";
 
-export default async function OpportunityPage({ params }: { params: { id: string } }) {
+export default async function OpportunityPage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  searchParams: { editBid?: string };
+}) {
   const supabase = createClient();
   const db = bdClient(supabase);
   const { data: opp } = await db.from("bd_opportunities").select("*").eq("id", params.id).maybeSingle();
@@ -82,6 +90,7 @@ export default async function OpportunityPage({ params }: { params: { id: string
     : { data: null };
   const today = todayIso();
   const canTransfer = can(effective, "transferBdToProject");
+  const breakdownTotal = rollUpCostLines(costLines ?? []).total;
 
   return (
     <div className="space-y-6">
@@ -159,7 +168,7 @@ export default async function OpportunityPage({ params }: { params: { id: string
         </Card>
       )}
 
-      <Card title={`Bids (${bidRows.length})`}>
+      <Card id="bids" title={`Bids (${bidRows.length})`}>
         {bidRows.length ? (
           <div className="mb-5 overflow-x-auto">
             <table className="w-full text-sm">
@@ -177,7 +186,8 @@ export default async function OpportunityPage({ params }: { params: { id: string
               </thead>
               <tbody>
                 {bidRows.map((b) => (
-                  <tr key={b.id} className="border-b last:border-0">
+                  <Fragment key={b.id}>
+                  <tr className="border-b last:border-0">
                     <td className={tdClass}>
                       {REVISION_LABEL[b.revision_type as keyof typeof REVISION_LABEL] ?? b.revision_type}
                       {b.id === latest?.id && bidRows.length > 1 && (
@@ -207,13 +217,53 @@ export default async function OpportunityPage({ params }: { params: { id: string
                       )}
                     </td>
                     <td className={cn(tdClass, "text-right")}>
-                      <form action={deleteBid.bind(null, b.id, opp.id)}>
-                        <button type="submit" className="text-xs text-muted-foreground hover:text-destructive">
-                          Remove
-                        </button>
-                      </form>
+                      <div className="flex justify-end gap-3">
+                        <Link
+                          href={`/bd/opportunities/${opp.id}?editBid=${b.id}#bids`}
+                          scroll={false}
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          Edit
+                        </Link>
+                        <form action={deleteBid.bind(null, b.id, opp.id)}>
+                          <button type="submit" className="text-xs text-muted-foreground hover:text-destructive">
+                            Remove
+                          </button>
+                        </form>
+                      </div>
                     </td>
                   </tr>
+                  {searchParams.editBid === b.id && (
+                    <tr className="border-b last:border-0">
+                      <td colSpan={8} className="bg-muted/30 p-4">
+                        <p className="mb-3 text-xs text-muted-foreground">
+                          Corrects this bid in place. Stage, follow-up and history stay as they are. If the
+                          client got a new price, add a revision instead so this one stays on record.
+                        </p>
+                        <ActionForm action={updateBid.bind(null, b.id, opp.id)} submitLabel="Save bid">
+                          <BidFields
+                            idPrefix={`edit_${b.id}`}
+                            revisionType={b.revision_type}
+                            submittedOn={b.submitted_on}
+                            price={b.price}
+                            marginPct={b.margin_pct === null ? null : Number(b.margin_pct)}
+                            equipmentBasis={b.equipment_basis}
+                            proposalUrl={b.proposal_url}
+                            exclusions={b.exclusions}
+                            notes={b.notes}
+                          />
+                        </ActionForm>
+                        <Link
+                          href={`/bd/opportunities/${opp.id}#bids`}
+                          scroll={false}
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          Cancel
+                        </Link>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -230,23 +280,12 @@ export default async function OpportunityPage({ params }: { params: { id: string
             follow-up 7 days after the submit date.
           </p>
           <ActionForm action={addBid.bind(null, opp.id)} submitLabel="Add bid" className="mt-4 space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Field label="Revision" htmlFor="revision_type">
-                <Select
-                  name="revision_type"
-                  defaultValue={bidRows.length ? "bafo" : "final"}
-                  options={REVISION_TYPES.map((r) => ({ value: r, label: REVISION_LABEL[r] }))}
-                />
-              </Field>
-              <Field label="Submitted" htmlFor="submitted_on">
-                <Input id="submitted_on" name="submitted_on" type="date" defaultValue={today} />
-              </Field>
-              <Field label="Price" htmlFor="price" required>
-                <MoneyInput id="price" name="price" required />
-              </Field>
-              <Field label="Margin %" htmlFor="margin_pct">
-                <Input id="margin_pct" name="margin_pct" inputMode="decimal" />
-              </Field>
+            <BidFields
+              idPrefix="add"
+              revisionType={bidRows.length ? "bafo" : "final"}
+              submittedOn={today}
+              equipmentBasis={latest?.equipment_basis ?? "epc_furnished"}
+            >
               <Field label="Expected decision" htmlFor="bid_expected_decision" hint="Best guess is fine. Optional on an indicative.">
                 <Input
                   id="bid_expected_decision"
@@ -255,23 +294,7 @@ export default async function OpportunityPage({ params }: { params: { id: string
                   defaultValue={opp.expected_decision_date ?? ""}
                 />
               </Field>
-              <Field label="Equipment basis" htmlFor="equipment_basis" hint="Only compare $/W on the same basis">
-                <Select
-                  name="equipment_basis"
-                  defaultValue={latest?.equipment_basis ?? "epc_furnished"}
-                  options={EQUIPMENT_BASES.map((e) => ({ value: e, label: EQUIPMENT_LABEL[e] }))}
-                />
-              </Field>
-              <Field label="Proposal link" htmlFor="proposal_url" className="sm:col-span-1 lg:col-span-2">
-                <Input id="proposal_url" name="proposal_url" placeholder="Google Drive link" />
-              </Field>
-              <Field label="Key exclusions" htmlFor="exclusions" className="sm:col-span-2">
-                <TextArea name="exclusions" rows={2} placeholder="Interconnection, substation..." />
-              </Field>
-              <Field label="Notes" htmlFor="notes" className="sm:col-span-2">
-                <TextArea name="notes" rows={2} />
-              </Field>
-            </div>
+            </BidFields>
           </ActionForm>
         </details>
       </Card>
@@ -281,6 +304,12 @@ export default async function OpportunityPage({ params }: { params: { id: string
           <p className="mb-3 text-xs text-muted-foreground">
             From the latest bid. Sell prices off the bid form, not what the work cost.
           </p>
+          {latest && Math.round(breakdownTotal) !== Math.round(latest.price) && (
+            <p className="mb-3 text-xs text-destructive">
+              This breakdown totals {formatCurrency(breakdownTotal)} off the bid form. The bid price on file is{" "}
+              {formatCurrency(latest.price)}.
+            </p>
+          )}
           <PriceBreakdown lines={costLines} size={lite.size_mw_dc} />
         </Card>
       ) : null}

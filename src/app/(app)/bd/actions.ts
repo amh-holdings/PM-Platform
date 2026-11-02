@@ -501,6 +501,45 @@ export async function addBid(oppId: string, _p: BdFormState, fd: FormData): Prom
   return saved();
 }
 
+/**
+ * Corrects a bid on file. Unlike addBid this is not a new price going to the
+ * client, so it leaves the stage, the follow-up clock and the history alone.
+ */
+export async function updateBid(
+  bidId: string,
+  oppId: string,
+  _p: BdFormState,
+  fd: FormData,
+): Promise<BdFormState> {
+  const denied = await requireBd();
+  if (denied) return { error: denied };
+  const price = num(fd, "price");
+  if (price === null || price === "invalid" || price < 0) return { error: "Enter the bid price." };
+  const margin = num(fd, "margin_pct");
+  if (margin === "invalid") return { error: "Margin must be a percent." };
+  const submittedOn = str(fd, "submitted_on");
+  if (!submittedOn) return { error: "Enter the submitted date." };
+
+  const { error } = await bdClient(createClient())
+    .from("bd_bids")
+    .update({
+      revision_type: oneOf(fd, "revision_type", REVISION_TYPES) ?? "final",
+      submitted_on: submittedOn,
+      price,
+      margin_pct: margin,
+      equipment_basis: oneOf(fd, "equipment_basis", EQUIPMENT_BASES) ?? "epc_furnished",
+      exclusions: str(fd, "exclusions"),
+      proposal_url: str(fd, "proposal_url"),
+      notes: str(fd, "notes"),
+    })
+    .eq("id", bidId)
+    .eq("opportunity_id", oppId);
+  if (error) return { error: error.message };
+
+  bump(`/bd/opportunities/${oppId}`);
+  redirect(`/bd/opportunities/${oppId}#bids`);
+}
+
 export async function deleteBid(bidId: string, oppId: string): Promise<void> {
   if (await requireBd()) return;
   await bdClient(createClient()).from("bd_bids").delete().eq("id", bidId);
