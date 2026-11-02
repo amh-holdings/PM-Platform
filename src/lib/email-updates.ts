@@ -363,6 +363,7 @@ export type AfpRecord = {
   project_id: string;
   app_number: string;
   status: string | null;
+  submitted_at: string | null;
   paid_at: string | null;
   notes: string | null;
   amount_due: number | null;
@@ -412,12 +413,32 @@ export function planAfpStatusApply(
   afp: AfpRecord | null,
   today: string,
 ): RecordPlan {
-  const note = String((row.payload as { note?: string } | null)?.note ?? "").trim();
+  const payload = (row.payload ?? {}) as { note?: string; submitted_on?: string | null };
+  const note = String(payload.note ?? "").trim();
   if (!note) return { ok: false, reason: "The email gave no status to note." };
   if (!afp || afp.project_id !== row.project_id) return { ok: false, reason: "The AFP is not on this project." };
   const line = `${today} from email: ${note.slice(0, 500)}`;
   if ((afp.notes ?? "").includes(line)) return { ok: false, reason: "That note is already on the AFP." };
   const notes = afp.notes ? `${afp.notes}\n${line}` : line;
+
+  // The AFP went to the owner. A draft moves to Submitted on the day it was
+  // sent, and its billing entries follow, as Submit does on the AFP page. One
+  // already submitted, approved or paid just takes the note.
+  const sent = payload.submitted_on;
+  if (sent != null) {
+    if (!isIsoDate(sent)) return { ok: false, reason: "The email gave no usable submission date." };
+    if (sent > today) return { ok: false, reason: `The submission date ${sent} is in the future.` };
+    if ((afp.status ?? "draft").toLowerCase() === "draft") {
+      return {
+        ok: true,
+        table: "pay_applications",
+        id: afp.id,
+        patch: { notes, status: "submitted", submitted_at: `${sent}T12:00:00.000Z` },
+        undo: { notes: afp.notes, status: afp.status, submitted_at: afp.submitted_at },
+        cascadeEntryStatus: "submitted",
+      };
+    }
+  }
   return { ok: true, table: "pay_applications", id: afp.id, patch: { notes }, undo: { notes: afp.notes } };
 }
 

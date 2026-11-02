@@ -48,13 +48,18 @@ export type ComplianceEvent = {
   source: SweepSource;
 };
 
-/** The owner reporting where an AFP stands: received, under review, sent for payment. */
+/**
+ * Where an AFP stands: our side sending it to the owner, or the owner saying
+ * it was received, is under review, is missing something, or went for payment.
+ */
 export type AfpStatusEvent = {
   project: string;
   kind: "afp_status";
   /** As the email writes it: "AFP 13", "Pay App #13", "13". */
   afp_number: string;
   note: string;
+  /** YYYY-MM-DD, only when this email is the AFP being sent to the owner. */
+  submitted_on?: string | null;
   source: SweepSource;
 };
 
@@ -718,15 +723,43 @@ export function planAfpIngest(input: {
   const base = { project_id: input.projectId };
   if (hits.length !== 1) {
     const why = hits.length ? `Matches ${hits.length} AFPs.` : `No AFP numbered "${event.afp_number}".`;
-    const what = event.kind === "afp_status" ? `"${event.note}"` : `paid on ${event.paid_on}`;
-    return { action: "insert", apply: null, row: unmatchedRow(event.kind, `${event.afp_number}: ${what}. ${why}`, { ...event, source: undefined }, src, why) };
+    const what =
+      event.kind === "afp_paid"
+        ? `paid on ${event.paid_on}`
+        : event.submitted_on
+          ? `sent to the owner on ${fmt(event.submitted_on)}, "${event.note}"`
+          : `"${event.note}"`;
+    const fix = event.kind === "afp_status" && event.submitted_on && hits.length === 0
+      ? " Create it in Billing, then this note can go on it."
+      : "";
+    return { action: "insert", apply: null, row: unmatchedRow(event.kind, `${event.afp_number}: ${what}. ${why}${fix}`, { ...event, source: undefined }, src, why) };
   }
   const afp = hits[0];
 
   if (event.kind === "afp_status") {
-    const payload = { note: event.note };
+    const payload = { note: event.note, submitted_on: event.submitted_on ?? null };
     const plan = planAfpStatusApply({ ...base, payload }, afp, input.today);
     if (!plan.ok) return { action: "skip", reason: plan.reason };
+    // Moving a draft to Submitted moves its billing entries too, so a person
+    // confirms it. A note on its own is applied, with undo.
+    if ("status" in plan.patch) {
+      return {
+        action: "insert",
+        apply: null,
+        row: {
+          kind: "afp_status",
+          status: "proposed",
+          auto_applied: false,
+          summary: `Mark AFP ${afp.app_number} submitted to the owner on ${fmt(event.submitted_on!)}`,
+          target_table: "pay_applications",
+          target_id: afp.id,
+          payload,
+          undo_data: null,
+          match_reason: event.note.slice(0, 300),
+          ...src,
+        },
+      };
+    }
     return {
       action: "insert",
       apply: { table: plan.table, id: plan.id, patch: plan.patch },
