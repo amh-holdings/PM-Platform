@@ -126,51 +126,6 @@ export default async function BdCostsPage({ searchParams }: { searchParams: { vi
           <Empty>No bid forms loaded yet.</Empty>
         )}
       </Card>
-
-      {rows.length > 0 && (
-        <Card title="Lines behind each number">
-          <div className="space-y-2">
-            {rows.map(({ bid, opp, own, size, rollup }) => (
-              <details key={bid.id} className="rounded-md border p-3">
-                <summary className="cursor-pointer text-sm font-medium">
-                  {opp?.name ?? "-"}
-                  <span className="ml-2 tabular-nums text-muted-foreground">
-                    Overall price: {cell(rollup.total, size)}
-                  </span>
-                </summary>
-                <p className="mt-2 text-xs text-muted-foreground">Source: {own[0]?.source_file}</p>
-                {COST_CATEGORIES.map((c) => {
-                  const list = own.filter((l) => l.category === c);
-                  if (!list.length) return null;
-                  return (
-                    <div key={c} className="mt-3">
-                      <h3 className="flex justify-between text-xs font-semibold uppercase text-muted-foreground">
-                        <span>{COST_CATEGORY_LABEL[c]}</span>
-                        <span className="tabular-nums">{cell(rollup.byCategory[c], size)}</span>
-                      </h3>
-                      <table className="mt-1 w-full text-sm">
-                        <tbody>
-                          {list.map((l) => (
-                            <tr key={l.id} className="border-b last:border-0">
-                              <td className={tdClass}>{l.label}</td>
-                              <td className={cn(tdClass, "w-24 text-right text-xs text-muted-foreground")}>
-                                Row {l.source_row}
-                              </td>
-                              <td className={cn(tdClass, "w-32 text-right tabular-nums")}>
-                                {cell(Number(l.amount), size)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  );
-                })}
-              </details>
-            ))}
-          </div>
-        </Card>
-      )}
     </div>
   );
 }
