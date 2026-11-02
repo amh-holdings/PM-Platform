@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import {
   DOCUMENT_BUCKET,
+  isDocumentCategory,
   type DocumentCategory,
 } from "./documents-constants";
 
@@ -96,4 +97,59 @@ export async function deleteDocument(
 
   revalidatePath(`/projects/${projectId}`);
   return { ok: true };
+}
+
+export type MoveDocumentResult =
+  | { ok: true; category: DocumentCategory }
+  | { ok: false; error: string };
+
+/**
+ * Change a document's category.
+ *
+ * Uploading picks the category from a dropdown before the file is in the app,
+ * which is the moment the person knows least about it. Three Sussex civil
+ * drawing sets went in as Prime Contract, and until now the only way back was
+ * to delete the file and upload it again - which loses the upload date and,
+ * on a 32 MB plan set, several minutes.
+ *
+ * The file itself does not move. Category is a label on the row; the blob
+ * keeps its storage path, so nothing is re-uploaded and the extracted text
+ * survives.
+ */
+export async function moveDocument(
+  documentId: string,
+  projectId: string,
+  category: string,
+): Promise<MoveDocumentResult> {
+  const supabase = createClient();
+
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+  if (userError || !user) {
+    return { ok: false, error: "Not authenticated" };
+  }
+
+  if (!isDocumentCategory(category)) {
+    return { ok: false, error: `"${category}" is not a document type` };
+  }
+
+  // Scoped to the project as well as the id. The id alone would move a
+  // document belonging to another project if one were ever passed in.
+  const { data, error } = await supabase
+    .from("project_documents")
+    .update({ category })
+    .eq("id", documentId)
+    .eq("project_id", projectId)
+    .select("id")
+    .maybeSingle();
+
+  if (error) return { ok: false, error: error.message };
+  if (!data) {
+    return { ok: false, error: "Document not found on this project" };
+  }
+
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, category };
 }

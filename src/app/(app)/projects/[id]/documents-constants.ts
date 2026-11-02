@@ -25,6 +25,18 @@ export const DOCUMENT_CATEGORY_OPTIONS: ReadonlyArray<{
   { value: "other", label: "Other" },
 ];
 
+/**
+ * Whether a string is a category the app knows.
+ *
+ * The move control is a <select>, and a select is a suggestion, not a
+ * guarantee: what reaches the server is whatever was posted. The database
+ * enum would reject a bad value anyway, but it would do it as a Postgres
+ * error string in a red box, which tells the reader nothing they can act on.
+ */
+export function isDocumentCategory(value: unknown): value is DocumentCategory {
+  return DOCUMENT_CATEGORY_OPTIONS.some((o) => o.value === value);
+}
+
 export const DOCUMENT_CATEGORY_LABEL: Record<DocumentCategory, string> =
   Object.fromEntries(
     DOCUMENT_CATEGORY_OPTIONS.map((o) => [o.value, o.label]),
