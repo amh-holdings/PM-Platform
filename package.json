@@ -67,7 +67,8 @@
     "email:ingest": "tsx scripts/email-sweep/ingest.ts",
     "test:sync-audit": "tsx scripts/sync-audit/run-tests.ts",
     "sync:audit": "tsx scripts/sync-audit/run.ts",
-    "test:sub-compliance": "tsx scripts/subs/run-compliance-tests.ts"
+    "test:sub-compliance": "tsx scripts/subs/run-compliance-tests.ts",
+    "test:rfi": "tsx scripts/rfi/run-tests.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
