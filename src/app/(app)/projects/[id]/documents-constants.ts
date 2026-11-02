@@ -22,7 +22,29 @@ export const DOCUMENT_CATEGORY_OPTIONS: ReadonlyArray<{
   { value: "rfi", label: "RFI" },
   { value: "daily_log", label: "Daily Log" },
   { value: "email", label: "Email" },
+  // Financial and compliance. A certificate of insurance used to go in as
+  // Other and be found by remembering the file name.
+  { value: "coi", label: "COI" },
+  { value: "w9", label: "W-9" },
+  { value: "bond", label: "Bond" },
+  { value: "lien_waiver", label: "Lien Waiver" },
+  { value: "invoice", label: "Invoice" },
   { value: "other", label: "Other" },
+];
+
+/**
+ * The categories that belong to a subcontractor rather than to the project.
+ *
+ * Used to decide when the uploader asks which sub a file is for, and which
+ * rows the compliance view reads.
+ */
+export const SUBCONTRACTOR_DOCUMENT_CATEGORIES: ReadonlyArray<DocumentCategory> =
+  ["coi", "w9", "bond", "lien_waiver", "subcontract", "invoice"];
+
+/** A COI expires. A W-9 does not. */
+export const EXPIRING_DOCUMENT_CATEGORIES: ReadonlyArray<DocumentCategory> = [
+  "coi",
+  "bond",
 ];
 
 /**
@@ -54,6 +76,11 @@ export const DOCUMENT_CATEGORY_ORDER: DocumentCategory[] = [
   "rfi",
   "daily_log",
   "email",
+  "coi",
+  "w9",
+  "bond",
+  "lien_waiver",
+  "invoice",
   "other",
 ];
 
