@@ -31,6 +31,10 @@ export type RfiRow = {
   answer: string | null;
   cost_impact: boolean;
   schedule_impact: boolean;
+  reference_doc: string | null;
+  suggested_answer: string | null;
+  location: string | null;
+  priority: string;
 };
 
 /**
@@ -205,6 +209,13 @@ export function compareRfis(a: RfiRow, b: RfiRow, today: string): number {
   const br = STATE_RANK[rfiState(b)];
   if (ar !== br) return ar - br;
 
+  // High before Normal before Low, inside a state. Anything the log does not
+  // recognise sorts as Normal rather than to one end.
+  const rank = (p: string) => (p === "High" ? 0 : p === "Low" ? 2 : 1);
+  const ap = rank(a.priority);
+  const bp = rank(b.priority);
+  if (ap !== bp) return ap - bp;
+
   if (a.received_at !== b.received_at) {
     return a.received_at < b.received_at ? -1 : 1;
   }
@@ -247,6 +258,10 @@ export type RfiDbRow = {
   response: string | null;
   cost_impact: boolean | null;
   schedule_impact: boolean | null;
+  reference_doc: string | null;
+  suggested_answer: string | null;
+  location: string | null;
+  priority: string | null;
 };
 
 export function toRfiRow(db: RfiDbRow): RfiRow {
@@ -273,6 +288,13 @@ export function toRfiRow(db: RfiDbRow): RfiRow {
     answer: db.response,
     cost_impact: db.cost_impact ?? false,
     schedule_impact: db.schedule_impact ?? false,
+    reference_doc: db.reference_doc,
+    suggested_answer: db.suggested_answer,
+    location: db.location,
+    // A row written before the column existed has no priority. Normal, not
+    // High: a log where everything is urgent sorts no better than one where
+    // nothing is.
+    priority: db.priority ?? "Normal",
   };
 }
 

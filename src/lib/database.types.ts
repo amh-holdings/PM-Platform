@@ -2450,6 +2450,10 @@ export type Database = {
       }
       rfis: {
         Row: {
+          location: string | null
+          priority: string
+          reference_doc: string | null
+          suggested_answer: string | null
           answer_document_id: string | null
           closed_at: string | null
           cost_impact: boolean
@@ -2482,6 +2486,10 @@ export type Database = {
           wbs_sov_id: string | null
         }
         Insert: {
+          location?: string | null
+          priority?: string
+          reference_doc?: string | null
+          suggested_answer?: string | null
           answer_document_id?: string | null
           closed_at?: string | null
           cost_impact?: boolean
@@ -2514,6 +2522,10 @@ export type Database = {
           wbs_sov_id?: string | null
         }
         Update: {
+          location?: string | null
+          priority?: string
+          reference_doc?: string | null
+          suggested_answer?: string | null
           answer_document_id?: string | null
           closed_at?: string | null
           cost_impact?: boolean
