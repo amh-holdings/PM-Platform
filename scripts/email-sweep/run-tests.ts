@@ -7,6 +7,7 @@ import {
   planPayAppIngest,
   senderAllowed,
   afpDigits,
+  afpLabel,
   planAfpIngest,
   planChangeOrderIngest,
   planComplianceIngest,
@@ -230,6 +231,7 @@ check("future payment date skipped", afp({ kind: "afp_paid", afp_number: "13", p
   const p = afp({ kind: "afp_status", afp_number: "Pay App #03", note: "Submitted to Dimension", submitted_on: "2026-10-27" });
   check("AFP sent but not in the app says to create it", p.action === "insert" && p.row.kind === "unmatched" && p.row.summary.includes("Create it in Billing"));
 }
+check("AFP label never doubles", afpLabel("AFP 3") === "AFP 3" && afpLabel("14") === "AFP 14");
 check("future submission skipped", afp({ kind: "afp_status", afp_number: "14", note: "x", submitted_on: "2026-11-05" }).action === "skip");
 check("unknown AFP is unmatched", (() => { const p = afp({ kind: "afp_status", afp_number: "99", note: "x" }); return p.action === "insert" && p.row.kind === "unmatched"; })());
 
