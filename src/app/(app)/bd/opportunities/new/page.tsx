@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
-import { bdClient, loadBdPeople } from "@/lib/bd-db";
+import { bdClient, loadBdOwners, ownerIdForEmail } from "@/lib/bd-db";
 import { createOpportunity } from "../../actions";
 import { ActionForm } from "../../_components/action-form";
 import { Card, TextLink } from "../../_components/fields";
@@ -21,12 +21,12 @@ export default async function NewOpportunityPage({
     },
     companies,
     contacts,
-    people,
+    owners,
   ] = await Promise.all([
     supabase.auth.getUser(),
     db.from("bd_companies").select("*").order("name"),
     db.from("bd_contacts").select("*").order("name"),
-    loadBdPeople(supabase),
+    loadBdOwners(supabase),
   ]);
 
   return (
@@ -48,9 +48,9 @@ export default async function NewOpportunityPage({
           <OpportunityFields
             companies={companies.data ?? []}
             contacts={contacts.data ?? []}
-            people={people}
+            owners={owners}
             defaultCompanyId={searchParams.company}
-            defaultOwnerId={user?.id}
+            defaultOwnerId={ownerIdForEmail(owners, user?.email)}
           />
         </ActionForm>
       </Card>

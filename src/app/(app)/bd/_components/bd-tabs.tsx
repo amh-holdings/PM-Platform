@@ -14,6 +14,7 @@ const TABS = [
   },
   { href: "/bd/clients", label: "Clients", match: (p: string) => p.startsWith("/bd/clients") },
   { href: "/bd/dashboard", label: "Dashboard", match: (p: string) => p.startsWith("/bd/dashboard") },
+  { href: "/bd/owners", label: "Owners", match: (p: string) => p.startsWith("/bd/owners") },
 ];
 
 export function BdTabs() {

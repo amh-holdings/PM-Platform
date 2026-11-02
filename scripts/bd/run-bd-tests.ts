@@ -35,7 +35,7 @@ function eq(name: string, actual: unknown, expected: unknown) {
 const opp = (id: string, stage: string, extra: Partial<OppLite> = {}): OppLite => ({
   id,
   stage,
-  owner_id: null,
+  bd_owner_id: null,
   company_id: "c1",
   est_value: null,
   probability_pct: null,

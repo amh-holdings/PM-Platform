@@ -5,15 +5,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { createClient } from "@/lib/supabase/server";
 import {
+  ACCOUNT_STAGE_LABEL,
+  ACCOUNT_TIER_LABEL,
+  ACCOUNT_TOUCH_DAYS,
   ACTIVITY_LABEL,
   STAGE_LABEL,
+  addDays,
+  daysBetween,
   formatPct,
   isOpenStage,
   latestBidByOpp,
+  todayIso,
   winRate,
+  type AccountStage,
   type BdStage,
 } from "@/lib/bd";
-import { bdClient, loadBdPeople } from "@/lib/bd-db";
+import { bdClient, loadBdOwners, loadBdPeople, ownerLabel } from "@/lib/bd-db";
 import { oppLite } from "@/lib/bd-load";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -29,7 +36,7 @@ export default async function ClientPage({ params }: { params: { id: string } })
   const { data: company } = await db.from("bd_companies").select("*").eq("id", params.id).maybeSingle();
   if (!company) notFound();
 
-  const [contacts, opps, activities, people] = await Promise.all([
+  const [contacts, opps, activities, people, owners] = await Promise.all([
     db.from("bd_contacts").select("*").eq("company_id", company.id).order("name"),
     db.from("bd_opportunities").select("*").eq("company_id", company.id).order("updated_at", { ascending: false }),
     db
@@ -40,6 +47,7 @@ export default async function ClientPage({ params }: { params: { id: string } })
       .order("created_at", { ascending: false })
       .limit(50),
     loadBdPeople(supabase),
+    loadBdOwners(supabase),
   ]);
   const oppRows = opps.data ?? [];
   const { data: bids } = oppRows.length
@@ -48,8 +56,11 @@ export default async function ClientPage({ params }: { params: { id: string } })
   const latest = latestBidByOpp((bids ?? []).map((b) => ({ ...b, price: Number(b.price) })));
   const wr = winRate(oppRows.map(oppLite), latest);
   const personName = new Map(people.map((p) => [p.id, p.name]));
+  const ownerName = new Map(owners.map((o) => [o.id, o.name]));
   const contactName = new Map((contacts.data ?? []).map((c) => [c.id, c.name]));
   const oppName = new Map(oppRows.map((o) => [o.id, o.name]));
+  const today = todayIso();
+  const late = company.next_touch_date ? daysBetween(company.next_touch_date, today) : 0;
 
   return (
     <div className="space-y-6">
@@ -57,9 +68,10 @@ export default async function ClientPage({ params }: { params: { id: string } })
         <div>
           <h1 className="text-2xl font-semibold">{company.name}</h1>
           <p className="text-sm text-muted-foreground">
-            {company.company_type}
+            {ACCOUNT_TIER_LABEL[company.tier as keyof typeof ACCOUNT_TIER_LABEL] ?? company.tier}
+            {` - ${company.company_type}`}
             {company.state && ` - ${company.state}`}
-            {company.owner_id && ` - Owner: ${personName.get(company.owner_id) ?? "-"}`}
+            {` - Owner: ${ownerLabel(company.bd_owner_id, ownerName)}`}
             {company.website && (
               <>
                 {" - "}
@@ -74,6 +86,19 @@ export default async function ClientPage({ params }: { params: { id: string } })
               </>
             )}
           </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+            <StagePill
+              stage={company.relationship_stage === "not_pursuing" ? "dead" : "lead"}
+              label={ACCOUNT_STAGE_LABEL[company.relationship_stage as AccountStage] ?? company.relationship_stage}
+            />
+            {company.next_step && <span>Next: {company.next_step}</span>}
+            {company.next_touch_date && (
+              <span className={cn("text-muted-foreground", late > 0 && "font-medium text-destructive")}>
+                due {formatDate(company.next_touch_date)}
+                {late > 0 && ` (${late}d late)`}
+              </span>
+            )}
+          </div>
           {company.notes && <p className="mt-2 max-w-2xl whitespace-pre-wrap text-sm">{company.notes}</p>}
         </div>
         <Button asChild size="sm">
@@ -201,11 +226,15 @@ export default async function ClientPage({ params }: { params: { id: string } })
 
       <Card title="Log a touch" id="log">
         <p className="mb-3 text-xs text-muted-foreground">
-          For a relationship touch with no particular bid. To follow up on a bid, log it on the
-          opportunity so its next follow-up date moves.
+          For a relationship touch with no particular bid. It moves this client&apos;s next touch.
+          To follow up on a bid, log it on the opportunity so its follow-up date moves.
         </p>
         <ActionForm action={logActivity} submitLabel="Log touch">
-          <LogTouchFields companyId={company.id} contacts={contacts.data ?? []} />
+          <LogTouchFields
+            companyId={company.id}
+            contacts={contacts.data ?? []}
+            account={{ nextTouch: addDays(today, ACCOUNT_TOUCH_DAYS), nextStep: company.next_step }}
+          />
         </ActionForm>
       </Card>
 
@@ -240,7 +269,7 @@ export default async function ClientPage({ params }: { params: { id: string } })
       <details className="rounded-lg border bg-card p-5 shadow-sm">
         <summary className="cursor-pointer text-base font-semibold">Edit client</summary>
         <ActionForm action={updateCompany.bind(null, company.id)} submitLabel="Save" className="mt-4 space-y-4">
-          <CompanyFields company={company} people={people} />
+          <CompanyFields company={company} owners={owners} />
         </ActionForm>
       </details>
     </div>

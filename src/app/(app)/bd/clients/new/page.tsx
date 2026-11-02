@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
-import { loadBdPeople } from "@/lib/bd-db";
+import { loadBdOwners, ownerIdForEmail } from "@/lib/bd-db";
 import { createCompany } from "../../actions";
 import { ActionForm } from "../../_components/action-form";
 import { Card } from "../../_components/fields";
@@ -14,8 +14,8 @@ export default async function NewClientPage() {
     {
       data: { user },
     },
-    people,
-  ] = await Promise.all([supabase.auth.getUser(), loadBdPeople(supabase)]);
+    owners,
+  ] = await Promise.all([supabase.auth.getUser(), loadBdOwners(supabase)]);
 
   return (
     <div className="space-y-6">
@@ -30,7 +30,7 @@ export default async function NewClientPage() {
       </div>
       <Card>
         <ActionForm action={createCompany} submitLabel="Create client">
-          <CompanyFields people={people} defaultOwnerId={user?.id} />
+          <CompanyFields owners={owners} defaultOwnerId={ownerIdForEmail(owners, user?.email)} />
         </ActionForm>
       </Card>
     </div>

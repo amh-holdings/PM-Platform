@@ -105,6 +105,45 @@ export const EQUIPMENT_LABEL: Record<(typeof EQUIPMENT_BASES)[number], string> =
 
 export const COMPANY_TYPES = ["Developer", "IPP", "Utility", "EPC", "Other"] as const;
 
+// Account stage: where the relationship stands, separate from any one bid.
+// The weekly tracker's dropdown, kept word for word (0078).
+export const ACCOUNT_STAGES = [
+  "not_contacted",
+  "contacted",
+  "in_conversation",
+  "quals_sent",
+  "meeting_held",
+  "bid_proposal",
+  "active_client",
+  "not_pursuing",
+] as const;
+export type AccountStage = (typeof ACCOUNT_STAGES)[number];
+
+export const ACCOUNT_STAGE_LABEL: Record<AccountStage, string> = {
+  not_contacted: "Not Contacted",
+  contacted: "Contacted",
+  in_conversation: "In Conversation",
+  quals_sent: "Qualifications Sent",
+  meeting_held: "Meeting Held",
+  bid_proposal: "Bid / Proposal",
+  active_client: "Active Client",
+  not_pursuing: "Not Pursuing",
+};
+
+export function isPursued(stage: string): boolean {
+  return stage !== "not_pursuing";
+}
+
+export const ACCOUNT_TIERS = ["active", "prospect"] as const;
+export const ACCOUNT_TIER_LABEL: Record<(typeof ACCOUNT_TIERS)[number], string> = {
+  active: "Active",
+  prospect: "Prospect",
+};
+
+// Default gap to the next account touch when none is given. Luke's intro
+// emails get a follow-up about two weeks later.
+export const ACCOUNT_TOUCH_DAYS = 14;
+
 export const ACTIVITY_TYPES = ["call", "email", "meeting", "site_visit", "text", "other"] as const;
 export const ACTIVITY_LABEL: Record<(typeof ACTIVITY_TYPES)[number], string> = {
   call: "Call",
@@ -147,7 +186,7 @@ export type BidLite = {
 export type OppLite = {
   id: string;
   stage: string;
-  owner_id: string | null;
+  bd_owner_id: string | null;
   company_id: string;
   est_value: number | null;
   probability_pct: number | null;

@@ -12,12 +12,15 @@ export function LogTouchFields({
   opportunityId,
   contacts,
   suggestedNext,
+  account,
 }: {
   companyId: string;
   opportunityId?: string;
   contacts: BdContact[];
   /** Present when the touch is on an open opportunity. */
   suggestedNext?: string;
+  /** Present for a client-level touch: moves the account's next touch and step. */
+  account?: { nextTouch: string; nextStep: string | null };
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -50,8 +53,17 @@ export function LogTouchFields({
             defaultValue={suggestedNext}
           />
         </Field>
+      ) : account ? (
+        <Field label="Next touch" htmlFor="next_touch_date">
+          <Input id="next_touch_date" name="next_touch_date" type="date" defaultValue={account.nextTouch} />
+        </Field>
       ) : (
         <div />
+      )}
+      {account && (
+        <Field label="Next step" htmlFor="next_step" className="sm:col-span-2 lg:col-span-4">
+          <Input id="next_step" name="next_step" defaultValue={account.nextStep ?? ""} />
+        </Field>
       )}
       <Field label="Notes" htmlFor="notes" className="sm:col-span-2 lg:col-span-4">
         <TextArea name="notes" rows={2} placeholder="What was said, what happens next" />

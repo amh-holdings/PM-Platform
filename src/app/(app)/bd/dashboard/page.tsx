@@ -49,9 +49,9 @@ export default async function BdDashboardPage({ searchParams }: { searchParams: 
   ).sort((a, b) => b.localeCompare(a));
 
   // Follow-up health per owner, open work only.
-  const health = [...data.people, { id: "", name: "Unassigned" }]
+  const health = [...data.owners.map((o) => ({ id: o.id, name: o.name })), { id: "", name: "Unassigned" }]
     .map((p) => {
-      const open = lites.filter((o) => isOpenStage(o.stage) && (o.owner_id ?? "") === p.id);
+      const open = lites.filter((o) => isOpenStage(o.stage) && (o.bd_owner_id ?? "") === p.id);
       return {
         p,
         open: open.length,

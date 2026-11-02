@@ -4,8 +4,11 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
-import { bdClient } from "@/lib/bd-db";
+import { bdClient, loadBdOwners, ownerIdForEmail } from "@/lib/bd-db";
 import {
+  ACCOUNT_STAGES,
+  ACCOUNT_TIERS,
+  ACCOUNT_TOUCH_DAYS,
   ACTIVITY_TYPES,
   BD_STAGES,
   COMPANY_TYPES,
@@ -17,6 +20,7 @@ import {
   REVISION_TYPES,
   addDays,
   isOpenStage,
+  isPursued,
   todayIso,
   type BdStage,
 } from "@/lib/bd";
@@ -30,6 +34,15 @@ import type { BdFormState } from "./form-state";
 async function requireBd(): Promise<string | null> {
   const role = toEffectiveRole(await readDbRole());
   return can(role, "viewBD") ? null : "You do not have access to business development.";
+}
+
+/** The owner the signed-in user is, matched by email (0079). */
+async function myOwnerId(): Promise<string | null> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return ownerIdForEmail(await loadBdOwners(supabase), user?.email);
 }
 
 async function userId(): Promise<string | null> {
@@ -66,15 +79,62 @@ function bump(...paths: string[]) {
   }
 }
 
+// -------------------------------------------------------------- owners ----
+
+function ownerFields(fd: FormData): { name: string; email: string | null } | { error: string } {
+  const name = str(fd, "name");
+  const email = str(fd, "email")?.toLowerCase() ?? null;
+  if (!name) return { error: "Owner name is required." };
+  if (email && !email.includes("@")) return { error: "That email does not look right. Leave it blank if there is none." };
+  return { name, email };
+}
+
+function ownerSaveError(message: string): string {
+  if (message.includes("bd_owners_name_key")) return "An owner with that name already exists.";
+  if (message.includes("bd_owners_email_key")) return "Another owner already has that email.";
+  return message;
+}
+
+export async function addOwner(_p: BdFormState, fd: FormData): Promise<BdFormState> {
+  const denied = await requireBd();
+  if (denied) return { error: denied };
+  const fields = ownerFields(fd);
+  if ("error" in fields) return fields;
+  const { error } = await bdClient(createClient()).from("bd_owners").insert(fields);
+  if (error) return { error: ownerSaveError(error.message) };
+  bump("/bd/owners");
+  return saved();
+}
+
+export async function updateOwner(ownerId: string, _p: BdFormState, fd: FormData): Promise<BdFormState> {
+  const denied = await requireBd();
+  if (denied) return { error: denied };
+  const fields = ownerFields(fd);
+  if ("error" in fields) return fields;
+  const { error } = await bdClient(createClient()).from("bd_owners").update(fields).eq("id", ownerId);
+  if (error) return { error: ownerSaveError(error.message) };
+  bump("/bd/owners");
+  return saved();
+}
+
 // ------------------------------------------------------------- clients ----
 
 function companyFields(fd: FormData) {
+  const stage = oneOf(fd, "relationship_stage", ACCOUNT_STAGES) ?? "not_contacted";
+  let next = str(fd, "next_touch_date");
+  // The database insists a pursued account has a next touch. Default it
+  // rather than bounce the form.
+  if (isPursued(stage) && !next) next = addDays(todayIso(), ACCOUNT_TOUCH_DAYS);
   return {
     name: str(fd, "name"),
     company_type: oneOf(fd, "company_type", COMPANY_TYPES) ?? "Developer",
     state: str(fd, "state"),
     website: str(fd, "website"),
-    owner_id: str(fd, "owner_id"),
+    bd_owner_id: str(fd, "bd_owner_id"),
+    relationship_stage: stage,
+    tier: oneOf(fd, "tier", ACCOUNT_TIERS) ?? "prospect",
+    next_step: str(fd, "next_step"),
+    next_touch_date: next,
     notes: str(fd, "notes"),
   };
 }
@@ -162,7 +222,7 @@ type OppFields = {
   size_mw_dc: number | null;
   size_mwh: number | null;
   stage: BdStage;
-  owner_id: string | null;
+  bd_owner_id: string | null;
   source: string | null;
   est_value: number | null;
   probability_pct: number | null;
@@ -195,7 +255,7 @@ function oppFields(fd: FormData, fallbackStage: BdStage): OppFields | { error: s
     size_mw_dc: mw,
     size_mwh: mwh,
     stage,
-    owner_id: str(fd, "owner_id"),
+    bd_owner_id: str(fd, "bd_owner_id"),
     source: str(fd, "source"),
     est_value: est,
     probability_pct: prob,
@@ -223,7 +283,7 @@ export async function createOpportunity(_p: BdFormState, fd: FormData): Promise<
       ...fields,
       company_id: fields.company_id,
       name: fields.name,
-      owner_id: fields.owner_id ?? me,
+      bd_owner_id: fields.bd_owner_id ?? (await myOwnerId()),
       created_by: me,
     })
     .select("id")
@@ -411,6 +471,20 @@ export async function logActivity(_p: BdFormState, fd: FormData): Promise<BdForm
       .from("bd_opportunities")
       .update({ next_follow_up_date: next })
       .eq("id", oppId);
+    if (upErr) return { error: upErr.message };
+  }
+
+  // A client-level touch moves the account's own next touch and next step.
+  const nextTouch = str(fd, "next_touch_date");
+  const nextStep = str(fd, "next_step");
+  if (!oppId && (nextTouch || nextStep)) {
+    const { error: upErr } = await db
+      .from("bd_companies")
+      .update({
+        ...(nextTouch ? { next_touch_date: nextTouch } : {}),
+        ...(nextStep ? { next_step: nextStep } : {}),
+      })
+      .eq("id", companyId);
     if (upErr) return { error: upErr.message };
   }
   bump(`/bd/clients/${companyId}`, ...(oppId ? [`/bd/opportunities/${oppId}`] : []));

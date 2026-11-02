@@ -1,21 +1,21 @@
 import { Input } from "@/components/ui/input";
 import { MoneyInput } from "@/components/ui/money-input";
 import { OPEN_STAGES, STAGE_LABEL, STAGE_PROBABILITY } from "@/lib/bd";
-import type { BdCompany, BdContact, BdOpportunity, BdPerson } from "@/lib/bd-db";
+import type { BdCompany, BdContact, BdOpportunity, BdOwner } from "@/lib/bd-db";
 import { Field, Select } from "./fields";
 
 /** The opportunity's own facts. Used by New and by Edit on the detail page. */
 export function OpportunityFields({
   companies,
   contacts,
-  people,
+  owners,
   opp,
   defaultCompanyId,
   defaultOwnerId,
 }: {
   companies: BdCompany[];
   contacts: BdContact[];
-  people: BdPerson[];
+  owners: BdOwner[];
   opp?: BdOpportunity;
   defaultCompanyId?: string;
   defaultOwnerId?: string | null;
@@ -54,12 +54,12 @@ export function OpportunityFields({
           options={OPEN_STAGES.map((s) => ({ value: s, label: STAGE_LABEL[s] }))}
         />
       </Field>
-      <Field label="Owner" htmlFor="owner_id">
+      <Field label="Owner" htmlFor="bd_owner_id">
         <Select
-          name="owner_id"
+          name="bd_owner_id"
           blank="Unassigned"
-          defaultValue={opp?.owner_id ?? defaultOwnerId}
-          options={people.map((p) => ({ value: p.id, label: p.name }))}
+          defaultValue={opp ? opp.bd_owner_id : defaultOwnerId}
+          options={owners.map((o) => ({ value: o.id, label: o.name }))}
         />
       </Field>
       <Field label="State" htmlFor="state">

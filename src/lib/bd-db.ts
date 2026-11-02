@@ -25,7 +25,27 @@ export type BdCompany = {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  // 0078: account tracking
+  relationship_stage: string;
+  tier: string;
+  // 0079: the owner, who may have no login
+  bd_owner_id: string | null;
+  next_step: string | null;
+  next_touch_date: string | null;
 };
+
+/** A BD owner (0079). Email is optional; when set, it links the name to a login. */
+export type BdOwner = {
+  id: string;
+  name: string;
+  email: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export function ownerLabel(ownerId: string | null, ownerName: Map<string, string>): string {
+  return (ownerId && ownerName.get(ownerId)) || "-";
+}
 
 export type BdContact = {
   id: string;
@@ -50,6 +70,7 @@ export type BdOpportunity = {
   size_mwh: number | null;
   stage: string;
   owner_id: string | null;
+  bd_owner_id: string | null;
   source: string | null;
   est_value: number | null;
   probability_pct: number | null;
@@ -104,6 +125,7 @@ type Table<Row, Required extends keyof Row> = {
 export type DatabaseWithBd = Omit<Database, "public"> & {
   public: Omit<Pub, "Tables"> & {
     Tables: T & {
+      bd_owners: Table<BdOwner, "name">;
       bd_companies: Table<BdCompany, "name">;
       bd_contacts: Table<BdContact, "company_id" | "name">;
       bd_opportunities: Table<BdOpportunity, "company_id" | "name">;
@@ -120,11 +142,23 @@ export function bdClient(supabase: unknown): BdClient {
   return supabase as BdClient;
 }
 
+export async function loadBdOwners(supabase: unknown): Promise<BdOwner[]> {
+  const { data } = await bdClient(supabase).from("bd_owners").select("*").order("name");
+  return data ?? [];
+}
+
+/** The owner a signed-in user is: the one carrying their email. */
+export function ownerIdForEmail(owners: BdOwner[], email: string | null | undefined): string | null {
+  if (!email) return null;
+  const e = email.toLowerCase();
+  return owners.find((o) => o.email?.toLowerCase() === e)?.id ?? null;
+}
+
 export type BdPerson = { id: string; name: string };
 
 /**
- * People who can own an opportunity: Phil and the bd users. RLS lets a bd
- * user read exactly these profiles (0074); Phil reads all and we filter.
+ * People with a login who can log BD activity: Phil and the bd users. RLS lets
+ * a bd user read exactly these profiles (0074); Phil reads all and we filter.
  */
 export async function loadBdPeople(supabase: unknown): Promise<BdPerson[]> {
   const { data } = await (supabase as SupabaseClient)

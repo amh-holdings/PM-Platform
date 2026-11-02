@@ -25,7 +25,7 @@ import {
   type BdStage,
   type LossReason,
 } from "@/lib/bd";
-import { bdClient, loadBdPeople } from "@/lib/bd-db";
+import { bdClient, loadBdOwners, loadBdPeople, ownerLabel } from "@/lib/bd-db";
 import { oppLite } from "@/lib/bd-load";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { can } from "@/lib/roles";
@@ -50,7 +50,7 @@ export default async function OpportunityPage({ params }: { params: { id: string
   const { data: opp } = await db.from("bd_opportunities").select("*").eq("id", params.id).maybeSingle();
   if (!opp) notFound();
 
-  const [companies, contacts, bids, activities, people, { effective }] = await Promise.all([
+  const [companies, contacts, bids, activities, people, owners, { effective }] = await Promise.all([
     db.from("bd_companies").select("*").order("name"),
     db.from("bd_contacts").select("*").order("name"),
     db.from("bd_bids").select("*").eq("opportunity_id", opp.id).order("submitted_on", { ascending: false }),
@@ -61,6 +61,7 @@ export default async function OpportunityPage({ params }: { params: { id: string
       .order("occurred_on", { ascending: false })
       .order("created_at", { ascending: false }),
     loadBdPeople(supabase),
+    loadBdOwners(supabase),
     getEffectiveRole(),
   ]);
 
@@ -68,6 +69,7 @@ export default async function OpportunityPage({ params }: { params: { id: string
   const companyContacts = (contacts.data ?? []).filter((c) => c.company_id === opp.company_id);
   const contactName = new Map((contacts.data ?? []).map((c) => [c.id, c.name]));
   const personName = new Map(people.map((p) => [p.id, p.name]));
+  const ownerName = new Map(owners.map((o) => [o.id, o.name]));
   const bidRows = (bids.data ?? []).map((b) => ({ ...b, price: Number(b.price) }));
   const latest = latestBidByOpp(bidRows).get(opp.id);
   const lite = oppLite(opp);
@@ -88,7 +90,7 @@ export default async function OpportunityPage({ params }: { params: { id: string
           <p className="text-sm text-muted-foreground">
             {company ? <TextLink href={`/bd/clients/${company.id}`}>{company.name}</TextLink> : "-"}
             {[opp.county, opp.state].filter(Boolean).length > 0 && ` - ${[opp.county, opp.state].filter(Boolean).join(", ")}`}
-            {opp.owner_id && ` - Owner: ${personName.get(opp.owner_id) ?? "-"}`}
+            {opp.bd_owner_id && ` - Owner: ${ownerLabel(opp.bd_owner_id, ownerName)}`}
           </p>
         </div>
         {opp.stage === "won" &&
@@ -352,7 +354,7 @@ export default async function OpportunityPage({ params }: { params: { id: string
           <OpportunityFields
             companies={companies.data ?? []}
             contacts={contacts.data ?? []}
-            people={people}
+            owners={owners}
             opp={opp}
           />
         </ActionForm>

@@ -14,6 +14,7 @@ import {
   probabilityOf,
   type BdStage,
 } from "@/lib/bd";
+import { ownerLabel } from "@/lib/bd-db";
 import { loadPipeline, oppLite } from "@/lib/bd-load";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -38,7 +39,7 @@ export default async function PipelinePage({
   const latest = latestBidByOpp(data.bids);
 
   const rows = data.opps.filter((o) => {
-    if (owner && o.owner_id !== owner) return false;
+    if (owner && o.bd_owner_id !== owner) return false;
     if (view === "open") return isOpenStage(o.stage);
     if (view === "won") return o.stage === "won";
     if (view === "lost") return o.stage === "lost";
@@ -89,7 +90,7 @@ export default async function PipelinePage({
           </Link>
         ))}
         <span className="mx-1 self-center text-muted-foreground">|</span>
-        {[{ id: "", name: "All owners" }, ...data.people].map((p) => (
+        {[{ id: "", name: "All owners" }, ...data.owners].map((p) => (
           <Link
             key={p.id || "all"}
             href={href({ owner: p.id })}
@@ -152,7 +153,7 @@ export default async function PipelinePage({
                       <td className={cn(tdClass, "whitespace-nowrap")}>
                         {formatDate(isOpenStage(o.stage) ? o.next_follow_up_date : o.outcome_date)}
                       </td>
-                      <td className={tdClass}>{o.owner_id ? data.personName.get(o.owner_id) ?? "-" : "-"}</td>
+                      <td className={tdClass}>{ownerLabel(o.bd_owner_id, data.ownerName)}</td>
                     </tr>
                   );
                 })}

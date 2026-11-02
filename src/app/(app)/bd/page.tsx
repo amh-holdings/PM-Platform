@@ -2,17 +2,20 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import {
+  ACCOUNT_STAGE_LABEL,
   STAGE_LABEL,
   STALE_CLIENT_DAYS,
   daysBetween,
   isOpenStage,
+  isPursued,
   needsOutcome,
   queueBucket,
   todayIso,
+  type AccountStage,
   type BdStage,
   type QueueBucket,
 } from "@/lib/bd";
-import type { BdOpportunity } from "@/lib/bd-db";
+import { ownerLabel, type BdOpportunity } from "@/lib/bd-db";
 import { loadPipeline, oppLite, type PipelineData } from "@/lib/bd-load";
 import { formatDate } from "@/lib/format";
 import { getEffectiveRole } from "@/lib/roles-server";
@@ -37,7 +40,7 @@ export default async function FollowUpQueuePage({
   const today = todayIso();
 
   const open = data.opps.filter(
-    (o) => isOpenStage(o.stage) && (who === "all" || o.owner_id === data.me),
+    (o) => isOpenStage(o.stage) && (who === "all" || o.bd_owner_id === data.me),
   );
   const outcomeDue = open.filter((o) => needsOutcome(oppLite(o), today));
   const outcomeIds = new Set(outcomeDue.map((o) => o.id));
@@ -52,8 +55,18 @@ export default async function FollowUpQueuePage({
   );
   const laterCount = byBucket.get("later")?.length ?? 0;
 
-  const stale = data.companies
-    .filter((c) => who === "all" || c.owner_id === data.me)
+  const myCompanies = data.companies.filter(
+    (c) => isPursued(c.relationship_stage) && (who === "all" || c.bd_owner_id === data.me),
+  );
+  // Accounts due within the week, most overdue first. Bid follow-ups above,
+  // relationship touches here - the weekly tracker, worked from the platform.
+  const accountsDue = myCompanies
+    .filter((c) => c.next_touch_date && daysBetween(today, c.next_touch_date) <= 7)
+    .sort((a, b) => (a.next_touch_date ?? "").localeCompare(b.next_touch_date ?? ""));
+
+  // Going cold = no touch in a while AND nothing scheduled to fix it.
+  const stale = myCompanies
+    .filter((c) => !c.next_touch_date || c.next_touch_date <= today)
     .map((c) => {
       const last = data.lastTouchByCompany.get(c.id) ?? null;
       const since = last ?? c.created_at.slice(0, 10);
@@ -124,9 +137,59 @@ export default async function FollowUpQueuePage({
         </p>
       )}
 
+      <Card title={`Accounts to touch (${accountsDue.length})`}>
+        <p className="mb-3 text-sm text-muted-foreground">
+          Relationship follow-ups due this week or late. Logging a touch on the client moves its date.
+        </p>
+        {accountsDue.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className={thClass}>Client</th>
+                  <th className={thClass}>Stage</th>
+                  <th className={thClass}>Next step</th>
+                  <th className={thClass}>Due</th>
+                  <th className={thClass}>Owner</th>
+                  <th className={thClass} />
+                </tr>
+              </thead>
+              <tbody>
+                {accountsDue.map((c) => {
+                  const late = daysBetween(c.next_touch_date!, today);
+                  return (
+                    <tr key={c.id} className="border-b last:border-0">
+                      <td className={tdClass}>
+                        <TextLink href={`/bd/clients/${c.id}`}>{c.name}</TextLink>
+                      </td>
+                      <td className={cn(tdClass, "whitespace-nowrap")}>
+                        {ACCOUNT_STAGE_LABEL[c.relationship_stage as AccountStage] ?? c.relationship_stage}
+                      </td>
+                      <td className={cn(tdClass, "max-w-xs")}>{c.next_step ?? "-"}</td>
+                      <td className={cn(tdClass, "whitespace-nowrap", late > 0 && "font-medium text-destructive")}>
+                        {formatDate(c.next_touch_date)}
+                        {late > 0 && <span className="ml-1 text-xs">({late}d late)</span>}
+                      </td>
+                      <td className={tdClass}>{ownerLabel(c.bd_owner_id, data.ownerName)}</td>
+                      <td className={cn(tdClass, "text-right")}>
+                        <Button asChild size="sm" variant="outline">
+                          <Link href={`/bd/clients/${c.id}#log`}>Log touch</Link>
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <Empty>No account touches due this week.</Empty>
+        )}
+      </Card>
+
       <Card title={`Clients going cold (${stale.length})`}>
         <p className="mb-3 text-sm text-muted-foreground">
-          No touch in {STALE_CLIENT_DAYS}+ days, open bid or not.
+          No touch in {STALE_CLIENT_DAYS}+ days and nothing scheduled ahead.
         </p>
         {stale.length ? (
           <div className="overflow-x-auto">
@@ -147,7 +210,7 @@ export default async function FollowUpQueuePage({
                     </td>
                     <td className={tdClass}>{last ? formatDate(last) : "Never"}</td>
                     <td className={cn(tdClass, "tabular-nums")}>{days}</td>
-                    <td className={tdClass}>{c.owner_id ? data.personName.get(c.owner_id) ?? "-" : "-"}</td>
+                    <td className={tdClass}>{ownerLabel(c.bd_owner_id, data.ownerName)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -206,7 +269,7 @@ function QueueTable({
                 <td className={cn(tdClass, "whitespace-nowrap")}>
                   {formatDate(data.lastTouchByOpp.get(o.id) ?? null)}
                 </td>
-                <td className={tdClass}>{o.owner_id ? data.personName.get(o.owner_id) ?? "-" : "-"}</td>
+                <td className={tdClass}>{ownerLabel(o.bd_owner_id, data.ownerName)}</td>
                 <td className={cn(tdClass, "text-right")}>
                   <Button asChild size="sm" variant="outline">
                     <Link href={`/bd/opportunities/${o.id}#${dateField === "next_follow_up_date" ? "log" : "outcome"}`}>

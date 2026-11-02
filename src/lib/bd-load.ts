@@ -3,11 +3,12 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import {
   bdClient,
-  loadBdPeople,
+  loadBdOwners,
+  ownerIdForEmail,
   type BdBid,
   type BdCompany,
   type BdOpportunity,
-  type BdPerson,
+  type BdOwner,
 } from "@/lib/bd-db";
 
 export type PipelineData = {
@@ -15,11 +16,12 @@ export type PipelineData = {
   companyName: Map<string, string>;
   opps: BdOpportunity[];
   bids: BdBid[];
-  people: BdPerson[];
-  personName: Map<string, string>;
+  owners: BdOwner[];
+  ownerName: Map<string, string>;
   /** Most recent touch per opportunity / per company (YYYY-MM-DD). */
   lastTouchByOpp: Map<string, string>;
   lastTouchByCompany: Map<string, string>;
+  /** The owner the signed-in user is, matched by email. */
   me: string | null;
 };
 
@@ -39,14 +41,14 @@ export async function loadPipeline(): Promise<PipelineData> {
     opps,
     bids,
     acts,
-    people,
+    owners,
   ] = await Promise.all([
     supabase.auth.getUser(),
     db.from("bd_companies").select("*").order("name"),
     db.from("bd_opportunities").select("*").order("updated_at", { ascending: false }),
     db.from("bd_bids").select("*").order("submitted_on", { ascending: false }),
     db.from("bd_activities").select("company_id, opportunity_id, occurred_on"),
-    loadBdPeople(supabase),
+    loadBdOwners(supabase),
   ]);
 
   const lastTouchByOpp = new Map<string, string>();
@@ -66,11 +68,11 @@ export async function loadPipeline(): Promise<PipelineData> {
     companyName: new Map(companyRows.map((c) => [c.id, c.name])),
     opps: opps.data ?? [],
     bids: (bids.data ?? []).map((b) => ({ ...b, price: Number(b.price) })),
-    people,
-    personName: new Map(people.map((p) => [p.id, p.name])),
+    owners,
+    ownerName: new Map(owners.map((o) => [o.id, o.name])),
     lastTouchByOpp,
     lastTouchByCompany,
-    me: user?.id ?? null,
+    me: ownerIdForEmail(owners, user?.email),
   };
 }
 
@@ -80,7 +82,7 @@ export function oppLite(o: BdOpportunity) {
   return {
     id: o.id,
     stage: o.stage,
-    owner_id: o.owner_id,
+    bd_owner_id: o.bd_owner_id,
     company_id: o.company_id,
     est_value: n(o.est_value),
     probability_pct: o.probability_pct,
