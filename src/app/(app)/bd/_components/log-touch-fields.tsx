@@ -1,5 +1,5 @@
 import { Input } from "@/components/ui/input";
-import { ACTIVITY_LABEL, ACTIVITY_TYPES, todayIso } from "@/lib/bd";
+import { ACCOUNT_STAGES, ACCOUNT_STAGE_LABEL, ACTIVITY_LABEL, ACTIVITY_TYPES, todayIso } from "@/lib/bd";
 import type { BdContact } from "@/lib/bd-db";
 import { Field, Select, TextArea } from "./fields";
 
@@ -20,7 +20,7 @@ export function LogTouchFields({
   /** Present when the touch is on an open opportunity. */
   suggestedNext?: string;
   /** Present for a client-level touch: moves the account's next touch and step. */
-  account?: { nextTouch: string; nextStep: string | null };
+  account?: { nextTouch: string; nextStep: string | null; stage: string };
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -29,7 +29,7 @@ export function LogTouchFields({
       <Field label="Type" htmlFor="activity_type">
         <Select
           name="activity_type"
-          defaultValue="call"
+          defaultValue="email"
           options={ACTIVITY_TYPES.map((t) => ({ value: t, label: ACTIVITY_LABEL[t] }))}
         />
       </Field>
@@ -40,7 +40,7 @@ export function LogTouchFields({
         <Select
           name="contact_id"
           blank="-"
-          options={contacts.map((c) => ({ value: c.id, label: c.name }))}
+          options={contacts.filter((c) => c.status === "active").map((c) => ({ value: c.id, label: c.name }))}
         />
       </Field>
       {suggestedNext ? (
@@ -61,9 +61,18 @@ export function LogTouchFields({
         <div />
       )}
       {account && (
-        <Field label="Next step" htmlFor="next_step" className="sm:col-span-2 lg:col-span-4">
-          <Input id="next_step" name="next_step" defaultValue={account.nextStep ?? ""} />
-        </Field>
+        <>
+          <Field label="Stage" htmlFor="relationship_stage">
+            <Select
+              name="relationship_stage"
+              defaultValue={account.stage}
+              options={ACCOUNT_STAGES.map((s) => ({ value: s, label: ACCOUNT_STAGE_LABEL[s] }))}
+            />
+          </Field>
+          <Field label="Next step" htmlFor="next_step" className="sm:col-span-1 lg:col-span-3" hint="Blank clears it.">
+            <Input id="next_step" name="next_step" defaultValue={account.nextStep ?? ""} />
+          </Field>
+        </>
       )}
       <Field label="Notes" htmlFor="notes" className="sm:col-span-2 lg:col-span-4">
         <TextArea name="notes" rows={2} placeholder="What was said, what happens next" />

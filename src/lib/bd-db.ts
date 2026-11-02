@@ -56,6 +56,8 @@ export type BdContact = {
   phone: string | null;
   is_decision_maker: boolean;
   notes: string | null;
+  // 0080
+  status: string;
   created_at: string;
 };
 
@@ -115,6 +117,17 @@ export type BdActivity = {
   created_at: string;
 };
 
+/** Every client and bid stage change, written by trigger (0080). */
+export type BdStageChange = {
+  id: string;
+  company_id: string;
+  opportunity_id: string | null;
+  from_stage: string;
+  to_stage: string;
+  changed_by: string | null;
+  changed_at: string;
+};
+
 type Table<Row, Required extends keyof Row> = {
   Row: Row;
   Insert: Omit<Optional<Row>, Required> & Pick<Row, Required>;
@@ -131,6 +144,7 @@ export type DatabaseWithBd = Omit<Database, "public"> & {
       bd_opportunities: Table<BdOpportunity, "company_id" | "name">;
       bd_bids: Table<BdBid, "opportunity_id" | "submitted_on" | "price">;
       bd_activities: Table<BdActivity, "company_id">;
+      bd_stage_history: Table<BdStageChange, "company_id" | "from_stage" | "to_stage">;
     };
   };
 };

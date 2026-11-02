@@ -5,11 +5,13 @@
  */
 
 import {
+  accountStageAfterBid,
   addDays,
   dollarsPerWatt,
   firstBidDateByOpp,
   latestBidByOpp,
   lossReasonMix,
+  mondayOf,
   medianCycleDays,
   needsOutcome,
   pipeline,
@@ -106,6 +108,14 @@ eq("closed never asks", needsOutcome(opp("x", "won", { expected_decision_date: "
 eq("$/W", dollarsPerWatt(8_500_000, 5), 1.7);
 eq("$/W without size", dollarsPerWatt(8_500_000, null), null);
 eq("addDays across month", addDays("2026-10-28", 7), "2026-11-04");
+
+eq("a bid moves an early client forward", accountStageAfterBid("quals_sent"), "bid_proposal");
+eq("a bid reopens a client we stopped pursuing", accountStageAfterBid("not_pursuing"), "bid_proposal");
+eq("a bid leaves an active client active", accountStageAfterBid("active_client"), "active_client");
+
+eq("monday of a Monday", mondayOf("2026-11-02"), "2026-11-02");
+eq("monday of a Sunday", mondayOf("2026-11-08"), "2026-11-02");
+eq("monday across a month", mondayOf("2026-11-01"), "2026-10-26");
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {

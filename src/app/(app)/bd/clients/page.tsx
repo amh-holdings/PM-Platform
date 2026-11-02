@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   ACCOUNT_STAGE_LABEL,
   daysBetween,
@@ -16,9 +17,9 @@ import { cn } from "@/lib/utils";
 import { Card, Empty, StagePill, TextLink, tdClass, thClass } from "../_components/fields";
 
 const TIERS = [
+  { v: "all", label: "All" },
   { v: "active", label: "Active" },
   { v: "prospect", label: "Prospects" },
-  { v: "all", label: "All" },
 ];
 
 // The weekly tracker, in the platform: one row per account, soonest due first.
@@ -26,11 +27,13 @@ const TIERS = [
 export default async function ClientsPage({
   searchParams,
 }: {
-  searchParams: { tier?: string; owner?: string };
+  searchParams: { tier?: string; owner?: string; q?: string };
 }) {
   const data = await loadPipeline();
   const today = todayIso();
-  const tier = searchParams.tier ?? "active";
+  const tier = searchParams.tier ?? "all";
+  const search = (searchParams.q ?? "").trim();
+  const needle = search.toLowerCase();
   const ownerFilter = searchParams.owner ?? "all";
 
   const all = data.companies.map((c) => ({
@@ -43,6 +46,11 @@ export default async function ClientsPage({
   const rows = all
     .filter((r) => tier === "all" || r.c.tier === tier)
     .filter((r) => ownerFilter === "all" || r.owner === ownerFilter)
+    .filter(
+      (r) =>
+        !needle ||
+        [r.c.name, r.c.next_step, r.c.notes].some((t) => t?.toLowerCase().includes(needle)),
+    )
     .sort((a, b) => {
       const pa = isPursued(a.c.relationship_stage) ? 0 : 1;
       const pb = isPursued(b.c.relationship_stage) ? 0 : 1;
@@ -54,7 +62,8 @@ export default async function ClientsPage({
     (r) => isPursued(r.c.relationship_stage) && r.c.next_touch_date && r.c.next_touch_date < today,
   ).length;
 
-  const href = (t: string, o: string) => `/bd/clients?tier=${t}&owner=${encodeURIComponent(o)}`;
+  const href = (t: string, o: string) =>
+    `/bd/clients?tier=${t}&owner=${encodeURIComponent(o)}${search ? `&q=${encodeURIComponent(search)}` : ""}`;
 
   return (
     <div className="space-y-6">
@@ -67,6 +76,18 @@ export default async function ClientsPage({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <form action="/bd/clients">
+            <input type="hidden" name="tier" value={tier} />
+            <input type="hidden" name="owner" value={ownerFilter} />
+            <Input
+              name="q"
+              type="search"
+              aria-label="Search clients"
+              placeholder="Search clients"
+              defaultValue={search}
+              className="h-9 w-48"
+            />
+          </form>
           <div className="flex rounded-md border p-0.5 text-sm">
             {TIERS.map((t) => (
               <Link

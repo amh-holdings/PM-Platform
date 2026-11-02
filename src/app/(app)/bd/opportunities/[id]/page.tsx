@@ -122,7 +122,15 @@ export default async function OpportunityPage({ params }: { params: { id: string
               value={formatDate(opp.next_follow_up_date)}
               alert={!!opp.next_follow_up_date && opp.next_follow_up_date < today}
             />
-            <Fact label="Expected decision" value={formatDate(opp.expected_decision_date)} />
+            {opp.stage === "lead" || opp.stage === "bidding" ? (
+              <Fact
+                label="Bid due"
+                value={formatDate(opp.bid_due_date)}
+                alert={!opp.bid_due_date || opp.bid_due_date < today}
+              />
+            ) : (
+              <Fact label="Expected decision" value={formatDate(opp.expected_decision_date)} />
+            )}
             <Fact label="Win probability" value={`${probabilityOf(lite)}%`} />
           </>
         ) : (
@@ -235,6 +243,14 @@ export default async function OpportunityPage({ params }: { params: { id: string
               <Field label="Margin %" htmlFor="margin_pct">
                 <Input id="margin_pct" name="margin_pct" inputMode="decimal" />
               </Field>
+              <Field label="Expected decision" htmlFor="bid_expected_decision" hint="Best guess is fine. Optional on an indicative.">
+                <Input
+                  id="bid_expected_decision"
+                  name="expected_decision_date"
+                  type="date"
+                  defaultValue={opp.expected_decision_date ?? ""}
+                />
+              </Field>
               <Field label="Equipment basis" htmlFor="equipment_basis" hint="Only compare $/W on the same basis">
                 <Select
                   name="equipment_basis"
@@ -242,7 +258,7 @@ export default async function OpportunityPage({ params }: { params: { id: string
                   options={EQUIPMENT_BASES.map((e) => ({ value: e, label: EQUIPMENT_LABEL[e] }))}
                 />
               </Field>
-              <Field label="Proposal link" htmlFor="proposal_url" className="sm:col-span-1 lg:col-span-3">
+              <Field label="Proposal link" htmlFor="proposal_url" className="sm:col-span-1 lg:col-span-2">
                 <Input id="proposal_url" name="proposal_url" placeholder="Google Drive link" />
               </Field>
               <Field label="Key exclusions" htmlFor="exclusions" className="sm:col-span-2">

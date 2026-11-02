@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
-import { bdClient, loadBdOwners, ownerIdForEmail } from "@/lib/bd-db";
+import { bdClient, loadBdOwners, ownerIdForEmail, type BdClient } from "@/lib/bd-db";
 import {
   ACCOUNT_STAGES,
   ACCOUNT_TIERS,
@@ -12,12 +12,14 @@ import {
   ACTIVITY_TYPES,
   BD_STAGES,
   COMPANY_TYPES,
+  CONTACT_STATUSES,
   EQUIPMENT_BASES,
   FIRST_FOLLOW_UP_AFTER_BID_DAYS,
   FOLLOW_UP_DAYS,
   LOSS_REASONS,
   REVISION_LABEL,
   REVISION_TYPES,
+  accountStageAfterBid,
   addDays,
   isOpenStage,
   isPursued,
@@ -76,6 +78,23 @@ function saved(): BdFormState {
 function bump(...paths: string[]) {
   for (const p of ["/bd", "/bd/pipeline", "/bd/clients", "/bd/dashboard", ...paths]) {
     revalidatePath(p);
+  }
+}
+
+/**
+ * A touch on a bid is a touch on the client: push the client's next touch out
+ * so it does not stay due. Never pulls it closer, and leaves a client we are
+ * not pursuing alone.
+ */
+async function rollAccountTouch(db: BdClient, companyId: string, nextDate: string) {
+  const { data: company } = await db
+    .from("bd_companies")
+    .select("relationship_stage, next_touch_date")
+    .eq("id", companyId)
+    .single();
+  if (!company || !isPursued(company.relationship_stage)) return;
+  if ((company.next_touch_date ?? "") < nextDate) {
+    await db.from("bd_companies").update({ next_touch_date: nextDate }).eq("id", companyId);
   }
 }
 
@@ -205,6 +224,14 @@ export async function addContact(
   return saved();
 }
 
+export async function setContactStatus(contactId: string, companyId: string, fd: FormData): Promise<void> {
+  if (await requireBd()) return;
+  const status = oneOf(fd, "status", CONTACT_STATUSES);
+  if (!status) return;
+  await bdClient(createClient()).from("bd_contacts").update({ status }).eq("id", contactId);
+  bump(`/bd/clients/${companyId}`);
+}
+
 export async function removeContact(contactId: string, companyId: string): Promise<void> {
   if (await requireBd()) return;
   await bdClient(createClient()).from("bd_contacts").delete().eq("id", contactId);
@@ -242,6 +269,9 @@ function oppFields(fd: FormData, fallbackStage: BdStage): OppFields | { error: s
     return { error: "Probability is a percent from 0 to 100." };
   }
   const stage = oneOf(fd, "stage", BD_STAGES) ?? fallbackStage;
+  if (stage === "bidding" && !str(fd, "bid_due_date")) {
+    return { error: "A job in Bidding needs a bid due date." };
+  }
   let next = str(fd, "next_follow_up_date");
   // The database insists an open job has a follow-up date. Rather than bounce
   // the form, default it from the stage cadence.
@@ -355,6 +385,22 @@ export async function recordOutcome(
     .select("company_id, project_id")
     .single();
   if (error) return { error: error.message };
+  // Winning a job makes the client an active client, whatever it was before.
+  if (outcome === "won") {
+    const { data: company } = await db
+      .from("bd_companies")
+      .select("next_touch_date")
+      .eq("id", opp.company_id)
+      .single();
+    await db
+      .from("bd_companies")
+      .update({
+        relationship_stage: "active_client",
+        tier: "active",
+        next_touch_date: company?.next_touch_date ?? addDays(todayIso(), ACCOUNT_TOUCH_DAYS),
+      })
+      .eq("id", opp.company_id);
+  }
   bump(`/bd/opportunities/${oppId}`, `/bd/clients/${opp.company_id}`);
 
   // Phil asked to be prompted for the transfer the moment a job is won.
@@ -383,6 +429,10 @@ export async function addBid(oppId: string, _p: BdFormState, fd: FormData): Prom
   if (margin === "invalid") return { error: "Margin must be a percent." };
   const submittedOn = str(fd, "submitted_on") ?? todayIso();
   const revision = oneOf(fd, "revision_type", REVISION_TYPES) ?? "final";
+  const decision = str(fd, "expected_decision_date");
+  if (revision !== "indicative" && !decision) {
+    return { error: "Enter the expected decision date. A best guess is fine." };
+  }
 
   const db = bdClient(createClient());
   const { data: opp, error: oppError } = await db
@@ -414,8 +464,28 @@ export async function addBid(oppId: string, _p: BdFormState, fd: FormData): Prom
       revision === "bafo" ? "shortlist" : opp.stage === "shortlist" ? "shortlist" : "submitted";
     await db
       .from("bd_opportunities")
-      .update({ stage, next_follow_up_date: addDays(submittedOn, FIRST_FOLLOW_UP_AFTER_BID_DAYS) })
+      .update({
+        stage,
+        next_follow_up_date: addDays(submittedOn, FIRST_FOLLOW_UP_AFTER_BID_DAYS),
+        ...(decision ? { expected_decision_date: decision } : {}),
+      })
       .eq("id", oppId);
+
+    const { data: company } = await db
+      .from("bd_companies")
+      .select("relationship_stage, next_touch_date")
+      .eq("id", opp.company_id)
+      .single();
+    if (company) {
+      const followUp = addDays(submittedOn, FIRST_FOLLOW_UP_AFTER_BID_DAYS);
+      await db
+        .from("bd_companies")
+        .update({
+          relationship_stage: accountStageAfterBid(company.relationship_stage),
+          next_touch_date: (company.next_touch_date ?? "") < followUp ? followUp : company.next_touch_date,
+        })
+        .eq("id", opp.company_id);
+    }
   }
   // Sending a price is a touch with the client.
   await db.from("bd_activities").insert({
@@ -472,17 +542,21 @@ export async function logActivity(_p: BdFormState, fd: FormData): Promise<BdForm
       .update({ next_follow_up_date: next })
       .eq("id", oppId);
     if (upErr) return { error: upErr.message };
+    await rollAccountTouch(db, companyId, next);
   }
 
-  // A client-level touch moves the account's own next touch and next step.
-  const nextTouch = str(fd, "next_touch_date");
-  const nextStep = str(fd, "next_step");
-  if (!oppId && (nextTouch || nextStep)) {
+  // A client-level touch moves the account's own stage, next touch and next
+  // step. The form always sends all three, so a blank next step clears it.
+  const stage = oneOf(fd, "relationship_stage", ACCOUNT_STAGES);
+  if (!oppId && stage) {
     const { error: upErr } = await db
       .from("bd_companies")
       .update({
-        ...(nextTouch ? { next_touch_date: nextTouch } : {}),
-        ...(nextStep ? { next_step: nextStep } : {}),
+        relationship_stage: stage,
+        next_step: str(fd, "next_step"),
+        next_touch_date: isPursued(stage)
+          ? str(fd, "next_touch_date") ?? addDays(todayIso(), ACCOUNT_TOUCH_DAYS)
+          : null,
       })
       .eq("id", companyId);
     if (upErr) return { error: upErr.message };

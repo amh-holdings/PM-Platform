@@ -21,6 +21,8 @@ export type PipelineData = {
   /** Most recent touch per opportunity / per company (YYYY-MM-DD). */
   lastTouchByOpp: Map<string, string>;
   lastTouchByCompany: Map<string, string>;
+  /** Every touch, for the per-owner counts. */
+  touches: { company_id: string; occurred_on: string }[];
   /** The owner the signed-in user is, matched by email. */
   me: string | null;
 };
@@ -72,6 +74,7 @@ export async function loadPipeline(): Promise<PipelineData> {
     ownerName: new Map(owners.map((o) => [o.id, o.name])),
     lastTouchByOpp,
     lastTouchByCompany,
+    touches: acts.data ?? [],
     me: ownerIdForEmail(owners, user?.email),
   };
 }

@@ -1,8 +1,12 @@
 import Link from "next/link";
 
 import {
+  ACCOUNT_STAGES,
+  ACCOUNT_STAGE_LABEL,
   EQUIPMENT_LABEL,
   LOSS_REASON_LABEL,
+  daysBetween,
+  isPursued,
   dollarsPerWatt,
   firstBidDateByOpp,
   formatCompactUsd,
@@ -60,6 +64,33 @@ export default async function BdDashboardPage({ searchParams }: { searchParams: 
       };
     })
     .filter((r) => r.open > 0 || r.p.id);
+
+  // Relationship work, which bid numbers never show. A client's touches count
+  // for its owner, whoever logged them.
+  const ownerOf = new Map(data.companies.map((c) => [c.id, c.bd_owner_id ?? ""]));
+  const pursued = data.companies.filter((c) => isPursued(c.relationship_stage));
+  const accountWork = [...data.owners.map((o) => ({ id: o.id, name: o.name })), { id: "", name: "Unassigned" }]
+    .map((p) => {
+      const mine = pursued.filter((c) => (c.bd_owner_id ?? "") === p.id);
+      const touched = (days: number) =>
+        data.touches.filter(
+          (t) => (ownerOf.get(t.company_id) ?? "") === p.id && daysBetween(t.occurred_on, today) <= days,
+        ).length;
+      return {
+        p,
+        accounts: mine.length,
+        overdue: mine.filter((c) => c.next_touch_date && c.next_touch_date < today).length,
+        week: mine.filter((c) => c.next_touch_date && c.next_touch_date >= today && daysBetween(today, c.next_touch_date) <= 7).length,
+        last7: touched(7),
+        last30: touched(30),
+      };
+    })
+    .filter((r) => r.accounts > 0 || r.last30 > 0);
+  const byStage = ACCOUNT_STAGES.map((s) => ({
+    stage: s,
+    count: data.companies.filter((c) => c.relationship_stage === s).length,
+  }));
+  const maxStage = Math.max(1, ...byStage.map((s) => s.count));
 
   const byClient = data.companies
     .map((c) => ({
@@ -130,7 +161,57 @@ export default async function BdDashboardPage({ searchParams }: { searchParams: 
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Card title="Follow-up health">
+        <Card title="Account work">
+          {accountWork.length ? (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className={thClass}>Owner</th>
+                  <th className={cn(thClass, "text-right")}>Accounts</th>
+                  <th className={cn(thClass, "text-right")}>Overdue</th>
+                  <th className={cn(thClass, "text-right")}>Due in 7 days</th>
+                  <th className={cn(thClass, "text-right")}>Touches 7d</th>
+                  <th className={cn(thClass, "text-right")}>Touches 30d</th>
+                </tr>
+              </thead>
+              <tbody>
+                {accountWork.map((r) => (
+                  <tr key={r.p.id || "none"} className="border-b last:border-0">
+                    <td className={tdClass}>{r.p.name}</td>
+                    <td className={cn(tdClass, "text-right tabular-nums")}>{r.accounts}</td>
+                    <td className={cn(tdClass, "text-right tabular-nums", r.overdue > 0 && "font-semibold text-destructive")}>
+                      {r.overdue}
+                    </td>
+                    <td className={cn(tdClass, "text-right tabular-nums")}>{r.week}</td>
+                    <td className={cn(tdClass, "text-right tabular-nums")}>{r.last7}</td>
+                    <td className={cn(tdClass, "text-right tabular-nums")}>{r.last30}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <Empty>No accounts being pursued.</Empty>
+          )}
+        </Card>
+
+        <Card title="Accounts by stage">
+          <ul className="space-y-2 text-sm">
+            {byStage.map((s) => (
+              <li key={s.stage} className="grid grid-cols-[10rem_1fr_2rem] items-center gap-3">
+                <span>{ACCOUNT_STAGE_LABEL[s.stage]}</span>
+                <span className="h-2 rounded-full bg-muted">
+                  <span
+                    className="block h-2 rounded-full bg-foreground/70"
+                    style={{ width: `${(s.count / maxStage) * 100}%` }}
+                  />
+                </span>
+                <span className="text-right tabular-nums">{s.count}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+
+        <Card title="Bid follow-up health">
           {health.length ? (
             <table className="w-full text-sm">
               <thead>

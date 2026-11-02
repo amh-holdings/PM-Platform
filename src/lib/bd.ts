@@ -144,6 +144,22 @@ export const ACCOUNT_TIER_LABEL: Record<(typeof ACCOUNT_TIERS)[number], string> 
 // emails get a follow-up about two weeks later.
 export const ACCOUNT_TOUCH_DAYS = 14;
 
+// A contact who bounced or left stays on file but out of the pickers (0080).
+export const CONTACT_STATUSES = ["active", "bounced", "left"] as const;
+export const CONTACT_STATUS_LABEL: Record<(typeof CONTACT_STATUSES)[number], string> = {
+  active: "Active",
+  bounced: "Email bounced",
+  left: "Left company",
+};
+
+/**
+ * Where a client stands once a bid goes in. Only ever forward: an Active Client
+ * stays one, and a bid reopens a client we had stopped pursuing.
+ */
+export function accountStageAfterBid(current: string): AccountStage {
+  return current === "active_client" ? "active_client" : "bid_proposal";
+}
+
 export const ACTIVITY_TYPES = ["call", "email", "meeting", "site_visit", "text", "other"] as const;
 export const ACTIVITY_LABEL: Record<(typeof ACTIVITY_TYPES)[number], string> = {
   call: "Call",
@@ -165,6 +181,13 @@ export function addDays(iso: string, days: number): string {
   const [y, m, d] = iso.split("-").map(Number);
   const date = new Date(Date.UTC(y, m - 1, d + days));
   return date.toISOString().slice(0, 10);
+}
+
+/** The Monday of the week holding this date. Weeks run Monday to Sunday. */
+export function mondayOf(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return addDays(iso, day === 0 ? -6 : 1 - day);
 }
 
 export function daysBetween(fromIso: string, toIso: string): number {

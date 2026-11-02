@@ -8,6 +8,8 @@ import {
   ACCOUNT_STAGE_LABEL,
   ACCOUNT_TIER_LABEL,
   ACCOUNT_TOUCH_DAYS,
+  CONTACT_STATUSES,
+  CONTACT_STATUS_LABEL,
   ACTIVITY_LABEL,
   STAGE_LABEL,
   addDays,
@@ -24,7 +26,7 @@ import { bdClient, loadBdOwners, loadBdPeople, ownerLabel } from "@/lib/bd-db";
 import { oppLite } from "@/lib/bd-load";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { addContact, logActivity, removeContact, updateCompany } from "../../actions";
+import { addContact, logActivity, removeContact, setContactStatus, updateCompany } from "../../actions";
 import { ActionForm } from "../../_components/action-form";
 import { CompanyFields } from "../../_components/company-fields";
 import { Card, Empty, Field, StagePill, TextLink, tdClass, thClass } from "../../_components/fields";
@@ -160,12 +162,13 @@ export default async function ClientPage({ params }: { params: { id: string } })
                   <th className={thClass}>Title</th>
                   <th className={thClass}>Email</th>
                   <th className={thClass}>Phone</th>
+                  <th className={thClass}>Status</th>
                   <th className={thClass} />
                 </tr>
               </thead>
               <tbody>
                 {contacts.data.map((c) => (
-                  <tr key={c.id} className="border-b last:border-0">
+                  <tr key={c.id} className={cn("border-b last:border-0", c.status !== "active" && "text-muted-foreground")}>
                     <td className={tdClass}>
                       {c.name}
                       {c.is_decision_maker && (
@@ -183,6 +186,25 @@ export default async function ClientPage({ params }: { params: { id: string } })
                       )}
                     </td>
                     <td className={tdClass}>{c.phone ?? "-"}</td>
+                    <td className={tdClass}>
+                      <form action={setContactStatus.bind(null, c.id, company.id)} className="flex items-center gap-2">
+                        <select
+                          name="status"
+                          aria-label={`Status of ${c.name}`}
+                          defaultValue={c.status}
+                          className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+                        >
+                          {CONTACT_STATUSES.map((s) => (
+                            <option key={s} value={s}>
+                              {CONTACT_STATUS_LABEL[s]}
+                            </option>
+                          ))}
+                        </select>
+                        <button type="submit" className="text-xs text-muted-foreground hover:text-foreground">
+                          Save
+                        </button>
+                      </form>
+                    </td>
                     <td className={cn(tdClass, "text-right")}>
                       <form action={removeContact.bind(null, c.id, company.id)}>
                         <button type="submit" className="text-xs text-muted-foreground hover:text-destructive">
@@ -233,7 +255,7 @@ export default async function ClientPage({ params }: { params: { id: string } })
           <LogTouchFields
             companyId={company.id}
             contacts={contacts.data ?? []}
-            account={{ nextTouch: addDays(today, ACCOUNT_TOUCH_DAYS), nextStep: company.next_step }}
+            account={{ nextTouch: addDays(today, ACCOUNT_TOUCH_DAYS), nextStep: company.next_step, stage: company.relationship_stage }}
           />
         </ActionForm>
       </Card>
