@@ -7,7 +7,7 @@ import { RfiLog } from "../rfi-log-view";
 type Params = { id: string };
 
 const COLS =
-  "id, rfi_number, subject, question, discipline, wbs_code, subcontractor_id, raised_by, eor_firm, eor_contact, received_at, sent_to_eor_at, date_answered, closed_at, date_needed, date_issued, response, cost_impact, schedule_impact";
+  "id, rfi_number, subject, question, discipline, wbs_code, subcontractor_id, raised_by, eor_firm, eor_contact, received_at, sent_to_eor_at, date_answered, closed_at, date_needed, date_issued, response, cost_impact, schedule_impact, reference_doc, suggested_answer, location, priority";
 
 export default async function ProjectRfisPage({ params }: { params: Params }) {
   await guardCapability("viewRfis");

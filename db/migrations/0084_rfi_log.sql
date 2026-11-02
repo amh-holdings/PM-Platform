@@ -25,6 +25,11 @@
 -- on every save, purely so the existing dashboard queries keep working. It is
 -- a cache, never a source.
 --
+-- THE NUMBER IS ASSIGNED BY THE APP, never typed. Checked against the live
+-- database 2026-11-02: the rfis table is empty, so there is no numbering
+-- convention to inherit and no row to backfill. The first one on each project
+-- is RFI-001.
+--
 -- Apply via Supabase SQL Editor (project sksfyygufnnbzrmneccx).
 -- Additive and idempotent - safe to re-run.
 
@@ -73,12 +78,34 @@ alter table public.rfis
     references public.project_documents(id) on delete set null,
 
   add column if not exists notes text,
-  add column if not exists created_by_id uuid references public.profiles(id);
+  add column if not exists created_by_id uuid references public.profiles(id),
+
+  -- From an earlier RFI tool of Phil's, found in Drive. Both earn their place.
+  --
+  -- The drawing or spec the question is about. Every RFI form in the industry
+  -- has this field, and without it the engineer's first reply is "against
+  -- which detail?", which costs a day.
+  add column if not exists reference_doc text,
+
+  -- What the sub thinks the answer is. A proposed solution the EOR can
+  -- confirm comes back faster than an open question, and it is the difference
+  -- between "what do we do here" and "can we do this".
+  add column if not exists suggested_answer text,
+
+  -- Where on site. Two RFIs about pile embedment are different questions if
+  -- one is at the swale and one is at the inverter pad.
+  add column if not exists location text,
+
+  -- Drives the chase list. Normal unless somebody says otherwise: a log where
+  -- everything is urgent sorts no better than a log where nothing is.
+  add column if not exists priority text not null default 'Normal'
+    check (priority in ('High', 'Normal', 'Low'));
 
 -- ============ BACKFILL ============
--- date_issued is the skeleton's single date and means "the originator issued
--- it", which is the moment the sub sent it to us. Anything already in the
--- table keeps that reading rather than arriving with no received date.
+-- The table is empty today, so this does nothing. It is here because the
+-- migration may be applied to a database where it is not: date_issued is the
+-- skeleton's single date and means "the originator issued it", which is the
+-- moment the sub sent it to us.
 
 update public.rfis
    set received_at = coalesce(received_at, date_issued, created_at::date)
@@ -92,6 +119,22 @@ update public.rfis
 create unique index if not exists rfis_project_number_key
   on public.rfis(project_id, rfi_number)
   where rfi_number is not null;
+
+-- The app assigns every number, so a null one is a bug rather than a state to
+-- support. Guarded: on a database that somehow has one, the constraint is
+-- skipped rather than failing the whole migration half-applied.
+do $$
+begin
+  if not exists (select 1 from public.rfis where rfi_number is null) then
+    alter table public.rfis alter column rfi_number set not null;
+  else
+    raise notice 'rfi_number left nullable: % row(s) have none',
+      (select count(*) from public.rfis where rfi_number is null);
+  end if;
+exception
+  when others then
+    raise notice 'could not set rfi_number not null: %', sqlerrm;
+end $$;
 
 create index if not exists rfis_open_idx
   on public.rfis(project_id, received_at desc)

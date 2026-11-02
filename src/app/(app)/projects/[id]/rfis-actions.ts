@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
-import { legacyStatus, rfiState } from "@/lib/rfi-log";
+import { legacyStatus, nextRfiNumber, rfiState } from "@/lib/rfi-log";
 
 export type RfiActionResult = { ok: true; id: string } | { ok: false; error: string };
 
@@ -15,15 +15,14 @@ function friendly(message: string): string {
   if (missingTable(message)) {
     return "The RFI log is not in the database yet. Run migration 0084 in the Supabase SQL Editor.";
   }
-  if (/duplicate key|rfis_project_id_rfi_number_key/i.test(message)) {
-    return "That RFI number is already used on this project.";
+  if (/duplicate key|rfis_project_number_key/i.test(message)) {
+    return "Two RFIs were logged at once and both took the same number. Try again.";
   }
   return message;
 }
 
 export type RfiInput = {
   projectId: string;
-  rfiNumber: string;
   subject: string;
   question: string;
   discipline?: string | null;
@@ -36,7 +35,37 @@ export type RfiInput = {
   responseNeededBy?: string | null;
   costImpact?: boolean;
   scheduleImpact?: boolean;
+  referenceDoc?: string | null;
+  suggestedAnswer?: string | null;
+  location?: string | null;
+  priority?: string | null;
 };
+
+/**
+ * The next number on this project.
+ *
+ * Assigned here rather than typed. Zarina: "you should be generating an RFI
+ * number to track all RFIs" - and a number somebody types is a number two
+ * people type the same on the same morning. The unique index catches that,
+ * but the person who loses the race loses their typing with it.
+ *
+ * Still a read-then-write, so two at the exact same instant can still collide.
+ * That is what the retry in createRfi is for: the index is the guarantee, this
+ * is the common path.
+ */
+async function assignNumber(
+  supabase: ReturnType<typeof createClient>,
+  projectId: string,
+): Promise<string> {
+  const { data } = await supabase
+    .from("rfis")
+    .select("rfi_number")
+    .eq("project_id", projectId);
+  const used = (data ?? [])
+    .map((r) => r.rfi_number)
+    .filter((n): n is string => !!n);
+  return nextRfiNumber(used);
+}
 
 export async function createRfi(input: RfiInput): Promise<RfiActionResult> {
   const supabase = createClient();
@@ -46,40 +75,62 @@ export async function createRfi(input: RfiInput): Promise<RfiActionResult> {
   } = await supabase.auth.getUser();
   if (userError || !user) return { ok: false, error: "Not authenticated" };
 
-  if (!input.rfiNumber.trim()) return { ok: false, error: "RFI number is required" };
   if (!input.subject.trim()) return { ok: false, error: "Subject is required" };
   if (!input.question.trim()) return { ok: false, error: "The question is required" };
 
-  const { data, error } = await supabase
-    .from("rfis")
-    .insert({
-      project_id: input.projectId,
-      rfi_number: input.rfiNumber.trim(),
-      subject: input.subject.trim(),
-      question: input.question.trim(),
-      discipline: input.discipline?.trim() || null,
-      wbs_code: input.wbsCode?.trim() || null,
-      subcontractor_id: input.subcontractorId || null,
-      raised_by: input.raisedBy?.trim() || null,
-      eor_firm: input.eorFirm?.trim() || null,
-      eor_contact: input.eorContact?.trim() || null,
-      received_at: input.receivedAt,
-      // The skeleton's own date, kept in step so the dashboard's stale-RFI
-      // query keeps working without being rewritten.
-      date_issued: input.receivedAt,
-      date_needed: input.responseNeededBy || null,
-      status: "open",
-      cost_impact: input.costImpact ?? false,
-      schedule_impact: input.scheduleImpact ?? false,
-      created_by_id: user.id,
-    })
-    .select("id")
-    .single();
+  const priority =
+    input.priority === "High" || input.priority === "Low"
+      ? input.priority
+      : "Normal";
 
-  if (error) return { ok: false, error: friendly(error.message) };
+  // Two attempts. The second re-reads the numbers, so a race that took RFI-004
+  // while we were typing lands on RFI-005 rather than failing in the person's
+  // face over something they did not choose and cannot fix.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const rfiNumber = await assignNumber(supabase, input.projectId);
 
-  revalidatePath(`/projects/${input.projectId}/rfis`);
-  return { ok: true, id: data.id };
+    const { data, error } = await supabase
+      .from("rfis")
+      .insert({
+        project_id: input.projectId,
+        rfi_number: rfiNumber,
+        subject: input.subject.trim(),
+        question: input.question.trim(),
+        discipline: input.discipline?.trim() || null,
+        wbs_code: input.wbsCode?.trim() || null,
+        subcontractor_id: input.subcontractorId || null,
+        raised_by: input.raisedBy?.trim() || null,
+        eor_firm: input.eorFirm?.trim() || null,
+        eor_contact: input.eorContact?.trim() || null,
+        received_at: input.receivedAt,
+        // The skeleton's own date, kept in step so the dashboard's stale-RFI
+        // query keeps working without being rewritten.
+        date_issued: input.receivedAt,
+        date_needed: input.responseNeededBy || null,
+        status: "open",
+        cost_impact: input.costImpact ?? false,
+        schedule_impact: input.scheduleImpact ?? false,
+        reference_doc: input.referenceDoc?.trim() || null,
+        suggested_answer: input.suggestedAnswer?.trim() || null,
+        location: input.location?.trim() || null,
+        priority,
+        created_by_id: user.id,
+      })
+      .select("id")
+      .single();
+
+    if (!error) {
+      revalidatePath(`/projects/${input.projectId}/rfis`);
+      return { ok: true, id: data.id };
+    }
+
+    const taken = /duplicate key|rfis_project_number_key/i.test(error.message);
+    if (!taken || attempt === 1) {
+      return { ok: false, error: friendly(error.message) };
+    }
+  }
+
+  return { ok: false, error: "Could not assign an RFI number" };
 }
 
 /**

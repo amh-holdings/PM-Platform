@@ -70,6 +70,10 @@ const rfi = (p: Partial<RfiRow> = {}): RfiRow => ({
   answer: p.answer ?? null,
   cost_impact: p.cost_impact ?? false,
   schedule_impact: p.schedule_impact ?? false,
+  reference_doc: p.reference_doc ?? null,
+  suggested_answer: p.suggested_answer ?? null,
+  location: p.location ?? null,
+  priority: p.priority ?? "Normal",
 });
 
 // ============================================================================
@@ -254,6 +258,61 @@ check("sorting does not mutate the log", (() => {
   return LOG.map((r) => r.id).join(",") === before;
 })());
 eq("comparing a row with itself is a tie", compareRfis(LOG[0], LOG[0], TODAY), 0);
+
+// ============================================================================
+section("Priority");
+
+// Inside a state, High leads. Across states it does not: a High question the
+// engineer already has is still a chase, and the Normal one on our own desk
+// is still the thing we can actually do today.
+eq(
+  "high before normal before low inside a state",
+  sortRfis(
+    [
+      rfi({ id: "low", rfi_number: "RFI-001", received_at: "2026-10-01", priority: "Low" }),
+      rfi({ id: "high", rfi_number: "RFI-002", received_at: "2026-10-01", priority: "High" }),
+      rfi({ id: "normal", rfi_number: "RFI-003", received_at: "2026-10-01" }),
+    ],
+    TODAY,
+  ).map((r) => r.id),
+  ["high", "normal", "low"],
+);
+eq(
+  "but state still outranks priority",
+  sortRfis(
+    [
+      rfi({ id: "high-with-eor", rfi_number: "RFI-001", received_at: "2026-10-01", priority: "High", sent_to_eor_at: "2026-10-02" }),
+      rfi({ id: "low-with-us", rfi_number: "RFI-002", received_at: "2026-10-01", priority: "Low" }),
+    ],
+    TODAY,
+  ).map((r) => r.id),
+  ["low-with-us", "high-with-eor"],
+);
+eq(
+  "an unrecognised priority sorts as normal, not to one end",
+  sortRfis(
+    [
+      rfi({ id: "junk", rfi_number: "RFI-001", received_at: "2026-10-01", priority: "Urgent!!" }),
+      rfi({ id: "low", rfi_number: "RFI-002", received_at: "2026-10-01", priority: "Low" }),
+      rfi({ id: "high", rfi_number: "RFI-003", received_at: "2026-10-01", priority: "High" }),
+    ],
+    TODAY,
+  ).map((r) => r.id),
+  ["high", "junk", "low"],
+);
+// Age still decides between two of the same priority.
+eq(
+  "age beats priority order only when priority ties",
+  sortRfis(
+    [
+      rfi({ id: "newer", rfi_number: "RFI-001", received_at: "2026-10-20", priority: "High" }),
+      rfi({ id: "older", rfi_number: "RFI-002", received_at: "2026-09-20", priority: "High" }),
+    ],
+    TODAY,
+  ).map((r) => r.id),
+  ["older", "newer"],
+);
+
 
 // ============================================================================
 console.log("\n" + "=".repeat(60));

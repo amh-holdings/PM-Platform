@@ -76,7 +76,6 @@ export function RfiLog({
     setError(null);
     const res = await createRfi({
       projectId,
-      rfiNumber: String(form.get("rfi_number") ?? ""),
       subject: String(form.get("subject") ?? ""),
       question: String(form.get("question") ?? ""),
       discipline: String(form.get("discipline") ?? "") || null,
@@ -89,6 +88,10 @@ export function RfiLog({
       responseNeededBy: String(form.get("response_needed_by") ?? "") || null,
       costImpact: form.get("cost_impact") === "on",
       scheduleImpact: form.get("schedule_impact") === "on",
+      referenceDoc: String(form.get("reference_doc") ?? "") || null,
+      suggestedAnswer: String(form.get("suggested_answer") ?? "") || null,
+      location: String(form.get("location") ?? "") || null,
+      priority: String(form.get("priority") ?? "Normal"),
     });
     if (!res.ok) {
       setError(res.error);
@@ -130,10 +133,31 @@ export function RfiLog({
           action={submitNew}
           className="space-y-3 rounded-lg border bg-card p-4 shadow-sm"
         >
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Field label="RFI number" name="rfi_number" defaultValue={suggestedNumber} required />
+          <div className="grid gap-3 sm:grid-cols-4">
+            <div className="space-y-2">
+              <Label>RFI number</Label>
+              {/* Shown, not typed. Two people logging on the same morning
+                  would otherwise pick the same number, and the one who loses
+                  the race loses their typing with it. */}
+              <p className="flex h-10 items-center rounded-md border border-dashed bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
+                {suggestedNumber}
+              </p>
+            </div>
             <Field label="Received" name="received_at" type="date" defaultValue={today} required />
             <Field label="Answer needed by" name="response_needed_by" type="date" />
+            <div className="space-y-2">
+              <Label htmlFor="priority">Priority</Label>
+              <select
+                id="priority"
+                name="priority"
+                defaultValue="Normal"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option>High</option>
+                <option>Normal</option>
+                <option>Low</option>
+              </select>
+            </div>
           </div>
           <Field label="Subject" name="subject" required />
           <div className="space-y-2">
@@ -164,9 +188,27 @@ export function RfiLog({
             <Field label="Discipline" name="discipline" placeholder="Civil" />
             <Field label="Blocks WBS" name="wbs_code" placeholder="1.2.1.4" />
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
             <Field label="EOR firm" name="eor_firm" placeholder="Exactus" />
             <Field label="EOR contact" name="eor_contact" />
+            <Field
+              label="Drawing or spec"
+              name="reference_doc"
+              placeholder="C-101 detail 3"
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Location on site" name="location" placeholder="Swale, row 12" />
+            <div className="space-y-2">
+              <Label htmlFor="suggested_answer">Sub&rsquo;s proposed answer</Label>
+              <textarea
+                id="suggested_answer"
+                name="suggested_answer"
+                rows={2}
+                placeholder="What they think the answer is. A proposal the engineer can confirm comes back faster than an open question."
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              />
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2">
@@ -223,7 +265,14 @@ export function RfiLog({
                         setAnswerDraft(r.answer ?? "");
                       }}
                     >
-                      <td className="px-4 py-2.5 font-mono text-xs">{r.rfi_number}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs">
+                        {r.rfi_number}
+                        {r.priority === "High" && (
+                          <span className="ml-1.5 rounded bg-destructive/15 px-1 text-[10px] font-semibold text-destructive">
+                            HIGH
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 font-medium">
                         {r.subject || r.question.slice(0, 60)}
                         {(r.cost_impact || r.schedule_impact) && (
@@ -280,6 +329,16 @@ export function RfiLog({
                               </p>
                               <p className="whitespace-pre-wrap">{r.question}</p>
                             </div>
+                            {r.suggested_answer && (
+                              <div>
+                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                  Proposed by the sub
+                                </p>
+                                <p className="whitespace-pre-wrap">
+                                  {r.suggested_answer}
+                                </p>
+                              </div>
+                            )}
                             {r.answer && (
                               <div>
                                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -371,6 +430,8 @@ export function RfiLog({
                               {r.closed_at && ` - closed ${r.closed_at}`}
                               {r.response_needed_by && ` - needed by ${r.response_needed_by}`}
                               {r.wbs_code && ` - blocks ${r.wbs_code}`}
+                              {r.reference_doc && ` - ref ${r.reference_doc}`}
+                              {r.location && ` - at ${r.location}`}
                             </p>
                           </div>
                         </td>
