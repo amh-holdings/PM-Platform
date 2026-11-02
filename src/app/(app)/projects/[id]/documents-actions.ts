@@ -100,24 +100,27 @@ export async function deleteDocument(
 }
 
 export type MoveDocumentResult =
-  | { ok: true; category: DocumentCategory }
+  | { ok: true; moved: number; category: DocumentCategory }
   | { ok: false; error: string };
 
 /**
- * Change a document's category.
+ * Change the category of one or more documents.
  *
- * Uploading picks the category from a dropdown before the file is in the app,
- * which is the moment the person knows least about it. Three Sussex civil
- * drawing sets went in as Prime Contract, and until now the only way back was
- * to delete the file and upload it again - which loses the upload date and,
- * on a 32 MB plan set, several minutes.
+ * The category is chosen from a dropdown before the file is in the app, which
+ * is the moment the person knows least about it. Three Sussex civil drawing
+ * sets went in as Prime Contract, and the only way back was to delete the file
+ * and upload it again - losing the upload date and, on a 32 MB plan set,
+ * several minutes.
  *
- * The file itself does not move. Category is a label on the row; the blob
- * keeps its storage path, so nothing is re-uploaded and the extracted text
- * survives.
+ * The files do not move. Category is a label on the row; each blob keeps its
+ * storage path, so nothing is re-uploaded and the extracted text survives.
+ *
+ * One statement for the whole batch rather than a request per row: moving
+ * twelve drawings out of Prime Contract should not be twelve round trips, and
+ * a half-applied batch is worse than a failed one.
  */
-export async function moveDocument(
-  documentId: string,
+export async function moveDocuments(
+  documentIds: readonly string[],
   projectId: string,
   category: string,
 ): Promise<MoveDocumentResult> {
@@ -135,21 +138,35 @@ export async function moveDocument(
     return { ok: false, error: `"${category}" is not a document type` };
   }
 
-  // Scoped to the project as well as the id. The id alone would move a
+  const ids = Array.from(new Set(documentIds.filter(Boolean)));
+  if (ids.length === 0) {
+    return { ok: false, error: "Nothing selected" };
+  }
+
+  // Scoped to the project as well as the ids. The ids alone would move a
   // document belonging to another project if one were ever passed in.
   const { data, error } = await supabase
     .from("project_documents")
     .update({ category })
-    .eq("id", documentId)
+    .in("id", ids)
     .eq("project_id", projectId)
-    .select("id")
-    .maybeSingle();
+    .select("id");
 
   if (error) return { ok: false, error: error.message };
-  if (!data) {
-    return { ok: false, error: "Document not found on this project" };
+
+  const moved = data?.length ?? 0;
+  if (moved === 0) {
+    return { ok: false, error: "Nothing moved - not found on this project" };
+  }
+  // A short count means some ids were not this project's. Say so rather than
+  // reporting a clean success over a partial one.
+  if (moved < ids.length) {
+    return {
+      ok: false,
+      error: `Moved ${moved} of ${ids.length}. The rest were not found on this project.`,
+    };
   }
 
   revalidatePath(`/projects/${projectId}`);
-  return { ok: true, category };
+  return { ok: true, moved, category };
 }
