@@ -12,13 +12,19 @@
 import {
   DRAG_SLOP,
   MAX_RENDER_PX,
+  MIN_CROP_PX,
   arrowHead,
   canvasPoint,
+  cropScale,
+  cropToSource,
   drawShape,
   drawShapes,
   isTinyDrag,
+  isUsableCrop,
   markupFileName,
+  normalizeRect,
   renderScale,
+  transformShapes,
   type DrawingContext,
   type Shape,
 } from "../../src/lib/markup";
@@ -205,6 +211,66 @@ console.log("\n=== drawShape ===");
   eq("every save is matched", calls.filter((c2) => c2[0] === "save").length, calls.filter((c2) => c2[0] === "restore").length);
 }
 
+
+console.log("\n=== Cropping ===");
+
+eq("a drag up and left is still a rectangle", normalizeRect(300, 200, 100, 50), { x: 100, y: 50, w: 200, h: 150 });
+eq("a drag down and right", normalizeRect(100, 50, 300, 200), { x: 100, y: 50, w: 200, h: 150 });
+
+check("a stray click is not a crop", !isUsableCrop({ x: 0, y: 0, w: 4, h: 4 }));
+check("a thin sliver is not a crop", !isUsableCrop({ x: 0, y: 0, w: 400, h: 3 }));
+check(`${MIN_CROP_PX}px square is`, isUsableCrop({ x: 0, y: 0, w: MIN_CROP_PX, h: MIN_CROP_PX }));
+
+// A C04 site plan: 3024 x 2160 points, first rendered at the render cap.
+const sheetScale = renderScale(3024, 2160);
+// A box drawn around the inverter pad, in canvas pixels.
+const box = { x: 600, y: 400, w: 800, h: 600 };
+const region = cropToSource(box, sheetScale, { x: 0, y: 0 });
+near("the crop is in PDF points, not canvas pixels", region.x, 600 / sheetScale);
+near("and keeps its size", region.w, 800 / sheetScale);
+
+// Cropping the crop has to measure from the sheet, not from the crop's corner.
+const second = cropToSource({ x: 100, y: 100, w: 200, h: 200 }, 4, region);
+near("a second crop composes", second.x, region.x + 25);
+near("a second crop composes vertically", second.y, region.y + 25);
+near("and takes its size from the new scale", second.w, 50);
+
+check("a detail is rendered larger than the sheet was", cropScale(region.w, region.h) > sheetScale);
+check("but never past the cap", cropScale(1, 1) === 8);
+check("a photo crop is capped lower", cropScale(1, 1, MAX_RENDER_PX, 3) === 3);
+check("a nonsense region is 1x", cropScale(0, 0) === 1);
+
+console.log("\n=== Marks survive the crop ===");
+
+// Crop to a box starting at (600, 400), re-rendered at twice the scale.
+const before: Shape[] = [
+  { kind: "arrow", color: "#dc2626", width: 6, x0: 700, y0: 500, x1: 800, y1: 600 },
+  { kind: "pen", color: "#dc2626", width: 6, points: [[620, 420], [640, 440]] },
+  { kind: "text", color: "#dc2626", size: 20, x: 650, y: 450, text: "here" },
+];
+const after = transformShapes(before, -600, -400, 2);
+
+eq(
+  "an arrow lands where it was drawn",
+  after[0],
+  { kind: "arrow", color: "#dc2626", width: 12, x0: 200, y0: 200, x1: 400, y1: 400 },
+);
+eq(
+  "a pen stroke carries every point",
+  (after[1] as Extract<Shape, { kind: "pen" }>).points,
+  [[40, 40], [80, 80]],
+);
+eq("a note moves and grows with the sheet", { x: (after[2] as Extract<Shape, { kind: "text" }>).x, size: (after[2] as Extract<Shape, { kind: "text" }>).size }, { x: 100, size: 40 });
+
+// Going back to the whole sheet is the same map, inverted.
+const backAgain = transformShapes(after, 600 * 2, 400 * 2, 1 / 2);
+eq("returning to the whole sheet puts them back", backAgain[0], before[0]);
+
+check("widths never round to nothing", (transformShapes(before, 0, 0, 0.01)[0] as Extract<Shape, { kind: "arrow" }>).width >= 1);
+check("text never shrinks to nothing", (transformShapes(before, 0, 0, 0.01)[2] as Extract<Shape, { kind: "text" }>).size >= 8);
+eq("nothing is dropped", transformShapes(before, -600, -400, 2).length, before.length);
+eq("an empty markup transforms to nothing", transformShapes([], 1, 1, 2), []);
+
 console.log("\n=== isTinyDrag: a click is not a shape ===");
 
 check("a click in place is tiny", isTinyDrag(100, 100, 100, 100));
@@ -214,6 +280,8 @@ check("a real drag is not", !isTinyDrag(100, 100, 140, 180));
 console.log("\n=== markupFileName ===");
 
 eq("a sheet and a page", markupFileName("Sussex-Civil-Set.pdf", 4), "Sussex-Civil-Set-p4-markup.png");
+eq("a cropped sheet says so", markupFileName("Sussex-Civil-Set.pdf", 6, true), "Sussex-Civil-Set-p6-detail-markup.png");
+eq("a cropped photo says so", markupFileName("IMG_4821.jpg", 0, true), "IMG_4821-detail-markup.png");
 eq("an image has no page", markupFileName("IMG_4821.jpg", 0), "IMG_4821-markup.png");
 eq("a name with dots keeps all but the extension", markupFileName("C-101.detail.3.pdf", 1), "C-101.detail.3-p1-markup.png");
 eq("a name with no extension survives", markupFileName("scan", 2), "scan-p2-markup.png");

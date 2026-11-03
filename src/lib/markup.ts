@@ -7,7 +7,7 @@
  * and flattening is then just "draw the same shapes onto the same canvas".
  */
 
-export type Tool = "pen" | "rect" | "arrow" | "text";
+export type Tool = "pen" | "rect" | "arrow" | "text" | "crop";
 
 export type Shape =
   | { kind: "pen"; color: string; width: number; points: Array<[number, number]> }
@@ -174,16 +174,132 @@ export function drawShapes(ctx: DrawingContext, shapes: readonly Shape[]): void 
   for (const s of shapes) drawShape(ctx, s);
 }
 
+
+// ============ CROPPING ============
+//
+// Zarina: "sometimes we don't need the whole page to show for an rfi, just a
+// portion of a page". A C04 site plan at 42 inches is unreadable in an email;
+// the quarter of it around the question is the whole point.
+//
+// A crop is held in SOURCE units - PDF points, or pixels of the original
+// image - not in whatever the canvas currently is. That is what lets a second
+// crop compose with the first, and what lets a PDF be re-rendered at a higher
+// scale for the cropped region so the detail is real rather than enlarged
+// pixels.
+
+export type Rect = { x: number; y: number; w: number; h: number };
+
+/** A drag in any direction, as a positive rectangle. */
+export function normalizeRect(x0: number, y0: number, x1: number, y1: number): Rect {
+  return {
+    x: Math.min(x0, x1),
+    y: Math.min(y0, y1),
+    w: Math.abs(x1 - x0),
+    h: Math.abs(y1 - y0),
+  };
+}
+
+/** Smaller than this and it was a stray click, not a crop. */
+export const MIN_CROP_PX = 24;
+
+export function isUsableCrop(rect: Rect): boolean {
+  return rect.w >= MIN_CROP_PX && rect.h >= MIN_CROP_PX;
+}
+
+/**
+ * A crop drawn on the canvas, expressed in source units.
+ *
+ * origin is the current crop's own origin, so cropping a crop composes
+ * instead of measuring from the wrong corner.
+ */
+export function cropToSource(
+  rect: Rect,
+  scale: number,
+  origin: { x: number; y: number },
+): Rect {
+  return {
+    x: origin.x + rect.x / scale,
+    y: origin.y + rect.y / scale,
+    w: rect.w / scale,
+    h: rect.h / scale,
+  };
+}
+
+/**
+ * The scale to render a region at.
+ *
+ * maxScale stops a postage-stamp crop from being rendered at 40x, which buys
+ * no detail from a raster and a 200 MB canvas from a vector.
+ */
+export function cropScale(
+  width: number,
+  height: number,
+  maxPx = MAX_RENDER_PX,
+  maxScale = 8,
+): number {
+  const longest = Math.max(width, height);
+  if (!Number.isFinite(longest) || longest <= 0) return 1;
+  return Math.min(maxScale, Math.max(0.25, maxPx / longest));
+}
+
+/**
+ * Move marks into the new canvas after a crop.
+ *
+ * new = (old + d) * factor. Without this, cropping leaves every mark where it
+ * was in the old frame, which puts them somewhere else entirely on the new
+ * one. Widths and text sizes scale too, or a crop rendered at 4x turns a
+ * 6px arrow into a hairline.
+ */
+export function transformShapes(
+  shapes: readonly Shape[],
+  dx: number,
+  dy: number,
+  factor: number,
+): Shape[] {
+  return shapes.map((s) => {
+    if (s.kind === "text") {
+      return {
+        ...s,
+        x: (s.x + dx) * factor,
+        y: (s.y + dy) * factor,
+        size: Math.max(8, s.size * factor),
+      };
+    }
+    if (s.kind === "pen") {
+      return {
+        ...s,
+        width: Math.max(1, s.width * factor),
+        points: s.points.map(([x, y]) => [(x + dx) * factor, (y + dy) * factor] as [number, number]),
+      };
+    }
+    return {
+      ...s,
+      width: Math.max(1, s.width * factor),
+      x0: (s.x0 + dx) * factor,
+      y0: (s.y0 + dy) * factor,
+      x1: (s.x1 + dx) * factor,
+      y1: (s.y1 + dy) * factor,
+    };
+  });
+}
+
 /**
  * What the saved markup is called.
  *
  * Carries the source sheet and the page, because "markup.png" in a folder of
  * forty files tells nobody which sheet it came off.
  */
-export function markupFileName(sourceName: string, page: number): string {
+export function markupFileName(
+  sourceName: string,
+  page: number,
+  cropped = false,
+): string {
   const stem = sourceName.replace(/\.[^.]+$/, "").slice(0, 60) || "sheet";
   const suffix = page > 0 ? `-p${page}` : "";
-  return `${stem}${suffix}-markup.png`;
+  // "detail" says the image is a piece of the sheet, not the sheet. Someone
+  // opening it a month later cannot tell otherwise.
+  const detail = cropped ? "-detail" : "";
+  return `${stem}${suffix}${detail}-markup.png`;
 }
 
 /** A drag shorter than this is a click, not a shape. */

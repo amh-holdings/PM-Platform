@@ -23,12 +23,19 @@ import {
 } from "@/lib/document-picker";
 import {
   MARKUP_COLORS,
+  MAX_RENDER_PX,
   canvasPoint,
+  cropScale,
+  cropToSource,
   drawShapes,
   isTinyDrag,
+  isUsableCrop,
   markupFileName,
+  normalizeRect,
   renderScale,
+  transformShapes,
   type DraftShape,
+  type Rect,
   type Shape,
   type Tool,
 } from "@/lib/markup";
@@ -78,6 +85,7 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
   const baseRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const drafting = useRef<DraftShape | null>(null);
+  const cropStart = useRef<{ x: number; y: number } | null>(null);
 
   const [options, setOptions] = useState<AttachableDoc[] | null>(null);
   const [query, setQuery] = useState("");
@@ -93,9 +101,25 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
   const [width, setWidth] = useState(6);
   const [zoom, setZoom] = useState(1);
   const [shapes, setShapes] = useState<Shape[]>([]);
+  /** The crop being dragged, in canvas pixels. Not a mark - it never saves. */
+  const [cropDraft, setCropDraft] = useState<Rect | null>(null);
+  const [cropped, setCropped] = useState(false);
 
   // The loaded PDF, kept so paging does not re-download a 40 MB set.
   const pdfRef = useRef<{ numPages: number; getPage: (n: number) => Promise<unknown> } | null>(null);
+  // The source image, for the same reason, when the file is not a PDF.
+  const bitmapRef = useRef<ImageBitmap | null>(null);
+  // The region being shown, in SOURCE units - PDF points, or pixels of the
+  // original image. Null is the whole sheet.
+  const cropRef = useRef<Rect | null>(null);
+  // Base pixels per source unit, so a click on the canvas can be put back
+  // into source units when cropping a crop.
+  const scaleRef = useRef(1);
+  // The render in flight. pdf.js refuses two renders onto one canvas, which
+  // is exactly what clicking Next twice used to do:
+  // "Cannot use the same canvas during multiple render() operations."
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const renderTaskRef = useRef<any>(null);
 
   useEffect(() => {
     void (async () => {
@@ -121,43 +145,172 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
     if (!canvas || !ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     drawShapes(ctx, drafting.current ? [...shapes, drafting.current] : shapes);
-  }, [shapes]);
+
+    if (cropDraft) {
+      // Everything outside the box goes dim, so what will survive the crop
+      // is obvious before committing to it.
+      ctx.save();
+      ctx.fillStyle = "rgba(15, 23, 42, 0.45)";
+      ctx.fillRect(0, 0, canvas.width, cropDraft.y);
+      ctx.fillRect(0, cropDraft.y + cropDraft.h, canvas.width, canvas.height);
+      ctx.fillRect(0, cropDraft.y, cropDraft.x, cropDraft.h);
+      ctx.fillRect(
+        cropDraft.x + cropDraft.w,
+        cropDraft.y,
+        canvas.width - cropDraft.x - cropDraft.w,
+        cropDraft.h,
+      );
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = Math.max(2, canvas.width / 400);
+      ctx.setLineDash([12, 8]);
+      ctx.strokeRect(cropDraft.x, cropDraft.y, cropDraft.w, cropDraft.h);
+      ctx.restore();
+    }
+  }, [shapes, cropDraft]);
 
   useEffect(() => {
     repaint();
   }, [repaint]);
 
-  const renderPage = useCallback(async (pageNumber: number) => {
-    const pdf = pdfRef.current;
-    const base = baseRef.current;
-    const overlay = overlayRef.current;
-    if (!pdf || !base || !overlay) return;
+  /**
+   * Draw the sheet, or a region of it, onto the base canvas.
+   *
+   * A PDF region is re-rendered from the vector at a higher scale rather than
+   * enlarged from the pixels already on screen, so cropping into a detail
+   * gains real resolution instead of losing it.
+   */
+  const renderSheet = useCallback(
+    async (pageNumber: number, crop: Rect | null) => {
+      const base = baseRef.current;
+      const overlay = overlayRef.current;
+      if (!base || !overlay) return 1;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pdfPage: any = await pdf.getPage(pageNumber);
-    const unscaled = pdfPage.getViewport({ scale: 1 });
-    const scale = renderScale(unscaled.width, unscaled.height);
-    const viewport = pdfPage.getViewport({ scale });
+      // Stop whatever is still drawing onto this canvas before starting again.
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+          await renderTaskRef.current.promise;
+        } catch {
+          // A cancelled render rejects. That is the point of cancelling it.
+        }
+        renderTaskRef.current = null;
+      }
 
-    base.width = Math.round(viewport.width);
-    base.height = Math.round(viewport.height);
-    overlay.width = base.width;
-    overlay.height = base.height;
+      const ctx = base.getContext("2d");
+      if (!ctx) return 1;
 
-    const ctx = base.getContext("2d");
-    if (!ctx) return;
-    // White behind the page: a PDF renders with a transparent background and
-    // a flattened PNG with no background reads as black in most viewers.
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, base.width, base.height);
-    await pdfPage.render({ canvasContext: ctx, viewport, canvas: base }).promise;
-  }, []);
+      const pdf = pdfRef.current;
+      if (pdf) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pdfPage: any = await pdf.getPage(pageNumber);
+        const unscaled = pdfPage.getViewport({ scale: 1 });
+        const region = crop ?? { x: 0, y: 0, w: unscaled.width, h: unscaled.height };
+        const scale = crop
+          ? cropScale(region.w, region.h)
+          : renderScale(unscaled.width, unscaled.height);
+
+        const viewport = pdfPage.getViewport({
+          scale,
+          offsetX: -region.x * scale,
+          offsetY: -region.y * scale,
+        });
+
+        base.width = Math.max(1, Math.round(region.w * scale));
+        base.height = Math.max(1, Math.round(region.h * scale));
+        overlay.width = base.width;
+        overlay.height = base.height;
+
+        // White behind the page: a PDF renders with a transparent background
+        // and a flattened PNG with no background reads as black in most
+        // viewers.
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, base.width, base.height);
+
+        const task = pdfPage.render({ canvasContext: ctx, viewport, canvas: base });
+        renderTaskRef.current = task;
+        try {
+          await task.promise;
+        } catch (e) {
+          const name = (e as { name?: string })?.name;
+          if (name !== "RenderingCancelledException") throw e;
+        } finally {
+          if (renderTaskRef.current === task) renderTaskRef.current = null;
+        }
+        scaleRef.current = scale;
+        return scale;
+      }
+
+      const bitmap = bitmapRef.current;
+      if (!bitmap) return 1;
+      const region = crop ?? { x: 0, y: 0, w: bitmap.width, h: bitmap.height };
+      // A photo has no more detail to give, so a crop is capped at 3x rather
+      // than blown up to the render budget.
+      const scale = crop ? cropScale(region.w, region.h, MAX_RENDER_PX, 3) : 1;
+
+      base.width = Math.max(1, Math.round(region.w * scale));
+      base.height = Math.max(1, Math.round(region.h * scale));
+      overlay.width = base.width;
+      overlay.height = base.height;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, base.width, base.height);
+      ctx.drawImage(
+        bitmap,
+        region.x,
+        region.y,
+        region.w,
+        region.h,
+        0,
+        0,
+        base.width,
+        base.height,
+      );
+      scaleRef.current = scale;
+      return scale;
+    },
+    [],
+  );
+
+  /** Crop to the rectangle just dragged, carrying the marks with it. */
+  async function applyCrop(rect: Rect) {
+    const previousScale = scaleRef.current;
+    const origin = cropRef.current ?? { x: 0, y: 0 };
+    cropRef.current = cropToSource(rect, previousScale, origin);
+
+    setLoading(true);
+    const scale = await renderSheet(page || 1, cropRef.current);
+    setLoading(false);
+
+    // Marks were drawn in the old frame. Move them into the new one, or they
+    // land somewhere else entirely on the cropped sheet.
+    setShapes((prev) => transformShapes(prev, -rect.x, -rect.y, scale / previousScale));
+    setCropped(true);
+  }
+
+  async function clearCrop() {
+    const previousScale = scaleRef.current;
+    const origin = cropRef.current;
+    cropRef.current = null;
+
+    setLoading(true);
+    const scale = await renderSheet(page || 1, null);
+    setLoading(false);
+
+    if (origin) {
+      setShapes((prev) =>
+        transformShapes(prev, origin.x * previousScale, origin.y * previousScale, scale / previousScale),
+      );
+    }
+    setCropped(false);
+  }
 
   async function open(doc: AttachableDoc) {
     setLoading(true);
     setError(null);
     setShapes([]);
     drafting.current = null;
+    setCropDraft(null);
+    setCropped(false);
+    cropRef.current = null;
 
     const res = await getDocumentForMarkup(projectId, doc.id);
     if (!res.ok) {
@@ -184,22 +337,16 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
         setPageCount(pdf.numPages);
         setPage(1);
         setSource({ id: doc.id, fileName: res.fileName });
-        await renderPage(1);
+        await renderSheet(1, null);
       } else {
         pdfRef.current = null;
-        const bitmap = await createImageBitmap(blob);
-        const base = baseRef.current;
-        const overlay = overlayRef.current;
-        if (!base || !overlay) throw new Error("Canvas not ready");
-        base.width = bitmap.width;
-        base.height = bitmap.height;
-        overlay.width = bitmap.width;
-        overlay.height = bitmap.height;
-        const ctx = base.getContext("2d");
-        ctx?.drawImage(bitmap, 0, 0);
+        // Kept so a crop can be re-cut from the original pixels rather than
+        // from whatever is currently on the canvas.
+        bitmapRef.current = await createImageBitmap(blob);
         setPageCount(1);
         setPage(0);
         setSource({ id: doc.id, fileName: res.fileName });
+        await renderSheet(1, null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not open that file");
@@ -217,9 +364,14 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
     }
     setShapes([]);
     drafting.current = null;
+    setCropDraft(null);
+    // The crop was a region of the page being left. Carrying it over would
+    // show a corner of the next sheet with no way to tell that is what it is.
+    cropRef.current = null;
+    setCropped(false);
     setLoading(true);
     setPage(next);
-    await renderPage(next);
+    await renderSheet(next, null);
     setLoading(false);
   }
 
@@ -238,6 +390,13 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
   function handleDown(e: React.PointerEvent) {
     if (!source) return;
     const p = pointFrom(e);
+
+    if (tool === "crop") {
+      (e.target as Element).setPointerCapture(e.pointerId);
+      cropStart.current = p;
+      setCropDraft({ x: p.x, y: p.y, w: 0, h: 0 });
+      return;
+    }
 
     if (tool === "text") {
       const text = prompt("Note to write on the sheet");
@@ -258,6 +417,14 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
   }
 
   function handleMove(e: React.PointerEvent) {
+    if (tool === "crop") {
+      const start = cropStart.current;
+      if (!start) return;
+      const p = pointFrom(e);
+      setCropDraft(normalizeRect(start.x, start.y, p.x, p.y));
+      return;
+    }
+
     const draft = drafting.current;
     if (!draft) return;
     const p = pointFrom(e);
@@ -270,6 +437,19 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
   }
 
   function handleUp() {
+    if (tool === "crop") {
+      const rect = cropDraft;
+      cropStart.current = null;
+      setCropDraft(null);
+      // A stray click is not a crop. Anything smaller than a postage stamp
+      // was a misclick, and cropping to it would lose the sheet.
+      if (rect && isUsableCrop(rect)) {
+        void applyCrop(rect);
+        setTool("arrow");
+      }
+      return;
+    }
+
     const draft = drafting.current;
     drafting.current = null;
     if (!draft) return;
@@ -288,8 +468,10 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
   async function save() {
     const base = baseRef.current;
     if (!base || !source) return;
-    if (shapes.length === 0) {
-      setError("Nothing is marked on this sheet yet.");
+    // A cropped detail with no marks is still worth sending: "this corner of
+    // C04" is an answer to "which part of the sheet".
+    if (shapes.length === 0 && !cropped) {
+      setError("Mark the sheet or crop to the part you mean first.");
       return;
     }
 
@@ -318,7 +500,7 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
       return;
     }
 
-    const name = markupFileName(source.fileName, page);
+    const name = markupFileName(source.fileName, page, cropped);
     const file = new File([blob], name, { type: "image/png" });
 
     const up = await uploadProjectDocument({ projectId, file, category: "rfi" });
@@ -351,7 +533,7 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
             <h3 className="text-sm font-semibold">Mark up a sheet</h3>
             <p className="truncate text-xs text-muted-foreground">
               {source
-                ? `${source.fileName}${pageCount > 1 ? ` - page ${page} of ${pageCount}` : ""}`
+                ? `${source.fileName}${pageCount > 1 ? ` - page ${page} of ${pageCount}` : ""}${cropped ? " - detail" : ""}`
                 : "Pick the drawing or photo the question is about"}
             </p>
           </div>
@@ -429,7 +611,7 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2 text-xs">
-              {(["arrow", "rect", "pen", "text"] as Tool[]).map((t) => (
+              {(["arrow", "rect", "pen", "text", "crop"] as Tool[]).map((t) => (
                 <button
                   key={t}
                   type="button"
@@ -439,7 +621,7 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
                     tool === t ? "border-foreground bg-foreground text-background" : "hover:bg-muted",
                   )}
                 >
-                  {t === "rect" ? "Box" : t}
+                  {t === "rect" ? "Box" : t === "crop" ? "Crop" : t}
                 </button>
               ))}
 
@@ -486,6 +668,18 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
               </select>
 
               <span className="mx-1 h-4 w-px bg-border" />
+
+              {cropped && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={loading}
+                  onClick={() => void clearCrop()}
+                >
+                  Whole sheet
+                </Button>
+              )}
 
               <Button
                 type="button"
@@ -543,6 +737,11 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
                   ref={overlayRef}
                   className="absolute left-0 top-0 block w-full touch-none"
                   style={{ cursor: tool === "text" ? "text" : "crosshair" }}
+                  aria-label={
+                    tool === "crop"
+                      ? "Drag a box around the part of the sheet to keep"
+                      : "Draw on the sheet"
+                  }
                   onPointerDown={handleDown}
                   onPointerMove={handleMove}
                   onPointerUp={handleUp}
@@ -558,8 +757,9 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
 
             <div className="flex items-center justify-between gap-2 border-t px-4 py-2">
               <p className="text-xs text-muted-foreground">
-                {shapes.length} mark{shapes.length === 1 ? "" : "s"}. The sheet itself
-                is not changed - this saves a flat image onto the RFI.
+                {tool === "crop"
+                  ? "Drag a box around the part of the sheet to keep."
+                  : `${shapes.length} mark${shapes.length === 1 ? "" : "s"}${cropped ? ", cropped" : ""}. The sheet itself is not changed - this saves a flat image onto the RFI.`}
               </p>
               <div className="flex gap-2">
                 <Button
@@ -569,7 +769,11 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
                   onClick={() => {
                     setSource(null);
                     setShapes([]);
+                    setCropped(false);
+                    setCropDraft(null);
+                    cropRef.current = null;
                     pdfRef.current = null;
+                    bitmapRef.current = null;
                   }}
                 >
                   Pick another sheet
