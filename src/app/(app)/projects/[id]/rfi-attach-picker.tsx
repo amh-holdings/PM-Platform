@@ -14,7 +14,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-import { DOCUMENT_CATEGORY_LABEL } from "./documents-constants";
+import {
+  countDocuments,
+  groupDocuments,
+  docDateLabel,
+} from "@/lib/document-picker";
+
 import { getAttachableRfiDocuments, type AttachableDoc } from "./rfis-actions";
 
 type Props = {
@@ -51,6 +56,8 @@ export function LibraryPicker({ projectId, rfiId, disabled, onPick, onCancel }: 
   const filtered = (options ?? []).filter((o) =>
     query.trim() ? o.fileName.toLowerCase().includes(query.trim().toLowerCase()) : true,
   );
+  const groups = groupDocuments(filtered);
+  const total = countDocuments(groups);
 
   return (
     <div className="space-y-2 rounded border bg-background p-2">
@@ -76,33 +83,47 @@ export function LibraryPicker({ projectId, rfiId, disabled, onPick, onCancel }: 
 
       {options === null ? (
         <p className="text-xs text-muted-foreground">Loading the library...</p>
-      ) : filtered.length === 0 ? (
+      ) : total === 0 ? (
         <p className="text-xs text-muted-foreground">
           Nothing matches. Upload it on the Documents page first.
         </p>
       ) : (
-        <div className="max-h-56 overflow-y-auto">
-          {filtered.slice(0, 100).map((o) => (
-            <button
-              key={o.id}
-              type="button"
-              disabled={disabled}
-              onClick={() => onPick(o)}
-              className={cn(
-                "flex w-full items-center justify-between gap-2 border-b px-2 py-1.5 text-left text-xs last:border-0",
-                "hover:bg-muted/40",
-              )}
-            >
-              <span className="min-w-0 flex-1 truncate">{o.fileName}</span>
-              <span className="shrink-0 text-[10px] text-muted-foreground">
-                {DOCUMENT_CATEGORY_LABEL[
-                  o.category as keyof typeof DOCUMENT_CATEGORY_LABEL
-                ] ?? o.category}
-              </span>
-            </button>
+        <div className="max-h-72 overflow-y-auto">
+          {groups.map((group) => (
+            <div key={group.key}>
+              <p className="sticky top-0 bg-muted/60 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur">
+                {group.label} ({group.docs.length})
+              </p>
+              {group.docs.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onPick(o)}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-2 border-b px-2 py-1.5 text-left text-xs last:border-0",
+                    "hover:bg-muted/40",
+                    o.olderCopy && "opacity-60",
+                  )}
+                >
+                  <span className="min-w-0 flex-1 truncate" title={o.fileName}>
+                    {o.fileName}
+                  </span>
+                  {o.olderCopy && (
+                    <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                      older copy
+                    </span>
+                  )}
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {docDateLabel(o)}
+                  </span>
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       )}
+
     </div>
   );
 }

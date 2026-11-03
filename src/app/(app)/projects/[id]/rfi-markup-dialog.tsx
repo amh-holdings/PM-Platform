@@ -17,6 +17,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
+  countDocuments,
+  groupDocuments,
+  docDateLabel,
+} from "@/lib/document-picker";
+import {
   MARKUP_COLORS,
   canvasPoint,
   drawShapes,
@@ -335,6 +340,8 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
   const filtered = (options ?? []).filter((o) =>
     query.trim() ? o.fileName.toLowerCase().includes(query.trim().toLowerCase()) : true,
   );
+  const groups = groupDocuments(filtered);
+  const total = countDocuments(groups);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -360,42 +367,65 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
         )}
 
         {!source ? (
-          <div className="flex-1 space-y-2 overflow-y-auto p-4">
-            <input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                // The dialog renders inside the form that logs the RFI.
-                // Enter here would submit it half-filled.
-                if (e.key === "Enter") e.preventDefault();
-              }}
-              placeholder="Search the library by file name"
-              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-            />
+          <>
+            {/* Outside the scroll area, so it stays put while you page
+                through a 29-sheet library. */}
+            <div className="border-b p-3">
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  // The dialog renders inside the form that logs the RFI.
+                  // Enter here would submit it half-filled.
+                  if (e.key === "Enter") e.preventDefault();
+                }}
+                placeholder="Search the library by file name"
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              />
+            </div>
+            <div className="flex-1 space-y-3 overflow-y-auto p-4 pt-2">
             {options === null ? (
               <p className="text-sm text-muted-foreground">Loading the library...</p>
-            ) : filtered.length === 0 ? (
+            ) : total === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No PDFs or images in this project&rsquo;s library yet. Upload the plan
                 set on the Documents page first.
               </p>
             ) : (
-              filtered.slice(0, 200).map((o) => (
-                <button
-                  key={o.id}
-                  type="button"
-                  onClick={() => void open(o)}
-                  className="flex w-full items-center justify-between gap-2 rounded border px-3 py-2 text-left text-sm hover:bg-muted/40"
-                >
-                  <span className="min-w-0 flex-1 truncate">{o.fileName}</span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    {o.category}
-                  </span>
-                </button>
+              groups.map((group) => (
+                <div key={group.key} className="space-y-1">
+                  <p className="sticky top-0 z-10 bg-card py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {group.label} ({group.docs.length})
+                  </p>
+                  {group.docs.map((o) => (
+                    <button
+                      key={o.id}
+                      type="button"
+                      onClick={() => void open(o)}
+                      className={cn(
+                        "flex w-full items-center justify-between gap-3 rounded border px-3 py-2 text-left text-sm hover:bg-muted/40",
+                        o.olderCopy && "opacity-60",
+                      )}
+                    >
+                      <span className="min-w-0 flex-1 truncate" title={o.fileName}>
+                        {o.fileName}
+                      </span>
+                      {o.olderCopy && (
+                        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                          older copy
+                        </span>
+                      )}
+                      <span className="shrink-0 text-[11px] text-muted-foreground">
+                        {docDateLabel(o)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               ))
             )}
-          </div>
+            </div>
+          </>
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2 text-xs">
