@@ -226,3 +226,138 @@ export async function deleteRfi(
   revalidatePath(`/projects/${projectId}/rfis`);
   return { ok: true };
 }
+
+// ============ ATTACHMENTS ============
+//
+// Zarina: "add option where we can add photo or we can mark up from the plan
+// sets". The file goes into project_documents like any other upload and
+// carries rfi_id, so it is on the Documents page too rather than buried in
+// the log. 0085 adds that column.
+
+function missingAttachmentColumn(message: string): boolean {
+  return /rfi_id/i.test(message) && /does not exist|schema cache/i.test(message);
+}
+
+function friendlyAttach(message: string): string {
+  if (missingAttachmentColumn(message)) {
+    return "Run migration 0085 in the Supabase SQL Editor to attach files to an RFI.";
+  }
+  return message;
+}
+
+export type AttachResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Point an existing document at an RFI.
+ *
+ * Both ids are checked against the project before the write. The client sends
+ * them, and a client is a suggestion: without this, a document id from another
+ * job would attach cleanly and show up on this one's log.
+ */
+export async function attachDocumentToRfi(
+  projectId: string,
+  rfiId: string,
+  documentId: string,
+): Promise<AttachResult> {
+  const supabase = createClient();
+
+  const { data: rfi, error: rfiError } = await supabase
+    .from("rfis")
+    .select("id")
+    .eq("id", rfiId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (rfiError) return { ok: false, error: friendly(rfiError.message) };
+  if (!rfi) return { ok: false, error: "That RFI is not on this project" };
+
+  const { data, error } = await supabase
+    .from("project_documents")
+    .update({ rfi_id: rfiId })
+    .eq("id", documentId)
+    .eq("project_id", projectId)
+    .select("id");
+
+  if (error) return { ok: false, error: friendlyAttach(error.message) };
+  if (!data || data.length === 0) {
+    return { ok: false, error: "That file is not in this project's library" };
+  }
+
+  revalidatePath(`/projects/${projectId}/rfis`);
+  revalidatePath(`/projects/${projectId}/documents`);
+  return { ok: true };
+}
+
+/**
+ * Unhook a document from its RFI. The file stays in the library - "this photo
+ * is on the wrong RFI" is a different problem from "delete this photo", and
+ * guessing wrong on that one loses the only picture of the condition.
+ */
+export async function detachDocumentFromRfi(
+  projectId: string,
+  documentId: string,
+): Promise<AttachResult> {
+  const supabase = createClient();
+
+  const { error } = await supabase
+    .from("project_documents")
+    .update({ rfi_id: null })
+    .eq("id", documentId)
+    .eq("project_id", projectId);
+
+  if (error) return { ok: false, error: friendlyAttach(error.message) };
+
+  revalidatePath(`/projects/${projectId}/rfis`);
+  revalidatePath(`/projects/${projectId}/documents`);
+  return { ok: true };
+}
+
+export type AttachableDoc = {
+  id: string;
+  fileName: string;
+  category: string;
+  uploadedAt: string | null;
+};
+
+export type AttachableResult =
+  | { ok: true; enabled: boolean; documents: AttachableDoc[] }
+  | { ok: false; error: string };
+
+/**
+ * What is already in the library and not yet on this RFI.
+ *
+ * The plan sets are the point: the sheet the question is about is usually
+ * already uploaded, and re-uploading it to attach it would put a second copy
+ * of a 40 MB drawing set in the bucket.
+ */
+export async function getAttachableRfiDocuments(
+  projectId: string,
+  rfiId: string,
+): Promise<AttachableResult> {
+  const supabase = createClient();
+
+  const { data, error } = await supabase
+    .from("project_documents")
+    .select("id, file_name, category, uploaded_at, rfi_id")
+    .eq("project_id", projectId)
+    .order("uploaded_at", { ascending: false, nullsFirst: false });
+
+  // 0085 not applied. The picker says so rather than offering to attach
+  // something that cannot be saved.
+  if (error && missingAttachmentColumn(error.message)) {
+    return { ok: true, enabled: false, documents: [] };
+  }
+  if (error) return { ok: false, error: error.message };
+
+  return {
+    ok: true,
+    enabled: true,
+    documents: (data ?? [])
+      .filter((d) => d.rfi_id !== rfiId)
+      .map((d) => ({
+        id: d.id,
+        fileName: d.file_name,
+        category: d.category,
+        uploadedAt: d.uploaded_at,
+      })),
+  };
+}

@@ -20,7 +20,15 @@ import {
   type RfiSummary,
 } from "@/lib/rfi-log";
 
-import { createRfi, deleteRfi, setRfiStep, type RfiStep } from "./rfis-actions";
+import {
+  attachDocumentToRfi,
+  createRfi,
+  deleteRfi,
+  setRfiStep,
+  type RfiStep,
+} from "./rfis-actions";
+import { RfiAttachments, type RfiAttachment } from "./rfi-attachments";
+import { uploadProjectDocument } from "./upload-document";
 
 type Sub = { id: string; company_name: string };
 
@@ -31,6 +39,10 @@ type Props = {
   subs: Sub[];
   today: string;
   suggestedNumber: string;
+  /** Keyed by rfi id. Signed on the server, good for an hour. */
+  attachments: Record<string, RfiAttachment[]>;
+  /** False when migration 0085 has not been applied. */
+  attachmentsEnabled: boolean;
 };
 
 const STATE_TONE: Record<RfiState, string> = {
@@ -47,6 +59,8 @@ export function RfiLog({
   subs,
   today,
   suggestedNumber,
+  attachments,
+  attachmentsEnabled,
 }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -54,6 +68,10 @@ export function RfiLog({
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [answerDraft, setAnswerDraft] = useState("");
+  // Files chosen while logging, uploaded after the RFI exists: they need its
+  // id to attach to, and the id is assigned by the insert.
+  const [pending, setPending] = useState<File[]>([]);
+  const [saving, setSaving] = useState(false);
   const [, startTransition] = useTransition();
 
   const subName = (id: string | null) =>
@@ -97,6 +115,32 @@ export function RfiLog({
       setError(res.error);
       return;
     }
+
+    // The RFI is saved. Anything that fails from here is reported against
+    // the file, never as a failure to log the RFI - that part is done.
+    if (pending.length > 0) {
+      setSaving(true);
+      const failed: string[] = [];
+      for (const file of pending) {
+        const up = await uploadProjectDocument({
+          projectId,
+          file,
+          category: "rfi",
+        });
+        if (!up.ok) {
+          failed.push(`${file.name} (${up.error})`);
+          continue;
+        }
+        const linked = await attachDocumentToRfi(projectId, res.id, up.id);
+        if (!linked.ok) failed.push(`${file.name} (${linked.error})`);
+      }
+      setSaving(false);
+      if (failed.length > 0) {
+        setError(`RFI saved. These files did not attach: ${failed.join(", ")}`);
+      }
+    }
+
+    setPending([]);
     setOpen(false);
     startTransition(() => router.refresh());
   }
@@ -210,6 +254,21 @@ export function RfiLog({
               />
             </div>
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="rfi_files">Photos or marked-up sheets</Label>
+            <input
+              id="rfi_files"
+              type="file"
+              multiple
+              onChange={(e) => setPending(Array.from(e.target.files ?? []))}
+              className="block w-full text-sm file:mr-3 file:rounded-md file:border file:border-input file:bg-background file:px-3 file:py-1.5 file:text-sm"
+            />
+            <p className="text-xs text-muted-foreground">
+              {pending.length > 0
+                ? `${pending.length} file${pending.length === 1 ? "" : "s"} will upload once the RFI is saved.`
+                : "A photo of the condition settles what a paragraph describes. Sheets already in the library attach from the RFI itself, no second upload."}
+            </p>
+          </div>
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2">
               <input type="checkbox" name="cost_impact" /> Possible cost impact
@@ -221,7 +280,9 @@ export function RfiLog({
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit">Save</Button>
+              <Button type="submit" disabled={saving}>
+                {saving ? "Uploading files..." : "Save"}
+              </Button>
             </div>
           </div>
         </form>
@@ -287,6 +348,14 @@ export function RfiLog({
                       </td>
                       <td className="px-4 py-2.5 text-muted-foreground">
                         {subName(r.subcontractor_id) ?? r.raised_by ?? "-"}
+                        {(attachments[r.id]?.length ?? 0) > 0 && (
+                          <span
+                            className="ml-1.5 text-[11px]"
+                            title={`${attachments[r.id].length} attached`}
+                          >
+                            &#128206;{attachments[r.id].length}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-muted-foreground">{r.eor_firm ?? "-"}</td>
                       <td className="px-4 py-2.5">
@@ -347,6 +416,12 @@ export function RfiLog({
                                 <p className="whitespace-pre-wrap">{r.answer}</p>
                               </div>
                             )}
+                            <RfiAttachments
+                              projectId={projectId}
+                              rfiId={r.id}
+                              attachments={attachments[r.id] ?? []}
+                              enabled={attachmentsEnabled}
+                            />
                             <div className="flex flex-wrap items-end gap-2">
                               {state === "with_us" && (
                                 <Button
