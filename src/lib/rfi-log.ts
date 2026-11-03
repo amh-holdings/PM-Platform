@@ -149,6 +149,23 @@ export function nextRfiNumber(existing: readonly string[], prefix = "RFI-"): str
   return `${head}${String(highest + 1).padStart(pad, "0")}`;
 }
 
+/**
+ * The control-number prefix for a project.
+ *
+ * Three letters off the project name plus RFI, so Sussexx CSG 1 LLC opens at
+ * SUS-RFI-001 and Sweet Springs Solar at SWE-RFI-001. The number carries the
+ * project on its face, which is what makes it useful on a transmittal or in
+ * an email subject line where nobody can see which log it came from.
+ *
+ * A name with fewer than two letters falls back to the plain series rather
+ * than inventing a one-letter code.
+ */
+export function projectRfiPrefix(projectName: string | null | undefined): string {
+  const letters = (projectName ?? "").replace(/[^A-Za-z]/g, "");
+  if (letters.length < 2) return "RFI-";
+  return `${letters.slice(0, 3).toUpperCase()}-RFI-`;
+}
+
 export type RfiSummary = {
   open: number;
   withUs: number;
