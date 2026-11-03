@@ -232,14 +232,20 @@ export function deliverableFileName(input: {
   /** YYYY-MM-DD, the document's own date. */
   versionDate: string;
   deviceId?: string | null;
+  /** Recurring reports only: this report's number in the series. */
+  controlNo?: number | null;
 }): string {
   const spv = input.spv.trim().replace(UNSAFE, "-");
   const device = (input.deviceId ?? "").trim().replace(UNSAFE, "-");
   let item = input.item.item;
-  // A recurring report is one file per period: its date is the version.
+  // A recurring report: one file per report, numbered in order. The number
+  // says which report it is and the date says which issue of it, so a
+  // second report never repeats the first one's name, and a corrected copy
+  // of the same report keeps its number with a new date.
   if (input.item.perDevice === "period") {
     const status = input.item.status ? `_${input.item.status}` : "";
-    return `${spv}_${item}${status}_v${device || input.versionDate}`;
+    const control = input.controlNo ? ` No. ${String(input.controlNo).padStart(3, "0")}` : "";
+    return `${spv}_${item}${control}${status}_v${input.versionDate}`;
   }
   if (device) {
     // The road is its own segment in Exhibit S; a device goes in parentheses.
@@ -261,7 +267,7 @@ export function deviceIdProblem(kind: DeviceKind, deviceId: string): string | nu
   return null;
 }
 
-export const DELIVERABLE_STATES = ["not_started", "in_progress", "submitted", "accepted", "not_applicable"] as const;
+export const DELIVERABLE_STATES = ["not_started", "in_progress", "submitted", "accepted", "missed", "not_applicable"] as const;
 export type DeliverableState = (typeof DELIVERABLE_STATES)[number];
 
 export const STATE_LABEL: Record<DeliverableState, string> = {
@@ -269,12 +275,17 @@ export const STATE_LABEL: Record<DeliverableState, string> = {
   in_progress: "In progress",
   submitted: "Uploaded",
   accepted: "Accepted",
+  missed: "Missed",
   not_applicable: "N/A",
 };
 
-/** Done for counting: uploaded, accepted, or not applicable to this site. */
+/**
+ * Done for counting: uploaded, accepted, not applicable to this site, or a
+ * recurring report that was missed and the reason recorded. A missed week
+ * with no reason is not done; it shows as a gap until somebody explains it.
+ */
 export function isDone(state: string): boolean {
-  return state === "submitted" || state === "accepted" || state === "not_applicable";
+  return state === "submitted" || state === "accepted" || state === "not_applicable" || state === "missed";
 }
 
 /**
@@ -321,4 +332,23 @@ export function stateForDecision(decision: ReviewDecision): DeliverableState {
   if (decision === "approved" || decision === "approved_as_noted") return "accepted";
   if (decision === "submitted") return "submitted";
   return "in_progress";
+}
+
+/**
+ * The weeks with no report on file. Weekly reports are expected every 7 days
+ * from the first one, through the last full week. A report anywhere in a week's 7-day
+ * window covers it, so a report sent a day late still counts, and a week
+ * recorded as missed (with its reason) counts as accounted for.
+ */
+export function missedWeeks(reportDates: string[], today: string): string[] {
+  const dates = reportDates.filter(Boolean).sort();
+  if (dates.length === 0) return [];
+  const day = (iso: string) => Math.floor(Date.parse(`${iso}T00:00:00Z`) / 86400000);
+  const covered = dates.map(day);
+  const out: string[] = [];
+  // Only weeks that have fully gone by: this week's report isn't late yet.
+  for (let d = day(dates[0]); d + 7 <= day(today); d += 7) {
+    if (!covered.some((c) => c >= d && c < d + 7)) out.push(new Date(d * 86400000).toISOString().slice(0, 10));
+  }
+  return out;
 }

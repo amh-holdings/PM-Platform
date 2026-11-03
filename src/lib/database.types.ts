@@ -2228,6 +2228,7 @@ export type Database = {
       project_deliverables: {
         Row: {
           catalog_key: string
+          control_no: number | null
           created_at: string
           device_id: string
           file_url: string | null
@@ -2242,6 +2243,7 @@ export type Database = {
         }
         Insert: {
           catalog_key: string
+          control_no?: number | null
           created_at?: string
           device_id?: string
           file_url?: string | null
@@ -2256,6 +2258,7 @@ export type Database = {
         }
         Update: {
           catalog_key?: string
+          control_no?: number | null
           created_at?: string
           device_id?: string
           file_url?: string | null

@@ -5,6 +5,7 @@ import {
   deliverableFileName,
   deviceIdProblem,
   isDone,
+  missedWeeks,
   nextPeriod,
   stateForDecision,
 } from "../../src/lib/exhibit-s";
@@ -42,8 +43,21 @@ check("new customer pole counts as switchgear", deviceIdProblem("MVSG", "New Cus
 check("1.1.MS is a GG met station", deviceIdProblem("MS", "1.1.MS") === null);
 check("free text is never refused", deviceIdProblem("equipment", "Recloser") === null);
 check("blank device is refused", deviceIdProblem("road", " ") !== null);
-check("weekly report is one file per week, dated by its week",
-  deliverableFileName({ spv: SPV, item: item("Weekly Progress Report"), versionDate: D, deviceId: "2026-11-06" }) === "Sussex CSG 1 LLC_Weekly Progress Report_v2026-11-06");
+const wpr = item("Weekly Progress Report");
+check("weekly report carries its control number and doc date",
+  deliverableFileName({ spv: SPV, item: wpr, versionDate: "2026-11-06", deviceId: "2026-11-06", controlNo: 12 }) === "Sussex CSG 1 LLC_Weekly Progress Report No. 012_v2026-11-06");
+check("two reports never share a name",
+  deliverableFileName({ spv: SPV, item: wpr, versionDate: "2026-11-06", deviceId: "2026-11-06", controlNo: 12 }) !==
+  deliverableFileName({ spv: SPV, item: wpr, versionDate: "2026-11-13", deviceId: "2026-11-13", controlNo: 13 }));
+check("a corrected issue keeps its number with the new date",
+  deliverableFileName({ spv: SPV, item: wpr, versionDate: "2026-11-09", deviceId: "2026-11-06", controlNo: 12 }) === "Sussex CSG 1 LLC_Weekly Progress Report No. 012_v2026-11-09");
+check("no gaps when every week is on file", missedWeeks(["2026-10-16", "2026-10-23", "2026-10-30"], "2026-11-03").length === 0);
+check("a missing week shows", JSON.stringify(missedWeeks(["2026-10-16", "2026-10-30"], "2026-11-03")) === JSON.stringify(["2026-10-23"]));
+check("a report a day late still covers its week", missedWeeks(["2026-10-16", "2026-10-24"], "2026-10-29").length === 0);
+check("this week isn't late while it's running", missedWeeks(["2026-10-16", "2026-10-23"], "2026-10-31").length === 0);
+check("a week counts once it's fully gone by", JSON.stringify(missedWeeks(["2026-10-16", "2026-10-23"], "2026-11-06")) === JSON.stringify(["2026-10-30"]));
+check("nothing on file means nothing missed yet", missedWeeks([], "2026-11-03").length === 0);
+check("missed with its reason counts as done", isDone("missed"));
 check("recurring items are per period", EXHIBIT_S.filter((c) => c.recurring).every((c) => c.perDevice === "period"));
 check("next week after the last report", nextPeriod("weekly", "2026-11-06", D) === "2026-11-13");
 check("next month after the last schedule", nextPeriod("monthly", "2026-10-31", D) === "2026-11-30" && nextPeriod("monthly", "2026-11-15", D) === "2026-12-15");

@@ -34,6 +34,22 @@ async function signedIn() {
 }
 
 const done = (projectId: string) => revalidatePath(`/projects/${projectId}/deliverables`);
+
+type Db = ReturnType<typeof createClient>;
+
+/** The next number in a recurring report's series. Assigned once, never recomputed. */
+async function nextControlNo(db: Db, projectId: string, catalogKey: string): Promise<number> {
+  const { data } = await db
+    .from("project_deliverables")
+    .select("control_no")
+    .eq("project_id", projectId)
+    .eq("catalog_key", catalogKey)
+    .not("control_no", "is", null)
+    .order("control_no", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data?.control_no ?? 0) + 1;
+}
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
@@ -70,10 +86,15 @@ export async function addDeliverableDevice(
   if (!item?.perDevice) return { ok: false, error: "That item isn't per device." };
   const problem = deviceIdProblem(item.perDevice, deviceId);
   if (problem) return { ok: false, error: problem };
+  // A recurring report takes the next number, and its report date as its
+  // doc date until somebody changes it.
+  const period = item.perDevice === "period";
   const { error } = await auth.supabase.from("project_deliverables").insert({
     project_id: projectId,
     catalog_key: catalogKey,
     device_id: deviceId.trim(),
+    control_no: period ? await nextControlNo(auth.supabase, projectId, catalogKey) : null,
+    version_date: period ? deviceId.trim() : null,
     updated_by: auth.userId,
   });
   if (error) return { ok: false, error: friendly(error.message) };
@@ -96,8 +117,24 @@ export async function updateDeliverable(
   const auth = await signedIn();
   if (!auth) return { ok: false, error: "Not signed in" };
   const update: Record<string, unknown> = { updated_by: auth.userId, updated_at: new Date().toISOString() };
+  const { data: current } = await auth.supabase
+    .from("project_deliverables")
+    .select("catalog_key, control_no, notes")
+    .eq("id", id)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (!current) return { ok: false, error: "Deliverable not found" };
   if (patch.state !== undefined) {
     if (!DELIVERABLE_STATES.includes(patch.state)) return { ok: false, error: "Unknown status" };
+    // A missed report needs its reason; that is the whole point of marking it.
+    if (patch.state === "missed" && !(patch.notes ?? current.notes ?? "").trim()) {
+      return { ok: false, error: "Write the reason this one was missed in the note first." };
+    }
+    // A missed week that later goes in after all becomes a numbered report.
+    const period = CATALOG_BY_KEY.get(current.catalog_key)?.perDevice === "period";
+    if (period && current.control_no == null && patch.state !== "missed" && patch.state !== "not_applicable") {
+      update.control_no = await nextControlNo(auth.supabase, projectId, current.catalog_key);
+    }
     update.state = patch.state;
     // Uploaded records the day; going back to not started clears it.
     if (patch.state === "submitted") update.submitted_on = new Date().toISOString().slice(0, 10);
@@ -114,6 +151,31 @@ export async function updateDeliverable(
     .update(update as never)
     .eq("id", id)
     .eq("project_id", projectId);
+  if (error) return { ok: false, error: friendly(error.message) };
+  done(projectId);
+  return { ok: true };
+}
+
+/** A week with no report: record it as missed, with the reason. */
+export async function recordMissedPeriod(
+  projectId: string,
+  catalogKey: string,
+  date: string,
+  reason: string,
+): Promise<DeliverableResult> {
+  const auth = await signedIn();
+  if (!auth) return { ok: false, error: "Not signed in" };
+  if (CATALOG_BY_KEY.get(catalogKey)?.perDevice !== "period") return { ok: false, error: "Not a recurring report." };
+  if (!ISO.test(date)) return { ok: false, error: "Pick the week" };
+  if (!reason.trim()) return { ok: false, error: "Write the reason this week was missed." };
+  const { error } = await auth.supabase.from("project_deliverables").insert({
+    project_id: projectId,
+    catalog_key: catalogKey,
+    device_id: date,
+    state: "missed",
+    notes: reason.trim(),
+    updated_by: auth.userId,
+  });
   if (error) return { ok: false, error: friendly(error.message) };
   done(projectId);
   return { ok: true };

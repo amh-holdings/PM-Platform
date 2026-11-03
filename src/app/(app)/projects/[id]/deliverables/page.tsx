@@ -13,7 +13,7 @@ export default async function ProjectDeliverablesPage({ params }: { params: Para
   // it loses this page rather than the project.
   const res = await supabase
     .from("project_deliverables")
-    .select("id, catalog_key, device_id, state, version_date, submitted_on, file_url, notes")
+    .select("id, catalog_key, device_id, control_no, state, version_date, submitted_on, file_url, notes")
     .eq("project_id", params.id);
   if (res.error) {
     return (

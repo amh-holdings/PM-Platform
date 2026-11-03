@@ -47,6 +47,18 @@ create policy "ahc_write_deliverable_revisions" on public.project_deliverable_re
   using (public.current_user_role() in ('phil', 'zarina', 'ahc_super'))
   with check (public.current_user_role() in ('phil', 'zarina', 'ahc_super'));
 
+-- Recurring reports are numbered: Weekly Progress Report No. 001, 002...
+-- The number is assigned once, when the report is added, and never
+-- recomputed, so a late report slotted in between does not renumber the
+-- ones already sent. A week recorded as missed gets no number.
+alter table public.project_deliverables add column if not exists control_no integer;
+
+-- A missed week is a state of its own, with the reason in notes, so the
+-- checklist can show the gap and why rather than an unexplained hole.
+alter table public.project_deliverables drop constraint if exists project_deliverables_state_check;
+alter table public.project_deliverables add constraint project_deliverables_state_check
+  check (state in ('not_started', 'in_progress', 'submitted', 'accepted', 'missed', 'not_applicable'));
+
 -- Recurring reports (weekly progress report, weekly minutes, monthly
 -- schedule) are now one row per report date. The single undated row the
 -- first load put on each project is replaced by them, so it comes off while
