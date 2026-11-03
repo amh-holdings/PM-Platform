@@ -333,6 +333,50 @@ export async function setPayApplicationStatus(
   return { ok: true };
 }
 
+// Correct the day an AFP was submitted, approved or paid. The status stays;
+// only the date moves, and it still has to fall in order: submitted, then
+// approved, then paid, none of them in the future.
+export async function setPayApplicationDate(
+  payAppId: string,
+  projectId: string,
+  field: "submitted_at" | "approved_at" | "paid_at",
+  onDate: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(onDate) || Number.isNaN(Date.parse(`${onDate}T00:00:00Z`))) {
+    return { ok: false, error: "Pick a valid date" };
+  }
+  if (onDate > new Date().toISOString().slice(0, 10)) return { ok: false, error: "The date can't be in the future" };
+
+  const { data: app } = await auth.supabase
+    .from("pay_applications")
+    .select("submitted_at, approved_at, paid_at")
+    .eq("id", payAppId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (!app) return { ok: false, error: "Pay application not found" };
+  if (!app[field]) return { ok: false, error: "That step hasn't happened yet. Use the button to mark it." };
+
+  const day = (v: string | null) => (v ? v.slice(0, 10) : null);
+  const order: ("submitted_at" | "approved_at" | "paid_at")[] = ["submitted_at", "approved_at", "paid_at"];
+  const at = order.indexOf(field);
+  const earlier = order.slice(0, at).map((f) => day(app[f])).filter(Boolean) as string[];
+  const later = order.slice(at + 1).map((f) => day(app[f])).filter(Boolean) as string[];
+  if (earlier.some((d) => onDate < d)) return { ok: false, error: `The date can't be before ${earlier.sort().pop()}` };
+  if (later.some((d) => onDate > d)) return { ok: false, error: `The date can't be after ${later.sort()[0]}` };
+
+  const { error } = await auth.supabase
+    .from("pay_applications")
+    .update({ [field]: `${onDate}T12:00:00.000Z` } as { submitted_at?: string; approved_at?: string; paid_at?: string })
+    .eq("id", payAppId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}/pay-apps`);
+  revalidatePath(`/projects/${projectId}/pay-apps/${payAppId}`);
+  return { ok: true };
+}
+
 // Put an AFP's lines back. The counterpart to "Create AFP from selected",
 // reachable from the billing page where the mistake is made rather than from a
 // screen the reader has no reason to be on.
