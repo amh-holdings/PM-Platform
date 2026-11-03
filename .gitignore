@@ -66,3 +66,6 @@ next-env.d.ts
 # outputs, not source - regenerate them from the scripts instead.
 /reports/
 scripts/_backups/
+
+# Copied from node_modules by scripts/copy-pdf-worker.mjs before dev/build.
+public/pdf.worker.min.mjs

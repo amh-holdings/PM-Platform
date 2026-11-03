@@ -26,6 +26,7 @@ import {
   getAttachableRfiDocuments,
   type AttachableDoc,
 } from "./rfis-actions";
+import { RfiMarkupDialog } from "./rfi-markup-dialog";
 import { formatBytes, uploadProjectDocument } from "./upload-document";
 
 export type RfiAttachment = {
@@ -61,6 +62,7 @@ export function RfiAttachments({ projectId, rfiId, attachments, enabled }: Props
   const [picking, setPicking] = useState(false);
   const [options, setOptions] = useState<AttachableDoc[] | null>(null);
   const [query, setQuery] = useState("");
+  const [markingUp, setMarkingUp] = useState(false);
   const [, startTransition] = useTransition();
 
   const handleFiles = useCallback(
@@ -269,6 +271,15 @@ export function RfiAttachments({ projectId, rfiId, attachments, enabled }: Props
         >
           Attach from the plan sets
         </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() => setMarkingUp(true)}
+        >
+          Mark up a sheet
+        </Button>
         <Link
           href={`/projects/${projectId}/documents`}
           className="text-[11px] text-muted-foreground underline hover:text-foreground"
@@ -330,6 +341,15 @@ export function RfiAttachments({ projectId, rfiId, attachments, enabled }: Props
             </div>
           )}
         </div>
+      )}
+
+      {markingUp && (
+        <RfiMarkupDialog
+          projectId={projectId}
+          rfiId={rfiId}
+          onClose={() => setMarkingUp(false)}
+          onSaved={() => startTransition(() => router.refresh())}
+        />
       )}
     </div>
   );
