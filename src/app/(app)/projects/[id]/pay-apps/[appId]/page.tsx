@@ -173,6 +173,15 @@ export default async function PayAppDetailPage({ params }: { params: Params }) {
             <div className="text-xs text-muted-foreground">
               {formatDate(app.period_start)} - {formatDate(app.period_end)}
             </div>
+            {app.submitted_at && (
+              <div className="text-xs text-muted-foreground">Submitted {formatDate(app.submitted_at)}</div>
+            )}
+            {app.approved_at && (
+              <div className="text-xs text-muted-foreground">Approved {formatDate(app.approved_at)}</div>
+            )}
+            {app.paid_at && (
+              <div className="text-xs text-muted-foreground">Paid {formatDate(app.paid_at)}</div>
+            )}
           </div>
         </div>
 

@@ -270,11 +270,35 @@ export async function setPayApplicationStatus(
   payAppId: string,
   projectId: string,
   newStatus: "submitted" | "approved" | "paid",
+  /** YYYY-MM-DD: the day it was submitted, approved or paid. Defaults to now. */
+  onDate?: string | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
-  const now = new Date().toISOString();
+  // The AFP goes out on one day and gets entered on another, so the person
+  // marking it says which day. Noon UTC keeps the date the same in every US
+  // timezone the app is read in.
+  let now = new Date().toISOString();
+  if (onDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(onDate) || Number.isNaN(Date.parse(`${onDate}T00:00:00Z`))) {
+      return { ok: false, error: "Pick a valid date" };
+    }
+    if (onDate > now.slice(0, 10)) return { ok: false, error: "The date can't be in the future" };
+    const { data: current } = await auth.supabase
+      .from("pay_applications")
+      .select("submitted_at, approved_at")
+      .eq("id", payAppId)
+      .maybeSingle();
+    const before =
+      newStatus === "approved" ? current?.submitted_at
+        : newStatus === "paid" ? (current?.approved_at ?? current?.submitted_at)
+          : null;
+    if (before && onDate < before.slice(0, 10)) {
+      return { ok: false, error: `The date can't be before ${newStatus === "approved" ? "it was submitted" : "it was approved"} (${before.slice(0, 10)})` };
+    }
+    now = `${onDate}T12:00:00.000Z`;
+  }
   const patch: {
     status: string;
     submitted_at?: string;
