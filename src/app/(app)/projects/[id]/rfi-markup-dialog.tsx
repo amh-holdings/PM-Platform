@@ -104,6 +104,11 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
   /** The crop being dragged, in canvas pixels. Not a mark - it never saves. */
   const [cropDraft, setCropDraft] = useState<Rect | null>(null);
   const [cropped, setCropped] = useState(false);
+  /** Saved on this visit, so several details off one sheet is one trip. */
+  const [savedCount, setSavedCount] = useState(0);
+  /** Saves off the sheet and page on screen, so their names do not collide. */
+  const [sheetSaves, setSheetSaves] = useState(0);
+  const [justSaved, setJustSaved] = useState<string | null>(null);
 
   // The loaded PDF, kept so paging does not re-download a 40 MB set.
   const pdfRef = useRef<{ numPages: number; getPage: (n: number) => Promise<unknown> } | null>(null);
@@ -310,6 +315,8 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
     drafting.current = null;
     setCropDraft(null);
     setCropped(false);
+    setJustSaved(null);
+    setSheetSaves(0);
     cropRef.current = null;
 
     const res = await getDocumentForMarkup(projectId, doc.id);
@@ -365,6 +372,9 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
     setShapes([]);
     drafting.current = null;
     setCropDraft(null);
+    setJustSaved(null);
+    // A new page is a new name, so the sequence starts again.
+    setSheetSaves(0);
     // The crop was a region of the page being left. Carrying it over would
     // show a corner of the next sheet with no way to tell that is what it is.
     cropRef.current = null;
@@ -465,7 +475,14 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
     setShapes((prev) => [...prev, draft]);
   }
 
-  async function save() {
+  /**
+   * Flatten what is on screen, store it, hand it to the caller.
+   *
+   * keepOpen leaves the sheet loaded and clears the marks, so three details
+   * off one C04 is one trip rather than three. Zarina: "add option to add
+   * multiple image, or multiple cropped section from plan sets."
+   */
+  async function save(keepOpen: boolean) {
     const base = baseRef.current;
     if (!base || !source) return;
     // A cropped detail with no marks is still worth sending: "this corner of
@@ -500,7 +517,7 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
       return;
     }
 
-    const name = markupFileName(source.fileName, page, cropped);
+    const name = markupFileName(source.fileName, page, cropped, sheetSaves + 1);
     const file = new File([blob], name, { type: "image/png" });
 
     const up = await uploadProjectDocument({ projectId, file, category: "rfi" });
@@ -515,8 +532,30 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
       setError(`${name} is in the library but not attached: ${linked.error}`);
       return;
     }
+
     onSaved();
-    onClose();
+    setSavedCount((n) => n + 1);
+    setSheetSaves((n) => n + 1);
+
+    if (!keepOpen) {
+      onClose();
+      return;
+    }
+
+    // Back to the whole sheet with a clean overlay, ready for the next
+    // detail. The sheet itself stays loaded - a 40 MB set is not re-fetched
+    // to crop a second corner of it.
+    setJustSaved(name);
+    setShapes([]);
+    drafting.current = null;
+    setCropDraft(null);
+    if (cropRef.current) {
+      cropRef.current = null;
+      setLoading(true);
+      await renderSheet(page || 1, null);
+      setLoading(false);
+    }
+    setCropped(false);
   }
 
   const filtered = (options ?? []).filter((o) =>
@@ -759,7 +798,9 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
               <p className="text-xs text-muted-foreground">
                 {tool === "crop"
                   ? "Drag a box around the part of the sheet to keep."
-                  : `${shapes.length} mark${shapes.length === 1 ? "" : "s"}${cropped ? ", cropped" : ""}. The sheet itself is not changed - this saves a flat image onto the RFI.`}
+                  : justSaved && shapes.length === 0 && !cropped
+                    ? `Saved ${justSaved}. ${savedCount} on this RFI so far - crop another part of the sheet, or close.`
+                    : `${shapes.length} mark${shapes.length === 1 ? "" : "s"}${cropped ? ", cropped" : ""}. The sheet itself is not changed - this saves a flat image onto the RFI.`}
               </p>
               <div className="flex gap-2">
                 <Button
@@ -778,8 +819,17 @@ export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }
                 >
                   Pick another sheet
                 </Button>
-                <Button type="button" size="sm" disabled={saving} onClick={() => void save()}>
-                  {saving ? "Saving..." : "Save to the RFI"}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={saving}
+                  onClick={() => void save(true)}
+                >
+                  {saving ? "Saving..." : "Save and add another"}
+                </Button>
+                <Button type="button" size="sm" disabled={saving} onClick={() => void save(false)}>
+                  {saving ? "Saving..." : "Save and close"}
                 </Button>
               </div>
             </div>

@@ -282,6 +282,18 @@ console.log("\n=== markupFileName ===");
 eq("a sheet and a page", markupFileName("Sussex-Civil-Set.pdf", 4), "Sussex-Civil-Set-p4-markup.png");
 eq("a cropped sheet says so", markupFileName("Sussex-Civil-Set.pdf", 6, true), "Sussex-Civil-Set-p6-detail-markup.png");
 eq("a cropped photo says so", markupFileName("IMG_4821.jpg", 0, true), "IMG_4821-detail-markup.png");
+
+// Several details off one sheet, which is the point of "save and add
+// another". One name for three files would be three files nobody can tell
+// apart in the attachment list.
+eq("the first detail keeps the plain name", markupFileName("C04.pdf", 6, true, 1), "C04-p6-detail-markup.png");
+eq("the second is numbered", markupFileName("C04.pdf", 6, true, 2), "C04-p6-detail-2-markup.png");
+eq("and the third", markupFileName("C04.pdf", 6, true, 3), "C04-p6-detail-3-markup.png");
+eq("a whole-sheet markup numbers too", markupFileName("C04.pdf", 6, false, 2), "C04-p6-2-markup.png");
+check(
+  "three details off one sheet are three distinct names",
+  new Set([1, 2, 3].map((n) => markupFileName("C04.pdf", 6, true, n))).size === 3,
+);
 eq("an image has no page", markupFileName("IMG_4821.jpg", 0), "IMG_4821-markup.png");
 eq("a name with dots keeps all but the extension", markupFileName("C-101.detail.3.pdf", 1), "C-101.detail.3-p1-markup.png");
 eq("a name with no extension survives", markupFileName("scan", 2), "scan-p2-markup.png");

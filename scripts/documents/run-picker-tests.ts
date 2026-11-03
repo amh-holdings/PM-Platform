@@ -11,6 +11,7 @@
 
 import {
   countDocuments,
+  mergePickedFiles,
   fileNameDate,
   groupDocuments,
   uploadedLabel,
@@ -172,6 +173,40 @@ eq(
   "the newest upload of one sheet leads",
   groupDocuments(repeats)[0].docs.map((d) => [d.id, d.olderCopy]),
   [["late", false], ["early", true]],
+);
+
+console.log("\n=== Adding files in more than one go ===");
+
+const f = (name: string, size: number) => ({ name, size });
+
+eq(
+  "a second trip to the file picker adds, it does not replace",
+  mergePickedFiles([f("swale.jpg", 10)], [f("pad.jpg", 20)]).map((x) => x.name),
+  ["swale.jpg", "pad.jpg"],
+);
+eq(
+  "the same photo picked twice lands once",
+  mergePickedFiles([f("swale.jpg", 10)], [f("swale.jpg", 10)]).map((x) => x.name),
+  ["swale.jpg"],
+);
+eq(
+  "two photos off two phones both land",
+  mergePickedFiles([f("IMG_4821.jpg", 10)], [f("IMG_4821.jpg", 99)]).length,
+  2,
+);
+eq(
+  "a repeat inside one batch lands once",
+  mergePickedFiles([], [f("a.jpg", 1), f("a.jpg", 1), f("b.jpg", 2)]).map((x) => x.name),
+  ["a.jpg", "b.jpg"],
+);
+eq("picking nothing changes nothing", mergePickedFiles([f("a.jpg", 1)], []).map((x) => x.name), ["a.jpg"]);
+check(
+  "the original list is never mutated",
+  (() => {
+    const start = [f("a.jpg", 1)];
+    mergePickedFiles(start, [f("b.jpg", 2)]);
+    return start.length === 1;
+  })(),
 );
 
 console.log("\n=== Odds and ends ===");
