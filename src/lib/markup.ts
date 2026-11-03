@@ -293,13 +293,17 @@ export function markupFileName(
   sourceName: string,
   page: number,
   cropped = false,
+  sequence = 1,
 ): string {
   const stem = sourceName.replace(/\.[^.]+$/, "").slice(0, 60) || "sheet";
   const suffix = page > 0 ? `-p${page}` : "";
   // "detail" says the image is a piece of the sheet, not the sheet. Someone
   // opening it a month later cannot tell otherwise.
   const detail = cropped ? "-detail" : "";
-  return `${stem}${suffix}${detail}-markup.png`;
+  // Three crops off one C04 would otherwise be three files with one name.
+  // The first keeps the plain name so a single markup is not called "-1".
+  const nth = sequence > 1 ? `-${sequence}` : "";
+  return `${stem}${suffix}${detail}${nth}-markup.png`;
 }
 
 /** A drag shorter than this is a click, not a shape. */

@@ -181,3 +181,27 @@ export function uploadedLabel(uploadedAt: string | null): string {
     year: "numeric",
   });
 }
+
+/**
+ * Add newly picked files to the ones already chosen.
+ *
+ * A file input reports only the files picked in THAT dialog, so replacing the
+ * list drops the first batch when the photos are in two folders. Name and
+ * size together identify a file well enough here: two different photos
+ * matching on both is not a case worth losing a photo over, and the same
+ * photo picked twice is a slip.
+ */
+export function mergePickedFiles<T extends { name: string; size: number }>(
+  existing: readonly T[],
+  picked: readonly T[],
+): T[] {
+  const have = new Set(existing.map((f) => `${f.name}:${f.size}`));
+  const fresh: T[] = [];
+  for (const f of picked) {
+    const key = `${f.name}:${f.size}`;
+    if (have.has(key)) continue;
+    have.add(key);
+    fresh.push(f);
+  }
+  return fresh.length === 0 ? [...existing] : [...existing, ...fresh];
+}

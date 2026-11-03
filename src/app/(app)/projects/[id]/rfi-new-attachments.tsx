@@ -15,10 +15,12 @@
  * the library, which is why it carries its own name rather than "markup.png".
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+
+import { mergePickedFiles } from "@/lib/document-picker";
 
 import { LibraryPicker } from "./rfi-attach-picker";
 import { RfiMarkupDialog } from "./rfi-markup-dialog";
@@ -40,14 +42,29 @@ export function RfiNewAttachments({
   staged,
   onStaged,
 }: Props) {
+  const fileInput = useRef<HTMLInputElement>(null);
   const [picking, setPicking] = useState(false);
   const [markingUp, setMarkingUp] = useState(false);
 
   function stage(doc: StagedDoc) {
     // Picking the same sheet twice is a slip, not an instruction to attach it
-    // twice.
+    // twice. Two crops of one sheet are different documents, so they both
+    // land - only the same document id is refused.
     if (staged.some((s) => s.id === doc.id)) return;
     onStaged([...staged, doc]);
+  }
+
+  /**
+   * Add to what is already chosen rather than replace it.
+   *
+   * The file input reports only the files picked in THAT dialog, so a second
+   * trip to Choose files used to drop the first batch on the floor. Zarina
+   * asked for multiple images; this is what multiple means when the photos
+   * are in two different folders.
+   */
+  function addFiles(picked: File[]) {
+    const merged = mergePickedFiles(files, picked);
+    if (merged.length !== files.length) onFiles(merged);
   }
 
   const total = files.length + staged.length;
@@ -61,7 +78,13 @@ export function RfiNewAttachments({
           id="rfi_files"
           type="file"
           multiple
-          onChange={(e) => onFiles(Array.from(e.target.files ?? []))}
+          ref={fileInput}
+          onChange={(e) => {
+            addFiles(Array.from(e.target.files ?? []));
+            // Clear it, or picking the same file again after removing it
+            // fires no change event and nothing happens.
+            e.target.value = "";
+          }}
           className="block text-sm file:mr-3 file:rounded-md file:border file:border-input file:bg-background file:px-3 file:py-1.5 file:text-sm"
         />
         <Button
@@ -96,9 +119,21 @@ export function RfiNewAttachments({
 
       {total > 0 ? (
         <ul className="space-y-1">
-          {files.map((f) => (
-            <li key={f.name} className="text-xs text-muted-foreground">
-              {f.name} <span className="text-[10px]">(uploads on save)</span>
+          {files.map((f, i) => (
+            // Two photos can share a name - IMG_4821 off two phones - so the
+            // key carries the size and position, not the name alone.
+            <li key={`${f.name}:${f.size}:${i}`} className="flex items-center gap-2 text-xs">
+              <span className="min-w-0 flex-1 truncate">{f.name}</span>
+              <span className="shrink-0 text-[10px] text-muted-foreground">
+                uploads on save
+              </span>
+              <button
+                type="button"
+                onClick={() => onFiles(files.filter((_, j) => j !== i))}
+                className="shrink-0 text-[10px] text-muted-foreground underline hover:text-destructive"
+              >
+                remove
+              </button>
             </li>
           ))}
           {staged.map((d) => (
