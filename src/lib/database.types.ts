@@ -2228,6 +2228,7 @@ export type Database = {
       project_deliverables: {
         Row: {
           catalog_key: string
+          control_no: number | null
           created_at: string
           device_id: string
           file_url: string | null
@@ -2242,6 +2243,7 @@ export type Database = {
         }
         Insert: {
           catalog_key: string
+          control_no?: number | null
           created_at?: string
           device_id?: string
           file_url?: string | null
@@ -2256,6 +2258,7 @@ export type Database = {
         }
         Update: {
           catalog_key?: string
+          control_no?: number | null
           created_at?: string
           device_id?: string
           file_url?: string | null
@@ -2267,6 +2270,48 @@ export type Database = {
           updated_at?: string
           updated_by?: string | null
           version_date?: string | null
+        }
+        Relationships: []
+      }
+      project_deliverable_revisions: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          decided_on: string | null
+          decision: string
+          deliverable_id: string
+          file_url: string | null
+          id: string
+          notes: string | null
+          rev_no: number
+          submitted_on: string | null
+          version_date: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          decided_on?: string | null
+          decision?: string
+          deliverable_id: string
+          file_url?: string | null
+          id?: string
+          notes?: string | null
+          rev_no: number
+          submitted_on?: string | null
+          version_date: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          decided_on?: string | null
+          decision?: string
+          deliverable_id?: string
+          file_url?: string | null
+          id?: string
+          notes?: string | null
+          rev_no?: number
+          submitted_on?: string | null
+          version_date?: string
         }
         Relationships: []
       }

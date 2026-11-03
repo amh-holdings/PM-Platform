@@ -5,6 +5,9 @@ import {
   deliverableFileName,
   deviceIdProblem,
   isDone,
+  missedWeeks,
+  nextPeriod,
+  stateForDecision,
 } from "../../src/lib/exhibit-s";
 
 let failures = 0;
@@ -40,6 +43,29 @@ check("new customer pole counts as switchgear", deviceIdProblem("MVSG", "New Cus
 check("1.1.MS is a GG met station", deviceIdProblem("MS", "1.1.MS") === null);
 check("free text is never refused", deviceIdProblem("equipment", "Recloser") === null);
 check("blank device is refused", deviceIdProblem("road", " ") !== null);
+const wpr = item("Weekly Progress Report");
+check("weekly report is the item and its doc date, no control number",
+  deliverableFileName({ spv: "Sussex", item: wpr, versionDate: "2026-11-06", deviceId: "2026-11-06" }) === "Sussex_Weekly Progress Report_v2026-11-06");
+check("the next report differs by its date",
+  deliverableFileName({ spv: "Sussex", item: wpr, versionDate: "2026-11-06", deviceId: "2026-11-06" }) !==
+  deliverableFileName({ spv: "Sussex", item: wpr, versionDate: "2026-11-13", deviceId: "2026-11-13" }));
+check("a corrected issue takes its new doc date",
+  deliverableFileName({ spv: "Sussex", item: wpr, versionDate: "2026-11-09", deviceId: "2026-11-06" }) === "Sussex_Weekly Progress Report_v2026-11-09");
+check("no gaps when every week is on file", missedWeeks(["2026-10-16", "2026-10-23", "2026-10-30"], "2026-11-03").length === 0);
+check("a missing week shows", JSON.stringify(missedWeeks(["2026-10-16", "2026-10-30"], "2026-11-03")) === JSON.stringify(["2026-10-23"]));
+check("a report a day late still covers its week", missedWeeks(["2026-10-16", "2026-10-24"], "2026-10-29").length === 0);
+check("this week isn't late while it's running", missedWeeks(["2026-10-16", "2026-10-23"], "2026-10-31").length === 0);
+check("a week counts once it's fully gone by", JSON.stringify(missedWeeks(["2026-10-16", "2026-10-23"], "2026-11-06")) === JSON.stringify(["2026-10-30"]));
+check("nothing on file means nothing missed yet", missedWeeks([], "2026-11-03").length === 0);
+check("missed with its reason counts as done", isDone("missed"));
+check("recurring items are per period", EXHIBIT_S.filter((c) => c.recurring).every((c) => c.perDevice === "period"));
+check("next week after the last report", nextPeriod("weekly", "2026-11-06", D) === "2026-11-13");
+check("next month after the last schedule", nextPeriod("monthly", "2026-10-31", D) === "2026-11-30" && nextPeriod("monthly", "2026-11-15", D) === "2026-12-15");
+check("first report defaults to today", nextPeriod("weekly", null, D) === D);
+check("a report date must be a date", deviceIdProblem("period", "next friday") !== null && deviceIdProblem("period", "2026-11-06") === null);
+check("approved revision accepts the item", stateForDecision("approved") === "accepted" && stateForDecision("approved_as_noted") === "accepted");
+check("revise and resubmit reopens the item", stateForDecision("revise_resubmit") === "in_progress" && stateForDecision("rejected") === "in_progress");
+check("a new submission is uploaded", stateForDecision("submitted") === "submitted");
 check("N/A counts as done", isDone("not_applicable") && isDone("accepted") && !isDone("in_progress"));
 
 console.log(failures ? `\n${failures} failing` : "\nall passing");
