@@ -16,16 +16,10 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
 
 import { DOCUMENT_CATEGORY_LABEL } from "./documents-constants";
-import {
-  attachDocumentToRfi,
-  detachDocumentFromRfi,
-  getAttachableRfiDocuments,
-  type AttachableDoc,
-} from "./rfis-actions";
+import { LibraryPicker } from "./rfi-attach-picker";
+import { attachDocumentToRfi, detachDocumentFromRfi } from "./rfis-actions";
 import { RfiMarkupDialog } from "./rfi-markup-dialog";
 import { formatBytes, uploadProjectDocument } from "./upload-document";
 
@@ -60,8 +54,6 @@ export function RfiAttachments({ projectId, rfiId, attachments, enabled }: Props
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState<string[]>([]);
   const [picking, setPicking] = useState(false);
-  const [options, setOptions] = useState<AttachableDoc[] | null>(null);
-  const [query, setQuery] = useState("");
   const [markingUp, setMarkingUp] = useState(false);
   const [, startTransition] = useTransition();
 
@@ -92,23 +84,6 @@ export function RfiAttachments({ projectId, rfiId, attachments, enabled }: Props
     [projectId, rfiId, router],
   );
 
-  async function openPicker() {
-    setPicking(true);
-    setError(null);
-    const res = await getAttachableRfiDocuments(projectId, rfiId);
-    if (!res.ok) {
-      setError(res.error);
-      setOptions([]);
-      return;
-    }
-    if (!res.enabled) {
-      setError("Run migration 0085 in the Supabase SQL Editor to attach files to an RFI.");
-      setOptions([]);
-      return;
-    }
-    setOptions(res.documents);
-  }
-
   async function attach(documentId: string) {
     setBusy(true);
     setError(null);
@@ -119,8 +94,6 @@ export function RfiAttachments({ projectId, rfiId, attachments, enabled }: Props
       return;
     }
     setPicking(false);
-    setOptions(null);
-    setQuery("");
     startTransition(() => router.refresh());
   }
 
@@ -143,12 +116,6 @@ export function RfiAttachments({ projectId, rfiId, attachments, enabled }: Props
       </p>
     );
   }
-
-  const filtered = (options ?? []).filter((o) =>
-    query.trim()
-      ? o.fileName.toLowerCase().includes(query.trim().toLowerCase())
-      : true,
-  );
 
   return (
     <div className="space-y-2">
@@ -267,7 +234,7 @@ export function RfiAttachments({ projectId, rfiId, attachments, enabled }: Props
           size="sm"
           variant="outline"
           disabled={busy}
-          onClick={() => void openPicker()}
+          onClick={() => setPicking(true)}
         >
           Attach from the plan sets
         </Button>
@@ -289,64 +256,20 @@ export function RfiAttachments({ projectId, rfiId, attachments, enabled }: Props
       </div>
 
       {picking && (
-        <div className="space-y-2 rounded border bg-background p-2">
-          <div className="flex items-center gap-2">
-            <Input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search the library by file name"
-              className="h-8 text-xs"
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setPicking(false);
-                setOptions(null);
-                setQuery("");
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-          {options === null ? (
-            <p className="text-xs text-muted-foreground">Loading...</p>
-          ) : filtered.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              Nothing matches. Upload the sheet from the library page first.
-            </p>
-          ) : (
-            <div className="max-h-56 overflow-y-auto">
-              {filtered.slice(0, 50).map((o) => (
-                <button
-                  key={o.id}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void attach(o.id)}
-                  className={cn(
-                    "flex w-full items-center justify-between gap-2 border-b px-2 py-1.5 text-left text-xs last:border-0",
-                    "hover:bg-muted/40",
-                  )}
-                >
-                  <span className="min-w-0 flex-1 truncate">{o.fileName}</span>
-                  <span className="shrink-0 text-[10px] text-muted-foreground">
-                    {DOCUMENT_CATEGORY_LABEL[
-                      o.category as keyof typeof DOCUMENT_CATEGORY_LABEL
-                    ] ?? o.category}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <LibraryPicker
+          projectId={projectId}
+          rfiId={rfiId}
+          disabled={busy}
+          onPick={(doc) => void attach(doc.id)}
+          onCancel={() => setPicking(false)}
+        />
       )}
 
       {markingUp && (
         <RfiMarkupDialog
           projectId={projectId}
           rfiId={rfiId}
+          onAttach={(documentId) => attachDocumentToRfi(projectId, rfiId, documentId)}
           onClose={() => setMarkingUp(false)}
           onSaved={() => startTransition(() => router.refresh())}
         />

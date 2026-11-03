@@ -333,7 +333,9 @@ export type AttachableResult =
  */
 export async function getAttachableRfiDocuments(
   projectId: string,
-  rfiId: string,
+  // Null while logging a new RFI, which has no id yet: nothing is on it, so
+  // nothing is filtered out.
+  rfiId: string | null,
 ): Promise<AttachableResult> {
   const supabase = createClient();
 
@@ -354,7 +356,7 @@ export async function getAttachableRfiDocuments(
     ok: true,
     enabled: true,
     documents: (data ?? [])
-      .filter((d) => d.rfi_id !== rfiId)
+      .filter((d) => (rfiId ? d.rfi_id !== rfiId : true))
       .map((d) => ({
         id: d.id,
         fileName: d.file_name,
