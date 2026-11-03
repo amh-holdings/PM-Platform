@@ -28,6 +28,7 @@ import {
   type RfiStep,
 } from "./rfis-actions";
 import { RfiAttachments, type RfiAttachment } from "./rfi-attachments";
+import { RfiNewAttachments, type StagedDoc } from "./rfi-new-attachments";
 import { uploadProjectDocument } from "./upload-document";
 
 type Sub = { id: string; company_name: string };
@@ -71,6 +72,9 @@ export function RfiLog({
   // Files chosen while logging, uploaded after the RFI exists: they need its
   // id to attach to, and the id is assigned by the insert.
   const [pending, setPending] = useState<File[]>([]);
+  // Library sheets and markups chosen before the RFI exists. Already in the
+  // library, so these only need pointing at the new row.
+  const [stagedDocs, setStagedDocs] = useState<StagedDoc[]>([]);
   const [saving, setSaving] = useState(false);
   const [, startTransition] = useTransition();
 
@@ -118,9 +122,10 @@ export function RfiLog({
 
     // The RFI is saved. Anything that fails from here is reported against
     // the file, never as a failure to log the RFI - that part is done.
-    if (pending.length > 0) {
+    if (pending.length > 0 || stagedDocs.length > 0) {
       setSaving(true);
       const failed: string[] = [];
+
       for (const file of pending) {
         const up = await uploadProjectDocument({
           projectId,
@@ -134,6 +139,14 @@ export function RfiLog({
         const linked = await attachDocumentToRfi(projectId, res.id, up.id);
         if (!linked.ok) failed.push(`${file.name} (${linked.error})`);
       }
+
+      // Already in the library - a plan sheet picked from it, or a markup
+      // that had to be stored to exist. These only need pointing at the row.
+      for (const doc of stagedDocs) {
+        const linked = await attachDocumentToRfi(projectId, res.id, doc.id);
+        if (!linked.ok) failed.push(`${doc.fileName} (${linked.error})`);
+      }
+
       setSaving(false);
       if (failed.length > 0) {
         setError(`RFI saved. These files did not attach: ${failed.join(", ")}`);
@@ -141,6 +154,7 @@ export function RfiLog({
     }
 
     setPending([]);
+    setStagedDocs([]);
     setOpen(false);
     startTransition(() => router.refresh());
   }
@@ -254,21 +268,13 @@ export function RfiLog({
               />
             </div>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="rfi_files">Photos or marked-up sheets</Label>
-            <input
-              id="rfi_files"
-              type="file"
-              multiple
-              onChange={(e) => setPending(Array.from(e.target.files ?? []))}
-              className="block w-full text-sm file:mr-3 file:rounded-md file:border file:border-input file:bg-background file:px-3 file:py-1.5 file:text-sm"
-            />
-            <p className="text-xs text-muted-foreground">
-              {pending.length > 0
-                ? `${pending.length} file${pending.length === 1 ? "" : "s"} will upload once the RFI is saved.`
-                : "A photo of the condition settles what a paragraph describes. Sheets already in the library attach from the RFI itself, no second upload."}
-            </p>
-          </div>
+          <RfiNewAttachments
+            projectId={projectId}
+            files={pending}
+            onFiles={setPending}
+            staged={stagedDocs}
+            onStaged={setStagedDocs}
+          />
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2">
               <input type="checkbox" name="cost_impact" /> Possible cost impact

@@ -29,7 +29,6 @@ import {
 } from "@/lib/markup";
 
 import {
-  attachDocumentToRfi,
   getAttachableRfiDocuments,
   getDocumentForMarkup,
   type AttachableDoc,
@@ -38,7 +37,18 @@ import { uploadProjectDocument } from "./upload-document";
 
 type Props = {
   projectId: string;
-  rfiId: string;
+  /** Null while logging a new RFI, which has no id yet. */
+  rfiId: string | null;
+  /**
+   * What to do with the flattened PNG once it is in the library.
+   *
+   * On a saved RFI that is "attach it". On the form that logs a new one it is
+   * "hold the id until the RFI exists", because there is nothing to attach to
+   * yet. The dialog does not need to know which.
+   */
+  onAttach: (documentId: string, fileName: string) => Promise<
+    { ok: true } | { ok: false; error: string }
+  >;
   onClose: () => void;
   onSaved: () => void;
 };
@@ -59,7 +69,7 @@ function renderable(doc: { fileName: string; mimeType: string | null }): boolean
   return /\.(pdf|png|jpe?g|gif|webp|bmp)$/i.test(doc.fileName);
 }
 
-export function RfiMarkupDialog({ projectId, rfiId, onClose, onSaved }: Props) {
+export function RfiMarkupDialog({ projectId, rfiId, onAttach, onClose, onSaved }: Props) {
   const baseRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const drafting = useRef<DraftShape | null>(null);
@@ -312,7 +322,7 @@ export function RfiMarkupDialog({ projectId, rfiId, onClose, onSaved }: Props) {
       setSaving(false);
       return;
     }
-    const linked = await attachDocumentToRfi(projectId, rfiId, up.id);
+    const linked = await onAttach(up.id, name);
     setSaving(false);
     if (!linked.ok) {
       setError(`${name} is in the library but not attached: ${linked.error}`);
@@ -355,6 +365,11 @@ export function RfiMarkupDialog({ projectId, rfiId, onClose, onSaved }: Props) {
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                // The dialog renders inside the form that logs the RFI.
+                // Enter here would submit it half-filled.
+                if (e.key === "Enter") e.preventDefault();
+              }}
               placeholder="Search the library by file name"
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
             />
