@@ -2225,6 +2225,51 @@ export type Database = {
           },
         ]
       }
+      project_deliverables: {
+        Row: {
+          catalog_key: string
+          created_at: string
+          device_id: string
+          file_url: string | null
+          id: string
+          notes: string | null
+          project_id: string
+          state: string
+          submitted_on: string | null
+          updated_at: string
+          updated_by: string | null
+          version_date: string | null
+        }
+        Insert: {
+          catalog_key: string
+          created_at?: string
+          device_id?: string
+          file_url?: string | null
+          id?: string
+          notes?: string | null
+          project_id: string
+          state?: string
+          submitted_on?: string | null
+          updated_at?: string
+          updated_by?: string | null
+          version_date?: string | null
+        }
+        Update: {
+          catalog_key?: string
+          created_at?: string
+          device_id?: string
+          file_url?: string | null
+          id?: string
+          notes?: string | null
+          project_id?: string
+          state?: string
+          submitted_on?: string | null
+          updated_at?: string
+          updated_by?: string | null
+          version_date?: string | null
+        }
+        Relationships: []
+      }
       project_documents: {
         Row: {
           subcontractor_id: string | null
@@ -2366,6 +2411,7 @@ export type Database = {
       }
       projects: {
         Row: {
+          spv_name: string | null
           ahc_pm_id: string | null
           ahc_super_id: string | null
           client: string | null
@@ -2389,6 +2435,7 @@ export type Database = {
           zip_code: string | null
         }
         Insert: {
+          spv_name?: string | null
           ahc_pm_id?: string | null
           ahc_super_id?: string | null
           client?: string | null
@@ -2412,6 +2459,7 @@ export type Database = {
           zip_code?: string | null
         }
         Update: {
+          spv_name?: string | null
           ahc_pm_id?: string | null
           ahc_super_id?: string | null
           client?: string | null
