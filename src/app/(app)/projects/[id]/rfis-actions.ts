@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import { DOCUMENT_BUCKET } from "./documents-constants";
 import { legacyStatus, nextRfiNumber, projectRfiPrefix, rfiState } from "@/lib/rfi-log";
 
 export type RfiActionResult = { ok: true; id: string } | { ok: false; error: string };
@@ -316,6 +317,7 @@ export type AttachableDoc = {
   fileName: string;
   category: string;
   uploadedAt: string | null;
+  mimeType: string | null;
 };
 
 export type AttachableResult =
@@ -337,7 +339,7 @@ export async function getAttachableRfiDocuments(
 
   const { data, error } = await supabase
     .from("project_documents")
-    .select("id, file_name, category, uploaded_at, rfi_id")
+    .select("id, file_name, category, uploaded_at, mime_type, rfi_id")
     .eq("project_id", projectId)
     .order("uploaded_at", { ascending: false, nullsFirst: false });
 
@@ -358,6 +360,50 @@ export async function getAttachableRfiDocuments(
         fileName: d.file_name,
         category: d.category,
         uploadedAt: d.uploaded_at,
+        mimeType: d.mime_type,
       })),
+  };
+}
+
+export type MarkupSource =
+  | { ok: true; url: string; fileName: string; mimeType: string | null }
+  | { ok: false; error: string };
+
+/**
+ * A signed URL for one document, so the browser can render it to mark it up.
+ *
+ * Scoped to the project before signing. The bucket is private, and a signed
+ * URL is a key: minting one from an id the client supplied without checking
+ * which project it belongs to would hand out files from other jobs.
+ */
+export async function getDocumentForMarkup(
+  projectId: string,
+  documentId: string,
+): Promise<MarkupSource> {
+  const supabase = createClient();
+
+  const { data: doc, error } = await supabase
+    .from("project_documents")
+    .select("file_name, mime_type, storage_path")
+    .eq("id", documentId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+
+  if (error) return { ok: false, error: error.message };
+  if (!doc) return { ok: false, error: "That file is not in this project's library" };
+
+  const signed = await supabase.storage
+    .from(DOCUMENT_BUCKET)
+    .createSignedUrl(doc.storage_path, 3600);
+
+  if (signed.error || !signed.data?.signedUrl) {
+    return { ok: false, error: signed.error?.message ?? "Could not open the file" };
+  }
+
+  return {
+    ok: true,
+    url: signed.data.signedUrl,
+    fileName: doc.file_name,
+    mimeType: doc.mime_type,
   };
 }
