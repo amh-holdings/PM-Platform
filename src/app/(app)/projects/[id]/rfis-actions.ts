@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
-import { legacyStatus, nextRfiNumber, rfiState } from "@/lib/rfi-log";
+import { legacyStatus, nextRfiNumber, projectRfiPrefix, rfiState } from "@/lib/rfi-log";
 
 export type RfiActionResult = { ok: true; id: string } | { ok: false; error: string };
 
@@ -57,14 +57,17 @@ async function assignNumber(
   supabase: ReturnType<typeof createClient>,
   projectId: string,
 ): Promise<string> {
-  const { data } = await supabase
-    .from("rfis")
-    .select("rfi_number")
-    .eq("project_id", projectId);
+  const [{ data }, { data: project }] = await Promise.all([
+    supabase.from("rfis").select("rfi_number").eq("project_id", projectId),
+    supabase.from("projects").select("name").eq("id", projectId).maybeSingle(),
+  ]);
   const used = (data ?? [])
     .map((r) => r.rfi_number)
     .filter((n): n is string => !!n);
-  return nextRfiNumber(used);
+  // The prefix only decides the FIRST number. After that nextRfiNumber carries
+  // forward whatever the log already uses, so renaming a project never splits
+  // an existing series.
+  return nextRfiNumber(used, projectRfiPrefix(project?.name));
 }
 
 export async function createRfi(input: RfiInput): Promise<RfiActionResult> {
