@@ -86,7 +86,7 @@ export async function DashboardCompliance({ projectId }: Props) {
               <tr className="border-b">
                 <th className="py-1.5 pr-2 text-left font-medium">Sub</th>
                 <th className="py-1.5 pr-2 text-left font-medium">COI</th>
-                <th className="py-1.5 text-left font-medium">W9</th>
+                <th className="py-1.5 text-left font-medium">W-9/W-8</th>
               </tr>
             </thead>
             <tbody>

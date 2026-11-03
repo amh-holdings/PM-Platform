@@ -175,7 +175,7 @@ export default async function SubBillPage({ params }: { params: Params }) {
   if (!app.lien_waiver_received) asks.push(`The conditional lien waiver for ${formatCurrency(payNet)}`);
   if (!app.invoice_number || !app.invoice_date) asks.push("The invoice number and date for this application");
   if (!["current", "approved"].includes((sub?.coi_status ?? "").toLowerCase())) asks.push("A current certificate of insurance");
-  if (!["received", "approved"].includes((sub?.w9_status ?? "").toLowerCase())) asks.push("A W-9");
+  if (!["received", "approved"].includes((sub?.w9_status ?? "").toLowerCase())) asks.push("A W-9 or W-8");
   const letter = buildSubLetter({
     kind: verdict.kind,
     projectName: project?.name ?? "Project",

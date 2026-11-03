@@ -25,7 +25,11 @@ export const DOCUMENT_CATEGORY_OPTIONS: ReadonlyArray<{
   // Financial and compliance. A certificate of insurance used to go in as
   // Other and be found by remembering the file name.
   { value: "coi", label: "COI" },
-  { value: "w9", label: "W-9" },
+  // W-8 lives here too. A foreign sub files a W-8BEN-E instead of a W-9
+  // and it serves the same purpose on our side, so it is one category
+  // rather than two that mean the same thing. Zarina: "W-8 is just the
+  // same for W-9 as they are a different contractor."
+  { value: "w9", label: "W-9 / W-8" },
   { value: "bond", label: "Bond" },
   { value: "lien_waiver", label: "Lien Waiver" },
   { value: "invoice", label: "Invoice" },
@@ -41,7 +45,7 @@ export const DOCUMENT_CATEGORY_OPTIONS: ReadonlyArray<{
 export const SUBCONTRACTOR_DOCUMENT_CATEGORIES: ReadonlyArray<DocumentCategory> =
   ["coi", "w9", "bond", "lien_waiver", "subcontract", "invoice"];
 
-/** A COI expires. A W-9 does not. */
+/** A COI expires. A W-9 or W-8 does not. */
 export const EXPIRING_DOCUMENT_CATEGORIES: ReadonlyArray<DocumentCategory> = [
   "coi",
   "bond",
