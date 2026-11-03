@@ -19,7 +19,7 @@ export const EXPIRY_WARNING_DAYS = 30;
 export type ComplianceItem = {
   category: DocumentCategory;
   label: string;
-  /** A COI lapses. A W-9 does not. */
+  /** A COI lapses. A W-9 or W-8 does not. */
   expires: boolean;
 };
 
@@ -32,7 +32,9 @@ export type ComplianceItem = {
  */
 export const COMPLIANCE_ITEMS: readonly ComplianceItem[] = [
   { category: "coi", label: "COI", expires: true },
-  { category: "w9", label: "W-9", expires: false },
+  // A foreign sub files a W-8BEN-E rather than a W-9. Same category, so
+  // the roster does not quietly report a W-8 as a missing W-9.
+  { category: "w9", label: "W-9 / W-8", expires: false },
   { category: "subcontract", label: "Subcontract", expires: false },
 ];
 

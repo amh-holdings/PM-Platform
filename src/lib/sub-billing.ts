@@ -573,8 +573,10 @@ export function runBillChecks(args: {
   if ((sub.w9_status ?? "").toLowerCase() !== "received" &&
       (sub.w9_status ?? "").toLowerCase() !== "approved") {
     out.push(
-      check("w9", "W-9 on file", "warning", "warn",
-        `W-9 status for ${sub.company_name} is "${sub.w9_status ?? "not set"}".`),
+      // A foreign sub files a W-8BEN-E instead. Same gate, so the warning
+      // does not read as a missing form when the right one is on file.
+      check("w9", "W-9 or W-8 on file", "warning", "warn",
+        `W-9/W-8 status for ${sub.company_name} is "${sub.w9_status ?? "not set"}".`),
     );
   }
 

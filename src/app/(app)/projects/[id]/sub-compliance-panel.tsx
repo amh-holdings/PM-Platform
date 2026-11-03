@@ -41,7 +41,7 @@ export function SubCompliancePanel({ subs, enabled }: Props) {
   if (!enabled) {
     return (
       <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-        Apply migration 0083 to track COI, W-9 and subcontract status per sub.
+        Apply migration 0083 to track COI, W-9/W-8 and subcontract status per sub.
         Until then the roster below is unchanged.
       </div>
     );

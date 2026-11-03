@@ -98,7 +98,7 @@ export function SubList({ projectId, subs, contractsEnabled }: Props) {
               <th className="px-4 py-3 font-medium">Trade</th>
               <th className="px-4 py-3 font-medium">Contact</th>
               <th className="px-4 py-3 font-medium">COI</th>
-              <th className="px-4 py-3 font-medium">W9</th>
+              <th className="px-4 py-3 font-medium">W-9/W-8</th>
               <th className="px-4 py-3 text-right font-medium">Contract</th>
               {contractsEnabled && (
                 <th className="px-4 py-3 font-medium">Subcontract</th>
