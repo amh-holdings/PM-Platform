@@ -76,7 +76,8 @@ export type Capability =
   // --- business development ---
   | "viewBD" // the BD section: clients, pipeline, bids, follow-ups, dashboard
   | "viewProjects" // the portfolio / project side of the app
-  | "transferBdToProject"; // turn a won opportunity into a PM project (Phil-only)
+  | "transferBdToProject" // turn a won opportunity into a PM project (Phil-only)
+  | "runRfp"; // the RFP workspace: runbook, state profiles, bidder tracker. Outside every project
 
 const MATRIX: Record<EffectiveRole, Set<Capability>> = {
   full: new Set<Capability>([
@@ -109,6 +110,7 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
     "viewBD",
     "viewProjects",
     "transferBdToProject",
+    "runRfp",
   ]),
   // Construction Manager: operational visibility (schedule, subs, procurement,
   // documents, field reports) but NO financials - no dashboard Financial
@@ -149,7 +151,7 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
   sub: new Set<Capability>(["viewFieldReports", "submitFieldReport", "viewProjects"]),
   // Business development: the BD section and nothing else. Creating the
   // project from a won job stays with Phil, who owns the contract setup.
-  bd: new Set<Capability>(["viewBD"]),
+  bd: new Set<Capability>(["viewBD", "runRfp"]),
 };
 
 export function can(role: EffectiveRole, cap: Capability): boolean {
@@ -162,9 +164,12 @@ export function can(role: EffectiveRole, cap: Capability): boolean {
 // office (Phil and Zarina, treated as one) and must not exist for the site
 // team at all - not in the nav, not by URL. The matrix cannot say that, so
 // these are granted by DB role on top of it.
+//
+// The RFP workspace is the same shape: the next bid runs through Zarina with
+// Phil doing the final review, so she runs it, but the site team does not.
 const PERSON_GRANTS: Record<string, Capability[]> = {
   phil: ["reviewEmailUpdates"],
-  zarina: ["reviewEmailUpdates"],
+  zarina: ["reviewEmailUpdates", "runRfp"],
 };
 
 export function grantsFor(dbRole: string | null | undefined): Capability[] {
