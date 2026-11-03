@@ -40,7 +40,9 @@ type Props = {
   documents: { id: string; label: string }[];
 };
 
-const STATUS_OPTIONS = ["active", "delivered", "complete", "cancelled"];
+const STATUS_OPTIONS = ["draft", "active", "delivered", "complete", "cancelled"];
+// "draft" is a PO not placed yet: billed ahead of the real PO, which follows.
+const STATUS_LABEL: Record<string, string> = { draft: "draft (PO to follow)" };
 
 const EMPTY: ProcurementFormValues = {
   vendor_name: "",
@@ -193,7 +195,7 @@ export function ProcurementForm({ projectId, mode, initial, documents }: Props) 
             >
               {STATUS_OPTIONS.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {STATUS_LABEL[s] ?? s}
                 </option>
               ))}
             </select>

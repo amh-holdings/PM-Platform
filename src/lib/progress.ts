@@ -268,6 +268,8 @@ export type LinkedPo = {
   total_value?: number | null;
   status?: string | null;
   signed_at?: string | null;
+  /** A draft PO (billed ahead of the real one) counts as released on this date. */
+  ordered_date?: string | null;
   actual_delivery_date?: string | null;
   milestones?: ProcurementMilestone[];
 };
@@ -461,6 +463,10 @@ export function milestoneTriggered(
   // delivery.
   if (/signed|po release|deposit|down|mob/.test(t)) {
     if (signed) return { fired: true, why: `PO signed ${signedAt}` };
+    // A draft PO: the order is committed and billed, the paper follows. Its
+    // order date stands in for signing until the real PO is signed.
+    const draftFrom = po.status === "draft" ? by(po.ordered_date) : null;
+    if (draftFrom) return { fired: true, why: `draft PO from ${draftFrom}, PO to follow` };
     return {
       fired: false,
       why: po.signed_at

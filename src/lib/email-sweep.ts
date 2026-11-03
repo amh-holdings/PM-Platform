@@ -700,6 +700,11 @@ export function afpDigits(v: string | number | null | undefined): string | null 
   return m ? String(Number(m[1])) : null;
 }
 
+/** "AFP 3" for a stored "3" or "AFP 3", never "AFP AFP 3". */
+export function afpLabel(appNumber: string): string {
+  return /^afp\b/i.test(appNumber.trim()) ? appNumber.trim() : `AFP ${appNumber.trim()}`;
+}
+
 export function matchAfp(afpNumber: string, afps: readonly AfpRecord[]): AfpRecord[] {
   const want = afpDigits(afpNumber);
   return want ? afps.filter((a) => afpDigits(a.app_number) === want) : [];
@@ -750,7 +755,7 @@ export function planAfpIngest(input: {
           kind: "afp_status",
           status: "proposed",
           auto_applied: false,
-          summary: `Mark AFP ${afp.app_number} submitted to the owner on ${fmt(event.submitted_on!)}`,
+          summary: `Mark ${afpLabel(afp.app_number)} submitted to the owner on ${fmt(event.submitted_on!)}`,
           target_table: "pay_applications",
           target_id: afp.id,
           payload,
@@ -767,7 +772,7 @@ export function planAfpIngest(input: {
         kind: "afp_status",
         status: "applied",
         auto_applied: true,
-        summary: `AFP ${afp.app_number}: ${event.note.slice(0, 200)}`,
+        summary: `${afpLabel(afp.app_number)}: ${event.note.slice(0, 200)}`,
         target_table: "pay_applications",
         target_id: afp.id,
         payload,
@@ -795,7 +800,7 @@ export function planAfpIngest(input: {
       kind: "afp_paid",
       status: "proposed",
       auto_applied: false,
-      summary: `Mark AFP ${afp.app_number} paid on ${fmt(event.paid_on)}.${amountNote}`,
+      summary: `Mark ${afpLabel(afp.app_number)} paid on ${fmt(event.paid_on)}.${amountNote}`,
       target_table: "pay_applications",
       target_id: afp.id,
       payload,
