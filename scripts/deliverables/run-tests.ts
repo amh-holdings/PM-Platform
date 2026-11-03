@@ -44,13 +44,13 @@ check("1.1.MS is a GG met station", deviceIdProblem("MS", "1.1.MS") === null);
 check("free text is never refused", deviceIdProblem("equipment", "Recloser") === null);
 check("blank device is refused", deviceIdProblem("road", " ") !== null);
 const wpr = item("Weekly Progress Report");
-check("weekly report carries its control number and doc date",
-  deliverableFileName({ spv: SPV, item: wpr, versionDate: "2026-11-06", deviceId: "2026-11-06", controlNo: 12 }) === "Sussex CSG 1 LLC_Weekly Progress Report No. 012_v2026-11-06");
-check("two reports never share a name",
-  deliverableFileName({ spv: SPV, item: wpr, versionDate: "2026-11-06", deviceId: "2026-11-06", controlNo: 12 }) !==
-  deliverableFileName({ spv: SPV, item: wpr, versionDate: "2026-11-13", deviceId: "2026-11-13", controlNo: 13 }));
-check("a corrected issue keeps its number with the new date",
-  deliverableFileName({ spv: SPV, item: wpr, versionDate: "2026-11-09", deviceId: "2026-11-06", controlNo: 12 }) === "Sussex CSG 1 LLC_Weekly Progress Report No. 012_v2026-11-09");
+check("weekly report is the item and its doc date, no control number",
+  deliverableFileName({ spv: "Sussex", item: wpr, versionDate: "2026-11-06", deviceId: "2026-11-06" }) === "Sussex_Weekly Progress Report_v2026-11-06");
+check("the next report differs by its date",
+  deliverableFileName({ spv: "Sussex", item: wpr, versionDate: "2026-11-06", deviceId: "2026-11-06" }) !==
+  deliverableFileName({ spv: "Sussex", item: wpr, versionDate: "2026-11-13", deviceId: "2026-11-13" }));
+check("a corrected issue takes its new doc date",
+  deliverableFileName({ spv: "Sussex", item: wpr, versionDate: "2026-11-09", deviceId: "2026-11-06" }) === "Sussex_Weekly Progress Report_v2026-11-09");
 check("no gaps when every week is on file", missedWeeks(["2026-10-16", "2026-10-23", "2026-10-30"], "2026-11-03").length === 0);
 check("a missing week shows", JSON.stringify(missedWeeks(["2026-10-16", "2026-10-30"], "2026-11-03")) === JSON.stringify(["2026-10-23"]));
 check("a report a day late still covers its week", missedWeeks(["2026-10-16", "2026-10-24"], "2026-10-29").length === 0);

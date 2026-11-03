@@ -373,7 +373,6 @@ function ItemRow({
     // anything else to today, until a doc date is set.
     versionDate: row.version_date ?? (period ? row.device_id : today),
     deviceId: row.device_id || null,
-    controlNo: row.control_no,
   });
 
   async function copy() {
@@ -506,7 +505,7 @@ function ItemRow({
                     <td className="py-1 pr-3 font-medium">Rev {rv.rev_no}</td>
                     <td className="py-1 pr-3">
                       <code className="break-all">
-                        {deliverableFileName({ spv, item, versionDate: rv.version_date, deviceId: row.device_id || null, controlNo: row.control_no })}
+                        {deliverableFileName({ spv, item, versionDate: rv.version_date, deviceId: row.device_id || null })}
                       </code>
                     </td>
                     <td className="py-1 pr-3 tabular-nums">{rv.submitted_on ?? "-"}</td>

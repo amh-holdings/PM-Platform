@@ -232,20 +232,17 @@ export function deliverableFileName(input: {
   /** YYYY-MM-DD, the document's own date. */
   versionDate: string;
   deviceId?: string | null;
-  /** Recurring reports only: this report's number in the series. */
-  controlNo?: number | null;
 }): string {
   const spv = input.spv.trim().replace(UNSAFE, "-");
   const device = (input.deviceId ?? "").trim().replace(UNSAFE, "-");
   let item = input.item.item;
-  // A recurring report: one file per report, numbered in order. The number
-  // says which report it is and the date says which issue of it, so a
-  // second report never repeats the first one's name, and a corrected copy
-  // of the same report keeps its number with a new date.
+  // A recurring report: one file per issue, told apart by its date alone.
+  // Phil: "The control number is not necessary in the file name. Filename
+  // will just change at the end by the date." The control number stays on
+  // the checklist for tracking; the name is the item and the doc date.
   if (input.item.perDevice === "period") {
     const status = input.item.status ? `_${input.item.status}` : "";
-    const control = input.controlNo ? ` No. ${String(input.controlNo).padStart(3, "0")}` : "";
-    return `${spv}_${item}${control}${status}_v${input.versionDate}`;
+    return `${spv}_${item}${status}_v${input.versionDate}`;
   }
   if (device) {
     // The road is its own segment in Exhibit S; a device goes in parentheses.
