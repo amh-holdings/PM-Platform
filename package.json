@@ -72,7 +72,8 @@
     "predev": "node scripts/copy-pdf-worker.mjs",
     "prebuild": "node scripts/copy-pdf-worker.mjs",
     "test:markup": "tsx scripts/markup/run-tests.ts",
-    "test:doc-picker": "tsx scripts/documents/run-picker-tests.ts"
+    "test:doc-picker": "tsx scripts/documents/run-picker-tests.ts",
+    "test:deliverables": "tsx scripts/deliverables/run-tests.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",

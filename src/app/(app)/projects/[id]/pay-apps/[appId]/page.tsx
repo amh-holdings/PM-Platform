@@ -7,6 +7,7 @@ import { formatCurrency, formatDate } from "@/lib/format";
 import { guardCapability } from "@/lib/roles-server";
 import { payAppLabel, payAppNeighbours } from "@/lib/pay-app-nav";
 
+import { PayAppDate } from "./pay-app-date";
 import { PayAppStatusActions } from "./pay-app-status-actions";
 
 type Params = { id: string; appId: string };
@@ -174,13 +175,13 @@ export default async function PayAppDetailPage({ params }: { params: Params }) {
               {formatDate(app.period_start)} - {formatDate(app.period_end)}
             </div>
             {app.submitted_at && (
-              <div className="text-xs text-muted-foreground">Submitted {formatDate(app.submitted_at)}</div>
+              <PayAppDate payAppId={app.id} projectId={params.id} field="submitted_at" label="Submitted" value={app.submitted_at} />
             )}
             {app.approved_at && (
-              <div className="text-xs text-muted-foreground">Approved {formatDate(app.approved_at)}</div>
+              <PayAppDate payAppId={app.id} projectId={params.id} field="approved_at" label="Approved" value={app.approved_at} />
             )}
             {app.paid_at && (
-              <div className="text-xs text-muted-foreground">Paid {formatDate(app.paid_at)}</div>
+              <PayAppDate payAppId={app.id} projectId={params.id} field="paid_at" label="Paid" value={app.paid_at} />
             )}
           </div>
         </div>
