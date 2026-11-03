@@ -5,6 +5,8 @@ import {
   deliverableFileName,
   deviceIdProblem,
   isDone,
+  nextPeriod,
+  stateForDecision,
 } from "../../src/lib/exhibit-s";
 
 let failures = 0;
@@ -40,6 +42,16 @@ check("new customer pole counts as switchgear", deviceIdProblem("MVSG", "New Cus
 check("1.1.MS is a GG met station", deviceIdProblem("MS", "1.1.MS") === null);
 check("free text is never refused", deviceIdProblem("equipment", "Recloser") === null);
 check("blank device is refused", deviceIdProblem("road", " ") !== null);
+check("weekly report is one file per week, dated by its week",
+  deliverableFileName({ spv: SPV, item: item("Weekly Progress Report"), versionDate: D, deviceId: "2026-11-06" }) === "Sussex CSG 1 LLC_Weekly Progress Report_v2026-11-06");
+check("recurring items are per period", EXHIBIT_S.filter((c) => c.recurring).every((c) => c.perDevice === "period"));
+check("next week after the last report", nextPeriod("weekly", "2026-11-06", D) === "2026-11-13");
+check("next month after the last schedule", nextPeriod("monthly", "2026-10-31", D) === "2026-11-30" && nextPeriod("monthly", "2026-11-15", D) === "2026-12-15");
+check("first report defaults to today", nextPeriod("weekly", null, D) === D);
+check("a report date must be a date", deviceIdProblem("period", "next friday") !== null && deviceIdProblem("period", "2026-11-06") === null);
+check("approved revision accepts the item", stateForDecision("approved") === "accepted" && stateForDecision("approved_as_noted") === "accepted");
+check("revise and resubmit reopens the item", stateForDecision("revise_resubmit") === "in_progress" && stateForDecision("rejected") === "in_progress");
+check("a new submission is uploaded", stateForDecision("submitted") === "submitted");
 check("N/A counts as done", isDone("not_applicable") && isDone("accepted") && !isDone("in_progress"));
 
 console.log(failures ? `\n${failures} failing` : "\nall passing");

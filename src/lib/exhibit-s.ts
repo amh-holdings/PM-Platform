@@ -34,7 +34,7 @@ export const PART_LABEL: Record<DeliverablePart, string> = {
  * How the per-device rows are named. The Exhibit GG ones are checked against
  * the convention; the free-text ones (a piece of equipment, a road) are not.
  */
-export type DeviceKind = "IN" | "MVT" | "MVSG" | "MS" | "equipment" | "road";
+export type DeviceKind = "IN" | "MVT" | "MVSG" | "MS" | "equipment" | "road" | "period";
 
 export const DEVICE_HINT: Record<DeviceKind, string> = {
   IN: "Exhibit GG inverter ID, e.g. IN 1.1.1",
@@ -43,6 +43,7 @@ export const DEVICE_HINT: Record<DeviceKind, string> = {
   MS: "Exhibit GG met station ID, e.g. 1.1.MS",
   equipment: "The equipment, e.g. Inverter",
   road: "Road name, or N-S-E-W from site if it has none",
+  period: "The date of the report",
 };
 
 const DEVICE_PATTERN: Partial<Record<DeviceKind, RegExp>> = {
@@ -66,7 +67,11 @@ export type CatalogItem = {
   perDevice?: DeviceKind;
   /** "(as applicable)" in the exhibit: may be marked not applicable. */
   asApplicable?: boolean;
-  /** Recurring through the job, not a one-time upload. */
+  /**
+   * Recurring through the job, not a one-time upload: one row per report,
+   * keyed by its date (perDevice "period"), each carrying that date as its
+   * vYYYY-MM-DD.
+   */
   recurring?: "weekly" | "monthly";
   /** The exhibit's direction for this item, shortened. */
   note?: string;
@@ -118,9 +123,9 @@ export const EXHIBIT_S: CatalogItem[] = [
     perDevice: "road",
     note: "Video or photos of every road next to the site, in full, before construction starts.",
   }),
-  one("I", "2.2 Weekly Progress Reports (based on Exhibit X)", "Weekly Progress Report", { recurring: "weekly" }),
-  one("I", "2.3 Weekly Progress Meeting Minutes", "Weekly Meeting Minutes", { recurring: "weekly" }),
-  one("I", "2.4 Monthly Progress Schedules", "Monthly Progress Schedule", { recurring: "monthly" }),
+  one("I", "2.2 Weekly Progress Reports (based on Exhibit X)", "Weekly Progress Report", { recurring: "weekly", perDevice: "period" }),
+  one("I", "2.3 Weekly Progress Meeting Minutes", "Weekly Meeting Minutes", { recurring: "weekly", perDevice: "period" }),
+  one("I", "2.4 Monthly Progress Schedules", "Monthly Progress Schedule", { recurring: "monthly", perDevice: "period" }),
   ...items("I", "2.5 Insurance & Bonds", ["Liability Cert", "Payment Bond", "Performance Bond"]),
   ...items("I", "3.1 Supply Agreements", [
     "Inverter Supply Agreement", "Inverter Purchase Order", "Racking Supply Agreement", "Racking Purchase Order",
@@ -231,6 +236,11 @@ export function deliverableFileName(input: {
   const spv = input.spv.trim().replace(UNSAFE, "-");
   const device = (input.deviceId ?? "").trim().replace(UNSAFE, "-");
   let item = input.item.item;
+  // A recurring report is one file per period: its date is the version.
+  if (input.item.perDevice === "period") {
+    const status = input.item.status ? `_${input.item.status}` : "";
+    return `${spv}_${item}${status}_v${device || input.versionDate}`;
+  }
   if (device) {
     // The road is its own segment in Exhibit S; a device goes in parentheses.
     item = input.item.perDevice === "road" ? `${item}_${device}` : `${item} (${device})`;
@@ -242,7 +252,10 @@ export function deliverableFileName(input: {
 /** Null when the ID follows Exhibit GG, or the reason it doesn't. */
 export function deviceIdProblem(kind: DeviceKind, deviceId: string): string | null {
   const id = deviceId.trim();
-  if (!id) return "Enter the device";
+  if (!id) return kind === "period" ? "Pick the report date" : "Enter the device";
+  if (kind === "period") {
+    return /^\d{4}-\d{2}-\d{2}$/.test(id) && !Number.isNaN(Date.parse(`${id}T00:00:00Z`)) ? null : "Pick a valid date";
+  }
   const pattern = DEVICE_PATTERN[kind];
   if (pattern && !pattern.test(id)) return `Not an Exhibit GG ID. ${DEVICE_HINT[kind]}.`;
   return null;
@@ -262,4 +275,50 @@ export const STATE_LABEL: Record<DeliverableState, string> = {
 /** Done for counting: uploaded, accepted, or not applicable to this site. */
 export function isDone(state: string): boolean {
   return state === "submitted" || state === "accepted" || state === "not_applicable";
+}
+
+/**
+ * The next report date for a recurring item: a week, or a month, after the
+ * latest one on file. With none on file, today.
+ */
+export function nextPeriod(recurring: "weekly" | "monthly", latest: string | null, today: string): string {
+  if (!latest) return today;
+  const d = new Date(`${latest}T00:00:00Z`);
+  if (recurring === "weekly") {
+    d.setUTCDate(d.getUTCDate() + 7);
+    return d.toISOString().slice(0, 10);
+  }
+  // Same day next month, held to the month's end: Oct 31 is followed by
+  // Nov 30, not Dec 1.
+  const day = d.getUTCDate();
+  const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+  const lastDay = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate();
+  next.setUTCDate(Math.min(day, lastDay));
+  return next.toISOString().slice(0, 10);
+}
+
+// ------------------------------- revisions -------------------------------
+//
+// A deliverable is submitted, reviewed, and sometimes sent back. A changed
+// equipment design means a new cut sheet for approval. Each submission is a
+// revision: Rev 0 first, Rev 1 after the first change, and so on, each with
+// its own date, which Exhibit S already puts in the file name. No rev number
+// goes in the name; the vYYYY-MM-DD is what tells the two files apart.
+
+export const REVIEW_DECISIONS = ["submitted", "approved", "approved_as_noted", "revise_resubmit", "rejected"] as const;
+export type ReviewDecision = (typeof REVIEW_DECISIONS)[number];
+
+export const DECISION_LABEL: Record<ReviewDecision, string> = {
+  submitted: "Submitted, awaiting review",
+  approved: "Approved",
+  approved_as_noted: "Approved as noted",
+  revise_resubmit: "Revise and resubmit",
+  rejected: "Rejected",
+};
+
+/** What the latest revision's decision makes the item's status. */
+export function stateForDecision(decision: ReviewDecision): DeliverableState {
+  if (decision === "approved" || decision === "approved_as_noted") return "accepted";
+  if (decision === "submitted") return "submitted";
+  return "in_progress";
 }

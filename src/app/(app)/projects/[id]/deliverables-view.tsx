@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   CATALOG_BY_KEY,
+  DECISION_LABEL,
   DELIVERABLE_STATES,
   DEVICE_HINT,
   EXHIBIT_S,
@@ -13,16 +14,21 @@ import {
   STATE_LABEL,
   deliverableFileName,
   isDone,
+  nextPeriod,
+  REVIEW_DECISIONS,
   type CatalogItem,
   type DeliverablePart,
   type DeliverableState,
+  type ReviewDecision,
 } from "@/lib/exhibit-s";
 import { cn } from "@/lib/utils";
 
 import {
   addDeliverableDevice,
+  addRevision,
   loadExhibitS,
   removeDeliverableDevice,
+  setRevisionDecision,
   setSpvName,
   updateDeliverable,
   type DeliverablePatch,
@@ -47,6 +53,25 @@ const STATE_TONE: Record<string, string> = {
   not_applicable: "bg-muted text-muted-foreground line-through",
 };
 
+export type RevisionRow = {
+  id: string;
+  deliverable_id: string;
+  rev_no: number;
+  version_date: string;
+  submitted_on: string | null;
+  decision: string;
+  decided_on: string | null;
+  notes: string | null;
+};
+
+const DECISION_TONE: Record<string, string> = {
+  submitted: "bg-blue-100 text-blue-900",
+  approved: "bg-emerald-100 text-emerald-900",
+  approved_as_noted: "bg-emerald-100 text-emerald-900",
+  revise_resubmit: "bg-amber-100 text-amber-900",
+  rejected: "bg-red-100 text-red-900",
+};
+
 type Filter = "open" | "all" | "done";
 
 export function DeliverablesView({
@@ -54,12 +79,16 @@ export function DeliverablesView({
   spvName,
   projectName,
   rows,
+  revisions,
+  revisionsEnabled,
   today,
 }: {
   projectId: string;
   spvName: string | null;
   projectName: string;
   rows: DeliverableRow[];
+  revisions: RevisionRow[];
+  revisionsEnabled: boolean;
   today: string;
 }) {
   const router = useRouter();
@@ -83,9 +112,18 @@ export function DeliverablesView({
   const byKey = useMemo(() => {
     const m = new Map<string, DeliverableRow[]>();
     for (const r of rows) (m.get(r.catalog_key) ?? m.set(r.catalog_key, []).get(r.catalog_key)!).push(r);
-    m.forEach((list) => list.sort((a, b) => a.device_id.localeCompare(b.device_id, undefined, { numeric: true })));
+    m.forEach((list, key) => {
+      const newestFirst = CATALOG_BY_KEY.get(key)?.perDevice === "period";
+      list.sort((a, b) => (newestFirst ? -1 : 1) * a.device_id.localeCompare(b.device_id, undefined, { numeric: true }));
+    });
     return m;
   }, [rows]);
+
+  const revsByRow = useMemo(() => {
+    const m = new Map<string, RevisionRow[]>();
+    for (const r of revisions) (m.get(r.deliverable_id) ?? m.set(r.deliverable_id, []).get(r.deliverable_id)!).push(r);
+    return m;
+  }, [revisions]);
 
   const progress = useMemo(() => {
     const out: Record<DeliverablePart, { done: number; total: number }> = {
@@ -220,7 +258,14 @@ export function DeliverablesView({
                         <tr className="border-b">
                           <td colSpan={5} className="px-3 py-1.5">
                             <AddDevice
+                              key={`${section}:${(byKey.get(deviceItems[0].key) ?? []).length}`}
                               items={deviceItems}
+                              suggested={(() => {
+                                const c = deviceItems[0];
+                                if (c.perDevice !== "period" || !c.recurring) return "";
+                                const latest = (byKey.get(c.key) ?? []).map((r) => r.device_id).sort().pop() ?? null;
+                                return nextPeriod(c.recurring, latest, today);
+                              })()}
                               disabled={busy}
                               onAdd={(key, id) => run(() => addDeliverableDevice(projectId, key, id))}
                             />
@@ -236,6 +281,10 @@ export function DeliverablesView({
                           today={today}
                           disabled={busy}
                           onSave={(patch) => run(() => updateDeliverable(projectId, r.id, patch))}
+                          revisions={revsByRow.get(r.id) ?? []}
+                          revisionsEnabled={revisionsEnabled}
+                          onAddRevision={(versionDate, notes) => run(() => addRevision(projectId, r.id, { versionDate, notes }))}
+                          onDecide={(revId, d) => run(() => setRevisionDecision(projectId, revId, d))}
                           onRemove={r.device_id ? () => run(() => removeDeliverableDevice(projectId, r.id)) : undefined}
                         />
                       ))}
@@ -272,6 +321,10 @@ function ItemRow({
   disabled,
   onSave,
   onRemove,
+  revisions,
+  revisionsEnabled,
+  onAddRevision,
+  onDecide,
 }: {
   item: CatalogItem;
   row: DeliverableRow;
@@ -280,7 +333,15 @@ function ItemRow({
   disabled: boolean;
   onSave: (patch: DeliverablePatch) => Promise<boolean>;
   onRemove?: () => Promise<boolean>;
+  revisions: RevisionRow[];
+  revisionsEnabled: boolean;
+  onAddRevision: (versionDate: string, notes: string) => Promise<boolean>;
+  onDecide: (revisionId: string, decision: ReviewDecision) => Promise<boolean>;
 }) {
+  const [showRevs, setShowRevs] = useState(false);
+  const [revDate, setRevDate] = useState(today);
+  const [revNote, setRevNote] = useState("");
+  const latest = revisions[revisions.length - 1] ?? null;
   const [copied, setCopied] = useState(false);
   const [link, setLink] = useState(row.file_url ?? "");
   const fileName = deliverableFileName({
@@ -301,17 +362,32 @@ function ItemRow({
   }
 
   return (
+    <>
     <tr className="border-b align-top">
       <td className="px-3 py-1.5">
         <div className={cn(row.state === "not_applicable" && "text-muted-foreground line-through")}>
           {item.item}
-          {row.device_id && <span className="font-medium"> ({row.device_id})</span>}
+          {row.device_id && (
+            <span className="font-medium">
+              {item.perDevice === "period" ? `, ${item.recurring === "monthly" ? "month of" : "week of"} ${row.device_id}` : ` (${row.device_id})`}
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap gap-1 text-[10px] text-muted-foreground">
           {item.status && <span className="rounded bg-muted px-1">signed, {item.status}</span>}
           {item.recurring && <span className="rounded bg-muted px-1">{item.recurring}</span>}
           {item.asApplicable && <span className="rounded bg-muted px-1">as applicable</span>}
           {row.submitted_on && <span>uploaded {row.submitted_on}</span>}
+          {latest && (
+            <span className={cn("rounded px-1", DECISION_TONE[latest.decision])}>
+              Rev {latest.rev_no}: {DECISION_LABEL[latest.decision as ReviewDecision] ?? latest.decision}
+            </span>
+          )}
+          {revisionsEnabled && (
+            <button type="button" className="underline-offset-2 hover:underline" onClick={() => setShowRevs((v) => !v)}>
+              {revisions.length ? `revisions (${revisions.length})` : "log submission"}
+            </button>
+          )}
           {onRemove && (
             <button type="button" className="underline-offset-2 hover:underline" disabled={disabled} onClick={() => void onRemove()}>
               remove
@@ -366,21 +442,92 @@ function ItemRow({
         )}
       </td>
     </tr>
+    {showRevs && (
+      <tr className="border-b bg-muted/10">
+        <td colSpan={5} className="px-6 py-2">
+          {revisions.length > 0 && (
+            <table className="mb-2 w-full text-xs">
+              <thead className="text-left text-muted-foreground">
+                <tr>
+                  <th className="py-1 pr-3">Rev</th>
+                  <th className="py-1 pr-3">File name</th>
+                  <th className="py-1 pr-3">Submitted</th>
+                  <th className="py-1 pr-3">Review</th>
+                  <th className="py-1">Why / reviewer note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {revisions.map((rv) => (
+                  <tr key={rv.id} className="align-top">
+                    <td className="py-1 pr-3 font-medium">Rev {rv.rev_no}</td>
+                    <td className="py-1 pr-3">
+                      <code className="break-all">
+                        {deliverableFileName({ spv, item, versionDate: rv.version_date, deviceId: row.device_id || null })}
+                      </code>
+                    </td>
+                    <td className="py-1 pr-3 tabular-nums">{rv.submitted_on ?? "-"}</td>
+                    <td className="py-1 pr-3">
+                      <select
+                        value={rv.decision}
+                        disabled={disabled}
+                        onChange={(e) => void onDecide(rv.id, e.target.value as ReviewDecision)}
+                        className={cn("h-7 rounded-md border px-1", DECISION_TONE[rv.decision])}
+                      >
+                        {REVIEW_DECISIONS.map((d) => <option key={d} value={d}>{DECISION_LABEL[d]}</option>)}
+                      </select>
+                      {rv.decided_on && <span className="ml-1 text-muted-foreground">{rv.decided_on}</span>}
+                    </td>
+                    <td className="py-1 text-muted-foreground">{rv.notes ?? ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-medium">
+              {revisions.length ? `Resubmit as Rev ${(latest?.rev_no ?? -1) + 1}` : "Log the first submission (Rev 0)"}
+            </span>
+            <label className="flex items-center gap-1 text-muted-foreground">
+              Doc date
+              <input type="date" value={revDate} onChange={(e) => setRevDate(e.target.value)} className="h-7 rounded-md border bg-background px-1 text-foreground" />
+            </label>
+            <input
+              value={revNote}
+              onChange={(e) => setRevNote(e.target.value)}
+              placeholder={revisions.length ? "Why: e.g. inverter changed to SMA 125, new cut sheet" : "Note (optional)"}
+              className="h-7 w-80 rounded-md border bg-background px-2"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={disabled || !revDate}
+              onClick={() => void onAddRevision(revDate, revNote).then((ok) => ok && setRevNote(""))}
+            >
+              {revisions.length ? "Resubmit" : "Log submission"}
+            </Button>
+          </div>
+        </td>
+      </tr>
+    )}
+    </>
   );
 }
 
 /** Per-device items: pick which item, type the Exhibit GG ID, add. */
 function AddDevice({
   items,
+  suggested,
   disabled,
   onAdd,
 }: {
   items: CatalogItem[];
+  /** For a recurring report, the next date after the latest on file. */
+  suggested: string;
   disabled: boolean;
   onAdd: (catalogKey: string, deviceId: string) => Promise<boolean>;
 }) {
   const [key, setKey] = useState(items.length === 1 ? items[0].key : "all");
-  const [deviceId, setDeviceId] = useState("");
+  const [deviceId, setDeviceId] = useState(suggested);
   const kind = items[0].perDevice!;
 
   async function add() {
@@ -393,7 +540,11 @@ function AddDevice({
 
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
-      <span className="text-muted-foreground">One file per {kind === "equipment" ? "piece of equipment" : kind === "road" ? "road" : "device"}:</span>
+      <span className="text-muted-foreground">
+        {kind === "period"
+          ? `One file per ${items[0].recurring === "monthly" ? "month" : "week"}. Add the next one:`
+          : `One file per ${kind === "equipment" ? "piece of equipment" : kind === "road" ? "road" : "device"}:`}
+      </span>
       {items.length > 1 && (
         <select value={key} onChange={(e) => setKey(e.target.value)} className="h-7 rounded-md border bg-background px-1">
           <option value="all">All {items.length} items</option>
@@ -401,10 +552,11 @@ function AddDevice({
         </select>
       )}
       <input
+        type={kind === "period" ? "date" : "text"}
         value={deviceId}
         onChange={(e) => setDeviceId(e.target.value)}
         placeholder={DEVICE_HINT[kind]}
-        className="h-7 w-64 rounded-md border bg-background px-2"
+        className={cn("h-7 rounded-md border bg-background px-2", kind === "period" ? "w-40" : "w-64")}
       />
       <Button size="sm" variant="outline" disabled={disabled || !deviceId.trim()} onClick={() => void add()}>
         Add
