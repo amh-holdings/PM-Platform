@@ -321,7 +321,7 @@ export async function computeBillingSuggestions(
       .eq("project_id", projectId),
     auth.supabase
       .from("procurement_orders")
-      .select("id, po_number, vendor_name, total_value, status, signed_at, actual_delivery_date")
+      .select("id, po_number, vendor_name, total_value, status, signed_at, ordered_date, actual_delivery_date")
       .eq("project_id", projectId),
   ]);
 
@@ -450,6 +450,7 @@ export async function computeBillingSuggestions(
       total_value: p.total_value,
       status: p.status,
       signed_at: p.signed_at,
+      ordered_date: (p as { ordered_date?: string | null }).ordered_date ?? null,
       actual_delivery_date: (p as { actual_delivery_date?: string | null }).actual_delivery_date ?? null,
       milestones: (msByPo.get(p.id) ?? []) as ProcurementMilestone[],
     });
@@ -1109,7 +1110,7 @@ export async function getBillThisPeriodRows(
     .eq("project_id", projectId);
   const { data: posInfo } = await auth.supabase
     .from("procurement_orders")
-    .select("id, po_number, vendor_name, total_value, status, signed_at, actual_delivery_date")
+    .select("id, po_number, vendor_name, total_value, status, signed_at, ordered_date, actual_delivery_date")
     .eq("project_id", projectId);
   const { data: msInfo } = await auth.supabase
     .from("procurement_payments")
@@ -1268,6 +1269,7 @@ export async function getBillThisPeriodRows(
       total_value: p.total_value,
       status: p.status,
       signed_at: p.signed_at,
+      ordered_date: (p as { ordered_date?: string | null }).ordered_date ?? null,
       actual_delivery_date: (p as { actual_delivery_date?: string | null }).actual_delivery_date ?? null,
       milestones: msByPoId.get(p.id) ?? [],
     });

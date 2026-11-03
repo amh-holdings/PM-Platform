@@ -264,6 +264,17 @@ const vendorTerms = [
   eq("a legacy side-carrying row still earns", r.earnedValue, 3975.25);
 }
 
+section("A draft PO bills its deposit from its order date");
+{
+  const DRAFT = { ...UNSIGNED, status: "draft", ordered_date: "2026-10-14" };
+  check("draft deposit fires from the order date", milestoneTriggered(ms("PO release"), DRAFT).fired);
+  check("draft deposit waits when ordered after the period", !milestoneTriggered(ms("Deposit"), DRAFT, "2026-10-10").fired);
+  check("draft with no order date does not fire", !milestoneTriggered(ms("Deposit"), { ...DRAFT, ordered_date: null }).fired);
+  check("draft delivery still needs delivery", !milestoneTriggered(ms("Delivery"), DRAFT).fired);
+  check("an active unsigned PO still waits for signing", !milestoneTriggered(ms("Deposit"), { ...UNSIGNED, ordered_date: "2026-10-14" }).fired);
+  eq("draft why reads plainly", milestoneTriggered(ms("Deposit"), DRAFT).why, "draft PO from 2026-10-14, PO to follow");
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log("\nFailures:");

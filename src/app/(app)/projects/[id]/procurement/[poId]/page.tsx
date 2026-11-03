@@ -30,6 +30,7 @@ import { UploadSignedPo } from "./upload-signed-po";
 type Params = { id: string; poId: string };
 
 const STATUS_TONE: Record<string, string> = {
+  draft: "bg-orange-100 text-orange-900",
   active: "bg-amber-100 text-amber-900",
   complete: "bg-emerald-100 text-emerald-900",
   cancelled: "bg-muted text-muted-foreground",

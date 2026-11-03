@@ -552,9 +552,17 @@ export async function setProcurementSignedStatus(
   const auth = await assertAhcUser();
   if (!auth.ok) return auth;
 
-  const patch: { signed_at: string | null; signed_by: string | null } = signed
+  const patch: { signed_at: string | null; signed_by: string | null; status?: string } = signed
     ? { signed_at: new Date().toISOString(), signed_by: auth.userId }
     : { signed_at: null, signed_by: null };
+
+  // Signing a draft PO makes it the real one. Its billing and AFP history stay
+  // on it, because it is the same record.
+  if (signed) {
+    const { data: current } = await auth.supabase
+      .from("procurement_orders").select("status").eq("id", poId).eq("project_id", projectId).maybeSingle();
+    if (current?.status === "draft") patch.status = "active";
+  }
 
   const { error } = await auth.supabase
     .from("procurement_orders")
