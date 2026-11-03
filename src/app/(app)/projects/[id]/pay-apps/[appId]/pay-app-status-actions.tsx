@@ -15,8 +15,20 @@ type Props = {
   status: string;
 };
 
+function localToday(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const NEXT: Record<string, { status: "submitted" | "approved" | "paid"; label: string; dateLabel: string }> = {
+  draft: { status: "submitted", label: "Mark submitted", dateLabel: "Submitted on" },
+  submitted: { status: "approved", label: "Mark approved", dateLabel: "Approved on" },
+  approved: { status: "paid", label: "Mark paid", dateLabel: "Paid on" },
+};
+
 export function PayAppStatusActions({ payAppId, projectId, status }: Props) {
   const router = useRouter();
+  const [onDate, setOnDate] = useState(localToday);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
@@ -24,7 +36,7 @@ export function PayAppStatusActions({ payAppId, projectId, status }: Props) {
   async function transition(next: "submitted" | "approved" | "paid") {
     setBusy(true);
     setError(null);
-    const res = await setPayApplicationStatus(payAppId, projectId, next);
+    const res = await setPayApplicationStatus(payAppId, projectId, next, onDate);
     setBusy(false);
     if (!res.ok) {
       setError(res.error);
@@ -59,35 +71,27 @@ export function PayAppStatusActions({ payAppId, projectId, status }: Props) {
         >
           Print / PDF
         </Button>
-        {status === "draft" && (
-          <Button
-            type="button"
-            size="sm"
-            disabled={busy}
-            onClick={() => transition("submitted")}
-          >
-            Mark submitted
-          </Button>
-        )}
-        {status === "submitted" && (
-          <Button
-            type="button"
-            size="sm"
-            disabled={busy}
-            onClick={() => transition("approved")}
-          >
-            Mark approved
-          </Button>
-        )}
-        {status === "approved" && (
-          <Button
-            type="button"
-            size="sm"
-            disabled={busy}
-            onClick={() => transition("paid")}
-          >
-            Mark paid
-          </Button>
+        {NEXT[status] && (
+          <>
+            <label className="flex items-center gap-1 text-xs text-muted-foreground">
+              {NEXT[status].dateLabel}
+              <input
+                type="date"
+                value={onDate}
+                max={localToday()}
+                onChange={(e) => setOnDate(e.target.value)}
+                className="h-8 rounded-md border bg-background px-2 text-xs text-foreground"
+              />
+            </label>
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy || !onDate}
+              onClick={() => transition(NEXT[status].status)}
+            >
+              {NEXT[status].label}
+            </Button>
+          </>
         )}
         {status === "draft" && (
           <Button
