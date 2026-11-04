@@ -368,7 +368,7 @@ export async function recordOutcome(
 ): Promise<BdFormState> {
   const denied = await requireBd();
   if (denied) return { error: denied };
-  const outcome = oneOf(fd, "outcome", ["won", "lost", "no_bid", "dead"] as const);
+  const outcome = oneOf(fd, "outcome", ["won", "lost", "no_bid", "dead", "retired"] as const);
   if (!outcome) return { error: "Pick the outcome." };
   const lossReason = oneOf(fd, "loss_reason", LOSS_REASONS);
   if (outcome === "lost" && !lossReason) return { error: "A loss needs a reason. Pick Unknown if they never said." };

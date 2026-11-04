@@ -129,7 +129,7 @@ export default async function BdDashboardPage({ searchParams }: { searchParams: 
         <div>
           <h1 className="text-2xl font-semibold">BD dashboard</h1>
           <p className="text-sm text-muted-foreground">
-            Win rate counts jobs decided in the period. No-bids and dead jobs are left out.
+            Win rate counts jobs decided in the period. No-bids, dead and retired jobs are left out.
           </p>
         </div>
         <div className="flex flex-wrap gap-2 text-sm">

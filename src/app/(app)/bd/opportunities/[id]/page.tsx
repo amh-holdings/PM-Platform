@@ -378,6 +378,7 @@ export default async function OpportunityPage({
                     { value: "lost", label: "Lost" },
                     { value: "no_bid", label: "No-bid (we passed)" },
                     { value: "dead", label: "Dead (client cancelled)" },
+                    { value: "retired", label: "Retired (dropped from the portfolio)" },
                   ]}
                 />
               </Field>

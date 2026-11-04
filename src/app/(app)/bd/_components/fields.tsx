@@ -126,6 +126,7 @@ const STAGE_TONE: Record<string, string> = {
   won: "bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200",
   lost: "bg-red-100 text-red-900 dark:bg-red-950 dark:text-red-200",
   no_bid: "bg-muted text-muted-foreground",
+  retired: "bg-muted text-muted-foreground",
   dead: "bg-muted text-muted-foreground",
 };
 
