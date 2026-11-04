@@ -1,20 +1,21 @@
 /**
- * The RFP workspace: runbook progress, bidder flags, package coverage,
- * document checklists, state profiles.
+ * The bid analyzer: leveling, foot checks, cost code baselines, extraction
+ * cleanup, bidder flags, package coverage, document checklists, state
+ * profiles.
  *
  * Run: npx tsx scripts/rfp/run-tests.ts
  */
 
 import {
-  ALL_STEP_KEYS,
   REQUIRED_DOCS,
-  RFP_PHASES,
   bidderFlags,
+  cleanExtractedLines,
+  costCodeBaseline,
   coverageDeadlinePassed,
-  currentPhase,
+  footCheck,
+  level,
   missingDocs,
   packageCoverage,
-  phaseProgress,
   stateCode,
   stateProfileGaps,
   type BidderLite,
@@ -46,22 +47,82 @@ const bidder = (extra: Partial<BidderLite> = {}): BidderLite => ({
   ...extra,
 });
 
-console.log("Runbook definition");
-eq("step keys are unique", new Set(ALL_STEP_KEYS).size, ALL_STEP_KEYS.length);
-eq("step keys carry their phase prefix", RFP_PHASES.every((p) => p.steps.every((s) => s.key.startsWith(`${p.key}.`))), true);
+console.log("Definitions");
 const docKeys = Object.values(REQUIRED_DOCS).flatMap((l) => l.map((d) => d.key));
 eq("document keys are unique across stages", new Set(docKeys).size, docKeys.length);
-eq("state profile is the second phase", RFP_PHASES[1].key, "state");
-eq("every Phil review gate is a step", ["package.phil_review", "price.frozen", "proposal.submitted"].every((k) => ALL_STEP_KEYS.includes(k)), true);
 
-console.log("Progress");
-eq("nothing done starts at intake", currentPhase([])?.key, "intake");
-const intakeDone = RFP_PHASES[0].steps.map((s) => s.key);
-eq("intake done moves to the state profile", currentPhase(intakeDone)?.key, "state");
-eq("all done means no current phase", currentPhase(ALL_STEP_KEYS), null);
-eq("a skipped step holds the phase open", currentPhase([...intakeDone.slice(1)])?.key, "intake");
-eq("unknown keys are ignored", phaseProgress(["retired.step"]).reduce((n, p) => n + p.done, 0), 0);
-eq("intake counts all six", phaseProgress(intakeDone)[0], { key: "intake", done: 6, total: 6, complete: true });
+console.log("Leveling");
+const lv = level({
+  bidders: [
+    { id: "a", firm: "SCS", confirmed: true },
+    { id: "b", firm: "Zholares", confirmed: true },
+    { id: "c", firm: "Unchecked", confirmed: false },
+  ],
+  lines: [
+    { bidder_id: "a", package: "civil", amount: 100 },
+    { bidder_id: "a", package: "civil", amount: 50 },
+    { bidder_id: "a", package: "mechanical", amount: 400 },
+    { bidder_id: "a", package: "mechanical", amount: null },
+    { bidder_id: "b", package: "mechanical", amount: 350 },
+    { bidder_id: "c", package: "civil", amount: 1 },
+  ],
+  packages: ["electrical"],
+  baseline: new Map([["civil", 120], ["mechanical", 380]]),
+  carried: new Map<string, string | null>([["civil", "a"], ["mechanical", "b"]]),
+});
+eq("only confirmed bidders count", lv.bidders.map((b) => b.id), ["a", "b"]);
+eq("rows in package order, invited scope included", lv.rows.map((r) => r.package), ["civil", "mechanical", "electrical"]);
+eq("lines sum per package, blanks skipped", lv.rows[1].cells.map((c) => c.amount), [400, 350]);
+eq("a package never priced is not bid, not zero", lv.rows[0].cells[1].amount, null);
+eq("low shaded only with two prices", [lv.rows[0].cells.some((c) => c.isLow), lv.rows[1].cells.find((c) => c.isLow)?.bidderId], [false, "b"]);
+eq("spread needs two prices", [lv.rows[0].spread, lv.rows[1].spread], [null, 50]);
+eq("carried and variance", [lv.rows[0].carried, lv.rows[0].variance, lv.rows[1].variance], [150, 30, -30]);
+eq("carried total", lv.carriedTotal, 500);
+eq("baseline total", lv.baselineTotal, 500);
+eq("uncarried packages listed", lv.uncarried, ["electrical"]);
+eq("whole-scope rule: SCS carried for civil, also priced mechanical", lv.wholeScope, [
+  { bidderId: "a", firm: "SCS", carriedIn: ["civil"], pricedButNotCarried: ["mechanical"] },
+]);
+const lv2 = level({
+  bidders: [{ id: "a", firm: "SCS", confirmed: true }],
+  lines: [{ bidder_id: "a", package: "civil", amount: 10 }],
+  packages: [],
+  baseline: new Map(),
+  carried: new Map<string, string | null>([["civil", "z"]]),
+});
+eq("a carry pointing at a bidder with no price is ignored", [lv2.rows[0].carried, lv2.rows[0].carriedBidderId], [null, null]);
+
+console.log("Foot check");
+eq("within a dollar foots", footCheck(100, [{ amount: 60 }, { amount: 40.5 }]), { extracted: 100.5, foots: true, difference: 0.5 });
+eq("off by more flags", footCheck(100, [{ amount: 60 }]).foots, false);
+eq("no printed total, no verdict", footCheck(null, [{ amount: 60 }]).foots, null);
+
+console.log("Cost code baseline");
+eq(
+  "mapped codes sum by package",
+  Array.from(costCodeBaseline(
+    [{ package: "civil", cost_code_id: "1" }, { package: "civil", cost_code_id: "2" }, { package: "electrical", cost_code_id: "3" }],
+    [{ id: "1", estimated_cost: 100 }, { id: "2", estimated_cost: 50 }, { id: "3", estimated_cost: null }],
+  ).entries()),
+  [["civil", 150], ["electrical", 0]],
+);
+
+console.log("Extraction cleanup");
+const cleaned = cleanExtractedLines(
+  [
+    { package: "civil", description: "Clearing", quantity: "12", unit: "AC", amount: "$1,200.50", source_ref: "Tab 5 row 9" },
+    { package: "nonsense", description: "Fence", amount: 500 },
+    { description: "", amount: 5 },
+    { package: "civil", description: "Survey", amount: null },
+    "junk",
+  ],
+  "mechanical",
+);
+eq("money strings parse", cleaned[0].amount, 1200.5);
+eq("unknown package falls back to the invited one", cleaned[1].package, "mechanical");
+eq("lines with no description drop", cleaned.length, 3);
+eq("blank amount stays blank (excluded)", cleaned[2].amount, null);
+eq("not an array returns nothing", cleanExtractedLines({ lines: [] }, "civil"), []);
 
 console.log("Bidder flags");
 eq("13 days quiet is fine", bidderFlags(bidder({ invited_on: "2026-10-01" }), "2026-10-14"), []);

@@ -77,7 +77,7 @@ export type Capability =
   | "viewBD" // the BD section: clients, pipeline, bids, follow-ups, dashboard
   | "viewProjects" // the portfolio / project side of the app
   | "transferBdToProject" // turn a won opportunity into a PM project (Phil-only)
-  | "runRfp"; // the RFP workspace: runbook, state profiles, bidder tracker. Outside every project
+  | "runRfp"; // the RFP workspace: bid rounds, the bid analyzer, state profiles (Phil-only). Outside every project
 
 const MATRIX: Record<EffectiveRole, Set<Capability>> = {
   full: new Set<Capability>([
@@ -151,7 +151,7 @@ const MATRIX: Record<EffectiveRole, Set<Capability>> = {
   sub: new Set<Capability>(["viewFieldReports", "submitFieldReport", "viewProjects"]),
   // Business development: the BD section and nothing else. Creating the
   // project from a won job stays with Phil, who owns the contract setup.
-  bd: new Set<Capability>(["viewBD", "runRfp"]),
+  bd: new Set<Capability>(["viewBD"]),
 };
 
 export function can(role: EffectiveRole, cap: Capability): boolean {
@@ -164,12 +164,9 @@ export function can(role: EffectiveRole, cap: Capability): boolean {
 // office (Phil and Zarina, treated as one) and must not exist for the site
 // team at all - not in the nav, not by URL. The matrix cannot say that, so
 // these are granted by DB role on top of it.
-//
-// The RFP workspace is the same shape: the next bid runs through Zarina with
-// Phil doing the final review, so she runs it, but the site team does not.
 const PERSON_GRANTS: Record<string, Capability[]> = {
   phil: ["reviewEmailUpdates"],
-  zarina: ["reviewEmailUpdates", "runRfp"],
+  zarina: ["reviewEmailUpdates"],
 };
 
 export function grantsFor(dbRole: string | null | undefined): Capability[] {

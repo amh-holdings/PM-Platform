@@ -6,8 +6,9 @@ export const metadata = {
   title: "RFPs - AHC PM Platform",
 };
 
-// Top level on purpose: an RFP comes before any project exists, so it lives
-// outside every project, beside Business Dev, not as a project tab.
+// Top level on purpose: a round can belong to a BD opportunity or a live
+// project, so it lives outside every project, beside Business Dev. Business
+// Dev keeps only the overall status of each bid; every RFP function is here.
 export default async function RfpLayout({ children }: { children: React.ReactNode }) {
   await guardCapability("runRfp");
   return (

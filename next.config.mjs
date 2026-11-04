@@ -16,6 +16,8 @@ const nextConfig = {
     // that has the full node_modules.
     outputFileTracingIncludes: {
       "/projects/**": ["./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"],
+      // The bid analyzer reads PDF proposals the same way.
+      "/rfp/**": ["./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"],
     },
   },
 };

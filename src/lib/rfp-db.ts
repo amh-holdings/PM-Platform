@@ -1,5 +1,5 @@
 /**
- * Type overlay for migration 0088 (the RFP workspace).
+ * Type overlay for migrations 0088 and 0090 (the bid analyzer).
  *
  * Same idea as bd-db.ts: migrations are applied by hand, so the generated
  * types lag. Builds on DatabaseWithBd so one client sees both.
@@ -33,17 +33,25 @@ export type StateProfile = {
   updated_at: string;
 };
 
-export type RfpStepCheck = {
+export type RfpRound = {
   id: string;
-  opportunity_id: string;
-  step_key: string;
-  checked_by: string | null;
-  checked_at: string;
+  opportunity_id: string | null;
+  project_id: string | null;
+  kind: string;
+  label: string;
+  state: string | null;
+  due_date: string | null;
+  status: string;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type RfpBidder = {
   id: string;
-  opportunity_id: string;
+  round_id: string;
+  opportunity_id: string | null;
   firm: string;
   package: string;
   kind: string;
@@ -61,9 +69,46 @@ export type RfpBidder = {
   license_note: string | null;
   decline_reason: string | null;
   notes: string | null;
+  // 0090: the last extraction
+  source_file_name: string | null;
+  printed_total: number | null;
+  extracted_at: string | null;
+  extraction_notes: string | null;
+  defects: string[];
+  lines_confirmed_at: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type RfpBidLine = {
+  id: string;
+  bidder_id: string;
+  package: string;
+  description: string;
+  quantity: number | null;
+  unit: string | null;
+  amount: number | null;
+  source_ref: string | null;
+  sort_order: number;
+  created_at: string;
+};
+
+export type RfpRoundPackage = {
+  id: string;
+  round_id: string;
+  package: string;
+  estimate: number | null;
+  carried_bidder_id: string | null;
+  created_at: string;
+};
+
+export type RfpRoundCostCode = {
+  id: string;
+  round_id: string;
+  package: string;
+  cost_code_id: string;
+  created_at: string;
 };
 
 export type RfpBidderDoc = {
@@ -87,8 +132,11 @@ export type DatabaseWithRfp = Omit<DatabaseWithBd, "public"> & {
   public: Omit<Pub, "Tables"> & {
     Tables: T & {
       bd_state_profiles: Table<StateProfile, "state">;
-      rfp_step_checks: Table<RfpStepCheck, "opportunity_id" | "step_key">;
-      rfp_bidders: Table<RfpBidder, "opportunity_id" | "firm" | "package">;
+      rfp_rounds: Table<RfpRound, "label">;
+      rfp_bidders: Table<RfpBidder, "round_id" | "firm" | "package">;
+      rfp_bid_lines: Table<RfpBidLine, "bidder_id" | "package" | "description">;
+      rfp_round_packages: Table<RfpRoundPackage, "round_id" | "package">;
+      rfp_round_cost_codes: Table<RfpRoundCostCode, "round_id" | "package" | "cost_code_id">;
       rfp_bidder_docs: Table<RfpBidderDoc, "bidder_id" | "doc_key">;
     };
   };

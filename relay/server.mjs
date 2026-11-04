@@ -77,7 +77,7 @@ const mcpServer = createSdkMcpServer({
 
 const fastify = Fastify({
   logger: { level: "info" },
-  bodyLimit: 1024 * 1024, // 1 MB max request body
+  bodyLimit: 2 * 1024 * 1024, // 2 MB: a bid's text runs up to 300k characters
 });
 
 fastify.addHook("onRequest", async (request, reply) => {
@@ -705,6 +705,124 @@ fastify.post("/extract-po-payment-terms", async (request, reply) => {
     payment_terms_summary: parsed.payment_terms_summary ?? "",
     notes: parsed.notes ?? "",
     source_document: doc.file_name,
+    elapsed_ms: elapsedMs,
+  };
+});
+
+// POST /extract-bid
+//   body: { file_name, text, firm, invited_package, packages: [{ key, label }], context? }
+//   The app reads the uploaded bid (Excel as CSV per sheet, PDF as text) and
+//   sends the text here. Claude returns every priced line sorted into our
+//   packages, the vendor's printed total, and the defects the runbook says to
+//   look for. Nothing is saved here: the app stores the lines unconfirmed and
+//   Phil confirms them before they count in the leveling.
+fastify.post("/extract-bid", async (request, reply) => {
+  const { file_name, text, firm, invited_package, packages, context } = request.body || {};
+  if (!text || typeof text !== "string") {
+    reply.code(400).send({ error: "text required" });
+    return;
+  }
+  const pkgList = Array.isArray(packages) ? packages : [];
+  const pkgKeys = pkgList.map((p) => p.key);
+
+  const systemPrompt = [
+    "You read a subcontractor bid or a supplier quote for a utility-scale or distributed solar EPC project and return every priced line.",
+    "",
+    "Return ONLY a JSON object (no markdown fences, no commentary) of this exact shape:",
+    "{",
+    '  "lines": [',
+    "    {",
+    `      "package": string,        // one of: ${pkgKeys.join(", ")}`,
+    '      "description": string,    // the line as written on the bid',
+    '      "quantity": number | null,',
+    '      "unit": string | null,    // EA, LF, MW, LS, etc.',
+    '      "amount": number | null,  // extended dollars. null if the line is blank or marked excluded',
+    '      "source_ref": string | null // sheet and row, or page, where the line is',
+    "    }",
+    "  ],",
+    '  "printed_total": number | null, // the total the vendor printed, if any',
+    '  "wage_basis": string | null,    // prevailing wage determination or labor basis they priced, if stated',
+    '  "validity": string | null,      // price validity as written, e.g. "30 days" or a date',
+    '  "bond_treatment": string | null,// bond included, a % adder, or excluded, if stated',
+    '  "defects": [string],            // problems Phil must see before trusting this bid',
+    '  "notes": string                 // exclusions, clarifications and assumptions, as short bullets',
+    "}",
+    "",
+    "Packages:",
+    ...pkgList.map((p) => `- ${p.key}: ${p.label}`),
+    "",
+    "Rules:",
+    "- Read every line. Do not trust the vendor's subtotals; return the lines, not the subtotals.",
+    "- A blank line, $0 line or line marked excluded or by others is NOT a price. Return it with amount null so the exclusion is visible.",
+    "- Never return a subtotal or grand total row as a line.",
+    "- General conditions, mobilization, bonds and insurance are lines too. Put them in the package of the scope they belong to; if the bid covers one package, use that package.",
+    `- If a line does not clearly belong to a package, use "${invited_package || "other"}", the package this firm was invited to bid.`,
+    "- Flag as defects: amounts typed in the wrong column so the sheet totals zero; freight or mobilization on the proposal but missing from the bid sheet; identical pricing on two different sites; in-scope lines left blank; supply and install split inconsistently; quantities that look priced against a different plant size or layout; a PDF proposal with no bid sheet; validity under 120 days; no prevailing wage basis stated; bond, insurance or wage marked excluded.",
+    "- If the lines do not add up to the printed total, say so in defects with both numbers.",
+    "- Plain language. No em dashes.",
+  ].join("\n");
+
+  const userPrompt = [
+    `Firm: ${firm || "unknown"}`,
+    `Invited package: ${invited_package || "unknown"}`,
+    context ? `Project context: ${context}` : "",
+    "",
+    `=== ${file_name || "bid"} ===`,
+    "",
+    text.length > 300_000 ? text.slice(0, 300_000) + "\n\n[... truncated]" : text,
+  ].join("\n");
+
+  const startedAt = Date.now();
+  let raw = "";
+  try {
+    const q = query({
+      prompt: userPrompt,
+      options: { model: MODEL, systemPrompt, permissionMode: "bypassPermissions", maxTurns: 1 },
+    });
+    for await (const message of q) {
+      if (message.type === "assistant") {
+        const content = message.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === "text" && typeof block.text === "string") raw = block.text;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    request.log.error({ err }, "bid extraction query failed");
+    reply.code(500).send({ error: err.message || "Internal error" });
+    return;
+  }
+
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first === -1 || last < first) {
+    reply.code(500).send({ error: "Claude response did not contain a JSON object", raw: raw.slice(0, 2000) });
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw.slice(first, last + 1));
+  } catch {
+    reply.code(500).send({ error: "Claude returned invalid JSON", raw: raw.slice(0, 2000) });
+    return;
+  }
+  if (!Array.isArray(parsed?.lines)) {
+    reply.code(500).send({ error: "Extracted JSON has no 'lines' array", raw: raw.slice(0, 2000) });
+    return;
+  }
+
+  const elapsedMs = Date.now() - startedAt;
+  request.log.info({ file_name, elapsedMs, line_count: parsed.lines.length }, "extracted bid");
+  return {
+    lines: parsed.lines,
+    printed_total: parsed.printed_total ?? null,
+    wage_basis: parsed.wage_basis ?? null,
+    validity: parsed.validity ?? null,
+    bond_treatment: parsed.bond_treatment ?? null,
+    defects: Array.isArray(parsed.defects) ? parsed.defects : [],
+    notes: parsed.notes ?? "",
     elapsed_ms: elapsedMs,
   };
 });

@@ -1,255 +1,18 @@
-// The RFP workspace: the AHC RFP Process runbook, the documents subs owe us,
-// and the bid tracker math. Pure - no Supabase, no server imports - so pages,
-// actions and the test script share one definition.
+// The bid analyzer: bid rounds, the documents subs owe us, the bidder
+// tracker and the leveling math. Pure - no Supabase, no server imports - so
+// pages, actions and the test script share one definition.
 //
-// Source of truth for the words is the Notion card "RFP and Proposal Process -
-// Map for Automation" and its runbook in the Runbook Library. Built from the
-// Sweet Springs, Standard Solar and Sussex CSG 1 RFPs (2026). When the runbook
-// changes, change it here and there together.
-//
-// Step keys are stored in rfp_step_checks. Never rename a key once it ships:
-// a renamed key silently unchecks that step on every live bid. Add a new key
-// and retire the old one instead.
+// The runbook itself lives in Notion (Runbook - RFP to Submitted EPC Price).
+// This file holds only what the app computes. A round is a new bid or a
+// rebid on a BD opportunity, or a pre-construction reprice on a live project.
 
-export type RfpStep = { key: string; text: string };
-export type RfpPhase = {
-  key: string;
-  num: string;
-  title: string;
-  /** Who does it. "Phil" marks a review gate. */
-  owner: string;
-  steps: RfpStep[];
-  /** Guidance that is not a checkbox: how to do the steps well. */
-  notes?: string[];
+export const ROUND_KINDS = ["new_bid", "rebid", "preconstruction"] as const;
+export type RoundKind = (typeof ROUND_KINDS)[number];
+export const ROUND_KIND_LABEL: Record<RoundKind, string> = {
+  new_bid: "New bid",
+  rebid: "Rebid",
+  preconstruction: "Pre-construction reprice",
 };
-
-export const RFP_PHASES: RfpPhase[] = [
-  {
-    key: "intake",
-    num: "1",
-    title: "Intake",
-    owner: "Zarina",
-    steps: [
-      { key: "intake.access", text: "Data room access for everyone on the bid" },
-      { key: "intake.drive", text: "Drive: one parent folder, one subfolder per project, vendor folders per project" },
-      { key: "intake.download", text: "Download everything, extract every zip, log the download date" },
-      { key: "intake.client_form", text: "Check for a client bid breakdown or project breakout form. If issued, it governs how we submit" },
-      { key: "intake.owner_split", text: "Confirm the Owner and JV split: Owner furnished equipment, Annex A labor, site general conditions" },
-      { key: "intake.state_county", text: "Confirm the state and county of every site" },
-    ],
-    notes: ["Portfolios cross state lines. Livingston was called Virginia and is in Maryland."],
-  },
-  {
-    key: "state",
-    num: "1b",
-    title: "State Profile",
-    owner: "Zarina",
-    steps: [
-      { key: "state.profile", text: "State Profile exists and is current for every project state" },
-      { key: "state.wage", text: "County Building and Heavy wage determinations pulled by number" },
-      { key: "state.license", text: "Electrical and medium voltage licensing rules confirmed for the state" },
-      { key: "state.bond_tax", text: "Out-of-state contractor bond or tax, sales tax and lien waiver forms confirmed" },
-      { key: "state.block", text: "State Requirements block written into the sub email, Tab 1 Cover and Tab 6 Required Submittals" },
-    ],
-    notes: [
-      "Projects 1 MWac and over carry Davis-Bacon and 15% registered apprenticeship at all tiers. Under 1 MWac, ask for an alternate price without it.",
-      "Nothing state-specific lives in any other phase. It lives in the State Profile.",
-    ],
-  },
-  {
-    key: "analyze",
-    num: "2",
-    title: "Analyze the document set",
-    owner: "Claude, Zarina checks",
-    steps: [
-      { key: "analyze.one_pass", text: "One pass in Claude across the full set" },
-      { key: "analyze.fact_sheet", text: "Fact sheet: DC/AC, address, parcel, AHJ, utility and voltage, modules, strings, tracker, rows, piles, inverters, fence, GCR, acres" },
-      { key: "analyze.consistency", text: "Consistency check: module count x wattage = DC size, drawing quantities match the permit set, every conflict flagged with both sources" },
-      { key: "analyze.missing", text: "Missing document list verified by hand" },
-      { key: "analyze.owner_rfi", text: "Numbered request for information sent to the Owner before the bid package goes out" },
-    ],
-  },
-  {
-    key: "package",
-    num: "3",
-    title: "Build the bid package",
-    owner: "Zarina builds, Phil approves",
-    steps: [
-      { key: "package.scope", text: "Scope inventory: every work item with quantity and source sheet" },
-      { key: "package.workbook", text: "Workbook tabs: Cover, Bid Instructions, Reference Documents, RFI Form, Bid Sheet, Required Submittals" },
-      { key: "package.quantities", text: "Quantity on every countable line. Unit prices only for field conditions" },
-      { key: "package.cost_lines", text: "Separate lines for bond, insurance, prevailing wage, apprenticeship, sales tax and state contractor bond or tax" },
-      { key: "package.reference_docs", text: "Reference Documents carry geotech, IFC pile plan, tracker drawings and BOM, single line, fence detail, wage determinations, COI requirements, form of subcontract, schedule" },
-      { key: "package.terms", text: "Bids due 10 business days, RFIs 5, validity 120 days. Labor basis from the State Profile stated" },
-      { key: "package.phil_review", text: "Phil review: what we bid" },
-    ],
-    notes: [
-      "Sections: A General Conditions, B Engineering, C Civil, D Procurement, E Structural and Mechanical, F Electrical, G Commissioning, H Commercial.",
-      "One unified bid sheet. Blank line = excluded. New scope = new line. Unneeded lines marked not applicable, not deleted.",
-      "Before sending: fill the RFI contact fields and click every link in the email.",
-    ],
-  },
-  {
-    key: "bidders",
-    num: "4",
-    title: "Build the bidder list",
-    owner: "Zarina",
-    steps: [
-      { key: "bidders.three", text: "Three bidders per package, bench of two more" },
-      { key: "bidders.license", text: "License check in the project state for every bidder, even known subs" },
-      { key: "bidders.footprint", text: "Footprint check: the state is inside their operating area" },
-      { key: "bidders.bonding", text: "Bonding capacity and surety rating, prevailing wage capability, NDA in place" },
-    ],
-  },
-  {
-    key: "issue",
-    num: "5",
-    title: "Issue",
-    owner: "Zarina",
-    steps: [
-      { key: "issue.sub_email", text: "Sub email sent: link, scopes, due dates, submission requirements and the With the bid list in the body" },
-      { key: "issue.equipment_rfq", text: "Equipment RFQ sent separately with the supplier quote list" },
-      { key: "issue.logged", text: "Every send logged here and the vendor folder created" },
-      { key: "issue.intent", text: "Intent to bid asked for within 3 business days" },
-    ],
-  },
-  {
-    key: "chase",
-    num: "6",
-    title: "Chase and collect",
-    owner: "Zarina",
-    steps: [
-      { key: "chase.weekly", text: "Weekly check-in with every live bidder, same day each week" },
-      { key: "chase.replace", text: "Every decline asked why and replaced from the bench the same week" },
-      { key: "chase.coverage", text: "Two weeks before due: every package has at least two live bidders" },
-      { key: "chase.filed", text: "Every returned file in the vendor folder and its documents checked off here" },
-    ],
-    notes: ["Silence is not a bid in progress. Two weeks of silence = at risk."],
-  },
-  {
-    key: "extract",
-    num: "7",
-    title: "Extract",
-    owner: "Claude, Zarina checks",
-    steps: [
-      { key: "extract.lines", text: "Every bid read line by line. A PDF proposal without the bid sheet is not a bid" },
-      { key: "extract.foot", text: "Each bid reconciled to the vendor's printed total" },
-      { key: "extract.quantity_basis", text: "Each bidder's quantity basis recorded" },
-    ],
-    notes: ["Common defects: amounts in the wrong column, freight or mobilization on the proposal but not the bid sheet, in-scope lines left blank, quantities priced on an old layout."],
-  },
-  {
-    key: "level",
-    num: "8",
-    title: "Level",
-    owner: "Claude builds",
-    steps: [
-      { key: "level.workbook", text: "Bid comparison workbook: YYYYMMDD_Project_AHC_BidComparison_R#" },
-      { key: "level.whole_scope", text: "Whole-scope rule held: a sub keeps its whole bid, general conditions counted once" },
-      { key: "level.material", text: "Material double count checked between installers and supplier packages" },
-    ],
-  },
-  {
-    key: "clarify",
-    num: "9",
-    title: "Clarify scope",
-    owner: "Zarina",
-    steps: [
-      { key: "clarify.confirm", text: "Confirmed with every bidder: material or labor only, quantity basis, wage, apprenticeship, insurance, bonds, state license, validity" },
-      { key: "clarify.excluded", text: "Excluded scope assigned to someone or carried as a named allowance" },
-      { key: "clarify.answers", text: "Every bidder question answered to the whole package" },
-    ],
-    notes: ["Ask \"can you confirm this is in your scope,\" not \"please price.\" Short emails, bullets, no acronyms."],
-  },
-  {
-    key: "negotiate",
-    num: "10",
-    title: "Negotiate",
-    owner: "Phil",
-    steps: [
-      { key: "negotiate.unit_price", text: "High lines pushed by unit price, plus general conditions, then best overall number" },
-    ],
-    notes: ["Never name the other bidder or send their sheet. Call first, email confirms the call."],
-  },
-  {
-    key: "history",
-    num: "11",
-    title: "Price unbid scope from history",
-    owner: "Claude builds",
-    steps: [
-      { key: "history.list", text: "Every unbid line listed before any rollup" },
-      { key: "history.allowances", text: "Priced from unit rates on the latest comparable job, labeled allowance with source and date" },
-      { key: "history.variance", text: "Side by side against the prior project, every variance over 20% explained" },
-    ],
-  },
-  {
-    key: "price",
-    num: "12",
-    title: "Build the price",
-    owner: "Phil approves",
-    steps: [
-      { key: "price.stack", text: "Carried sub per package plus allowances, AHC general conditions, insurance and bonds 2% plus any state contractor bond or tax" },
-      { key: "price.benchmark", text: "$ per watt checked against a benchmark project" },
-      { key: "price.frozen", text: "Price frozen and dated. Everything downstream cites it" },
-    ],
-  },
-  {
-    key: "review",
-    num: "13",
-    title: "Executive review",
-    owner: "Phil",
-    steps: [
-      { key: "review.booked", text: "Meeting booked the day the price froze, backed off the Owner deadline and the shortest validity" },
-      { key: "review.deck", text: "Seven-slide deck and bullet talk track sent 1 business day ahead" },
-      { key: "review.outcome", text: "Outcome recorded in writing the same day" },
-    ],
-  },
-  {
-    key: "proposal",
-    num: "14",
-    title: "Proposal and submission",
-    owner: "Zarina drafts, Phil approves",
-    steps: [
-      { key: "proposal.draft", text: "Proposal drafted after the price was approved" },
-      { key: "proposal.foot", text: "Client form, proposal and approved price foot to one number" },
-      { key: "proposal.exclusions", text: "Sub exclusions we don't carry are our exclusions. Allowances stated as qualifications" },
-      { key: "proposal.internal_review", text: "Internal review by someone other than the author" },
-      { key: "proposal.submitted", text: "Phil review, then submitted. Date, version and our validity logged" },
-    ],
-  },
-  {
-    key: "award",
-    num: "15",
-    title: "After award",
-    owner: "Phil",
-    steps: [
-      { key: "award.subcontracts", text: "Subcontract scope written from the comparison and the confirmed clarifications" },
-      { key: "award.open_items", text: "Each sub's open items locked before signing" },
-      { key: "award.mobilization_docs", text: "Every carried sub's Before mobilization documents in hand" },
-      { key: "award.pos", text: "Equipment POs released against lead times" },
-    ],
-  },
-];
-
-export const ALL_STEP_KEYS: string[] = RFP_PHASES.flatMap((p) => p.steps.map((s) => s.key));
-
-export type PhaseProgress = { key: string; done: number; total: number; complete: boolean };
-
-/** Done counts per phase, ignoring stored keys the runbook no longer has. */
-export function phaseProgress(checked: Iterable<string>): PhaseProgress[] {
-  const set = new Set(checked);
-  return RFP_PHASES.map((p) => {
-    const done = p.steps.filter((s) => set.has(s.key)).length;
-    return { key: p.key, done, total: p.steps.length, complete: done === p.steps.length };
-  });
-}
-
-/** The first phase with anything left. Null when the whole runbook is done. */
-export function currentPhase(checked: Iterable<string>): RfpPhase | null {
-  const progress = phaseProgress(checked);
-  const i = progress.findIndex((p) => !p.complete);
-  return i === -1 ? null : RFP_PHASES[i];
-}
 
 // ------------------------------------------------------------ documents ----
 
@@ -527,4 +290,174 @@ export const STATE_REQUIRED_FIELDS: StateFieldKey[] = ["labor", "licensing", "co
 export function stateProfileGaps(profile: Partial<Record<StateFieldKey, string | null>> | null): StateFieldKey[] {
   if (!profile) return [...STATE_REQUIRED_FIELDS];
   return STATE_REQUIRED_FIELDS.filter((k) => !profile[k]?.trim());
+}
+
+// -------------------------------------------------------------- leveling ----
+//
+// Rules from the Sub Bid Comparison + Award runbook:
+//   - Level at package level, not line by line.
+//   - A blank line is excluded. Zero on the sheet is exposure, not savings,
+//     so a package a bidder never priced is "not bid", never $0.
+//   - A sub keeps its whole bid: carrying one package from a sub whose bid
+//     covers others is flagged.
+//   - Only confirmed extractions count. Claude reads, Phil confirms.
+
+export type BidLineLite = { bidder_id: string; package: string; amount: number | null };
+
+export type LevelBidder = { id: string; firm: string; confirmed: boolean };
+
+export type LevelCell = { bidderId: string; amount: number | null; isLow: boolean };
+
+export type LevelRow = {
+  package: string;
+  cells: LevelCell[];
+  low: number | null;
+  /** High minus low across bidders that priced the package. Null under two prices. */
+  spread: number | null;
+  baseline: number | null;
+  carriedBidderId: string | null;
+  carried: number | null;
+  /** Carried minus baseline. Null if either is missing. */
+  variance: number | null;
+};
+
+export type Leveling = {
+  bidders: LevelBidder[];
+  rows: LevelRow[];
+  carriedTotal: number;
+  baselineTotal: number;
+  /** Packages with no carried price yet. The total is not a price until this is empty. */
+  uncarried: string[];
+  wholeScope: { bidderId: string; firm: string; carriedIn: string[]; pricedButNotCarried: string[] }[];
+};
+
+function packageOrder(p: string): number {
+  const i = (PACKAGES as readonly string[]).indexOf(p);
+  return i === -1 ? PACKAGES.length : i;
+}
+
+/** Sum of priced lines per bidder per package. Blank lines do not count. */
+export function packageTotals(lines: BidLineLite[]): Map<string, Map<string, number>> {
+  const out = new Map<string, Map<string, number>>();
+  for (const l of lines) {
+    if (l.amount === null || l.amount === undefined) continue;
+    const byPkg = out.get(l.bidder_id) ?? new Map<string, number>();
+    byPkg.set(l.package, (byPkg.get(l.package) ?? 0) + Number(l.amount));
+    out.set(l.bidder_id, byPkg);
+  }
+  return out;
+}
+
+export function level(input: {
+  bidders: LevelBidder[];
+  lines: BidLineLite[];
+  /** Packages that must appear even with no bids: invited scope, estimates, mappings. */
+  packages: string[];
+  baseline: Map<string, number>;
+  carried: Map<string, string | null>;
+}): Leveling {
+  const confirmed = input.bidders.filter((b) => b.confirmed);
+  const ids = new Set(confirmed.map((b) => b.id));
+  const totals = packageTotals(input.lines.filter((l) => ids.has(l.bidder_id)));
+
+  const pkgs = new Set(input.packages);
+  totals.forEach((byPkg) => byPkg.forEach((_v, p) => pkgs.add(p)));
+  input.baseline.forEach((_v, p) => pkgs.add(p));
+  const ordered = Array.from(pkgs).sort((a, b) => packageOrder(a) - packageOrder(b) || a.localeCompare(b));
+
+  const rows: LevelRow[] = ordered.map((pkg) => {
+    const amounts = confirmed.map((b) => totals.get(b.id)?.get(pkg) ?? null);
+    const priced = amounts.filter((a): a is number => a !== null);
+    const low = priced.length ? Math.min(...priced) : null;
+    const spread = priced.length >= 2 ? Math.max(...priced) - Math.min(...priced) : null;
+    const cells = confirmed.map((b, i) => ({
+      bidderId: b.id,
+      amount: amounts[i],
+      isLow: priced.length >= 2 && amounts[i] === low,
+    }));
+    const carriedBidderId = input.carried.get(pkg) ?? null;
+    const carried = carriedBidderId ? totals.get(carriedBidderId)?.get(pkg) ?? null : null;
+    const baseline = input.baseline.has(pkg) ? input.baseline.get(pkg)! : null;
+    return {
+      package: pkg,
+      cells,
+      low,
+      spread,
+      baseline,
+      carriedBidderId: carried === null ? null : carriedBidderId,
+      carried,
+      variance: carried !== null && baseline !== null ? carried - baseline : null,
+    };
+  });
+
+  const wholeScope: Leveling["wholeScope"] = [];
+  for (const b of confirmed) {
+    const pricedPkgs = Array.from(totals.get(b.id)?.keys() ?? []);
+    const carriedIn = rows.filter((r) => r.carriedBidderId === b.id).map((r) => r.package);
+    if (!carriedIn.length) continue;
+    const pricedButNotCarried = pricedPkgs.filter((p) => !carriedIn.includes(p));
+    if (pricedButNotCarried.length) wholeScope.push({ bidderId: b.id, firm: b.firm, carriedIn, pricedButNotCarried });
+  }
+
+  return {
+    bidders: confirmed,
+    rows,
+    carriedTotal: rows.reduce((n, r) => n + (r.carried ?? 0), 0),
+    baselineTotal: rows.reduce((n, r) => n + (r.baseline ?? 0), 0),
+    uncarried: rows.filter((r) => r.carried === null).map((r) => r.package),
+    wholeScope,
+  };
+}
+
+/** Extracted lines against the vendor's printed total. Within a dollar foots. */
+export function footCheck(printed: number | null, lines: { amount: number | null }[]): {
+  extracted: number;
+  foots: boolean | null;
+  difference: number | null;
+} {
+  const extracted = lines.reduce((n, l) => n + (l.amount === null ? 0 : Number(l.amount)), 0);
+  if (printed === null) return { extracted, foots: null, difference: null };
+  const difference = Math.round((extracted - printed) * 100) / 100;
+  return { extracted, foots: Math.abs(difference) <= 1, difference };
+}
+
+/** Package budget on a live project: the sum of its mapped cost codes' estimated cost. */
+export function costCodeBaseline(
+  mappings: { package: string; cost_code_id: string }[],
+  costCodes: { id: string; estimated_cost: number | null }[],
+): Map<string, number> {
+  const est = new Map(costCodes.map((c) => [c.id, Number(c.estimated_cost ?? 0)]));
+  const out = new Map<string, number>();
+  for (const m of mappings) out.set(m.package, (out.get(m.package) ?? 0) + (est.get(m.cost_code_id) ?? 0));
+  return out;
+}
+
+/** Turns what Claude returns into lines we will store. Drops anything unusable. */
+export function cleanExtractedLines(
+  raw: unknown,
+  fallbackPackage: string,
+): { package: string; description: string; quantity: number | null; unit: string | null; amount: number | null; source_ref: string | null }[] {
+  if (!Array.isArray(raw)) return [];
+  const num = (v: unknown): number | null => {
+    if (v === null || v === undefined || v === "") return null;
+    const n = typeof v === "number" ? v : Number(String(v).replace(/[$,\s]/g, ""));
+    return Number.isFinite(n) ? n : null;
+  };
+  const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const out = [];
+  for (const r of raw as Record<string, unknown>[]) {
+    if (!r || typeof r !== "object") continue;
+    const description = str(r.description);
+    if (!description) continue;
+    const pkg = str(r.package);
+    out.push({
+      package: pkg && (PACKAGES as readonly string[]).includes(pkg) ? pkg : fallbackPackage,
+      description: description.slice(0, 500),
+      quantity: num(r.quantity),
+      unit: str(r.unit)?.slice(0, 40) ?? null,
+      amount: num(r.amount),
+      source_ref: str(r.source_ref)?.slice(0, 120) ?? null,
+    });
+  }
+  return out;
 }
