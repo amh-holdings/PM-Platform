@@ -69,6 +69,7 @@
     "sync:audit": "tsx scripts/sync-audit/run.ts",
     "test:sub-compliance": "tsx scripts/subs/run-compliance-tests.ts",
     "test:rfi": "tsx scripts/rfi/run-tests.ts",
+    "test:rfp": "tsx scripts/rfp/run-tests.ts",
     "predev": "node scripts/copy-pdf-worker.mjs",
     "prebuild": "node scripts/copy-pdf-worker.mjs",
     "test:markup": "tsx scripts/markup/run-tests.ts",
