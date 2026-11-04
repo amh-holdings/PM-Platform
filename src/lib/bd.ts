@@ -3,7 +3,9 @@
 // one definition of "win rate".
 //
 // Definitions (agreed with Phil 2026-10-09):
-//   - Decided  = won + lost. No-bid and dead never count either way.
+//   - Decided  = won + lost. No-bid, dead and retired never count either way.
+//     Retired = the client dropped the site from a portfolio (Livingston,
+//     10/29/26). Not a loss, not a cancelled job.
 //   - Win rate (count) = won / decided.
 //   - Win rate ($)     = $ won / $ decided, priced at each opportunity's latest
 //                        bid revision. A decided job with no bid on file counts
@@ -21,11 +23,12 @@ export const BD_STAGES = [
   "lost",
   "no_bid",
   "dead",
+  "retired",
 ] as const;
 export type BdStage = (typeof BD_STAGES)[number];
 
 export const OPEN_STAGES: readonly BdStage[] = ["lead", "bidding", "submitted", "shortlist"];
-export const CLOSED_STAGES: readonly BdStage[] = ["won", "lost", "no_bid", "dead"];
+export const CLOSED_STAGES: readonly BdStage[] = ["won", "lost", "no_bid", "dead", "retired"];
 
 export function isOpenStage(stage: string): boolean {
   return (OPEN_STAGES as readonly string[]).includes(stage);
@@ -40,6 +43,7 @@ export const STAGE_LABEL: Record<BdStage, string> = {
   lost: "Lost",
   no_bid: "No-bid",
   dead: "Dead",
+  retired: "Retired",
 };
 
 // Default win probability by stage, used for the weighted pipeline when an
@@ -53,6 +57,7 @@ export const STAGE_PROBABILITY: Record<BdStage, number> = {
   lost: 0,
   no_bid: 0,
   dead: 0,
+  retired: 0,
 };
 
 // Days to the next follow-up when one is logged, by stage. Submitted is 7 days
@@ -66,6 +71,7 @@ export const FOLLOW_UP_DAYS: Record<BdStage, number> = {
   lost: 0,
   no_bid: 0,
   dead: 0,
+  retired: 0,
 };
 export const FIRST_FOLLOW_UP_AFTER_BID_DAYS = 7;
 export const STALE_CLIENT_DAYS = 60;

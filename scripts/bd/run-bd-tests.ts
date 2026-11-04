@@ -78,12 +78,13 @@ const opps = [
   opp("lost3", "lost", { loss_reason: "schedule" }), // no bid on file
   opp("nobid", "no_bid"),
   opp("dead", "dead"),
+  opp("retired", "retired"),
   opp("open1", "submitted"), // 35% default
   opp("open2", "lead", { est_value: 5_000_000, probability_pct: 50 }),
 ];
 
 const wr = winRate(opps, latest);
-eq("count rate excludes no-bid and dead", [wr.won, wr.lost], [1, 3]);
+eq("count rate excludes no-bid, dead and retired", [wr.won, wr.lost], [1, 3]);
 eq("count rate", wr.rateCount, 0.25);
 eq("$ rate leaves out decided jobs with no bid", [wr.wonDollars, wr.decidedDollars], [8_500_000, 18_400_000]);
 
