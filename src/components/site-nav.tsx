@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { PaletteTrigger } from "@/components/nav/palette-trigger";
 import { signOut } from "@/app/actions";
 import { createClient } from "@/lib/supabase/server";
-import { can, canWith } from "@/lib/roles";
+import { can } from "@/lib/roles";
 import { getEffectiveRole } from "@/lib/roles-server";
 
 /**
@@ -19,7 +19,7 @@ export async function SiteNav() {
   } = await supabase.auth.getUser();
 
   if (!user) return null;
-  const { effective, grants } = await getEffectiveRole();
+  const { effective } = await getEffectiveRole();
 
   return (
     // `print:hidden` because the report pages under this shell are printed and
@@ -44,14 +44,6 @@ export async function SiteNav() {
               className="rounded-md px-2 py-1.5 font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               Business Dev
-            </Link>
-          )}
-          {canWith(effective, grants, "runRfp") && (
-            <Link
-              href="/rfp"
-              className="rounded-md px-2 py-1.5 font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              RFPs
             </Link>
           )}
         </nav>
