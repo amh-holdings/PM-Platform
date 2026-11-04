@@ -110,11 +110,6 @@ export default async function OpportunityPage({
             {opp.bd_owner_id && ` - Owner: ${ownerLabel(opp.bd_owner_id, ownerName)}`}
           </p>
         </div>
-        {open && (
-          <Button asChild size="sm" variant="outline">
-            <Link href={`/rfp/${opp.id}`}>RFP workspace</Link>
-          </Button>
-        )}
         {opp.stage === "won" &&
           (opp.project_id ? (
             canTransfer ? (

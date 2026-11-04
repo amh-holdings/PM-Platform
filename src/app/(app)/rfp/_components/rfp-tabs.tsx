@@ -8,11 +8,10 @@ import { cn } from "@/lib/utils";
 const TABS = [
   {
     href: "/rfp",
-    label: "Bids",
-    match: (p: string) => p === "/rfp" || (p.startsWith("/rfp/") && !p.startsWith("/rfp/states") && !p.startsWith("/rfp/runbook")),
+    label: "Bid rounds",
+    match: (p: string) => p === "/rfp" || (p.startsWith("/rfp/") && !p.startsWith("/rfp/states")),
   },
   { href: "/rfp/states", label: "State profiles", match: (p: string) => p.startsWith("/rfp/states") },
-  { href: "/rfp/runbook", label: "Runbook", match: (p: string) => p.startsWith("/rfp/runbook") },
 ];
 
 export function RfpTabs() {

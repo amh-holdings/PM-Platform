@@ -1,124 +1,111 @@
 import Link from "next/link";
 
-import { STAGE_LABEL, isOpenStage, todayIso, type BdStage } from "@/lib/bd";
+import { Input } from "@/components/ui/input";
+import { isOpenStage, todayIso } from "@/lib/bd";
 import { formatDate } from "@/lib/format";
-import {
-  RFP_PHASES,
-  bidderFlags,
-  currentPhase,
-  packageCoverage,
-  phaseProgress,
-  stateCode,
-} from "@/lib/rfp";
+import { ROUND_KINDS, ROUND_KIND_LABEL, bidderFlags, packageCoverage, type RoundKind } from "@/lib/rfp";
 import { rfpClient } from "@/lib/rfp-db";
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
-import { Card, Empty, StagePill, tdClass, thClass } from "../bd/_components/fields";
+import { ActionForm } from "../bd/_components/action-form";
+import { Card, Empty, Field, Select, TextArea, tdClass, thClass } from "../bd/_components/fields";
+import { createRound } from "./actions";
 import { Pill } from "./_components/flag-pill";
 
 /**
- * Every open bid and where it sits in the runbook. The list Zarina works
- * from: which phase each bid is in, which packages are thin, who has gone
- * quiet.
+ * Every bid round. A round is a new bid or rebid on a BD opportunity, or a
+ * pre-construction reprice on a live project. Business Dev keeps only the
+ * overall status of a bid; the bidding itself runs here.
  */
-export default async function RfpIndexPage() {
-  const db = rfpClient(createClient());
-  const [opps, companies, checks, bidders, profiles] = await Promise.all([
-    db.from("bd_opportunities").select("*").order("bid_due_date", { ascending: true, nullsFirst: false }),
+export default async function RfpIndexPage({ searchParams }: { searchParams: { show?: string } }) {
+  const supabase = createClient();
+  const db = rfpClient(supabase);
+  const [rounds, opps, companies, projects, bidders] = await Promise.all([
+    db.from("rfp_rounds").select("*").order("due_date", { ascending: true, nullsFirst: false }),
+    db.from("bd_opportunities").select("id, name, stage, company_id, state"),
     db.from("bd_companies").select("id, name"),
-    db.from("rfp_step_checks").select("opportunity_id, step_key"),
+    supabase.from("projects").select("id, name, status").order("name"),
     db.from("rfp_bidders").select("*"),
-    db.from("bd_state_profiles").select("state"),
   ]);
 
   const today = todayIso();
+  const showClosed = searchParams.show === "closed";
+  const oppById = new Map((opps.data ?? []).map((o) => [o.id, o]));
   const companyName = new Map((companies.data ?? []).map((c) => [c.id, c.name]));
-  const profileStates = new Set((profiles.data ?? []).map((p) => p.state));
-  const checksBy = new Map<string, string[]>();
-  for (const c of checks.data ?? []) checksBy.set(c.opportunity_id, [...(checksBy.get(c.opportunity_id) ?? []), c.step_key]);
+  const projectById = new Map((projects.data ?? []).map((p) => [p.id, p]));
   const biddersBy = new Map<string, NonNullable<typeof bidders.data>>();
-  for (const b of bidders.data ?? []) biddersBy.set(b.opportunity_id, [...(biddersBy.get(b.opportunity_id) ?? []), b]);
+  for (const b of bidders.data ?? []) biddersBy.set(b.round_id, [...(biddersBy.get(b.round_id) ?? []), b]);
 
-  const open = (opps.data ?? []).filter((o) => isOpenStage(o.stage));
-  const totalSteps = RFP_PHASES.reduce((n, p) => n + p.steps.length, 0);
+  const list = (rounds.data ?? []).filter((r) => (showClosed ? r.status === "closed" : r.status === "open"));
+  const openOpps = (opps.data ?? []).filter((o) => isOpenStage(o.stage)).sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">RFPs</h1>
+        <h1 className="text-2xl font-semibold">Bid rounds</h1>
         <p className="text-sm text-muted-foreground">
-          Every open bid, run through the AHC RFP Process. Zarina runs it. Phil reviews at the bid package, the
-          price and the submission.
+          New bids, rebids and pre-construction reprices. Upload each bid, confirm what Claude read, level by
+          package. The runbook is in Notion: Runbook - RFP to Submitted EPC Price.
         </p>
       </div>
 
-      <Card title={`Open bids (${open.length})`}>
-        {open.length ? (
+      <Card
+        title={showClosed ? `Closed rounds (${list.length})` : `Open rounds (${list.length})`}
+        action={
+          <Link href={showClosed ? "/rfp" : "/rfp?show=closed"} className="text-xs text-muted-foreground hover:text-foreground">
+            {showClosed ? "Show open" : "Show closed"}
+          </Link>
+        }
+      >
+        {list.length ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b">
-                  <th className={thClass}>Bid</th>
-                  <th className={thClass}>Client</th>
+                  <th className={thClass}>Round</th>
+                  <th className={thClass}>For</th>
+                  <th className={thClass}>Type</th>
                   <th className={thClass}>State</th>
-                  <th className={thClass}>Stage</th>
-                  <th className={thClass}>Bid due</th>
-                  <th className={thClass}>Runbook</th>
+                  <th className={thClass}>Due</th>
                   <th className={thClass}>Bidders</th>
                   <th className={thClass}>Needs attention</th>
                 </tr>
               </thead>
               <tbody>
-                {open.map((o) => {
-                  const done = checksBy.get(o.id) ?? [];
-                  const phase = currentPhase(done);
-                  const doneCount = phaseProgress(done).reduce((n, p) => n + p.done, 0);
-                  const list = biddersBy.get(o.id) ?? [];
-                  const thin = packageCoverage(list).filter((c) => c.thin).length;
-                  const flagged = list.filter((b) => bidderFlags(b, today).some((f) => f.kind !== "license_unverified")).length;
-                  const unlicensed = list.filter((b) => bidderFlags(b, today).some((f) => f.kind === "license_unverified")).length;
-                  const st = stateCode(o.state);
-                  const overdue = !!o.bid_due_date && o.bid_due_date < today;
+                {list.map((r) => {
+                  const opp = r.opportunity_id ? oppById.get(r.opportunity_id) : null;
+                  const project = r.project_id ? projectById.get(r.project_id) : null;
+                  const rows = biddersBy.get(r.id) ?? [];
+                  const received = rows.filter((b) => b.status === "received" || b.status === "carried").length;
+                  const unconfirmed = rows.filter((b) => b.extracted_at && !b.lines_confirmed_at).length;
+                  const thin = packageCoverage(rows).filter((c) => c.thin).length;
+                  const chase = rows.filter((b) => bidderFlags(b, today).some((f) => f.kind !== "license_unverified")).length;
+                  const overdue = r.status === "open" && !!r.due_date && r.due_date < today;
                   return (
-                    <tr key={o.id} className="border-b last:border-0">
+                    <tr key={r.id} className="border-b last:border-0">
                       <td className={tdClass}>
-                        <Link href={`/rfp/${o.id}`} className="font-medium underline-offset-4 hover:underline">
-                          {o.name}
+                        <Link href={`/rfp/${r.id}`} className="font-medium underline-offset-4 hover:underline">
+                          {r.label}
                         </Link>
                       </td>
-                      <td className={tdClass}>{companyName.get(o.company_id) ?? "-"}</td>
                       <td className={tdClass}>
-                        {st ?? o.state ?? "-"}
-                        {st && !profileStates.has(st) && (
-                          <span className="ml-2">
-                            <Pill tone="warn">No profile</Pill>
-                          </span>
-                        )}
-                        {!st && (
-                          <span className="ml-2">
-                            <Pill tone="warn">Set state</Pill>
-                          </span>
-                        )}
-                      </td>
-                      <td className={tdClass}>
-                        <StagePill stage={o.stage} label={STAGE_LABEL[o.stage as BdStage] ?? o.stage} />
-                      </td>
-                      <td className={cn(tdClass, "whitespace-nowrap", overdue && "text-destructive")}>
-                        {formatDate(o.bid_due_date)}
-                      </td>
-                      <td className={tdClass}>
-                        <div className="whitespace-nowrap">{phase ? `${phase.num}. ${phase.title}` : "Complete"}</div>
+                        <div>{opp?.name ?? project?.name ?? "-"}</div>
                         <div className="text-xs text-muted-foreground">
-                          {doneCount} of {totalSteps} steps
+                          {opp ? companyName.get(opp.company_id) ?? "Opportunity" : project ? "Live project" : ""}
                         </div>
                       </td>
-                      <td className={cn(tdClass, "tabular-nums")}>{list.length}</td>
+                      <td className={tdClass}>{ROUND_KIND_LABEL[r.kind as RoundKind] ?? r.kind}</td>
+                      <td className={tdClass}>{r.state ?? <Pill tone="warn">Set state</Pill>}</td>
+                      <td className={cn(tdClass, "whitespace-nowrap", overdue && "text-destructive")}>{formatDate(r.due_date)}</td>
+                      <td className={cn(tdClass, "tabular-nums")}>
+                        {received} in / {rows.length}
+                      </td>
                       <td className={tdClass}>
                         <div className="flex flex-wrap gap-1">
+                          {unconfirmed > 0 && <Pill tone="warn">{unconfirmed} to confirm</Pill>}
                           {thin > 0 && <Pill tone="bad">{thin} thin package{thin === 1 ? "" : "s"}</Pill>}
-                          {flagged > 0 && <Pill tone="warn">{flagged} to chase</Pill>}
-                          {unlicensed > 0 && <Pill tone="warn">{unlicensed} license unchecked</Pill>}
-                          {!thin && !flagged && !unlicensed && <span className="text-muted-foreground">-</span>}
+                          {chase > 0 && <Pill tone="warn">{chase} to chase</Pill>}
+                          {!unconfirmed && !thin && !chase && <span className="text-muted-foreground">-</span>}
                         </div>
                       </td>
                     </tr>
@@ -128,8 +115,60 @@ export default async function RfpIndexPage() {
             </table>
           </div>
         ) : (
-          <Empty>No open bids. New bids start as an opportunity in Business Dev.</Empty>
+          <Empty>{showClosed ? "No closed rounds." : "No open rounds. Start one below."}</Empty>
         )}
+      </Card>
+
+      <Card title="Start a round">
+        <ActionForm action={createRound} submitLabel="Start round">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label="For" htmlFor="target" required className="sm:col-span-2">
+              <select
+                id="target"
+                name="target"
+                required
+                defaultValue=""
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="">Pick an opportunity or project</option>
+                <optgroup label="Open opportunities (new bid or rebid)">
+                  {openOpps.map((o) => (
+                    <option key={o.id} value={`opp:${o.id}`}>
+                      {o.name}
+                      {companyName.get(o.company_id) ? ` - ${companyName.get(o.company_id)}` : ""}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Live projects (pre-construction reprice)">
+                  {(projects.data ?? []).map((p) => (
+                    <option key={p.id} value={`project:${p.id}`}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </Field>
+            <Field label="Type" htmlFor="kind" hint="Blank = new bid for an opportunity, reprice for a project">
+              <Select
+                name="kind"
+                blank="-"
+                options={ROUND_KINDS.map((k) => ({ value: k, label: ROUND_KIND_LABEL[k] }))}
+              />
+            </Field>
+            <Field label="Round name" htmlFor="label" required>
+              <Input id="label" name="label" required placeholder="R1, R2, 90% reprice" />
+            </Field>
+            <Field label="State" htmlFor="state" hint="Blank = from the opportunity">
+              <Input id="state" name="state" maxLength={2} placeholder="VA" />
+            </Field>
+            <Field label="Bids due" htmlFor="due_date">
+              <Input id="due_date" name="due_date" type="date" />
+            </Field>
+            <Field label="Notes" htmlFor="notes" className="sm:col-span-2">
+              <TextArea name="notes" rows={2} />
+            </Field>
+          </div>
+        </ActionForm>
       </Card>
     </div>
   );
