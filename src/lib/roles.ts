@@ -71,7 +71,6 @@ export type Capability =
   | "viewDocuments" // Documents tab
   | "viewRfis" // RFI log
   | "viewDeliverables" // Exhibit S deliverables checklist
-  | "reviewEmailUpdates" // Email updates page. Granted per person, never by role - see PERSON_GRANTS
   | "viewAsToggle" // the Phil-only "view as" switcher
   // --- business development ---
   | "viewBD" // the BD section: clients, pipeline, bids, follow-ups, dashboard
@@ -159,15 +158,15 @@ export function can(role: EffectiveRole, cap: Capability): boolean {
 }
 
 // ---- Per-person grants. ----
-// A few things follow the person, not the effective role. Zarina and the
-// construction manager share the `cm` role, but email updates belong to the
-// office (Phil and Zarina, treated as one) and must not exist for the site
-// team at all - not in the nav, not by URL. The matrix cannot say that, so
-// these are granted by DB role on top of it.
-const PERSON_GRANTS: Record<string, Capability[]> = {
-  phil: ["reviewEmailUpdates"],
-  zarina: ["reviewEmailUpdates"],
-};
+// A few things can follow the person rather than the effective role, for
+// cases the matrix cannot express: Zarina and the construction manager share
+// the `cm` role, so anything that belongs to the office and not to the site
+// team has to be granted by DB role on top of it.
+//
+// Empty since the email updates page was removed. The mechanism stays because
+// `canWith` is wired through the nav and every guard already, and the next
+// office-only page will need it.
+const PERSON_GRANTS: Record<string, Capability[]> = {};
 
 export function grantsFor(dbRole: string | null | undefined): Capability[] {
   return (dbRole && PERSON_GRANTS[dbRole]) || [];

@@ -9,7 +9,7 @@ function check(name: string, cond: boolean, detail = "") {
 
 const base = (over: Partial<AuditInput> = {}): AuditInput => ({
   today: "2026-10-28",
-  emailUpdates: [], subBills: [], afps: [], changeOrders: [], subs: [], tasks: [], billingEntries: [],
+  subBills: [], afps: [], changeOrders: [], subs: [], tasks: [], billingEntries: [],
   dprs: ["2026-10-27", "2026-10-26", "2026-10-23", "2026-10-22", "2026-10-21"].map((d) => ({ report_date: d, status: "approved", submitted_at: d })),
   ...over,
 });
@@ -20,8 +20,6 @@ check("days since", daysSince("2026-10-20T15:00:00Z", "2026-10-28") === 8);
 check("clean project has no findings", runAudit(base()).length === 0);
 check("clean project sends no chat", auditMessages("Sussex", []).chat === null);
 
-check("stale email update flagged", areas(base({ emailUpdates: [{ status: "proposed", created_at: "2026-10-24T10:00:00Z", summary: "x" }] }))[0]?.startsWith("action:Email updates:1 email update"));
-check("fresh email update not flagged", runAudit(base({ emailUpdates: [{ status: "proposed", created_at: "2026-10-27T10:00:00Z", summary: "x" }] })).length === 0);
 
 const bill = { company_name: "SCS", app_number: 3, status: "received", created_at: "2026-10-26", error_checks: 0 };
 check("bill failing checks flagged", areas(base({ subBills: [{ ...bill, error_checks: 2 }] }))[0]?.includes("fails 2 checks"));
