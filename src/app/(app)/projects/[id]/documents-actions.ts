@@ -236,3 +236,56 @@ export async function attachDocument(
   revalidatePath(`/projects/${projectId}`);
   return { ok: true };
 }
+
+export type DocumentParty =
+  | { kind: "none" }
+  | { kind: "sub"; subcontractorId: string }
+  | { kind: "owner"; payApplicationId: string | null };
+
+/**
+ * Say whose document this is: a subcontractor's, or the owner side's (our
+ * pay application to the owner, optionally the exact AFP). One or the other,
+ * never both. The expiry date is left as it is.
+ */
+export async function setDocumentParty(
+  documentId: string,
+  projectId: string,
+  party: DocumentParty,
+): Promise<AttachDocumentResult> {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated" };
+
+  if (party.kind === "owner" && party.payApplicationId) {
+    const { data: afp } = await supabase
+      .from("pay_applications")
+      .select("id")
+      .eq("id", party.payApplicationId)
+      .eq("project_id", projectId)
+      .maybeSingle();
+    if (!afp) return { ok: false, error: "That AFP is not on this project" };
+  }
+
+  const { data, error } = await supabase
+    .from("project_documents")
+    .update({
+      subcontractor_id: party.kind === "sub" ? party.subcontractorId : null,
+      owner_invoice: party.kind === "owner",
+      pay_application_id: party.kind === "owner" ? party.payApplicationId : null,
+    })
+    .eq("id", documentId)
+    .eq("project_id", projectId)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    if (/column .*(owner_invoice|pay_application_id)/i.test(error.message)) {
+      return { ok: false, error: "Run migration 0090 in the Supabase SQL Editor to mark a document as the owner's." };
+    }
+    return { ok: false, error: error.message };
+  }
+  if (!data) return { ok: false, error: "Document not found on this project" };
+
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
+}

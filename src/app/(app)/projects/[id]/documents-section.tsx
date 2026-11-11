@@ -24,11 +24,21 @@ export async function DocumentsSection({ projectId }: Props) {
   // 0083's columns are asked for first and the query falls back without them,
   // because migrations here are applied by hand: selecting a column that does
   // not exist yet 400s and takes the whole documents page down with it.
-  const withCompliance = await supabase
+  // 0090 (owner invoices) is tried first, then 0083 alone, then neither.
+  const withOwner = await supabase
     .from("project_documents")
-    .select(`${BASE_COLS}, subcontractor_id, valid_until`)
+    .select(`${BASE_COLS}, subcontractor_id, valid_until, owner_invoice, pay_application_id`)
     .eq("project_id", projectId)
     .order("uploaded_at", { ascending: false, nullsFirst: false });
+  const ownerEnabled = !withOwner.error;
+
+  const withCompliance = ownerEnabled
+    ? withOwner
+    : await supabase
+        .from("project_documents")
+        .select(`${BASE_COLS}, subcontractor_id, valid_until`)
+        .eq("project_id", projectId)
+        .order("uploaded_at", { ascending: false, nullsFirst: false });
 
   const complianceEnabled = !withCompliance.error;
   const documents = complianceEnabled
@@ -42,7 +52,7 @@ export async function DocumentsSection({ projectId }: Props) {
       ).data;
 
   const rows = (documents ?? []) as Array<
-    NonNullable<typeof withCompliance.data>[number]
+    NonNullable<typeof withOwner.data>[number]
   >;
 
   // The roster, for the Sub dropdown. Active only: a COI belongs to a sub who
@@ -54,6 +64,19 @@ export async function DocumentsSection({ projectId }: Props) {
         .eq("project_id", projectId)
         .neq("active", false)
         .order("company_name", { ascending: true })
+    : { data: null };
+
+  // The owner side, for the same dropdown: the client's name and the AFPs a
+  // pay application file can be tied to.
+  const { data: project } = ownerEnabled
+    ? await supabase.from("projects").select("client").eq("id", projectId).maybeSingle()
+    : { data: null };
+  const { data: afps } = ownerEnabled
+    ? await supabase
+        .from("pay_applications")
+        .select("id, app_number, period_end")
+        .eq("project_id", projectId)
+        .order("period_end", { ascending: true })
     : { data: null };
 
   // Grouped in the fixed category order rather than by whatever came back
@@ -100,6 +123,9 @@ export async function DocumentsSection({ projectId }: Props) {
         groups={groups}
         subs={subRoster ?? []}
         complianceEnabled={complianceEnabled}
+        ownerEnabled={ownerEnabled}
+        ownerName={project?.client ?? null}
+        afps={(afps ?? []).map((a) => ({ id: a.id, label: a.app_number }))}
       />
     </section>
   );
