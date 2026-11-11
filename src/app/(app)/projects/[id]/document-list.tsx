@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   attachDocument,
+  setDocumentParty,
+  type DocumentParty,
   deleteDocument,
   moveDocuments,
 } from "./documents-actions";
@@ -21,6 +23,7 @@ import {
 } from "./documents-constants";
 
 export type SubOption = { id: string; company_name: string };
+export type AfpOption = { id: string; label: string };
 
 type DocumentRow = {
   id: string;
@@ -28,6 +31,8 @@ type DocumentRow = {
   category: DocumentCategory;
   subcontractor_id?: string | null;
   valid_until?: string | null;
+  owner_invoice?: boolean | null;
+  pay_application_id?: string | null;
   size_bytes: number | null;
   mime_type: string | null;
   text_status: DocumentTextStatus;
@@ -47,6 +52,10 @@ type Props = {
   /** Empty until migration 0083 lands, which hides the Sub and Expires cells. */
   subs?: SubOption[];
   complianceEnabled?: boolean;
+  /** Migration 0090: the dropdown can also say the file is the owner's. */
+  ownerEnabled?: boolean;
+  ownerName?: string | null;
+  afps?: AfpOption[];
 };
 
 function formatBytes(bytes: number | null): string {
@@ -88,6 +97,9 @@ export function DocumentList({
   groups,
   subs = [],
   complianceEnabled = false,
+  ownerEnabled = false,
+  ownerName = null,
+  afps = [],
 }: Props) {
   const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -142,6 +154,32 @@ export function DocumentList({
     setNote(`${label} moved to ${DOCUMENT_CATEGORY_LABEL[result.category]}.`);
     setPicked(new Set());
     anchor.current = null;
+    startTransition(() => {
+      router.refresh();
+    });
+  };
+
+  // The Sub dropdown's value: a sub's id, "owner", or "owner:<AFP id>".
+  const partyValue = (doc: DocumentRow) =>
+    doc.owner_invoice
+      ? doc.pay_application_id ? `owner:${doc.pay_application_id}` : "owner"
+      : doc.subcontractor_id ?? "";
+
+  const handleParty = async (doc: DocumentRow, value: string) => {
+    const party: DocumentParty =
+      value === "" ? { kind: "none" }
+        : value === "owner" ? { kind: "owner", payApplicationId: null }
+          : value.startsWith("owner:") ? { kind: "owner", payApplicationId: value.slice(6) }
+            : { kind: "sub", subcontractorId: value };
+    setPendingId(doc.id);
+    setError(null);
+    setNote(null);
+    const result = await setDocumentParty(doc.id, projectId, party);
+    setPendingId(null);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
     startTransition(() => {
       router.refresh();
     });
@@ -398,24 +436,46 @@ export function DocumentList({
                             doc.category,
                           ) ? (
                             <select
-                              value={doc.subcontractor_id ?? ""}
+                              value={ownerEnabled ? partyValue(doc) : doc.subcontractor_id ?? ""}
                               disabled={pendingId === doc.id}
                               onChange={(e) =>
-                                handleAttach(
-                                  doc,
-                                  e.target.value || null,
-                                  doc.valid_until ?? null,
-                                )
+                                ownerEnabled
+                                  ? handleParty(doc, e.target.value)
+                                  : handleAttach(
+                                      doc,
+                                      e.target.value || null,
+                                      doc.valid_until ?? null,
+                                    )
                               }
-                              aria-label={`Subcontractor for ${doc.file_name}`}
+                              aria-label={`Who ${doc.file_name} belongs to`}
                               className="h-8 rounded-md border border-input bg-background px-2 text-xs disabled:opacity-50"
                             >
                               <option value="">Not assigned</option>
-                              {subs.map((s) => (
-                                <option key={s.id} value={s.id}>
-                                  {s.company_name}
-                                </option>
-                              ))}
+                              {ownerEnabled && (
+                                <optgroup label={`Owner${ownerName ? ` - ${ownerName}` : ""}`}>
+                                  <option value="owner">Owner invoice</option>
+                                  {afps.map((a) => (
+                                    <option key={a.id} value={`owner:${a.id}`}>
+                                      Owner invoice - {a.label}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              {ownerEnabled ? (
+                                <optgroup label="Subcontractors">
+                                  {subs.map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                      {s.company_name}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              ) : (
+                                subs.map((s) => (
+                                  <option key={s.id} value={s.id}>
+                                    {s.company_name}
+                                  </option>
+                                ))
+                              )}
                             </select>
                           ) : (
                             <span className="text-xs text-muted-foreground">

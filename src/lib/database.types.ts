@@ -2217,6 +2217,8 @@ export type Database = {
       }
       project_documents: {
         Row: {
+          owner_invoice: boolean
+          pay_application_id: string | null
           subcontractor_id: string | null
           rfi_id: string | null
           valid_until: string | null
@@ -2236,6 +2238,8 @@ export type Database = {
           uploaded_by_id: string | null
         }
         Insert: {
+          owner_invoice?: boolean
+          pay_application_id?: string | null
           subcontractor_id?: string | null
           rfi_id?: string | null
           valid_until?: string | null
@@ -2255,6 +2259,8 @@ export type Database = {
           uploaded_by_id?: string | null
         }
         Update: {
+          owner_invoice?: boolean
+          pay_application_id?: string | null
           subcontractor_id?: string | null
           rfi_id?: string | null
           valid_until?: string | null
