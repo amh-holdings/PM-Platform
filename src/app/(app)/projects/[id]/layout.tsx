@@ -47,7 +47,7 @@ export default async function ProjectLayout({
       .from("projects")
       .select("id, name, client, status")
       .order("created_at", { ascending: false }),
-    getNavCounts(params.id, effective, grants),
+    getNavCounts(params.id, effective),
   ]);
 
   if (!project) notFound();

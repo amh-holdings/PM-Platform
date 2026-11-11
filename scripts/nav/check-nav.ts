@@ -94,15 +94,17 @@ check("search 'zzz' finds nothing",
   !PROJECT_NAV.some((i) => matchesQuery(i, "zzz")));
 check("empty search matches everything", PROJECT_NAV.every((i) => matchesQuery(i, "  ")));
 
-// 10. Email updates are a per-person grant: the office sees them, the site
-// team never does, and previewing a role drops the grant.
-const hasEmail = (role: EffectiveRole, dbRole: string) =>
-  visibleNav(role, grantsFor(dbRole)).some((i) => i.key === "email-updates");
-check("phil sees email updates", hasEmail("full", "phil"));
-check("zarina sees email updates", hasEmail("cm", "zarina"));
-check("ahc_super (site CM) never sees email updates", !hasEmail("cm", "ahc_super"));
-check("sub never sees email updates", !hasEmail("sub", "sub_pm"));
-check("no grant, no email updates, even for full", !visibleNav("full").some((i) => i.key === "email-updates"));
+// 10. Per-person grants. None are granted today - the email updates page was
+// the only one - so the mechanism has to be inert rather than quietly
+// granting something. Every nav item must come from the role alone.
+check("no person grants are handed out", grantsFor("phil").length === 0 && grantsFor("zarina").length === 0);
+check("an unknown db role grants nothing", grantsFor("nobody").length === 0);
+for (const role of ["full", "cm", "sub"] as EffectiveRole[]) {
+  check(`${role}: a grant list changes nothing today`,
+    visibleNav(role, grantsFor("phil")).length === visibleNav(role).length);
+}
+check("no nav item is left pointing at the removed page",
+  !PROJECT_NAV.some((i) => i.key === "email-updates" || i.path === "email-updates"));
 
 console.log(failures === 0 ? "\nAll nav checks passed." : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

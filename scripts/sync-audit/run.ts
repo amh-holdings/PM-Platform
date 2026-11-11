@@ -32,8 +32,7 @@ async function main() {
   const project = projects[0] as { id: string; name: string };
   const pid = project.id;
 
-  const [eu, bills, subs, afps, cos, dprs, tasks, lines] = await Promise.all([
-    db.from("email_updates").select("status, created_at, summary").eq("project_id", pid),
+  const [bills, subs, afps, cos, dprs, tasks, lines] = await Promise.all([
     db.from("sub_pay_apps").select("id, app_number, status, created_at, subcontractor_id").eq("project_id", pid),
     db.from("subcontractors").select("id, company_name, coi_status, w9_status, active").eq("project_id", pid),
     db.from("pay_applications").select("app_number, status, submitted_at, paid_at").eq("project_id", pid),
@@ -42,7 +41,7 @@ async function main() {
     db.from("schedule_tasks").select("wbs_code, task_name, task_type, status, pct_complete, end_date, last_dpr_at").eq("project_id", pid),
     db.from("billing_lines").select("id").eq("project_id", pid),
   ]);
-  const failures = [eu, bills, subs, afps, cos, dprs, tasks, lines].filter((r) => r.error).map((r) => r.error!.message);
+  const failures = [bills, subs, afps, cos, dprs, tasks, lines].filter((r) => r.error).map((r) => r.error!.message);
   if (failures.length) {
     console.error(failures.join("\n"));
     process.exit(2);
@@ -68,7 +67,6 @@ async function main() {
 
   const input: AuditInput = {
     today,
-    emailUpdates: (eu.data ?? []) as AuditInput["emailUpdates"],
     subBills: billRows.map((b) => ({
       company_name: subName.get(b.subcontractor_id) ?? "Sub",
       app_number: b.app_number,
@@ -85,8 +83,9 @@ async function main() {
   };
 
   const findings = runAudit(input);
-  const config = JSON.parse(readFileSync("config/email-sweep.json", "utf8")) as { appUrl?: string };
-  const appUrl = (loadEnvLocal().APP_URL || config.appUrl || "").replace(/\/$/, "");
+  // APP_URL only, since the email sweep's config went with the sweep. No URL
+  // just means the Chat message goes out without a link.
+  const appUrl = (loadEnvLocal().APP_URL || "").replace(/\/$/, "");
   const { chat, card } = auditMessages(project.name, findings, appUrl ? `${appUrl}/projects/${pid}` : null);
   console.log(JSON.stringify({ project: project.name, projectId: pid, today, findings, chat, card }, null, 2));
 }

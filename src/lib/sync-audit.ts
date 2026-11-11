@@ -13,7 +13,6 @@ import { leafStateOf } from "./schedule-summary-status";
 
 export type AuditSeverity = "action" | "watch";
 export type AuditArea =
-  | "Email updates"
   | "Sub billing"
   | "AFPs"
   | "Change orders"
@@ -26,7 +25,6 @@ export type AuditFinding = { area: AuditArea; severity: AuditSeverity; text: str
 
 export type AuditInput = {
   today: string; // YYYY-MM-DD, project time zone
-  emailUpdates: { status: string; created_at: string | null; summary: string }[];
   subBills: {
     company_name: string;
     app_number: number;
@@ -98,10 +96,6 @@ export function runAudit(input: AuditInput): AuditFinding[] {
   const { today } = input;
   const out: AuditFinding[] = [];
   const add = (area: AuditArea, severity: AuditSeverity, text: string) => out.push({ area, severity, text });
-
-  // Email updates waiting on a decision for more than two days.
-  const stale = input.emailUpdates.filter((u) => u.status === "proposed" && (daysSince(u.created_at, today) ?? 0) > 2);
-  if (stale.length) add("Email updates", "action", `${stale.length} email update${stale.length === 1 ? "" : "s"} waiting more than 2 days`);
 
   // Sub bills sitting in review.
   for (const b of input.subBills) {
