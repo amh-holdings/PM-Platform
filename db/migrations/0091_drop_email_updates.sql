@@ -1,0 +1,33 @@
+-- Drop the email updates table, 2026-11-11.
+--
+-- Zarina: "remove email updates in the app. It is not needed." Then, asked
+-- whether to keep the table: "I want the email updates in the app completely
+-- gone permanently."
+--
+-- The code went in #185. This is the table it used to write to.
+--
+-- WHAT GOES WITH IT. Everything the table owns: both indexes
+-- (email_updates_once_idx, email_updates_project_status_idx), both RLS
+-- policies (ahc_read_email_updates, ahc_write_email_updates) and the
+-- email_updates_kind_chk constraint. No cascade is needed - the table points
+-- out at projects and profiles, nothing points in at it.
+--
+-- WHAT IS LOST. 15 rows as of today, Oct 28 to Nov 10: 7 proposed that were
+-- never decided, 3 rejected, and 5 applied. The 5 applied ones recorded
+-- changes the sweep made to real records - two schedule dates and three AFP 3
+-- status notes - plus the data to undo them. The changes themselves live in
+-- the schedule and the AFP records and are untouched; what goes is the note
+-- of where they came from and the ability to reverse them. With the feature
+-- removed, nothing could have run that undo anyway.
+--
+-- NOT REVERSIBLE by re-running a migration. 0080 and 0081 stay in this folder
+-- as the record that the table existed, not as something to re-apply.
+--
+-- Apply via Supabase SQL Editor (project sksfyygufnnbzrmneccx).
+-- Safe to re-run: after the first time it does nothing.
+
+drop table if exists public.email_updates;
+
+-- AFTER RUNNING, to confirm it is gone (expect zero rows):
+--   select table_name from information_schema.tables
+--    where table_schema = 'public' and table_name = 'email_updates';
