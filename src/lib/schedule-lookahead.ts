@@ -44,6 +44,8 @@ export type LookaheadTask = {
    * look-ahead weeks before this existed.
    */
   section?: string | null;
+  /** Set on look-ahead rows: the first week with work in it. See whenLabel. */
+  firstWeek?: number;
   assignedTo: string | null;
   /**
    * Discipline, derived the same way the schedule grid's scope filter derives
@@ -335,7 +337,20 @@ export function lookaheadToText(
 // ---------------------------------------------------------------------------
 
 /** What a row is flagged for. The chips at the top count and filter these. */
-export type LookaheadFlag = "critical" | "blocked" | "late" | "finishing";
+export type LookaheadFlag = "now" | "critical" | "blocked" | "late" | "finishing";
+
+/**
+ * Which week a row first has work in: 0 is this week (including work already
+ * under way), 1 next week, and so on.
+ *
+ * Phil, 2026-11-16: procurement three weeks out "could be seen that it's
+ * needed now if you're making a quick look." The bar's position said when, but
+ * only to someone reading the grid; every row's text looked the same. This is
+ * what the When label and the dimming hang off.
+ */
+export function whenLabel(firstWeek: number): string {
+  return firstWeek <= 0 ? "This week" : firstWeek === 1 ? "Next week" : `Week ${firstWeek + 1}`;
+}
 
 /**
  * Every task in the window, once, in WBS order.
@@ -349,16 +364,17 @@ export function lookaheadRows(weeks: readonly LookaheadWeek[]): LookaheadTask[] 
   const windowStart = weeks[0].weekStart;
   const firstEnd = weeks[0].weekEnd;
   const seen = new Map<string, LookaheadTask>();
-  for (const w of weeks) {
+  weeks.forEach((w, i) => {
     for (const t of w.tasks) {
       if (seen.has(t.wbs)) continue;
       seen.set(t.wbs, {
         ...t,
+        firstWeek: i,
         continuing: t.start < windowStart,
         finishing: t.end >= windowStart && t.end <= firstEnd,
       });
     }
-  }
+  });
   return Array.from(seen.values()).sort((a, b) => compareWbs(a.wbs, b.wbs));
 }
 
@@ -447,10 +463,10 @@ export function lookaheadToPrintHtml(
         timeZone: "UTC",
       });
       const startsWeek = i > 0 && days[i - 1].week !== days[i].week;
-      return `<th class="day${startsWeek ? " wb" : ""}">${dow}<br>${Number(d.slice(8))}</th>`;
+      return `<th class="day${startsWeek ? " wb" : ""}${days[i].week === 0 ? " tw" : ""}">${dow}<br>${Number(d.slice(8))}</th>`;
     })
     .join("");
-  const cols = 5 + days.length;
+  const cols = 6 + days.length;
 
   const body = rows.length
     ? groupBySection(rows)
@@ -467,10 +483,11 @@ export function lookaheadToPrintHtml(
                 .map(({ d }, i) => {
                   const on = d >= t.start && d <= t.end;
                   const startsWeek = i > 0 && days[i - 1].week !== days[i].week;
-                  return `<td class="day${startsWeek ? " wb" : ""}">${on ? `<div class="bar${t.critical ? " crit" : ""}"></div>` : ""}</td>`;
+                  return `<td class="day${startsWeek ? " wb" : ""}${days[i].week === 0 ? " tw" : ""}">${on ? `<div class="bar${t.critical ? " crit" : ""}"></div>` : ""}</td>`;
                 })
                 .join("");
-              return `<tr><td class="mono">${esc(t.wbs)}</td><td class="act">${t.parent ? `<div class="par">${esc(t.parent)}</div>` : ""}<div>${esc(t.name)}${tags.length ? ` <span class="tag">${esc(tags.join(", "))}</span>` : ""}</div></td><td>${esc(t.assignedTo ?? "-")}</td><td>${shortDate(t.start)}</td><td>${shortDate(t.end)}</td>${cells}</tr>`;
+              const fw = t.firstWeek ?? 0;
+              return `<tr class="${fw > 0 ? "later" : ""}"><td class="when w${Math.min(fw, 2)}">${whenLabel(fw)}</td><td class="mono">${esc(t.wbs)}</td><td class="act">${t.parent ? `<div class="par">${esc(t.parent)}</div>` : ""}<div>${esc(t.name)}${tags.length ? ` <span class="tag">${esc(tags.join(", "))}</span>` : ""}</div></td><td>${esc(t.assignedTo ?? "-")}</td><td>${shortDate(t.start)}</td><td>${shortDate(t.end)}</td>${cells}</tr>`;
             })
             .join("");
           return head + lines;
@@ -489,8 +506,9 @@ th,td{border:1px solid #999;padding:2px 4px;vertical-align:top;text-align:left}
 th{background:#1f4e79;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 th.wk{text-align:center}
 th.day,td.day{width:18px;padding:1px;text-align:center;font-weight:normal}
-th.w-wbs{width:56px}th.w-who{width:120px}th.w-d{width:44px}
+th.w-when{width:58px}th.w-wbs{width:56px}th.w-who{width:120px}th.w-d{width:44px}
 .wb{border-left:2px solid #333}
+td.tw{background:#eef4fb;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 tr.sec td{background:#bdd7ee;font-weight:bold;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .n{font-weight:normal;color:#333}
 .mono{font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
@@ -500,11 +518,13 @@ tr.sec td{background:#bdd7ee;font-weight:bold;-webkit-print-color-adjust:exact;p
 .bar{height:8px;background:#4a7ab0;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .bar.crit{background:#c0392b}
 .empty{font-style:italic}
+.when{white-space:nowrap;font-weight:bold;font-size:9px}.w0{color:#fff;background:#1f4e79;-webkit-print-color-adjust:exact;print-color-adjust:exact}.w1{background:#fde9c8;-webkit-print-color-adjust:exact;print-color-adjust:exact}.w2{color:#555}
+tr.later td.act{color:#555}
 tr{page-break-inside:avoid}
 </style></head><body>
 <h1>${esc(opts.projectName)} - ${weeks.length}-week look-ahead</h1>
 <div class="sub">${opts.subtitle ? `${esc(opts.subtitle)} - ` : ""}Generated ${esc(opts.generated)}</div>
-<table><thead><tr><th rowspan="2" class="w-wbs">WBS</th><th rowspan="2">Activity</th><th rowspan="2" class="w-who">Responsible</th><th rowspan="2" class="w-d">Start</th><th rowspan="2" class="w-d">Finish</th>${head1}</tr><tr>${head2}</tr></thead>
+<table><thead><tr><th rowspan="2" class="w-when">When</th><th rowspan="2" class="w-wbs">WBS</th><th rowspan="2">Activity</th><th rowspan="2" class="w-who">Responsible</th><th rowspan="2" class="w-d">Start</th><th rowspan="2" class="w-d">Finish</th>${head1}</tr><tr>${head2}</tr></thead>
 <tbody>${body}</tbody></table>
 </body></html>`;
 }

@@ -64,6 +64,7 @@ import {
   UNASSIGNED,
   filterWeeks,
   isClosedForLookahead,
+  whenLabel,
   groupBySection,
   lookaheadAssignees,
   lookaheadRows,
@@ -3452,6 +3453,18 @@ section("Dragging a branch above the first row of the sheet");
   check("in progress stays on", !isClosedForLookahead("In Progress", 40));
   check("awaiting stays on - blocked work is exactly what the meeting needs", !isClosedForLookahead("Awaiting"));
   check("a blank status stays on", !isClosedForLookahead(null));
+
+  // Phil: procurement three weeks out read as "needed now" at a glance.
+  same("each row knows its first week", rows3.map((r) => [r.wbs, r.firstWeek]), [["4.10", 0], ["5.2", 0]]);
+  const later = lookaheadRows([
+    wk("2026-11-16", "2026-11-22", []),
+    wk("2026-11-23", "2026-11-29", []),
+    wk("2026-11-30", "2026-12-06", [task("3.4.1", "2026-12-01", "2026-12-01")]),
+  ]);
+  eq("work that only starts in week three says so", later[0].firstWeek, 2);
+  eq("week three is labelled week 3", whenLabel(2), "Week 3");
+  eq("week two is next week", whenLabel(1), "Next week");
+  eq("week one is this week", whenLabel(0), "This week");
 }
 
 // ============================================================================

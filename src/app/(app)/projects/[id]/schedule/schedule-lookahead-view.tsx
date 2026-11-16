@@ -16,6 +16,7 @@ import {
   lookaheadToText,
   matchesAssignee,
   shortDate,
+  whenLabel,
   staleDays,
   type LookaheadFlag,
   type LookaheadTask,
@@ -41,11 +42,30 @@ type Props = {
 };
 
 const FLAGS: { key: LookaheadFlag; label: string; tone: string }[] = [
+  { key: "now", label: "Active this week", tone: "text-foreground" },
   { key: "critical", label: "Critical", tone: "text-destructive" },
   { key: "blocked", label: "Blocked", tone: "text-destructive" },
   { key: "late", label: "Late", tone: "text-amber-700" },
   { key: "finishing", label: "Finishing this week", tone: "text-blue-700" },
 ];
+
+// The When label. This week is solid so it is the first thing the eye lands
+// on; next week is a warning colour; anything later is an outline, present but
+// quiet. Phil: procurement three weeks out "could be seen that it's needed now".
+function whenTone(firstWeek: number): string {
+  if (firstWeek <= 0) return "bg-blue-600 text-white";
+  if (firstWeek === 1) return "bg-amber-100 text-amber-900";
+  return "border text-muted-foreground";
+}
+
+// Week bands behind the grid: this week blue, to match its label, then later
+// weeks alternating plain and faint grey, so a bar reads against a block
+// rather than a run of identical columns. Next week stays plain on purpose: a
+// grey band beside the blue one read as the same tint.
+function weekBand(week: number): string {
+  if (week === 0) return "bg-blue-50";
+  return week % 2 === 0 ? "bg-muted/40" : "";
+}
 
 function dowLetter(iso: string): string {
   return new Date(parseIso(iso)).toLocaleDateString("en-US", {
@@ -84,7 +104,9 @@ export function ScheduleLookaheadView({
 
   const isBlocked = (t: LookaheadTask) => (constraintState.get(t.wbs)?.open ?? 0) > 0;
   const hasFlag = (t: LookaheadTask, f: LookaheadFlag) =>
-    f === "critical"
+    f === "now"
+      ? (t.firstWeek ?? 0) === 0
+      : f === "critical"
       ? t.critical
       : f === "blocked"
         ? isBlocked(t)
@@ -153,7 +175,7 @@ export function ScheduleLookaheadView({
     apply(next);
   };
 
-  const cols = 5 + days.length;
+  const cols = 6 + days.length;
   // Fewer weeks, wider days, so three weeks fills the table instead of
   // leaving the activity column to soak up the width.
   const dayWidth = weeks <= 2 ? "min-w-[3rem]" : weeks === 3 ? "min-w-[2.5rem]" : weeks === 4 ? "min-w-[2rem]" : "min-w-[1.5rem]";
@@ -260,6 +282,7 @@ export function ScheduleLookaheadView({
         <table className="w-full border-collapse text-xs">
           <thead>
             <tr className="bg-muted/40">
+              <th rowSpan={2} className="border-b px-2 py-1.5 text-left font-semibold">When</th>
               <th rowSpan={2} className="border-b px-2 py-1.5 text-left font-semibold">WBS</th>
               <th rowSpan={2} className="min-w-[240px] border-b px-2 py-1.5 text-left font-semibold">Activity</th>
               <th rowSpan={2} className="border-b px-2 py-1.5 text-left font-semibold">Responsible</th>
@@ -269,23 +292,32 @@ export function ScheduleLookaheadView({
                 <th
                   key={w.weekStart}
                   colSpan={Math.max(1, w.workingDays.length)}
-                  className="border-b border-l px-1 py-1 text-center font-semibold"
+                  className={cn(
+                    "border-b border-l-2 border-l-foreground/25 px-1 py-1 text-center font-semibold",
+                    weekBand(i),
+                  )}
                 >
                   <div>{w.label}</div>
-                  <div className="text-[10px] font-normal text-muted-foreground">
-                    {i === 0 ? "This week" : `Week ${i + 1}`}
+                  <div
+                    className={cn(
+                      "text-[10px]",
+                      i === 0 ? "font-semibold text-blue-700" : "font-normal text-muted-foreground",
+                    )}
+                  >
+                    {whenLabel(i)}
                   </div>
                 </th>
               ))}
             </tr>
             <tr className="bg-muted/40">
-              {days.map(({ d, startsWeek }) => (
+              {days.map(({ d, week, startsWeek }) => (
                 <th
                   key={d}
                   className={cn(
                     dayWidth,
                     "border-b px-0 py-0.5 text-center text-[10px] font-normal leading-tight text-muted-foreground",
-                    startsWeek && "border-l",
+                    weekBand(week),
+                    startsWeek && "border-l-2 border-l-foreground/25",
                     d === today && "bg-primary/15 font-semibold text-foreground",
                   )}
                 >
@@ -331,8 +363,19 @@ export function ScheduleLookaheadView({
                   {!isCollapsed &&
                     sec.tasks.map((t) => {
                       const blocked = constraintState.get(t.wbs);
+                      const fw = t.firstWeek ?? 0;
                       return (
                         <tr key={t.wbs} className="border-t align-top hover:bg-muted/20">
+                          <td className="whitespace-nowrap px-2 py-1.5">
+                            <span
+                              className={cn(
+                                "inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold",
+                                whenTone(fw),
+                              )}
+                            >
+                              {whenLabel(fw)}
+                            </span>
+                          </td>
                           <td className="whitespace-nowrap px-2 py-1.5 font-mono text-[10px] text-muted-foreground">
                             {t.wbs}
                           </td>
@@ -344,7 +387,14 @@ export function ScheduleLookaheadView({
                                 {t.parent}
                               </div>
                             )}
-                            <div className="font-medium leading-tight">{t.name}</div>
+                            <div
+                              className={cn(
+                                "leading-tight",
+                                fw === 0 ? "font-medium" : "text-muted-foreground",
+                              )}
+                            >
+                              {t.name}
+                            </div>
                             <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px]">
                               {t.critical && (
                                 <span className="rounded bg-destructive/10 px-1 font-medium text-destructive">
@@ -390,7 +440,7 @@ export function ScheduleLookaheadView({
                             )}
                           </td>
                           <td className="whitespace-nowrap px-2 py-1.5">{shortDate(t.end)}</td>
-                          {days.map(({ d, startsWeek }, i) => {
+                          {days.map(({ d, week, startsWeek }, i) => {
                             const on = d >= t.start && d <= t.end;
                             const prevOn = i > 0 && days[i - 1].d >= t.start && days[i - 1].d <= t.end;
                             const nextOn =
@@ -400,7 +450,8 @@ export function ScheduleLookaheadView({
                                 key={d}
                                 className={cn(
                                   "px-0 py-1.5 align-middle",
-                                  startsWeek && "border-l",
+                                  weekBand(week),
+                                  startsWeek && "border-l-2 border-l-foreground/25",
                                   d === today && "bg-primary/10",
                                 )}
                               >
