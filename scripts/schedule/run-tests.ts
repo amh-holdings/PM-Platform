@@ -63,6 +63,7 @@ import {
 import {
   UNASSIGNED,
   filterWeeks,
+  isClosedForLookahead,
   groupBySection,
   lookaheadAssignees,
   lookaheadRows,
@@ -3441,6 +3442,16 @@ section("Dragging a branch above the first row of the sheet");
     { projectName: "Test", generated: "Nov 16" },
   );
   check("the print escapes task names", html.includes("&lt;Pour&gt; &amp; cure") && !html.includes("<Pour>"));
+
+  // Sussex 2026-11-16: Dimension rejected the equipment LNTP and it still sat
+  // in "this week" because only Complete was skipped.
+  check("rejected is off the look-ahead", isClosedForLookahead("Rejected"));
+  check("approved is off the look-ahead", isClosedForLookahead("Approved"));
+  check("so is complete, however it was typed", isClosedForLookahead("COMPLETED"));
+  check("100% is finished whatever the status says", isClosedForLookahead("In Progress", 100));
+  check("in progress stays on", !isClosedForLookahead("In Progress", 40));
+  check("awaiting stays on - blocked work is exactly what the meeting needs", !isClosedForLookahead("Awaiting"));
+  check("a blank status stays on", !isClosedForLookahead(null));
 }
 
 // ============================================================================

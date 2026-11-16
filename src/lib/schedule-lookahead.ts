@@ -110,6 +110,28 @@ export function parentLabel(
   return at ? `${at.wbs} ${at.name}` : null;
 }
 
+/**
+ * Whether a task has no work left to plan, so it stays off the look-ahead.
+ *
+ * Phil, 2026-11-16, on Sussex: "the LNTP for equipment was rejected by
+ * Dimension. Shouldn't that not show up on the three week look ahead?" The
+ * look-ahead only skipped Complete, so the rejected review and the "LNTP
+ * Executed" it was meant to produce were both shown as this week's work.
+ *
+ * Closed means Complete, Approved (finished, as statusTintBeatsCriticality
+ * already treats it) or Rejected (dead - whatever replaces it is a new row),
+ * matched loosely because imports put "Completed" and "COMPLETE" in the
+ * column. Anything at 100% is finished whatever its status says.
+ */
+export function isClosedForLookahead(
+  status: string | null | undefined,
+  pctComplete?: number | null,
+): boolean {
+  if (Number(pctComplete ?? 0) >= 100) return true;
+  const st = (status ?? "").trim().toLowerCase();
+  return st === "complete" || st === "completed" || st === "approved" || st === "rejected";
+}
+
 /** The top-level section a code sits in: "4 Procurement" for 4.4.4.1. */
 export function sectionLabel(
   wbs: string,
@@ -193,7 +215,7 @@ export function buildLookahead(
     for (const t of tasks) {
       const c = cpm.byWbs.get(t.wbs_code);
       if (!c) continue; // summary rows are not work
-      if (t.status === "Complete") continue;
+      if (isClosedForLookahead(t.status, t.pct_complete)) continue;
 
       // Overlap test against the projected window, not the planned one.
       const s = parseIso(c.projectedStart);
