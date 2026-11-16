@@ -60,7 +60,20 @@ import {
   rowTone,
   statusRowTone,
 } from "../../src/lib/schedule-status-tone";
-import { parentLabel } from "@/lib/schedule-lookahead";
+import {
+  UNASSIGNED,
+  filterWeeks,
+  groupBySection,
+  lookaheadAssignees,
+  lookaheadRows,
+  lookaheadToPrintHtml,
+  matchesAssignee,
+  parentLabel,
+  sectionLabel,
+  staleDays,
+  type LookaheadTask,
+  type LookaheadWeek,
+} from "@/lib/schedule-lookahead";
 import {
   daysSinceReport,
   describeRecordCounts,
@@ -3366,6 +3379,68 @@ section("Dragging a branch above the first row of the sheet");
     "two identical names get different parents",
     parentLabel("4.4.4.1", NAMES) !== parentLabel("4.4.6.1", NAMES),
   );
+
+  // Phil: the look-ahead "should be grouped by the overall WBS code so they
+  // stay in the correct order."
+  eq("the section is the top-level code, named", sectionLabel("4.4.4.1", NAMES), "4 Procurement");
+  eq("an unnamed section keeps its bare code", sectionLabel("5.1.3.1", NAMES), "5");
+
+  const week = [
+    { wbs: "5.1.3.1", section: "5 Civil" },
+    { wbs: "4.4.10.1", section: "4 Procurement" },
+    { wbs: "4.4.9.1", section: "4 Procurement" },
+    { wbs: "6.2", section: null },
+  ];
+  const secs = groupBySection(week);
+  same("sections come out in WBS order", secs.map((s) => s.label), ["4 Procurement", "5 Civil", "6"]);
+  same(
+    "tasks inside a section are numeric, so 4.4.10 follows 4.4.9",
+    secs[0].tasks.map((t) => t.wbs),
+    ["4.4.9.1", "4.4.10.1"],
+  );
+  same(
+    "a frozen weekly-report task with no section still groups by its code",
+    groupBySection([{ wbs: "7.1" }, { wbs: "7.2" }]).map((s) => [s.label, s.tasks.length]),
+    [["7", 2]],
+  );
+
+  // One row per task: the week cards repeated a three-week task three times.
+  const task = (wbs: string, start: string, end: string, extra: Partial<LookaheadTask> = {}): LookaheadTask => ({
+    wbs, name: wbs, parent: null, section: null, assignedTo: null, scope: "Civil", start, end,
+    pctComplete: null, critical: false, totalFloat: 10, slipDays: 0,
+    continuing: false, finishing: false, ...extra,
+  });
+  const long = task("5.2", "2026-11-10", "2026-11-27", { assignedTo: "Pyramid" });
+  const short = task("4.10", "2026-11-17", "2026-11-18", { critical: true });
+  const wk = (weekStart: string, weekEnd: string, tasks: LookaheadTask[]): LookaheadWeek => ({
+    weekStart, weekEnd, label: weekStart, workingDays: [], tasks,
+  });
+  const window3 = [
+    wk("2026-11-16", "2026-11-22", [long, short]),
+    wk("2026-11-23", "2026-11-29", [long]),
+    wk("2026-11-30", "2026-12-06", []),
+  ];
+  const rows3 = lookaheadRows(window3);
+  same("a task spanning weeks is one row", rows3.map((r) => r.wbs), ["4.10", "5.2"]);
+  check("started before the window reads as under way", rows3[1].continuing && !rows3[0].continuing);
+  check("finishing means finishing in week one", rows3[0].finishing && !rows3[1].finishing);
+
+  same("assignees list unassigned last", lookaheadAssignees(rows3), ["Pyramid", UNASSIGNED]);
+  check("the unassigned filter finds blanks only", matchesAssignee(short, UNASSIGNED) && !matchesAssignee(long, UNASSIGNED));
+  same(
+    "a sub's look-ahead keeps only their work, every week",
+    filterWeeks(window3, (t) => matchesAssignee(t, "Pyramid")).map((w) => w.tasks.length),
+    [1, 1, 0],
+  );
+
+  eq("a data date three weeks old is 21 days stale", staleDays("2026-10-26", "2026-11-16"), 21);
+  eq("no data date is not stale", staleDays(null, "2026-11-16"), 0);
+
+  const html = lookaheadToPrintHtml(
+    [wk("2026-11-16", "2026-11-22", [task("1.1", "2026-11-16", "2026-11-16", { name: "<Pour> & cure" })])],
+    { projectName: "Test", generated: "Nov 16" },
+  );
+  check("the print escapes task names", html.includes("&lt;Pour&gt; &amp; cure") && !html.includes("<Pour>"));
 }
 
 // ============================================================================
