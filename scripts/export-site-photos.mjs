@@ -652,7 +652,37 @@ async function main() {
   if (!touched) console.log("\nNo project has photos yet.\n");
 }
 
-main().catch((e) => {
-  console.error(`\n${e.message}\n`);
-  process.exit(1);
-});
+// ---------------------------------------------------------------- registry check-in
+
+// The scheduled --all run stamps "Last Run" on its row in the Notion
+// Automation Registry once it finishes cleanly. A failed run writes nothing,
+// so a stale date is the failure signal. This script has no Notion access of
+// its own; it borrows NOTION_TOKEN from the solar engine on the same Mac.
+const REGISTRY_ROW = "400a22ad-5e09-817c-8dec-e485901286cb";
+const SOLAR_ENV = join(ROOT, "..", "Phil Horwitch", "solar-research", ".env");
+
+async function checkIn() {
+  try {
+    const line = readFileSync(SOLAR_ENV, "utf8").split("\n").find((l) => l.trim().startsWith("NOTION_TOKEN="));
+    const token = line?.trim().slice("NOTION_TOKEN=".length).replace(/^["']|["']$/g, "");
+    if (!token) throw new Error(`no NOTION_TOKEN in ${SOLAR_ENV}`);
+    const now = new Date().toLocaleString("sv-SE", { timeZone: "America/New_York", hour12: false }).replace(" ", "T");
+    const res = await fetch(`https://api.notion.com/v1/pages/${REGISTRY_ROW}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}`, "Notion-Version": "2022-06-28", "Content-Type": "application/json" },
+      body: JSON.stringify({ properties: { "Last Run": { date: { start: now, time_zone: "America/New_York" } } } }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    console.log(`Registry check-in: Last Run ${now} ET`);
+  } catch (e) {
+    console.error(`Registry check-in failed: ${e.message}`);
+  }
+}
+
+main()
+  .then(() => (OPT.all && !OPT.dryRun ? checkIn() : undefined))
+  .catch((e) => {
+    console.error(`\n${e.message}\n`);
+    process.exit(1);
+  });
