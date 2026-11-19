@@ -139,6 +139,8 @@ import {
 import {
   STATUS_TONE,
   progressBarTone,
+  statusDotLabel,
+  statusDotTone,
   rowTone,
 } from "@/lib/schedule-status-tone";
 
@@ -236,7 +238,7 @@ const ALL_COLUMNS: Column[] = [
   { key: "type", label: "Type", width: 104, title: TASK_TYPE_HELP },
   { key: "assigned", label: "Assigned", width: 110 },
   { key: "phase", label: "Phase", width: 104 },
-  { key: "progress", label: "Progress", width: 96, derived: true, title: "Percent complete. Green is from an approved field report, amber was set by hand, grey is rolled up from the leaves below. Hover for the report date." },
+  { key: "progress", label: "Progress", width: 108, derived: true, title: "The dot is the status: filled green finished, filled blue in progress, hollow not started. The bar is percent complete - green from an approved field report, amber set by hand, grey rolled up from the leaves below. Hover either for detail." },
   { key: "dur", label: "Dur", width: 44, align: "right" },
   { key: "start", label: "Start", width: 120 },
   { key: "finish", label: "Finish", width: 120 },
@@ -2771,6 +2773,22 @@ type GridRowProps = {
   onOpenRecords: (tab?: RecordsTab) => void;
 };
 
+/**
+ * Three states in 8 pixels: filled green finished, filled blue moving, hollow
+ * ring not started. Shrink-0 so a long task name never squeezes it away.
+ */
+function StatusDot({ status }: { status: string | null }) {
+  const tone = statusDotTone(status);
+  if (!tone) return null;
+  return (
+    <span
+      aria-label={statusDotLabel(status)}
+      title={statusDotLabel(status)}
+      className={cn("inline-block h-2 w-2 shrink-0 rounded-full border", tone)}
+    />
+  );
+}
+
 function GridRow({
   t, r, columns, cpm: c, progress: p, isSummary, rolledStatus,
   collapsed, onToggleCollapse,
@@ -3118,7 +3136,7 @@ function GridRow({
                   projectId={projectId}
                   savedType={t.task_type ?? null}
                   draftType={valueOf(t, "task_type") || null}
-                  status={valueOf(t, "status")}
+                  status={isSummary ? rolledStatus : valueOf(t, "status")}
                   isSummary={isSummary}
                 />
               );
@@ -3355,6 +3373,10 @@ function ProgressCell({
   isSummary: boolean;
 }) {
   const router = useRouter();
+  // One marker on every row, whatever the rest of the cell turns out to be:
+  // a typed box, a rolled-up bar, or a prompt to set a Type. Without it the
+  // only legible state is Complete, and a row at 0% looks like a row at 40%.
+  const dot = <StatusDot status={status} />;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [, startProgressTransition] = useTransition();
@@ -3392,6 +3414,7 @@ function ProgressCell({
     };
     return (
       <span className="flex items-center gap-1" title={err ?? "Typed in - there is no field report for this kind of task"}>
+        {dot}
         <input
           key={current ?? "blank"}
           type="number"
@@ -3424,7 +3447,8 @@ function ProgressCell({
 
   if (pendingType) {
     return (
-      <span className="text-[11px] text-amber-700" title="Save the row and the percent box appears here">
+      <span className="flex items-center gap-1 text-[11px] text-amber-700" title="Save the row and the percent box appears here">
+        {dot}
         Save row first
       </span>
     );
@@ -3436,16 +3460,22 @@ function ProgressCell({
   if (!isSummary && completionNeedsAType(status, savedType)) {
     return (
       <span
-        className="text-[11px] text-amber-700"
+        className="flex items-center gap-1 text-[11px] text-amber-700"
         title="Status says Complete, but an unclassified task has no rule for where its percent comes from. Set Type to Deliverable, Procurement or Inspection and the 100% follows."
       >
+        {dot}
         Set a Type
       </span>
     );
   }
 
   if (progress.kind === "none") {
-    return <span className="text-[11px] text-muted-foreground">No report</span>;
+    return (
+      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+        {dot}
+        No report
+      </span>
+    );
   }
   const pct = Math.max(0, Math.min(100, progress.pct));
   const rolled = progress.kind === "rolled";
@@ -3457,6 +3487,7 @@ function ProgressCell({
           ? `From an approved field report${progress.at ? ` on ${fmtDate(progress.at.slice(0, 10))}` : ""}`
           : "Set manually rather than from a field report"
     }>
+      {dot}
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
         <div
           className={cn(

@@ -103,3 +103,50 @@ export function progressBarTone(input: {
   if (input.rolled) return "bg-muted-foreground/50";
   return input.source === "dpr" ? "bg-emerald-500" : "bg-amber-500";
 }
+
+/**
+ * The dot that says where a task stands, in one glance, on every row.
+ *
+ * Zarina: "We only know task completed because of color green. But we cant
+ * see at a glance if the task is in work in progress and if it has not
+ * started yet."
+ *
+ * She is right, and the row tint cannot fix it. statusRowTone deliberately
+ * leaves In Progress and Not Started plain, because those two are most of a
+ * live schedule and tinting them would leave nothing to contrast against.
+ * That reasoning still holds. What was missing is a marker narrow enough to
+ * sit on every row without colouring the sheet.
+ *
+ * So: a filled dot for work that is finished or moving, a hollow ring for
+ * work that has not started. Hollow reads as empty at a glance, which is the
+ * distinction she could not make, and it does it without adding a fourth
+ * background colour to a grid that already carries critical-path red.
+ *
+ * Returns null only for a row with no status at all, where a dot would be
+ * inventing a state the data does not have.
+ */
+export function statusDotTone(status: string | null | undefined): string | null {
+  switch ((status ?? "").trim()) {
+    case "Complete":
+    case "Approved":
+      return "bg-emerald-500 border-emerald-500";
+    case "In Progress":
+      return "bg-blue-500 border-blue-500";
+    case "Awaiting":
+      return "bg-amber-500 border-amber-500";
+    case "Rejected":
+      return "bg-destructive border-destructive";
+    case "Not Started":
+    case "Planned":
+      // Hollow on purpose: nothing has happened yet, so nothing is filled in.
+      return "bg-transparent border-muted-foreground/50";
+    default:
+      return null;
+  }
+}
+
+/** What the dot means, for its tooltip. A dot with no label is a decoration. */
+export function statusDotLabel(status: string | null | undefined): string {
+  const s = (status ?? "").trim();
+  return s === "" ? "No status set" : s;
+}
