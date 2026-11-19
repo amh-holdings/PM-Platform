@@ -7,6 +7,7 @@ import {
   aggregateConfidence,
   estimateProcurementProgress,
   estimateTaskProgress,
+  projectForPeriod,
   isProcurementLine,
   durationWeightedPct,
   type LinkedPo,
@@ -29,7 +30,7 @@ import {
   typedAmount,
   unsupportedForecastReason,
 } from "@/lib/billing-progress";
-import { progressAsOf } from "@/lib/billing-period";
+import { periodEndOf, progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import { scopeByLine } from "@/lib/sov-amendments";
 import { COMMODITIES } from "@/lib/commodities";
@@ -313,7 +314,7 @@ export async function computeBillingSuggestions(
       .eq("project_id", projectId),
     auth.supabase
       .from("schedule_tasks")
-      .select("wbs_code, task_name, status, start_date, end_date, pct_complete, parent_wbs_code, duration_days")
+      .select("wbs_code, task_name, task_type, status, start_date, end_date, pct_complete, parent_wbs_code, duration_days")
       .eq("project_id", projectId),
     auth.supabase
       .from("v_billing_line_totals")
@@ -344,19 +345,27 @@ export async function computeBillingSuggestions(
 
   // Estimate progress for every task up-front so we have a confidence + reason
   // alongside the pct.
+  // Pencil-copy projects bill deliverables due by the period end. See
+  // projectForPeriod.
+  const projectAhead =
+    (projectRow as { bill_scheduled_milestones?: boolean | null } | null)?.bill_scheduled_milestones === true;
+  const periodEnd = periodEndOf(period, cutoffDay);
   const estimateByCode = new Map<string, ProgressEstimate>();
   for (const t of tasks ?? []) {
+    const est = estimateTaskProgress(
+      {
+        status: t.status,
+        start_date: t.start_date,
+        end_date: t.end_date,
+        pct_complete: t.pct_complete,
+      },
+      todayIso,
+    );
     estimateByCode.set(
       t.wbs_code,
-      estimateTaskProgress(
-        {
-          status: t.status,
-          start_date: t.start_date,
-          end_date: t.end_date,
-          pct_complete: t.pct_complete,
-        },
-        todayIso,
-      ),
+      projectAhead
+        ? projectForPeriod(est, t as { task_type?: string | null; end_date?: string | null }, periodEnd, todayIso)
+        : est,
     );
   }
   const summaryCodes = summaryWbsCodes(tasks ?? []);
@@ -1106,7 +1115,7 @@ export async function getBillThisPeriodRows(
     .eq("project_id", projectId);
   const { data: taskInfo } = await auth.supabase
     .from("schedule_tasks")
-    .select("wbs_code, status, start_date, end_date, pct_complete, parent_wbs_code")
+    .select("wbs_code, task_type, status, start_date, end_date, pct_complete, parent_wbs_code")
     .eq("project_id", projectId);
   const { data: posInfo } = await auth.supabase
     .from("procurement_orders")
@@ -1240,19 +1249,27 @@ export async function getBillThisPeriodRows(
         .linked_procurement_order_ids,
     });
   }
+  // Same projection as computeBillingSuggestions, so the panel and the
+  // suggestion agree on a deliverable due by the period end.
+  const billCutoff =
+    (billProjectRow as { billing_cutoff_day?: number | null } | null)?.billing_cutoff_day ?? null;
+  const billAhead =
+    (billProjectRow as { bill_scheduled_milestones?: boolean | null } | null)?.bill_scheduled_milestones === true;
+  const billPeriodEnd = periodEndOf(period, billCutoff);
   const taskEstimates = new Map<string, number>();
   for (const t of taskInfo ?? []) {
+    const est = estimateTaskProgress(
+      {
+        status: t.status,
+        start_date: t.start_date,
+        end_date: t.end_date,
+        pct_complete: t.pct_complete,
+      },
+      todayIso,
+    );
     taskEstimates.set(
       t.wbs_code,
-      estimateTaskProgress(
-        {
-          status: t.status,
-          start_date: t.start_date,
-          end_date: t.end_date,
-          pct_complete: t.pct_complete,
-        },
-        todayIso,
-      ).pct,
+      (billAhead ? projectForPeriod(est, t, billPeriodEnd, todayIso) : est).pct,
     );
   }
   // Summary rows are excluded from the billing signal here for the same reason

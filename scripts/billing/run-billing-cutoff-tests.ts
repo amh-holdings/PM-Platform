@@ -3,7 +3,7 @@
 // Run: npx tsx scripts/billing/run-billing-cutoff-tests.ts
 
 import { periodEndOf, progressAsOf } from "@/lib/billing-period";
-import { milestoneTriggered } from "@/lib/progress";
+import { estimateTaskProgress, milestoneTriggered, projectForPeriod } from "@/lib/progress";
 
 let passed = 0, failed = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -75,6 +75,24 @@ const ms = (over: Record<string, unknown> = {}) =>
   const paidEarly = milestoneTriggered(
     ms({ paid_at: "2026-09-02" }), po({ actual_delivery_date: null }), "2026-09-20");
   check("paid before the cutoff is paid", paidEarly.fired === true, paidEarly.why);
+}
+
+// Pencil copy on the 20th: a deliverable due by month end is billed ahead.
+{
+  const nov = periodEndOf("2026-11-01", null);
+  const today = "2026-11-19";
+  const pageTurn = { task_type: "deliverable", status: "Not Started", start_date: "2026-11-23", end_date: "2026-11-23", pct_complete: null };
+  const est = estimateTaskProgress(pageTurn, today);
+  const p = projectForPeriod(est, pageTurn, nov, today);
+  check("deliverable due 11/23 bills on the November pencil copy", p.pct === 1 && p.source === "projected" && p.confidence === "low", p.reason);
+  const slipped = { ...pageTurn, end_date: "2026-12-02" };
+  check("one that slips past month end drops off", projectForPeriod(estimateTaskProgress(slipped, today), slipped, nov, today).pct === 0);
+  const pour = { ...pageTurn, task_type: "construction" };
+  check("construction is never billed ahead", projectForPeriod(estimateTaskProgress(pour, today), pour, nov, today).source !== "projected");
+  const done = { ...pageTurn, status: "Complete" };
+  check("a finished deliverable stays measured", projectForPeriod(estimateTaskProgress(done, today), done, nov, today).source === "status");
+  check("nothing is projected once the period has closed",
+    projectForPeriod(est, pageTurn, nov, "2026-12-03").source !== "projected");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

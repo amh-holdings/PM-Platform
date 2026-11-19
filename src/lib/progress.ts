@@ -12,6 +12,7 @@ export type ProgressSource =
   | "status"            // status text mapped to %
   | "past_due"          // end_date passed, status isn't Complete -> probably 75%
   | "date_interpolation"// linear pct from start_date/end_date and today
+  | "projected"         // deliverable scheduled to finish inside the period, billed ahead on the pencil copy
   | "no_signal";        // can't say anything
 
 export type Confidence = "high" | "medium" | "low" | "none";
@@ -198,6 +199,38 @@ export function isSummaryOf(code: string, candidate: string): boolean {
  * The task inside `summaryCode` whose completion earns the line, or null when
  * the branch holds nothing that could be one.
  */
+/**
+ * A deliverable scheduled to finish inside the billing period, billed ahead.
+ *
+ * Phil: "we submit pencil copy every 20th of every month so even if it is not
+ * completed yet, they are projected to be included on the month bill, we
+ * will reject if delay comes." On a project that bills this way, a design
+ * package or permit due by the period's end goes on the bill as 100%,
+ * marked projected and low confidence so it reads as what it is. If it slips
+ * past the period end, its scheduled finish moves and it drops off.
+ *
+ * Deliverables only. Construction is measured by field reports and is never
+ * billed ahead. Once the period has closed, nothing is projected: the
+ * application then bills what happened.
+ */
+export function projectForPeriod(
+  est: ProgressEstimate,
+  task: { task_type?: string | null; status?: string | null; end_date?: string | null },
+  periodEnd: string,
+  todayIso: string,
+): ProgressEstimate {
+  if (est.pct >= 1) return est;
+  if ((task.task_type ?? "") !== "deliverable") return est;
+  if (!task.end_date || task.end_date > periodEnd) return est;
+  if (todayIso > periodEnd) return est;
+  return {
+    pct: 1,
+    confidence: "low",
+    source: "projected",
+    reason: `Projected: scheduled to finish ${task.end_date}, inside this period. On the pencil copy; take it off if it slips.`,
+  };
+}
+
 export function resolveMilestoneTask<T extends MilestoneCandidate>(
   tasks: T[],
   summaryCode: string,
