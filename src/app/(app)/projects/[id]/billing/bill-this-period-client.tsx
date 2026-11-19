@@ -33,7 +33,15 @@ type Props = {
   periodMonth: string;
   /** Set when the period is empty because its lines went onto an AFP. */
   billedTo?: BilledElsewhere | null;
+  /** The dates the period covers, and the day its evidence is measured to. */
+  window?: { start: string; end: string; asOf: string } | null;
 };
+
+/** "Nov 19" for a YYYY-MM-DD string. */
+function shortDate(iso: string): string {
+  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+}
 
 const CONF_STYLES: Record<string, string> = {
   high: "text-emerald-700",
@@ -49,6 +57,7 @@ export function BillThisPeriodClient({
   variant,
   periodMonth,
   billedTo,
+  window: periodWindow,
 }: Props) {
   // Default selection: ALL forecast rows checked, suggestion rows unchecked
   // (so the panel acts like the old Next AFP panel by default - lower friction).
@@ -178,6 +187,14 @@ export function BillThisPeriodClient({
             Tick what to bill, then create the AFP. Anything the evidence does
             not support arrives unchecked with the reason.
           </p>
+          {periodWindow && (
+            <p className="text-xs font-medium text-emerald-800">
+              Covers {shortDate(periodWindow.start)} to {shortDate(periodWindow.end)}.{" "}
+              {periodWindow.asOf < periodWindow.end
+                ? `Field evidence counted through today, ${shortDate(periodWindow.asOf)}; the period is still open.`
+                : `Field evidence counted through ${shortDate(periodWindow.asOf)}, the day the period closed.`}
+            </p>
+          )}
         </div>
       </div>
 
@@ -545,7 +562,7 @@ export function BillThisPeriodClient({
                                       </td>
                                       <td className="text-muted-foreground">
                                         {e.source === "pct_complete"
-                                          ? "field report"
+                                          ? `field report${e.reportedOn ? ` ${shortDate(e.reportedOn)}` : ""}`
                                           : e.source}
                                       </td>
                                         </>
@@ -564,6 +581,20 @@ export function BillThisPeriodClient({
                     </td>
                     <td className={cn("py-1.5 pr-2 font-medium", sourceColor)}>
                       {sourceLabel}
+                      {(() => {
+                        // How far this line's field evidence runs: its latest
+                        // approved report among the tasks behind it.
+                        const last = (r.evidence ?? [])
+                          .map((e) => e.reportedOn)
+                          .filter((d): d is string => !!d)
+                          .sort()
+                          .pop();
+                        return last ? (
+                          <div className="text-[10px] font-normal text-muted-foreground">
+                            field reports through {shortDate(last)}
+                          </div>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="py-1.5 pr-2 text-right">
                       <MoneyInput

@@ -30,7 +30,7 @@ import {
   typedAmount,
   unsupportedForecastReason,
 } from "@/lib/billing-progress";
-import { periodEndOf, progressAsOf } from "@/lib/billing-period";
+import { periodEndOf, periodStartOf, progressAsOf } from "@/lib/billing-period";
 import { resolveBillingPeriod } from "@/lib/billing-period-resolve";
 import { scopeByLine } from "@/lib/sov-amendments";
 import { COMMODITIES } from "@/lib/commodities";
@@ -214,6 +214,8 @@ export type BillingEvidenceItem = {
   weight: number;
   /** 'dpr' when an approved field report set it, else how it was inferred. */
   source: string;
+  /** The task's latest approved field report, YYYY-MM-DD, when one set it. */
+  reportedOn?: string | null;
 };
 
 /**
@@ -314,7 +316,7 @@ export async function computeBillingSuggestions(
       .eq("project_id", projectId),
     auth.supabase
       .from("schedule_tasks")
-      .select("wbs_code, task_name, task_type, status, start_date, end_date, pct_complete, parent_wbs_code, duration_days")
+      .select("wbs_code, task_name, task_type, status, start_date, end_date, pct_complete, parent_wbs_code, duration_days, last_dpr_at")
       .eq("project_id", projectId),
     auth.supabase
       .from("v_billing_line_totals")
@@ -370,8 +372,11 @@ export async function computeBillingSuggestions(
   }
   const summaryCodes = summaryWbsCodes(tasks ?? []);
   const taskNameByCode = new Map<string, string>();
+  const reportedOnByCode = new Map<string, string | null>();
   for (const t of tasks ?? []) {
     taskNameByCode.set(t.wbs_code, (t as { task_name?: string }).task_name ?? "");
+    const last = (t as { last_dpr_at?: string | null }).last_dpr_at ?? null;
+    reportedOnByCode.set(t.wbs_code, last ? last.slice(0, 10) : null);
   }
   const durationByCode = new Map<string, number | null>();
   for (const t of tasks ?? []) {
@@ -670,6 +675,7 @@ export async function computeBillingSuggestions(
             : 0,
         source: e.source,
         scope: ruleWeight?.component ?? null,
+        reportedOn: e.source === "pct_complete" ? reportedOnByCode.get(code) ?? null : null,
       };
     });
     const confidence: Confidence = aggregateConfidence(
@@ -1016,6 +1022,8 @@ export async function getBillThisPeriodRows(
       notBillable: NotBillableLine[];
       periodMonth: string;
       billedTo: BilledElsewhere | null;
+      /** The dates the period covers, and the day its evidence is measured to. */
+      window?: { start: string; end: string; asOf: string };
     }
   | { ok: false; error: string }
 > {
@@ -1657,6 +1665,11 @@ export async function getBillThisPeriodRows(
     notBillable,
     periodMonth: period,
     billedTo,
+    window: {
+      start: periodStartOf(period, billCutoff),
+      end: billPeriodEnd,
+      asOf: todayIso,
+    },
   };
 }
 

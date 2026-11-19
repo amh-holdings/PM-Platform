@@ -63,6 +63,23 @@ export function periodEndOf(
   return `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+/**
+ * The first day a period covers: the day after the previous period closed.
+ * A calendar month starts on the 1st; with a 20th cutoff, November runs
+ * Oct 21 to Nov 20.
+ */
+export function periodStartOf(
+  periodMonth: string,
+  cutoffDay?: number | null,
+): string {
+  const [y, m] = periodMonth.split("-").map(Number);
+  const prev = `${m === 1 ? y - 1 : y}-${String(m === 1 ? 12 : m - 1).padStart(2, "0")}-01`;
+  const prevEnd = periodEndOf(prev, cutoffDay);
+  const d = new Date(`${prevEnd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 /** "Aug 2026" for a YYYY-MM-01 string. */
 export function periodLabel(periodMonth: string): string {
   const [y, m] = periodMonth.split("-").map(Number);

@@ -31,6 +31,7 @@ export async function BillThisPeriodPanel({
       variant={variant}
       periodMonth={result.periodMonth}
       billedTo={result.billedTo}
+      window={result.window ?? null}
     />
   );
 }
