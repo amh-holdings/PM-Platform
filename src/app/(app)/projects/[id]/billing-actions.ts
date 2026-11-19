@@ -276,6 +276,39 @@ export type NotBillableLine = {
   confidence?: Confidence;
 };
 
+/** Latest approved field report date per WBS code, from pins and task updates. */
+async function latestReportDates(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  projectId: string,
+  tasks: readonly { wbs_code: string }[],
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  const { data: ids } = await db.from("schedule_tasks").select("id, wbs_code").eq("project_id", projectId);
+  const codeById = new Map<string, string>((ids ?? []).map((t: { id: string; wbs_code: string }) => [t.id, t.wbs_code]));
+  const keep = (taskId: string | null, date: string | null) => {
+    const code = taskId ? codeById.get(taskId) : undefined;
+    if (!code || !date) return;
+    const prev = out.get(code);
+    if (!prev || date > prev) out.set(code, date);
+  };
+  const { data: pins } = await db
+    .from("inspections")
+    .select("schedule_task_id, status, dprs!inner(report_date, status, project_id)")
+    .eq("dprs.project_id", projectId)
+    .eq("dprs.status", "approved")
+    .eq("status", "approved");
+  for (const p of pins ?? []) keep(p.schedule_task_id, p.dprs?.report_date ?? null);
+  const { data: updates } = await db
+    .from("dpr_task_updates")
+    .select("schedule_task_id, dprs!inner(report_date, status, project_id)")
+    .eq("dprs.project_id", projectId)
+    .eq("dprs.status", "approved");
+  for (const u of updates ?? []) keep(u.schedule_task_id, u.dprs?.report_date ?? null);
+  for (const t of tasks) if (!out.has(t.wbs_code)) out.set(t.wbs_code, null);
+  return out;
+}
+
 export async function computeBillingSuggestions(
   projectId: string,
   periodMonth?: string,
@@ -316,7 +349,7 @@ export async function computeBillingSuggestions(
       .eq("project_id", projectId),
     auth.supabase
       .from("schedule_tasks")
-      .select("wbs_code, task_name, task_type, status, start_date, end_date, pct_complete, parent_wbs_code, duration_days, last_dpr_at")
+      .select("wbs_code, task_name, task_type, status, start_date, end_date, pct_complete, parent_wbs_code, duration_days")
       .eq("project_id", projectId),
     auth.supabase
       .from("v_billing_line_totals")
@@ -372,12 +405,15 @@ export async function computeBillingSuggestions(
   }
   const summaryCodes = summaryWbsCodes(tasks ?? []);
   const taskNameByCode = new Map<string, string>();
-  const reportedOnByCode = new Map<string, string | null>();
   for (const t of tasks ?? []) {
     taskNameByCode.set(t.wbs_code, (t as { task_name?: string }).task_name ?? "");
-    const last = (t as { last_dpr_at?: string | null }).last_dpr_at ?? null;
-    reportedOnByCode.set(t.wbs_code, last ? last.slice(0, 10) : null);
   }
+  // The date of the latest approved field report behind each task: the
+  // report's own date, not when somebody approved it. last_dpr_at is the
+  // approval stamp, so a report for the 12th approved on the 13th read as the
+  // 13th, and two reports approved the same morning read as one day. A report
+  // reaches a task two ways, a pin or a task update, so both are read.
+  const reportedOnByCode = await latestReportDates(auth.supabase, projectId, tasks ?? []);
   const durationByCode = new Map<string, number | null>();
   for (const t of tasks ?? []) {
     durationByCode.set(
