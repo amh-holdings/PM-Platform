@@ -525,6 +525,14 @@ export async function buildProjection(
   //
   // Only the unbilled remainder is forecast, so a line half billed in real
   // entries contributes its other half here and nothing is counted twice.
+  // A line is "done" once less than a dollar is left on it. The old guard was
+  // half a cent, which is right for floating point and wrong for money: Sussex
+  // splits $61,019.37 of 90% design across two SOV lines as $30,509.69 and
+  // $30,509.68, so billing one of them against the invoice's $30,509.68 left a
+  // penny open, and a penny is enough to keep forecasting a row forever. No
+  // real billing item is under a dollar.
+  const SETTLED = 1;
+
   const schedTasks = (tasksRes.data ?? []) as {
     wbs_code: string; task_name: string; start_date: string | null; end_date: string | null;
   }[];
@@ -599,7 +607,7 @@ export async function buildProjection(
     const remaining = eff
       ? eff.scope - eff.billed
       : Number(line.scheduled_value ?? 0) - (billedByLine.get(line.id) ?? 0);
-    if (remaining <= 0.005) continue;
+    if (remaining <= SETTLED) continue;
 
     const at = milestoneMonthOf(line.linked_task_wbs_codes);
     if (!at) {
@@ -742,7 +750,7 @@ export async function buildProjection(
   }[]) {
     if (line.active === false) continue;
     const remaining = Number(line.scheduled_value ?? 0) - (subBilledByLine.get(line.id) ?? 0);
-    if (remaining <= 0.005) continue;
+    if (remaining <= SETTLED) continue;
 
     const subName = line.subcontractors?.company_name ?? "A subcontractor";
     const mapping = {
