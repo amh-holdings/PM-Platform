@@ -333,6 +333,55 @@ export async function setPayApplicationStatus(
   return { ok: true };
 }
 
+// Take an AFP back one step: paid to approved, approved to submitted,
+// submitted to draft. Marking the wrong button, or marking it a day early,
+// should not be permanent. The step's date is cleared, and the billing
+// entries follow the AFP's status the same way they do going forward. A draft
+// is the floor; deleting it is its own button.
+const PREVIOUS: Record<string, { status: string; clear: "paid_at" | "approved_at" | "submitted_at"; entries: string }> = {
+  paid: { status: "approved", clear: "paid_at", entries: "approved" },
+  approved: { status: "submitted", clear: "approved_at", entries: "submitted" },
+  // Back to draft, the entries go back to sitting on the application.
+  submitted: { status: "draft", clear: "submitted_at", entries: "on_pay_app" },
+};
+
+export async function undoPayApplicationStatus(
+  payAppId: string,
+  projectId: string,
+): Promise<{ ok: true; status: string } | { ok: false; error: string }> {
+  const auth = await assertAhcUser();
+  if (!auth.ok) return auth;
+
+  const { data: app } = await auth.supabase
+    .from("pay_applications")
+    .select("status")
+    .eq("id", payAppId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (!app) return { ok: false, error: "Pay application not found" };
+  const back = PREVIOUS[app.status ?? ""];
+  if (!back) return { ok: false, error: "A draft has nothing to undo." };
+
+  const patch: Record<string, unknown> = { status: back.status, [back.clear]: null };
+  if (back.clear === "submitted_at") patch.submitted_by = null;
+  const { error } = await auth.supabase
+    .from("pay_applications")
+    .update(patch as { status: string })
+    .eq("id", payAppId)
+    .eq("status", app.status ?? "");
+  if (error) return { ok: false, error: error.message };
+
+  await auth.supabase
+    .from("billing_entries")
+    .update({ status: back.entries })
+    .eq("pay_application_id", payAppId);
+
+  revalidatePath(`/projects/${projectId}/pay-apps`);
+  revalidatePath(`/projects/${projectId}/pay-apps/${payAppId}`);
+  revalidatePath(`/projects/${projectId}/billing`);
+  return { ok: true, status: back.status };
+}
+
 // Correct the day an AFP was submitted, approved or paid. The status stays;
 // only the date moves, and it still has to fall in order: submitted, then
 // approved, then paid, none of them in the future.
