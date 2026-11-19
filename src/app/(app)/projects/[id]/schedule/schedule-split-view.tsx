@@ -143,6 +143,7 @@ import {
   statusDotTone,
   rowTone,
 } from "@/lib/schedule-status-tone";
+import { scheduleProgressHint } from "@/lib/schedule-progress-hint";
 
 // Fields the grid edits in place. Anything not here is either derived (float,
 // projected dates), owned by another workflow (progress comes from approved
@@ -2447,6 +2448,7 @@ export function ScheduleSplitView({
                     key={t.id}
                     t={t}
                     r={r}
+                    dataDate={dataDate}
                     editTasks={editTasks}
                     columns={resolvedColumns}
                     cpm={previewCpm.byWbs.get(t.wbs_code)}
@@ -2771,6 +2773,8 @@ type GridRowProps = {
   counts: TaskRecordCounts | undefined;
   /** Opens the records popup on this row, optionally on a named tab. */
   onOpenRecords: (tab?: RecordsTab) => void;
+  /** The date the schedule is being read as of, for the in-progress hint. */
+  dataDate: string;
 };
 
 /**
@@ -2796,7 +2800,7 @@ function GridRow({
   statusOptions, calendar, constraint, dragging, dropAt,
   onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, fileOver, fileBusy,
   projectId, phaseOptions, allTasks, phase1Available, typeAvailable, rowIndex, predAsRows,
-  onDialogSaved, editTasks, counts, onOpenRecords,
+  onDialogSaved, editTasks, counts, onOpenRecords, dataDate,
 }: GridRowProps) {
   const indent = Math.max(0, (t.level_code ?? 1) - 1) * 10;
   const rowDirty = columns.some((col) => {
@@ -3138,6 +3142,9 @@ function GridRow({
                   draftType={valueOf(t, "task_type") || null}
                   status={isSummary ? rolledStatus : valueOf(t, "status")}
                   isSummary={isSummary}
+                  start={valueOf(t, "start_date")}
+                  end={valueOf(t, "end_date")}
+                  today={dataDate}
                 />
               );
 
@@ -3363,6 +3370,9 @@ function ProgressCell({
   draftType,
   status,
   isSummary,
+  start,
+  end,
+  today,
 }: {
   progress: Progress;
   taskId: string;
@@ -3371,6 +3381,9 @@ function ProgressCell({
   draftType: string | null;
   status: string | null;
   isSummary: boolean;
+  start: string | null;
+  end: string | null;
+  today: string;
 }) {
   const router = useRouter();
   // One marker on every row, whatever the rest of the cell turns out to be:
@@ -3402,6 +3415,14 @@ function ProgressCell({
 
   if (editable) {
     const current = progress.kind === "none" ? null : Math.round(progress.pct);
+    // A running row with nothing typed in it. The box is the only place a
+    // part-way percent can come from on these types, and until now it sat
+    // blank and silent, so the column only ever carried the 100 that the
+    // Complete status writes. Show what the dates suggest as a placeholder
+    // and ring the box, so an in-progress row asks for the number instead of
+    // looking broken. The hint is never saved - see schedule-progress-hint.
+    const hint = current == null ? scheduleProgressHint({ status, start, end, today }) : null;
+    const wants = current == null && (status ?? "").trim() === "In Progress";
     // Committed on blur or Enter rather than on every keystroke, or typing
     // "100" would write 1, then 10, then 100 - three round trips and two wrong
     // numbers briefly on the forecast.
@@ -3413,7 +3434,16 @@ function ProgressCell({
       void save(next);
     };
     return (
-      <span className="flex items-center gap-1" title={err ?? "Typed in - there is no field report for this kind of task"}>
+      <span
+        className="flex items-center gap-1"
+        title={
+          err ??
+          hint?.why ??
+          (wants
+            ? "In progress with no percent entered. Type one here - these rows have no field report to take it from."
+            : "Typed in - there is no field report for this kind of task")
+        }
+      >
         {dot}
         <input
           key={current ?? "blank"}
@@ -3422,7 +3452,7 @@ function ProgressCell({
           max={100}
           defaultValue={current ?? ""}
           disabled={busy}
-          placeholder="-"
+          placeholder={hint ? String(hint.pct) : wants ? "?" : "-"}
           onBlur={(e) => commit(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
@@ -3432,6 +3462,9 @@ function ProgressCell({
           }}
           className={cn(
             "h-6 w-11 rounded border bg-background px-1 text-right text-[11px]",
+            // Amber ring, not an amber value: the box is empty and wants a
+            // number, which is a different thing from a number being low.
+            wants && !err && "border-amber-500 placeholder:text-amber-600",
             err && "border-destructive",
           )}
         />
