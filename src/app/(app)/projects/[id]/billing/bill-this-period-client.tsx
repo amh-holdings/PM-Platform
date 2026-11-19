@@ -285,12 +285,18 @@ export function BillThisPeriodClient({
                 // milestone reading and not a forecast. Calling it either sends
                 // the reader to the wrong place to change it.
                 const typedFromPo = r.kind === "forecast" && r.typedFromPo === true;
+                // A deliverable billed ahead on the pencil copy is not field
+                // evidence of anything yet. Say what it is, so nobody mistakes
+                // a scheduled page turn for one that happened.
+                const projected = (r.evidence ?? []).some((e) => e.source === "projected");
                 const sourceLabel = typedFromPo
                   ? "Typed from POs"
                   : usingRecommendation
                     ? fromMilestones
                       ? "Payment milestones"
-                      : "Field evidence"
+                      : projected
+                        ? "Projected, pencil copy"
+                        : "Field evidence"
                     : `Forecast (${r.status})${r.kind === "forecast" && r.afpNumber ? ` ${r.afpNumber}` : ""}`;
                 const sourceColor = typedFromPo
                   ? "text-emerald-700"

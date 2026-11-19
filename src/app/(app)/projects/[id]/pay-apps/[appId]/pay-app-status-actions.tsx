@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import {
   deletePayApplication,
   setPayApplicationStatus,
+  undoPayApplicationStatus,
 } from "../../pay-app-actions";
 
 type Props = {
@@ -26,6 +27,12 @@ const NEXT: Record<string, { status: "submitted" | "approved" | "paid"; label: s
   approved: { status: "paid", label: "Mark paid", dateLabel: "Paid on" },
 };
 
+const UNDO_LABEL: Record<string, string> = {
+  submitted: "Undo submitted, back to draft",
+  approved: "Undo approved, back to submitted",
+  paid: "Undo paid, back to approved",
+};
+
 export function PayAppStatusActions({ payAppId, projectId, status }: Props) {
   const router = useRouter();
   const [onDate, setOnDate] = useState(localToday);
@@ -37,6 +44,20 @@ export function PayAppStatusActions({ payAppId, projectId, status }: Props) {
     setBusy(true);
     setError(null);
     const res = await setPayApplicationStatus(payAppId, projectId, next, onDate);
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    startTransition(() => router.refresh());
+  }
+
+  async function onUndo() {
+    const back = UNDO_LABEL[status];
+    if (!back || !confirm(`${back}? The date it was ${status} is cleared and its billing entries go back too.`)) return;
+    setBusy(true);
+    setError(null);
+    const res = await undoPayApplicationStatus(payAppId, projectId);
     setBusy(false);
     if (!res.ok) {
       setError(res.error);
@@ -92,6 +113,18 @@ export function PayAppStatusActions({ payAppId, projectId, status }: Props) {
               {NEXT[status].label}
             </Button>
           </>
+        )}
+        {UNDO_LABEL[status] && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => void onUndo()}
+            title={UNDO_LABEL[status]}
+          >
+            Undo {status}
+          </Button>
         )}
         {status === "draft" && (
           <Button
