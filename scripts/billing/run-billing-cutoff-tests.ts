@@ -2,7 +2,7 @@
 //
 // Run: npx tsx scripts/billing/run-billing-cutoff-tests.ts
 
-import { periodEndOf, progressAsOf } from "@/lib/billing-period";
+import { periodEndOf, periodStartOf, progressAsOf } from "@/lib/billing-period";
 import { estimateTaskProgress, milestoneTriggered, projectForPeriod } from "@/lib/progress";
 
 let passed = 0, failed = 0;
@@ -94,6 +94,11 @@ const ms = (over: Record<string, unknown> = {}) =>
   check("nothing is projected once the period has closed",
     projectForPeriod(est, pageTurn, nov, "2026-12-03").source !== "projected");
 }
+
+// The window a period covers.
+check("a 20th cutoff runs Oct 21 to Nov 20", periodStartOf("2026-11-01", 20) === "2026-10-21" && periodEndOf("2026-11-01", 20) === "2026-11-20");
+check("a calendar month starts on the 1st", periodStartOf("2026-11-01", null) === "2026-11-01");
+check("January's window reaches back into December", periodStartOf("2027-01-01", 20) === "2026-12-21");
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
