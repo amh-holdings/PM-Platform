@@ -63,6 +63,8 @@ const RENUMBER: Record<string, string> = {
 // missing here is reported, never guessed.
 const VENDOR_CODE: Record<string, { code: string; confirmed: boolean; note: string }> = {
   "HUB INTERNATIONAL": { code: "800-1150", confirmed: true, note: "the JV's bond (Phil, 2026-10-28)" },
+  "EXACTUS ENERGY INC.": { code: "100-1010", confirmed: true, note: "civil design subcontractor (2026-11-20)" },
+  "PURE POWER ENGINEERING INC": { code: "100-1020", confirmed: true, note: "electrical design subcontractor (2026-11-20)" },
 };
 
 const n = (v: any) => Number(v ?? 0);
@@ -128,7 +130,32 @@ type JobLine = { code: string; name: string; costClass: string; original: number
 const jobRows = await rowsOf(file(/job[ _-]*cost/i));
 const jobAsOf = mdy(text(jobRows).match(/to (\d{1,2}\/\d{1,2}\/\d{4})/)?.[1] ?? "");
 if (!jobAsOf) throw new Error("job cost report: no 'to <date>' line");
-const JH = headersOf(jobRows, ["Estimated Costs", "Change Orders", "Estimate", "Costs to Date", "Available Budget"]);
+// Two layouts. Through 10/15/2026 IBT sent the Job Cost Report: Estimated
+// Costs, Change Orders, Estimate, Costs to Date, Available Budget. From
+// 11/15/2026 it sends the Production Cost Report: Estimated / To Date /
+// Current, each for Quantity, Production and Costs, with "Costs" printed
+// under the column and the qualifier above it. It carries no change orders,
+// so the revised estimate is the estimated cost and available is what is
+// left of it.
+const PRODUCTION = /Production Cost Report/.test(text(jobRows));
+function productionHeaders(rows: Row[]) {
+  const costs = rows.flatMap((r) => r.items).filter((i) => i.s === "Costs");
+  const xs = Array.from(new Set(costs.map((c) => Math.round(c.x1)))).sort((a, b) => a - b);
+  if (xs.length < 3) throw new Error("production cost report: Estimated / To Date / Current Costs headers not found");
+  const [est, toDate, current] = xs;
+  // Quantity and Production columns sit to the left; give them names so a
+  // stray number there can never land in a cost column.
+  const left = rows.flatMap((r) => r.items).filter((i) => i.s === "Quantity" || i.s === "Production");
+  return [
+    ...left.map((i, k) => ({ name: `other-${k}`, x1: i.x1 })),
+    { name: "Estimated Costs", x1: est },
+    { name: "Costs to Date", x1: toDate },
+    { name: "Current Costs", x1: current },
+  ];
+}
+const JH = PRODUCTION
+  ? productionHeaders(jobRows)
+  : headersOf(jobRows, ["Estimated Costs", "Change Orders", "Estimate", "Costs to Date", "Available Budget"]);
 const job = new Map<string, JobLine>();
 for (const r of jobRows) {
   const [first, ...rest] = r.items;
@@ -136,11 +163,17 @@ for (const r of jobRows) {
   const words = rest.filter((i) => !isNum(i.s));
   const vals: Record<string, number> = {};
   for (const i of rest.filter((i) => isNum(i.s))) vals[column(i.x1, JH)] = num(i.s);
-  const line: JobLine = {
-    code: first.s, name: words[0]?.s ?? "", costClass: words[1]?.s ?? "",
-    original: vals["Estimated Costs"] ?? 0, changeOrders: vals["Change Orders"] ?? 0, revised: vals["Estimate"] ?? 0,
-    toDate: vals["Costs to Date"] ?? 0, available: vals["Available Budget"] ?? 0,
-  };
+  const line: JobLine = PRODUCTION
+    ? {
+        code: first.s, name: words[0]?.s ?? "", costClass: "",
+        original: vals["Estimated Costs"] ?? 0, changeOrders: 0, revised: vals["Estimated Costs"] ?? 0,
+        toDate: vals["Costs to Date"] ?? 0, available: r2((vals["Estimated Costs"] ?? 0) - (vals["Costs to Date"] ?? 0)),
+      }
+    : {
+        code: first.s, name: words[0]?.s ?? "", costClass: words[1]?.s ?? "",
+        original: vals["Estimated Costs"] ?? 0, changeOrders: vals["Change Orders"] ?? 0, revised: vals["Estimate"] ?? 0,
+        toDate: vals["Costs to Date"] ?? 0, available: vals["Available Budget"] ?? 0,
+      };
   // A code split across a page break prints its row again on the next page.
   const prev = job.get(line.code);
   if (prev && (prev.revised !== line.revised || prev.toDate !== line.toDate)) throw new Error(`${line.code} printed twice with different amounts`);
@@ -152,7 +185,7 @@ const jobTotal = (() => {
   if (!tot) throw new Error("job cost report: no grand total row");
   const v: Record<string, number> = {};
   for (const x of tot.items) v[column(x.x1, JH)] = num(x.s);
-  return { revised: v["Estimate"] ?? 0, toDate: v["Costs to Date"] ?? 0 };
+  return { revised: (PRODUCTION ? v["Estimated Costs"] : v["Estimate"]) ?? 0, toDate: v["Costs to Date"] ?? 0 };
 })();
 const jobSum = (k: "revised" | "toDate") => r2([...job.values()].reduce((s, l) => s + l[k], 0));
 if (jobSum("revised") !== jobTotal.revised) throw new Error(`job cost lines sum to ${jobSum("revised")}, report total ${jobTotal.revised}`);
@@ -160,7 +193,8 @@ if (jobSum("toDate") !== jobTotal.toDate) throw new Error(`job cost to date sums
 
 // ---- Contract Receivables ------------------------------------------------
 type Invoice = { invoice: string; description: string; date: string; paidOn: string | null; invoiced: number; received: number; due: number; retainage: number };
-const arRows = await rowsOf(file(/receivable/i));
+// Named "Contract Receivables" through 10/15/2026, "AR Aging Report" from 11/15.
+const arRows = await rowsOf(file(/receivable|ar[ _-]*aging/i));
 const arAsOf = mdy(text(arRows).match(/AS OF:\s*(\S+)/)?.[1] ?? "");
 const contractAmount = num(text(arRows).match(/Contract Amount:\s*([\d,.]+)/)?.[1] ?? "0");
 const AH = headersOf(arRows, ["Date", "Paid", "Invoiced", "Received", "Due", "Retainage", "Receivable"]);
