@@ -63,6 +63,8 @@ const RENUMBER: Record<string, string> = {
 // missing here is reported, never guessed.
 const VENDOR_CODE: Record<string, { code: string; confirmed: boolean; note: string }> = {
   "HUB INTERNATIONAL": { code: "800-1150", confirmed: true, note: "the JV's bond (Phil, 2026-10-28)" },
+  "EXACTUS ENERGY INC.": { code: "100-1010", confirmed: true, note: "civil design subcontractor (2026-11-20)" },
+  "PURE POWER ENGINEERING INC": { code: "100-1020", confirmed: true, note: "electrical design subcontractor (2026-11-20)" },
 };
 
 const n = (v: any) => Number(v ?? 0);
