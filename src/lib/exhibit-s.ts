@@ -430,3 +430,30 @@ export function sectionLabel(section: string): string {
 export function isRecurringKey(catalogKey: string): boolean {
   return Boolean(CATALOG_BY_KEY.get(catalogKey)?.recurring);
 }
+
+// ------------------------------- submittals -------------------------------
+//
+// Every document goes to the owner under the AHC submittal cover, and each
+// submission takes a new submittal number, unique on the project. A
+// resubmittal is a new number, not the old one again.
+
+export const TRANSMITTED_FOR = ["approval", "record", "signature", "other"] as const;
+export type TransmittedFor = (typeof TRANSMITTED_FOR)[number];
+export const TRANSMITTED_LABEL: Record<TransmittedFor, string> = {
+  approval: "For Approval",
+  record: "For Record",
+  signature: "For Signature",
+  other: "Other",
+};
+
+/** "SUS - 0001", the way Sweet Springs numbers them ("SSS - 0001"). */
+export function submittalNumber(prefix: string | null | undefined, no: number): string {
+  const n = String(no).padStart(4, "0");
+  const p = (prefix ?? "").trim();
+  return p ? `${p} - ${n}` : n;
+}
+
+/** Reports go to the owner for record; everything else for approval. */
+export function defaultTransmittedFor(items: Pick<CatalogItem, "recurring">[]): TransmittedFor {
+  return items.length > 0 && items.every((i) => i.recurring) ? "record" : "approval";
+}
