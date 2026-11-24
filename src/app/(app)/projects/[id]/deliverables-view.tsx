@@ -12,6 +12,8 @@ import {
   EXHIBIT_S,
   EXHIBIT_S_TABS,
   PART_LABEL,
+  PART_MILESTONE,
+  sectionLabel,
   STATE_LABEL,
   tabOf,
   deliverableFileName,
@@ -104,6 +106,8 @@ export function DeliverablesView({
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>("open");
   const [tab, setTab] = useState<ExhibitSTab>("design");
+  // The section shown inside the tab, "part|section", or "all".
+  const [sub, setSub] = useState<string | null>(null);
   const [spvDraft, setSpvDraft] = useState(spvName ?? projectName);
   const spv = spvName ?? projectName;
 
@@ -139,7 +143,7 @@ export function DeliverablesView({
     };
     for (const r of rows) {
       const c = CATALOG_BY_KEY.get(r.catalog_key);
-      if (!c) continue;
+      if (!c || c.recurring) continue;
       out[c.part].total++;
       if (isDone(r.state)) out[c.part].done++;
     }
@@ -150,7 +154,7 @@ export function DeliverablesView({
     const out = new Map<ExhibitSTab, { done: number; total: number }>();
     for (const r of rows) {
       const c = CATALOG_BY_KEY.get(r.catalog_key);
-      if (!c) continue;
+      if (!c || c.recurring) continue;
       const t = out.get(tabOf(c)) ?? { done: 0, total: 0 };
       t.total++;
       if (isDone(r.state)) t.done++;
@@ -158,6 +162,37 @@ export function DeliverablesView({
     }
     return out;
   }, [rows]);
+
+  // Sections in the open tab, in Part order, each a sub-tab.
+  const tabSections = useMemo(() => {
+    const seen = new Map<string, { id: string; part: DeliverablePart; section: string; recurring: boolean }>();
+    for (const c of EXHIBIT_S) {
+      if (tabOf(c) !== tab) continue;
+      const id = `${c.part}|${c.section}`;
+      const s0 = seen.get(id);
+      if (s0) s0.recurring = s0.recurring && Boolean(c.recurring);
+      else seen.set(id, { id, part: c.part, section: c.section, recurring: Boolean(c.recurring) });
+    }
+    const list = Array.from(seen.values());
+    const names = list.map((x) => sectionLabel(x.section));
+    return list.map((x, i) => {
+      const name = names[i];
+      const dup = names.filter((n) => n === name).length > 1;
+      let done = 0;
+      let total = 0;
+      let logged = 0;
+      for (const c of EXHIBIT_S) {
+        if (c.part !== x.part || c.section !== x.section) continue;
+        for (const r of byKey.get(c.key) ?? []) {
+          if (c.recurring) { logged++; continue; }
+          total++;
+          if (isDone(r.state)) done++;
+        }
+      }
+      return { ...x, label: dup ? `${name} (${PART_MILESTONE[x.part]})` : name, done, total, logged };
+    });
+  }, [tab, byKey]);
+  const activeSub = sub && (sub === "all" || tabSections.some((x) => x.id === sub)) ? sub : (tabSections[0]?.id ?? "all");
 
   if (rows.length === 0) {
     return (
@@ -231,7 +266,7 @@ export function DeliverablesView({
               type="button"
               role="tab"
               aria-selected={tab === t.key}
-              onClick={() => setTab(t.key)}
+              onClick={() => { setTab(t.key); setSub(null); }}
               className={cn(
                 "-mb-px rounded-t-md border px-3 py-1.5 text-sm",
                 tab === t.key ? "border-b-background bg-background font-semibold" : "border-transparent text-muted-foreground hover:text-foreground",
@@ -239,11 +274,42 @@ export function DeliverablesView({
             >
               {t.label}
               <span className="ml-1.5 text-xs tabular-nums text-muted-foreground">
-                {p.done}/{p.total}
+                {p.total === 0 && EXHIBIT_S.some((c) => c.recurring && tabOf(c) === t.key) ? "ongoing" : `${p.done}/${p.total}`}
               </span>
             </button>
           );
         })}
+      </div>
+
+      <div className="flex flex-wrap gap-1.5 text-xs">
+        {tabSections.map((x) => (
+          <button
+            key={x.id}
+            type="button"
+            onClick={() => setSub(x.id)}
+            className={cn(
+              "rounded-full border px-3 py-1",
+              activeSub === x.id ? "border-foreground bg-foreground text-background" : "bg-card hover:bg-muted",
+            )}
+          >
+            {x.label}
+            <span className={cn("ml-1.5 tabular-nums", activeSub === x.id ? "opacity-70" : "text-muted-foreground")}>
+              {x.recurring ? `ongoing · ${x.logged} filed` : x.total === 0 ? "none added" : `${x.done}/${x.total}`}
+            </span>
+          </button>
+        ))}
+        {tabSections.length > 1 && (
+          <button
+            type="button"
+            onClick={() => setSub("all")}
+            className={cn(
+              "rounded-full border px-3 py-1",
+              activeSub === "all" ? "border-foreground bg-foreground text-background" : "bg-card hover:bg-muted",
+            )}
+          >
+            Whole tab
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-2 text-xs">
@@ -271,7 +337,11 @@ export function DeliverablesView({
 
       {parts.map((part) => {
         const sections = Array.from(
-          new Set(EXHIBIT_S.filter((c) => c.part === part && tabOf(c) === tab).map((c) => c.section)),
+          new Set(
+            EXHIBIT_S.filter(
+              (c) => c.part === part && tabOf(c) === tab && (activeSub === "all" || activeSub === `${part}|${c.section}`),
+            ).map((c) => c.section),
+          ),
         );
         if (sections.length === 0) return null;
         return (
@@ -296,13 +366,40 @@ export function DeliverablesView({
                     ).map((r) => ({ c, r })),
                   );
                   const deviceItems = catalog.filter((c) => c.perDevice);
-                  if (visible.length === 0 && (filter !== "open" || deviceItems.length === 0)) return null;
+                  const recurring = deviceItems.length > 0 && deviceItems.every((c) => c.recurring);
+                  if (visible.length === 0 && !recurring && (filter !== "open" || deviceItems.length === 0)) return null;
                   return (
                     <Fragment key={section}>
                       <tr className="border-b bg-muted/20">
                         <td colSpan={5} className="px-3 py-1.5 text-xs font-semibold">{section}</td>
                       </tr>
-                      {deviceItems.length > 0 && (
+                      {recurring && filter !== "done" && deviceItems.map((c) => {
+                        const logged = (byKey.get(c.key) ?? []).map((r) => r.device_id).filter(Boolean).sort();
+                        const latest = logged[logged.length - 1] ?? null;
+                        return (
+                          <tr key={`next-${c.key}`} className="border-b bg-amber-50/60">
+                            <td colSpan={5} className="px-3 py-2">
+                              <NextReport
+                                key={`${c.key}:${logged.length}`}
+                                item={c}
+                                spv={spv}
+                                latest={latest}
+                                next={nextPeriod(c.recurring!, latest, today)}
+                                disabled={busy}
+                                onAdd={(date) => run(() => addDeliverableDevice(projectId, c.key, date))}
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {recurring && filter === "done" && visible.length === 0 && (
+                        <tr className="border-b">
+                          <td colSpan={5} className="px-3 py-2 text-xs text-muted-foreground">
+                            No reports filed yet. Each report shows here once it&apos;s submitted; the item itself stays open until the job ends.
+                          </td>
+                        </tr>
+                      )}
+                      {deviceItems.length > 0 && !recurring && (
                         <tr className="border-b">
                           <td colSpan={5} className="px-3 py-1.5">
                             <AddDevice
@@ -320,7 +417,7 @@ export function DeliverablesView({
                           </td>
                         </tr>
                       )}
-                      {deviceItems.filter((c) => c.recurring === "weekly").map((c) => {
+                      {filter !== "done" && deviceItems.filter((c) => c.recurring === "weekly").map((c) => {
                         const gaps = missedWeeks((byKey.get(c.key) ?? []).map((r) => r.device_id), today);
                         return gaps.length === 0 ? null : (
                           <tr key={`gaps-${c.key}`} className="border-b bg-red-50/60">
@@ -647,6 +744,51 @@ function MissedWeeks({
 }
 
 /** Per-device items: pick which item, type the Exhibit GG ID, add. */
+function NextReport({
+  item,
+  spv,
+  latest,
+  next,
+  disabled,
+  onAdd,
+}: {
+  item: CatalogItem;
+  spv: string;
+  latest: string | null;
+  next: string;
+  disabled: boolean;
+  onAdd: (date: string) => Promise<boolean>;
+}) {
+  const [date, setDate] = useState(next);
+  const every = item.recurring === "monthly" ? "month" : "week";
+  const fmt = (iso: string) =>
+    new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+      <span className="rounded bg-amber-200/70 px-1.5 py-0.5 font-semibold text-amber-900">Ongoing</span>
+      <span className="font-medium">{item.item}</span>
+      <span className="text-muted-foreground">
+        One every {every} until the job ends.{" "}
+        {latest ? `Last filed ${fmt(latest)}. Next due ${fmt(next)}.` : "None filed yet. Log the first one when it goes out."}
+      </span>
+      <span className="flex items-center gap-2">
+        <input
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          className="h-7 w-40 rounded-md border bg-background px-2"
+        />
+        <code className="rounded bg-muted px-1.5 py-0.5">
+          {date ? deliverableFileName({ spv, item, versionDate: date, deviceId: date }) : ""}
+        </code>
+        <Button size="sm" variant="outline" disabled={disabled || !date} onClick={() => void onAdd(date)}>
+          Log this {every}&apos;s report
+        </Button>
+      </span>
+    </div>
+  );
+}
+
 function AddDevice({
   items,
   suggested,

@@ -398,3 +398,35 @@ export function tabOf(c: Pick<CatalogItem, "part" | "section">): ExhibitSTab {
   const hit = TAB_PREFIXES.find((p) => id.startsWith(p));
   return hit ? TAB_BY_SECTION[hit] : "closeout";
 }
+
+/** The milestone each Part is due by, short form for labels. */
+export const PART_MILESTONE: Record<DeliverablePart, string> = { I: "MC", II: "SC", III: "FC" };
+
+/**
+ * A section's name for a sub-tab: the exhibit's numbering and the
+ * "Pictures - " lead-in dropped, since the tab already says what it is.
+ */
+const SHORT_SECTION: Record<string, string> = {
+  "Issued For Permit (IFP) Plans & Specs": "IFP Plans & Specs",
+  "Issued For Construction (IFC) Plans & Specs": "IFC Plans & Specs",
+  "SWPPP (Storm Water Pollution Prevention Plan)": "SWPPP",
+  "Construction Roads (Pre-Existing Conditions)": "Pre-Existing Road Conditions",
+  "Weekly Progress Reports (based on Exhibit X)": "Weekly Progress Reports",
+  // Each Part's Miscellaneous folder holds only its completion certificate.
+  Miscellaneous: "Certificate",
+};
+
+export function sectionLabel(section: string): string {
+  const name = section.replace(/^\d+(\.\d+)*\.?\s+/, "").replace(/^Pictures - /, "");
+  return SHORT_SECTION[name] ?? name;
+}
+
+/**
+ * Recurring reports (weekly progress reports, minutes, monthly schedules)
+ * are never complete while the job runs: each report on file is done, the
+ * item itself stays open with a next one due. They are left out of the
+ * done/total counts so a tab doesn't read finished between reports.
+ */
+export function isRecurringKey(catalogKey: string): boolean {
+  return Boolean(CATALOG_BY_KEY.get(catalogKey)?.recurring);
+}
