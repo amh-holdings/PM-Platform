@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -8,13 +9,16 @@ import {
   DELIVERABLE_STATES,
   EXHIBIT_S,
   REVIEW_DECISIONS,
+  TRANSMITTED_FOR,
+  submittalNumber,
   deviceIdProblem,
   stateForDecision,
   type DeliverableState,
   type ReviewDecision,
+  type TransmittedFor,
 } from "@/lib/exhibit-s";
 
-export type DeliverableResult = { ok: true; note?: string } | { ok: false; error: string };
+export type DeliverableResult = { ok: true; note?: string; id?: string } | { ok: false; error: string };
 
 function friendly(message: string): string {
   if (/project_deliverables|spv_name/i.test(message) && /does not exist|could not find/i.test(message)) {
@@ -22,6 +26,9 @@ function friendly(message: string): string {
   }
   if (/project_deliverable_revisions/i.test(message) && /does not exist|could not find/i.test(message)) {
     return "Revisions are not in the database yet. Run migration 0087 in the Supabase SQL Editor.";
+  }
+  if (/project_submittals|submittal_id|submittal_prefix/i.test(message) && /does not exist|could not find/i.test(message)) {
+    return "Submittals are not in the database yet. Run migration 0093 in the Supabase SQL Editor.";
   }
   if (/duplicate key|project_deliverables_once/i.test(message)) return "That one is already on the list.";
   return message;
@@ -89,17 +96,17 @@ export async function addDeliverableDevice(
   // A recurring report takes the next number, and its report date as its
   // doc date until somebody changes it.
   const period = item.perDevice === "period";
-  const { error } = await auth.supabase.from("project_deliverables").insert({
+  const { data, error } = await auth.supabase.from("project_deliverables").insert({
     project_id: projectId,
     catalog_key: catalogKey,
     device_id: deviceId.trim(),
     control_no: period ? await nextControlNo(auth.supabase, projectId, catalogKey) : null,
     version_date: period ? deviceId.trim() : null,
     updated_by: auth.userId,
-  });
+  }).select("id").single();
   if (error) return { ok: false, error: friendly(error.message) };
   done(projectId);
-  return { ok: true };
+  return { ok: true, id: data.id };
 }
 
 export type DeliverablePatch = {
@@ -279,6 +286,111 @@ export async function setRevisionDecision(
       state: stateForDecision(decision), updated_by: auth.userId, updated_at: new Date().toISOString(),
     }).eq("id", rev.deliverable_id);
   }
+  done(projectId);
+  return { ok: true };
+}
+
+// --------------------------------- submittals --------------------------------
+
+export type SubmittalInput = {
+  items: { deliverableId: string; versionDate: string; note?: string | null }[];
+  submittedOn: string;
+  transmittedFor: TransmittedFor;
+  transmittedOther?: string | null;
+  projectLabel?: string | null;
+  toName?: string | null;
+  fromName?: string | null;
+  cc?: string | null;
+  subject?: string | null;
+  notes?: string | null;
+  requestedResponseDate?: string | null;
+};
+
+// project_submittals and submittal_prefix arrive with 0093, after the
+// generated types; this client is untyped for them.
+const untyped = (db: Db) => db as unknown as SupabaseClient;
+
+/**
+ * Send one or more documents to the owner under one cover. The submittal
+ * takes the project's next number; each document gets its next revision
+ * (Rev 0 the first time), tied to this submittal, and goes to Uploaded.
+ */
+export async function createSubmittal(projectId: string, input: SubmittalInput): Promise<DeliverableResult> {
+  const auth = await signedIn();
+  if (!auth) return { ok: false, error: "Not signed in" };
+  if (input.items.length === 0) return { ok: false, error: "Pick at least one document." };
+  if (!ISO.test(input.submittedOn)) return { ok: false, error: "Pick the submittal date" };
+  if (!TRANSMITTED_FOR.includes(input.transmittedFor)) return { ok: false, error: "Pick what it is transmitted for" };
+  if (input.requestedResponseDate && !ISO.test(input.requestedResponseDate)) return { ok: false, error: "Pick a valid response date" };
+  for (const it of input.items) if (!ISO.test(it.versionDate)) return { ok: false, error: "Every document needs a doc date" };
+  const db = untyped(auth.supabase);
+
+  const ids = input.items.map((i) => i.deliverableId);
+  const { data: owned } = await auth.supabase
+    .from("project_deliverables").select("id").eq("project_id", projectId).in("id", ids);
+  if ((owned ?? []).length !== new Set(ids).size) return { ok: false, error: "A document is not on this project." };
+
+  const clean = (v?: string | null) => v?.trim() || null;
+  // The next number. Two people submitting at once collide on the unique
+  // key; the second tries the number after.
+  let submittal: { id: string; submittal_no: number } | null = null;
+  for (let attempt = 0; attempt < 3 && !submittal; attempt++) {
+    const { data: last, error: lastErr } = await db
+      .from("project_submittals").select("submittal_no").eq("project_id", projectId)
+      .order("submittal_no", { ascending: false }).limit(1).maybeSingle();
+    if (lastErr) return { ok: false, error: friendly(lastErr.message) };
+    const { data, error } = await db.from("project_submittals").insert({
+      project_id: projectId,
+      submittal_no: (last?.submittal_no ?? 0) + 1,
+      submitted_on: input.submittedOn,
+      transmitted_for: input.transmittedFor,
+      transmitted_other: input.transmittedFor === "other" ? clean(input.transmittedOther) : null,
+      project_label: clean(input.projectLabel),
+      to_name: clean(input.toName),
+      from_name: clean(input.fromName),
+      cc: clean(input.cc),
+      subject: clean(input.subject),
+      notes: clean(input.notes),
+      requested_response_date: input.requestedResponseDate || null,
+      created_by: auth.userId,
+    }).select("id, submittal_no").single();
+    if (!error) submittal = data;
+    else if (!/duplicate key/i.test(error.message)) return { ok: false, error: friendly(error.message) };
+  }
+  if (!submittal) return { ok: false, error: "Couldn't get a submittal number. Try again." };
+
+  for (const it of input.items) {
+    const { data: lastRev } = await auth.supabase
+      .from("project_deliverable_revisions").select("rev_no").eq("deliverable_id", it.deliverableId)
+      .order("rev_no", { ascending: false }).limit(1).maybeSingle();
+    const { error } = await db.from("project_deliverable_revisions").insert({
+      deliverable_id: it.deliverableId,
+      rev_no: lastRev ? lastRev.rev_no + 1 : 0,
+      version_date: it.versionDate,
+      submitted_on: input.submittedOn,
+      notes: clean(it.note),
+      submittal_id: submittal.id,
+      created_by: auth.userId,
+    });
+    if (error) return { ok: false, error: friendly(error.message) };
+    await auth.supabase.from("project_deliverables").update({
+      state: "submitted", submitted_on: input.submittedOn, version_date: it.versionDate,
+      updated_by: auth.userId, updated_at: new Date().toISOString(),
+    }).eq("id", it.deliverableId);
+  }
+  done(projectId);
+  const { data: proj } = await db.from("projects").select("submittal_prefix").eq("id", projectId).maybeSingle();
+  return { ok: true, id: submittal.id, note: submittalNumber(proj?.submittal_prefix, submittal.submittal_no) };
+}
+
+/** The letters in front of the submittal number, e.g. SUS. */
+export async function setSubmittalPrefix(projectId: string, prefix: string): Promise<DeliverableResult> {
+  const auth = await signedIn();
+  if (!auth) return { ok: false, error: "Not signed in" };
+  const p = prefix.trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,8}$/.test(p)) return { ok: false, error: "Use 1 to 8 letters or digits, e.g. SUS" };
+  const { error } = await untyped(auth.supabase).from("projects").update({ submittal_prefix: p }).eq("id", projectId);
+  if (error) return { ok: false, error: friendly(error.message) };
   done(projectId);
   return { ok: true };
 }

@@ -12,11 +12,17 @@ import {
   EXHIBIT_S,
   EXHIBIT_S_TABS,
   PART_LABEL,
+  PART_MILESTONE,
+  sectionLabel,
   STATE_LABEL,
+  TRANSMITTED_FOR,
+  TRANSMITTED_LABEL,
+  defaultTransmittedFor,
+  submittalNumber,
+  type TransmittedFor,
   tabOf,
   deliverableFileName,
   isDone,
-  missedWeeks,
   nextPeriod,
   REVIEW_DECISIONS,
   type CatalogItem,
@@ -30,8 +36,9 @@ import { cn } from "@/lib/utils";
 import {
   addDeliverableDevice,
   addRevision,
+  createSubmittal,
+  setSubmittalPrefix,
   loadExhibitS,
-  recordMissedPeriod,
   removeDeliverableDevice,
   setRevisionDecision,
   setSpvName,
@@ -69,7 +76,32 @@ export type RevisionRow = {
   decision: string;
   decided_on: string | null;
   notes: string | null;
+  /** The submittal it went out on (0093). */
+  submittal_id?: string | null;
 };
+
+export type SubmittalRow = {
+  id: string;
+  submittal_no: number;
+  submitted_on: string;
+  transmitted_for: string;
+  transmitted_other: string | null;
+  project_label: string | null;
+  to_name: string | null;
+  from_name: string | null;
+  cc: string | null;
+  subject: string | null;
+  notes: string | null;
+  requested_response_date: string | null;
+};
+
+/** What the submittal form starts with. */
+type SubmittalDraft = {
+  items: { deliverableId: string; versionDate: string; note: string }[];
+  transmittedFor: TransmittedFor;
+};
+
+const coverHref = (id: string) => `/submittal-cover/${id}`;
 
 const DECISION_TONE: Record<string, string> = {
   submitted: "bg-blue-100 text-blue-900",
@@ -88,6 +120,10 @@ export function DeliverablesView({
   rows,
   revisions,
   revisionsEnabled,
+  submittals,
+  submittalsEnabled,
+  submittalPrefix,
+  userName,
   today,
 }: {
   projectId: string;
@@ -96,6 +132,10 @@ export function DeliverablesView({
   rows: DeliverableRow[];
   revisions: RevisionRow[];
   revisionsEnabled: boolean;
+  submittals: SubmittalRow[];
+  submittalsEnabled: boolean;
+  submittalPrefix: string | null;
+  userName: string;
   today: string;
 }) {
   const router = useRouter();
@@ -103,7 +143,14 @@ export function DeliverablesView({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>("open");
-  const [tab, setTab] = useState<ExhibitSTab>("design");
+  const [tab, setTab] = useState<ExhibitSTab | "log">("design");
+  // Rows ticked for one submittal, and the open submittal form.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [draft, setDraft] = useState<SubmittalDraft | null>(null);
+  const [created, setCreated] = useState<{ id: string; label: string } | null>(null);
+  const [prefixDraft, setPrefixDraft] = useState(submittalPrefix ?? "");
+  // The section shown inside the tab, "part|section", or "all".
+  const [sub, setSub] = useState<string | null>(null);
   const [spvDraft, setSpvDraft] = useState(spvName ?? projectName);
   const spv = spvName ?? projectName;
 
@@ -133,13 +180,47 @@ export function DeliverablesView({
     return m;
   }, [revisions]);
 
+  const subById = useMemo(() => new Map(submittals.map((x) => [x.id, x])), [submittals]);
+  const subLabel = (id: string | null | undefined) => {
+    const x = id ? subById.get(id) : undefined;
+    return x ? submittalNumber(submittalPrefix, x.submittal_no) : null;
+  };
+  const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+
+  function openSubmittal(items: SubmittalDraft["items"]) {
+    const catalog = items
+      .map((i) => CATALOG_BY_KEY.get(rowById.get(i.deliverableId)?.catalog_key ?? ""))
+      .filter((c): c is CatalogItem => Boolean(c));
+    setCreated(null);
+    setDraft({ items, transmittedFor: defaultTransmittedFor(catalog) });
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function openFromSelection() {
+    openSubmittal(
+      Array.from(selected).map((id) => {
+        const r = rowById.get(id);
+        const c = r ? CATALOG_BY_KEY.get(r.catalog_key) : undefined;
+        return { deliverableId: id, versionDate: r?.version_date ?? (c?.perDevice === "period" ? r?.device_id ?? today : today), note: "" };
+      }),
+    );
+  }
+
+  const toggle = (id: string) =>
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   const progress = useMemo(() => {
     const out: Record<DeliverablePart, { done: number; total: number }> = {
       I: { done: 0, total: 0 }, II: { done: 0, total: 0 }, III: { done: 0, total: 0 },
     };
     for (const r of rows) {
       const c = CATALOG_BY_KEY.get(r.catalog_key);
-      if (!c) continue;
+      if (!c || c.recurring) continue;
       out[c.part].total++;
       if (isDone(r.state)) out[c.part].done++;
     }
@@ -150,7 +231,7 @@ export function DeliverablesView({
     const out = new Map<ExhibitSTab, { done: number; total: number }>();
     for (const r of rows) {
       const c = CATALOG_BY_KEY.get(r.catalog_key);
-      if (!c) continue;
+      if (!c || c.recurring) continue;
       const t = out.get(tabOf(c)) ?? { done: 0, total: 0 };
       t.total++;
       if (isDone(r.state)) t.done++;
@@ -158,6 +239,37 @@ export function DeliverablesView({
     }
     return out;
   }, [rows]);
+
+  // Sections in the open tab, in Part order, each a sub-tab.
+  const tabSections = useMemo(() => {
+    const seen = new Map<string, { id: string; part: DeliverablePart; section: string; recurring: boolean }>();
+    for (const c of EXHIBIT_S) {
+      if (tabOf(c) !== tab) continue;
+      const id = `${c.part}|${c.section}`;
+      const s0 = seen.get(id);
+      if (s0) s0.recurring = s0.recurring && Boolean(c.recurring);
+      else seen.set(id, { id, part: c.part, section: c.section, recurring: Boolean(c.recurring) });
+    }
+    const list = Array.from(seen.values());
+    const names = list.map((x) => sectionLabel(x.section));
+    return list.map((x, i) => {
+      const name = names[i];
+      const dup = names.filter((n) => n === name).length > 1;
+      let done = 0;
+      let total = 0;
+      let logged = 0;
+      for (const c of EXHIBIT_S) {
+        if (c.part !== x.part || c.section !== x.section) continue;
+        for (const r of byKey.get(c.key) ?? []) {
+          if (c.recurring) { logged++; continue; }
+          total++;
+          if (isDone(r.state)) done++;
+        }
+      }
+      return { ...x, label: dup ? `${name} (${PART_MILESTONE[x.part]})` : name, done, total, logged };
+    });
+  }, [tab, byKey]);
+  const activeSub = sub && (sub === "all" || tabSections.some((x) => x.id === sub)) ? sub : (tabSections[0]?.id ?? "all");
 
   if (rows.length === 0) {
     return (
@@ -210,7 +322,28 @@ export function DeliverablesView({
             </span>
           )}
         </label>
-        <div className="flex items-end gap-3 text-xs">
+        {submittalsEnabled && (
+          <label className="block text-xs sm:col-span-2">
+            <span className="font-medium">Submittal prefix</span>
+            <span className="text-muted-foreground"> - the letters in front of every submittal number, e.g. SSS on Sweet Springs</span>
+            <div className="mt-1 flex items-center gap-2">
+              <input
+                value={prefixDraft}
+                onChange={(e) => setPrefixDraft(e.target.value.toUpperCase())}
+                className="h-8 w-28 rounded-md border bg-background px-2 text-sm uppercase"
+              />
+              <span className="text-muted-foreground">
+                Next: <span className="font-medium text-foreground">{submittalNumber(prefixDraft || null, (submittals[submittals.length - 1]?.submittal_no ?? 0) + 1)}</span>
+              </span>
+              {prefixDraft.trim() !== (submittalPrefix ?? "") && (
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(() => setSubmittalPrefix(projectId, prefixDraft))}>
+                  Save
+                </Button>
+              )}
+            </div>
+          </label>
+        )}
+        <div className="flex items-end gap-3 text-xs sm:col-start-2 sm:row-start-1">
           {parts.map((p) => (
             <div key={p} className="text-right">
               <div className="text-muted-foreground">Part {p}</div>
@@ -231,7 +364,7 @@ export function DeliverablesView({
               type="button"
               role="tab"
               aria-selected={tab === t.key}
-              onClick={() => setTab(t.key)}
+              onClick={() => { setTab(t.key); setSub(null); }}
               className={cn(
                 "-mb-px rounded-t-md border px-3 py-1.5 text-sm",
                 tab === t.key ? "border-b-background bg-background font-semibold" : "border-transparent text-muted-foreground hover:text-foreground",
@@ -239,11 +372,124 @@ export function DeliverablesView({
             >
               {t.label}
               <span className="ml-1.5 text-xs tabular-nums text-muted-foreground">
-                {p.done}/{p.total}
+                {p.total === 0 && EXHIBIT_S.some((c) => c.recurring && tabOf(c) === t.key) ? "ongoing" : `${p.done}/${p.total}`}
               </span>
             </button>
           );
         })}
+        {submittalsEnabled && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "log"}
+            onClick={() => { setTab("log"); setSub(null); }}
+            className={cn(
+              "-mb-px rounded-t-md border px-3 py-1.5 text-sm",
+              tab === "log" ? "border-b-background bg-background font-semibold" : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Submittal Log
+            <span className="ml-1.5 text-xs tabular-nums text-muted-foreground">{submittals.length}</span>
+          </button>
+        )}
+      </div>
+
+      {!submittalsEnabled && (
+        <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          Run migration 0093 in the Supabase SQL Editor to number submittals and print the cover sheet.
+        </p>
+      )}
+
+      {created && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+          <span>Submittal <span className="font-semibold">{created.label}</span> created.</span>
+          <a href={coverHref(created.id)} target="_blank" rel="noreferrer" className="font-medium underline">
+            Open the cover sheet
+          </a>
+          <button type="button" className="ml-auto text-xs underline-offset-2 hover:underline" onClick={() => setCreated(null)}>
+            Close
+          </button>
+        </div>
+      )}
+
+      {draft && (
+        <SubmittalForm
+          key={draft.items.map((i) => i.deliverableId).join(",")}
+          draft={draft}
+          rows={rowById}
+          spv={spv}
+          nextLabel={submittalNumber(submittalPrefix, (submittals[submittals.length - 1]?.submittal_no ?? 0) + 1)}
+          last={submittals[submittals.length - 1] ?? null}
+          defaultProject={spvName ? `${spvName} Solar` : projectName}
+          userName={userName}
+          today={today}
+          disabled={busy}
+          onCancel={() => setDraft(null)}
+          onSubmit={async (input) => {
+            setBusy(true);
+            setError(null);
+            const res = await createSubmittal(projectId, input);
+            setBusy(false);
+            if (!res.ok) { setError(res.error); return; }
+            setDraft(null);
+            setSelected(new Set());
+            setCreated({ id: res.id ?? "", label: res.note ?? "" });
+            startTransition(() => router.refresh());
+          }}
+        />
+      )}
+
+      {submittalsEnabled && selected.size > 0 && !draft && tab !== "log" && (
+        <div className="sticky top-2 z-10 flex items-center gap-3 rounded-md border bg-foreground px-3 py-2 text-sm text-background shadow">
+          <span>{selected.size} selected</span>
+          <Button size="sm" variant="secondary" onClick={openFromSelection}>
+            Create submittal
+          </Button>
+          <button type="button" className="ml-auto text-xs underline-offset-2 hover:underline" onClick={() => setSelected(new Set())}>
+            Clear
+          </button>
+        </div>
+      )}
+
+      {tab === "log" ? (
+        <SubmittalLog
+          submittals={submittals}
+          revisions={revisions}
+          rows={rowById}
+          spv={spv}
+          prefix={submittalPrefix}
+        />
+      ) : (
+      <>
+      <div className="flex flex-wrap gap-1.5 text-xs">
+        {tabSections.map((x) => (
+          <button
+            key={x.id}
+            type="button"
+            onClick={() => setSub(x.id)}
+            className={cn(
+              "rounded-full border px-3 py-1",
+              activeSub === x.id ? "border-foreground bg-foreground text-background" : "bg-card hover:bg-muted",
+            )}
+          >
+            {x.label}
+            <span className={cn("ml-1.5 tabular-nums", activeSub === x.id ? "opacity-70" : "text-muted-foreground")}>
+              {x.recurring ? `ongoing · ${x.logged} filed` : x.total === 0 ? "none added" : `${x.done}/${x.total}`}
+            </span>
+          </button>
+        ))}
+        {tabSections.length > 1 && (
+          <button
+            type="button"
+            onClick={() => setSub("all")}
+            className={cn(
+              "rounded-full border px-3 py-1",
+              activeSub === "all" ? "border-foreground bg-foreground text-background" : "bg-card hover:bg-muted",
+            )}
+          >
+            Whole tab
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-2 text-xs">
@@ -271,7 +517,11 @@ export function DeliverablesView({
 
       {parts.map((part) => {
         const sections = Array.from(
-          new Set(EXHIBIT_S.filter((c) => c.part === part && tabOf(c) === tab).map((c) => c.section)),
+          new Set(
+            EXHIBIT_S.filter(
+              (c) => c.part === part && tabOf(c) === tab && (activeSub === "all" || activeSub === `${part}|${c.section}`),
+            ).map((c) => c.section),
+          ),
         );
         if (sections.length === 0) return null;
         return (
@@ -296,13 +546,49 @@ export function DeliverablesView({
                     ).map((r) => ({ c, r })),
                   );
                   const deviceItems = catalog.filter((c) => c.perDevice);
-                  if (visible.length === 0 && (filter !== "open" || deviceItems.length === 0)) return null;
+                  const recurring = deviceItems.length > 0 && deviceItems.every((c) => c.recurring);
+                  if (visible.length === 0 && !recurring && (filter !== "open" || deviceItems.length === 0)) return null;
                   return (
                     <Fragment key={section}>
                       <tr className="border-b bg-muted/20">
                         <td colSpan={5} className="px-3 py-1.5 text-xs font-semibold">{section}</td>
                       </tr>
-                      {deviceItems.length > 0 && (
+                      {recurring && filter !== "done" && deviceItems.map((c) => {
+                        const logged = (byKey.get(c.key) ?? []).map((r) => r.device_id).filter(Boolean).sort();
+                        const latest = logged[logged.length - 1] ?? null;
+                        return (
+                          <tr key={`next-${c.key}`} className="border-b bg-amber-50/60">
+                            <td colSpan={5} className="px-3 py-2">
+                              <NextReport
+                                key={`${c.key}:${logged.length}`}
+                                item={c}
+                                spv={spv}
+                                latest={latest}
+                                next={nextPeriod(c.recurring!, latest, today)}
+                                disabled={busy}
+                                onAdd={async (date) => {
+                                  setBusy(true);
+                                  setError(null);
+                                  const res = await addDeliverableDevice(projectId, c.key, date);
+                                  setBusy(false);
+                                  if (!res.ok) { setError(res.error); return false; }
+                                  startTransition(() => router.refresh());
+                                  if (submittalsEnabled && res.id) openSubmittal([{ deliverableId: res.id, versionDate: date, note: "" }]);
+                                  return true;
+                                }}
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {recurring && filter === "done" && visible.length === 0 && (
+                        <tr className="border-b">
+                          <td colSpan={5} className="px-3 py-2 text-xs text-muted-foreground">
+                            No reports filed yet. Each report shows here once it&apos;s submitted; the item itself stays open until the job ends.
+                          </td>
+                        </tr>
+                      )}
+                      {deviceItems.length > 0 && !recurring && (
                         <tr className="border-b">
                           <td colSpan={5} className="px-3 py-1.5">
                             <AddDevice
@@ -320,22 +606,6 @@ export function DeliverablesView({
                           </td>
                         </tr>
                       )}
-                      {deviceItems.filter((c) => c.recurring === "weekly").map((c) => {
-                        const gaps = missedWeeks((byKey.get(c.key) ?? []).map((r) => r.device_id), today);
-                        return gaps.length === 0 ? null : (
-                          <tr key={`gaps-${c.key}`} className="border-b bg-red-50/60">
-                            <td colSpan={5} className="px-3 py-2">
-                              <MissedWeeks
-                                label={c.item}
-                                weeks={gaps}
-                                disabled={busy}
-                                onRecord={(week, reason) => run(() => recordMissedPeriod(projectId, c.key, week, reason))}
-                                onAddReport={(week) => run(() => addDeliverableDevice(projectId, c.key, week))}
-                              />
-                            </td>
-                          </tr>
-                        );
-                      })}
                       {visible.map(({ c, r }) => (
                         <ItemRow
                           key={r.id}
@@ -347,7 +617,14 @@ export function DeliverablesView({
                           onSave={(patch) => run(() => updateDeliverable(projectId, r.id, patch))}
                           revisions={revsByRow.get(r.id) ?? []}
                           revisionsEnabled={revisionsEnabled}
-                          onAddRevision={(versionDate, notes) => run(() => addRevision(projectId, r.id, { versionDate, notes }))}
+                          onAddRevision={(versionDate, notes) =>
+                            submittalsEnabled
+                              ? (openSubmittal([{ deliverableId: r.id, versionDate, note: notes }]), Promise.resolve(true))
+                              : run(() => addRevision(projectId, r.id, { versionDate, notes }))}
+                          selectable={submittalsEnabled}
+                          selected={selected.has(r.id)}
+                          onToggle={() => toggle(r.id)}
+                          subLabel={subLabel}
                           onDecide={(revId, d) => run(() => setRevisionDecision(projectId, revId, d))}
                           onRemove={r.device_id ? () => run(() => removeDeliverableDevice(projectId, r.id)) : undefined}
                         />
@@ -360,6 +637,8 @@ export function DeliverablesView({
           </section>
         );
       })}
+      </>
+      )}
     </div>
   );
 }
@@ -389,7 +668,15 @@ function ItemRow({
   revisionsEnabled,
   onAddRevision,
   onDecide,
+  selectable,
+  selected,
+  onToggle,
+  subLabel,
 }: {
+  selectable: boolean;
+  selected: boolean;
+  onToggle: () => void;
+  subLabel: (submittalId: string | null | undefined) => string | null;
   item: CatalogItem;
   row: DeliverableRow;
   spv: string;
@@ -433,15 +720,26 @@ function ItemRow({
     <>
     <tr className="border-b align-top">
       <td className="px-3 py-1.5">
-        <div className={cn(row.state === "not_applicable" && "text-muted-foreground line-through")}>
+        <div className={cn("flex items-start gap-2", row.state === "not_applicable" && "text-muted-foreground line-through")}>
+          {selectable && (
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onToggle}
+              aria-label={`Select ${item.item} for a submittal`}
+              className="mt-1 h-3.5 w-3.5 shrink-0"
+            />
+          )}
+          <span>
           {item.item}
           {row.device_id && (
             <span className="font-medium">
               {item.perDevice === "period"
-                ? `${row.control_no ? ` No. ${String(row.control_no).padStart(3, "0")}` : ""}, ${item.recurring === "monthly" ? "month of" : "week of"} ${row.device_id}`
+                ? `, ${item.recurring === "monthly" ? "month of" : "week of"} ${row.device_id}`
                 : ` (${row.device_id})`}
             </span>
           )}
+          </span>
         </div>
         <div className="flex flex-wrap gap-1 text-[10px] text-muted-foreground">
           {item.status && <span className="rounded bg-muted px-1">signed, {item.status}</span>}
@@ -450,7 +748,7 @@ function ItemRow({
           {row.submitted_on && <span>uploaded {row.submitted_on}</span>}
           {latest && (
             <span className={cn("rounded px-1", DECISION_TONE[latest.decision])}>
-              Rev {latest.rev_no}: {DECISION_LABEL[latest.decision as ReviewDecision] ?? latest.decision}
+              {subLabel(latest.submittal_id) ? `${subLabel(latest.submittal_id)} · ` : ""}Rev {latest.rev_no}: {DECISION_LABEL[latest.decision as ReviewDecision] ?? latest.decision}
             </span>
           )}
           {revisionsEnabled && (
@@ -507,7 +805,7 @@ function ItemRow({
         >
           {DELIVERABLE_STATES.filter((s) =>
             (s !== "not_applicable" || item.asApplicable || row.state === s) &&
-            (s !== "missed" || period || row.state === s),
+            (s !== "missed" || row.state === s),
           ).map((s) => (
             <option key={s} value={s}>{STATE_LABEL[s]}</option>
           ))}
@@ -537,6 +835,7 @@ function ItemRow({
               <thead className="text-left text-muted-foreground">
                 <tr>
                   <th className="py-1 pr-3">Rev</th>
+                  <th className="py-1 pr-3">Submittal</th>
                   <th className="py-1 pr-3">File name</th>
                   <th className="py-1 pr-3">Submitted</th>
                   <th className="py-1 pr-3">Review</th>
@@ -547,6 +846,13 @@ function ItemRow({
                 {revisions.map((rv) => (
                   <tr key={rv.id} className="align-top">
                     <td className="py-1 pr-3 font-medium">Rev {rv.rev_no}</td>
+                    <td className="py-1 pr-3 whitespace-nowrap">
+                      {rv.submittal_id && subLabel(rv.submittal_id) ? (
+                        <a href={coverHref(rv.submittal_id)} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline">
+                          {subLabel(rv.submittal_id)}
+                        </a>
+                      ) : "-"}
+                    </td>
                     <td className="py-1 pr-3">
                       <code className="break-all">
                         {deliverableFileName({ spv, item, versionDate: rv.version_date, deviceId: row.device_id || null })}
@@ -590,7 +896,7 @@ function ItemRow({
               disabled={disabled || !revDate}
               onClick={() => void onAddRevision(revDate, revNote).then((ok) => ok && setRevNote(""))}
             >
-              {revisions.length ? "Resubmit" : "Log submission"}
+              {selectable ? (revisions.length ? "Resubmit on a new submittal" : "Create submittal") : revisions.length ? "Resubmit" : "Log submission"}
             </Button>
           </div>
         </td>
@@ -600,48 +906,48 @@ function ItemRow({
   );
 }
 
-/** Weeks with no report: add the report late, or record why it was missed. */
-function MissedWeeks({
-  label,
-  weeks,
+/** A recurring report: when the next one is due, and log it. */
+function NextReport({
+  item,
+  spv,
+  latest,
+  next,
   disabled,
-  onRecord,
-  onAddReport,
+  onAdd,
 }: {
-  label: string;
-  weeks: string[];
+  item: CatalogItem;
+  spv: string;
+  latest: string | null;
+  next: string;
   disabled: boolean;
-  onRecord: (week: string, reason: string) => Promise<boolean>;
-  onAddReport: (week: string) => Promise<boolean>;
+  onAdd: (date: string) => Promise<boolean>;
 }) {
-  const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [date, setDate] = useState(next);
+  const every = item.recurring === "monthly" ? "month" : "week";
+  const fmt = (iso: string) =>
+    new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
   return (
-    <div className="space-y-1 text-xs">
-      <div className="font-medium text-red-900">
-        {weeks.length} week{weeks.length === 1 ? "" : "s"} with no {label}
-      </div>
-      {weeks.map((w) => (
-        <div key={w} className="flex flex-wrap items-center gap-2">
-          <span className="w-28 tabular-nums">Week of {w}</span>
-          <input
-            value={reasons[w] ?? ""}
-            onChange={(e) => setReasons((r) => ({ ...r, [w]: e.target.value }))}
-            placeholder="Why it can't be submitted, e.g. site shut down for weather"
-            className="h-7 w-96 rounded-md border bg-background px-2"
-          />
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={disabled || !(reasons[w] ?? "").trim()}
-            onClick={() => void onRecord(w, reasons[w] ?? "")}
-          >
-            Record as missed
-          </Button>
-          <button type="button" className="text-muted-foreground underline-offset-2 hover:underline" disabled={disabled} onClick={() => void onAddReport(w)}>
-            or add the report for this week
-          </button>
-        </div>
-      ))}
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+      <span className="rounded bg-amber-200/70 px-1.5 py-0.5 font-semibold text-amber-900">Ongoing</span>
+      <span className="font-medium">{item.item}</span>
+      <span className="text-muted-foreground">
+        One every {every} until the job ends.{" "}
+        {latest ? `Last filed ${fmt(latest)}. Next due ${fmt(next)}.` : "None filed yet. Log the first one when it goes out."}
+      </span>
+      <span className="flex items-center gap-2">
+        <input
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          className="h-7 w-40 rounded-md border bg-background px-2"
+        />
+        <code className="rounded bg-muted px-1.5 py-0.5">
+          {date ? deliverableFileName({ spv, item, versionDate: date, deviceId: date }) : ""}
+        </code>
+        <Button size="sm" variant="outline" disabled={disabled || !date} onClick={() => void onAdd(date)}>
+          Log this {every}&apos;s report
+        </Button>
+      </span>
     </div>
   );
 }
@@ -694,6 +1000,308 @@ function AddDevice({
       <Button size="sm" variant="outline" disabled={disabled || !deviceId.trim()} onClick={() => void add()}>
         Add
       </Button>
+    </div>
+  );
+}
+
+const plusDays = (iso: string, days: number) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+
+/**
+ * One submittal: the documents going out together and the cover's header.
+ * To, CC and the project line carry over from the last submittal.
+ */
+function SubmittalForm({
+  draft,
+  rows,
+  spv,
+  nextLabel,
+  last,
+  defaultProject,
+  userName,
+  today,
+  disabled,
+  onCancel,
+  onSubmit,
+}: {
+  draft: SubmittalDraft;
+  rows: Map<string, DeliverableRow>;
+  spv: string;
+  nextLabel: string;
+  last: SubmittalRow | null;
+  defaultProject: string;
+  userName: string;
+  today: string;
+  disabled: boolean;
+  onCancel: () => void;
+  onSubmit: (input: Parameters<typeof createSubmittal>[1]) => Promise<void>;
+}) {
+  const [items, setItems] = useState(draft.items);
+  const [submittedOn, setSubmittedOn] = useState(today);
+  const [transmittedFor, setTransmittedFor] = useState<TransmittedFor>(draft.transmittedFor);
+  const [other, setOther] = useState("");
+  const [projectLabel, setProjectLabel] = useState(last?.project_label ?? defaultProject);
+  const [toName, setToName] = useState(last?.to_name ?? "");
+  const [fromName, setFromName] = useState(last?.from_name ?? userName);
+  const [cc, setCc] = useState(last?.cc ?? "");
+  const catalogOf = (id: string) => CATALOG_BY_KEY.get(rows.get(id)?.catalog_key ?? "");
+  const [subject, setSubject] = useState(() => {
+    const first = catalogOf(draft.items[0]?.deliverableId ?? "");
+    if (!first) return "";
+    if (draft.items.length === 1) return first.item;
+    const sections = new Set(draft.items.map((i) => catalogOf(i.deliverableId)?.section));
+    return sections.size === 1 ? sectionLabel(first.section) : `${draft.items.length} documents`;
+  });
+  const [respond, setRespond] = useState(draft.transmittedFor === "approval" ? plusDays(today, 14) : "");
+  const [notes, setNotes] = useState("");
+  const field = "h-8 w-full rounded-md border bg-background px-2 text-sm";
+
+  return (
+    <section className="space-y-3 rounded-md border-2 border-foreground/20 bg-card p-4">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <h3 className="text-base font-semibold">New submittal</h3>
+        <span className="text-sm text-muted-foreground">
+          will be <span className="font-semibold text-foreground">{nextLabel}</span>
+        </span>
+      </div>
+
+      <table className="w-full text-xs">
+        <thead className="text-left text-muted-foreground">
+          <tr>
+            <th className="w-10 py-1">Item #</th>
+            <th className="py-1">Document (file name)</th>
+            <th className="py-1">Doc date</th>
+            <th className="py-1">Note on the cover (e.g. why it was revised)</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((it, i) => {
+            const r = rows.get(it.deliverableId);
+            const c = catalogOf(it.deliverableId);
+            return (
+              <tr key={it.deliverableId} className="align-top">
+                <td className="py-1">{i + 1}</td>
+                <td className="py-1 pr-2">
+                  <code className="break-all">
+                    {c && r ? deliverableFileName({ spv, item: c, versionDate: it.versionDate || today, deviceId: r.device_id || null }) : "?"}
+                  </code>
+                </td>
+                <td className="py-1 pr-2">
+                  <input
+                    type="date"
+                    value={it.versionDate}
+                    onChange={(e) => setItems((cur) => cur.map((x, j) => (j === i ? { ...x, versionDate: e.target.value } : x)))}
+                    className="h-7 rounded-md border bg-background px-1"
+                  />
+                </td>
+                <td className="py-1 pr-2">
+                  <input
+                    value={it.note}
+                    onChange={(e) => setItems((cur) => cur.map((x, j) => (j === i ? { ...x, note: e.target.value } : x)))}
+                    className="h-7 w-full rounded-md border bg-background px-2"
+                  />
+                </td>
+                <td className="py-1">
+                  {items.length > 1 && (
+                    <button
+                      type="button"
+                      className="text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => setItems((cur) => cur.filter((_, j) => j !== i))}
+                    >
+                      remove
+                    </button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <div className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-3">
+        <label className="space-y-1"><span className="font-medium">Date</span>
+          <input type="date" value={submittedOn} onChange={(e) => setSubmittedOn(e.target.value)} className={field} />
+        </label>
+        <label className="space-y-1"><span className="font-medium">Project (as printed)</span>
+          <input value={projectLabel} onChange={(e) => setProjectLabel(e.target.value)} className={field} />
+        </label>
+        <label className="space-y-1"><span className="font-medium">Subject</span>
+          <input value={subject} onChange={(e) => setSubject(e.target.value)} className={field} />
+        </label>
+        <label className="space-y-1"><span className="font-medium">To</span>
+          <input value={toName} onChange={(e) => setToName(e.target.value)} placeholder="e.g. John Merriman" className={field} />
+        </label>
+        <label className="space-y-1"><span className="font-medium">From</span>
+          <input value={fromName} onChange={(e) => setFromName(e.target.value)} className={field} />
+        </label>
+        <label className="space-y-1"><span className="font-medium">CC</span>
+          <input value={cc} onChange={(e) => setCc(e.target.value)} className={field} />
+        </label>
+        <div className="space-y-1">
+          <span className="font-medium">Transmitted</span>
+          <div className="flex flex-wrap gap-x-3 gap-y-1 pt-1">
+            {TRANSMITTED_FOR.map((t) => (
+              <label key={t} className="flex items-center gap-1">
+                <input type="radio" checked={transmittedFor === t} onChange={() => setTransmittedFor(t)} />
+                {TRANSMITTED_LABEL[t]}
+              </label>
+            ))}
+          </div>
+          {transmittedFor === "other" && (
+            <input value={other} onChange={(e) => setOther(e.target.value)} placeholder="Specify" className={field} />
+          )}
+        </div>
+        <label className="space-y-1"><span className="font-medium">Requested response date</span>
+          <input type="date" value={respond} onChange={(e) => setRespond(e.target.value)} className={field} />
+        </label>
+        <label className="space-y-1 sm:col-span-2 lg:col-span-1"><span className="font-medium">Additional notes</span>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full rounded-md border bg-background px-2 py-1 text-sm" />
+        </label>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          disabled={disabled || items.length === 0 || items.some((i) => !i.versionDate) || !submittedOn}
+          onClick={() =>
+            void onSubmit({
+              items,
+              submittedOn,
+              transmittedFor,
+              transmittedOther: other,
+              projectLabel,
+              toName,
+              fromName,
+              cc,
+              subject,
+              notes,
+              requestedResponseDate: respond || null,
+            })
+          }
+        >
+          Create {nextLabel}
+        </Button>
+        <Button size="sm" variant="outline" disabled={disabled} onClick={onCancel}>
+          Cancel
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          Each document goes to Uploaded with its next revision. The cover sheet opens once it&apos;s created.
+        </span>
+      </div>
+    </section>
+  );
+}
+
+/** Every submittal on the project, newest first, with its documents and answers. */
+function SubmittalLog({
+  submittals,
+  revisions,
+  rows,
+  spv,
+  prefix,
+}: {
+  submittals: SubmittalRow[];
+  revisions: RevisionRow[];
+  rows: Map<string, DeliverableRow>;
+  spv: string;
+  prefix: string | null;
+}) {
+  const [q, setQ] = useState("");
+  const bySub = useMemo(() => {
+    const m = new Map<string, RevisionRow[]>();
+    for (const r of revisions) if (r.submittal_id) (m.get(r.submittal_id) ?? m.set(r.submittal_id, []).get(r.submittal_id)!).push(r);
+    return m;
+  }, [revisions]);
+  const list = submittals
+    .map((x) => {
+      const docs = (bySub.get(x.id) ?? []).map((rv) => {
+        const d = rows.get(rv.deliverable_id);
+        const c = d ? CATALOG_BY_KEY.get(d.catalog_key) : undefined;
+        return {
+          rv,
+          name: c && d ? deliverableFileName({ spv, item: c, versionDate: rv.version_date, deviceId: d.device_id || null }) : "?",
+        };
+      });
+      return { x, label: submittalNumber(prefix, x.submittal_no), docs };
+    })
+    .filter(({ x, label, docs }) => {
+      const t = q.trim().toLowerCase();
+      if (!t) return true;
+      return [label, x.subject ?? "", x.to_name ?? "", ...docs.map((d) => d.name)].some((s) => s.toLowerCase().includes(t));
+    })
+    .reverse();
+
+  if (submittals.length === 0) {
+    return (
+      <p className="rounded-md border bg-card p-4 text-sm text-muted-foreground">
+        No submittals yet. Tick documents on any tab and press Create submittal, or use Create submittal on a row.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Find a submittal: number, subject, file name"
+        className="h-8 w-80 rounded-md border bg-background px-2 text-sm"
+      />
+      <div className="overflow-x-auto rounded-md border">
+        <table className="w-full min-w-[900px] text-sm">
+          <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2">Submittal #</th>
+              <th className="px-3 py-2">Date</th>
+              <th className="px-3 py-2">Subject</th>
+              <th className="px-3 py-2">Documents</th>
+              <th className="px-3 py-2">For</th>
+              <th className="px-3 py-2">Response</th>
+              <th className="px-3 py-2">Cover</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map(({ x, label, docs }) => (
+              <tr key={x.id} className="border-t align-top">
+                <td className="whitespace-nowrap px-3 py-2 font-semibold">{label}</td>
+                <td className="whitespace-nowrap px-3 py-2 tabular-nums">{x.submitted_on}</td>
+                <td className="px-3 py-2">{x.subject}{x.to_name && <div className="text-xs text-muted-foreground">to {x.to_name}</div>}</td>
+                <td className="px-3 py-2 text-xs">
+                  {docs.map((d) => (
+                    <div key={d.rv.id}>
+                      <code className="break-all">{d.name}</code>
+                      {d.rv.rev_no > 0 && <span className="text-muted-foreground"> Rev {d.rv.rev_no}</span>}
+                    </div>
+                  ))}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-xs">
+                  {TRANSMITTED_LABEL[x.transmitted_for as TransmittedFor] ?? x.transmitted_for}
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  {docs.map((d) => (
+                    <div key={d.rv.id}>
+                      <span className={cn("rounded px-1", DECISION_TONE[d.rv.decision])}>
+                        {DECISION_LABEL[d.rv.decision as ReviewDecision] ?? d.rv.decision}
+                      </span>
+                    </div>
+                  ))}
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  <a href={coverHref(x.id)} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline">
+                    Open
+                  </a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Record the owner&apos;s answer on the document&apos;s row (its revisions). A revise and resubmit goes back out on a new submittal number.
+      </p>
     </div>
   );
 }
