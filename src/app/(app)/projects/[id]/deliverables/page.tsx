@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { driveConfigured } from "@/lib/google-drive";
 import { guardCapability } from "@/lib/roles-server";
 import { createClient } from "@/lib/supabase/server";
 
@@ -32,19 +33,27 @@ export default async function ProjectDeliverablesPage({ params }: { params: Para
   const ids = (res.data ?? []).map((r) => r.id);
   const revCols = "id, deliverable_id, rev_no, version_date, submitted_on, decision, decided_on, notes";
   let revRes: { data: unknown[] | null; error: { message: string } | null } = ids.length
-    ? await db.from("project_deliverable_revisions").select(`${revCols}, submittal_id`)
+    ? await db.from("project_deliverable_revisions").select(`${revCols}, submittal_id, document_id`)
         .in("deliverable_id", ids).order("rev_no", { ascending: true })
     : { data: [], error: null };
+  // 0094 adds document_id; before it, revisions still load with their submittal.
+  if (revRes.error && ids.length) {
+    revRes = await db.from("project_deliverable_revisions").select(`${revCols}, submittal_id`)
+      .in("deliverable_id", ids).order("rev_no", { ascending: true });
+  }
   if (revRes.error && ids.length) {
     revRes = await db.from("project_deliverable_revisions").select(revCols)
       .in("deliverable_id", ids).order("rev_no", { ascending: true });
   }
 
-  const subRes = await db
-    .from("project_submittals")
-    .select("id, submittal_no, submitted_on, transmitted_for, transmitted_other, project_label, to_name, from_name, cc, subject, notes, requested_response_date")
-    .eq("project_id", params.id)
-    .order("submittal_no", { ascending: true });
+  const subCols = "id, submittal_no, submitted_on, transmitted_for, transmitted_other, project_label, to_name, from_name, cc, subject, notes, requested_response_date";
+  let subRes: { data: unknown[] | null; error: { message: string } | null } = await db.from("project_submittals").select(`${subCols}, package_document_id, drive_url, package_built_at`)
+    .eq("project_id", params.id).order("submittal_no", { ascending: true });
+  const packagesEnabled = !subRes.error;
+  if (subRes.error) {
+    subRes = await db.from("project_submittals").select(subCols)
+      .eq("project_id", params.id).order("submittal_no", { ascending: true });
+  }
 
   const { data: project } = await supabase
     .from("projects")
@@ -52,6 +61,9 @@ export default async function ProjectDeliverablesPage({ params }: { params: Para
     .eq("id", params.id)
     .maybeSingle();
   const { data: prefixRow } = await db.from("projects").select("submittal_prefix").eq("id", params.id).maybeSingle();
+  const { data: folderRow } = packagesEnabled
+    ? await db.from("projects").select("submittal_drive_folder_id").eq("id", params.id).maybeSingle()
+    : { data: null };
 
   const { data: { user } } = await supabase.auth.getUser();
   const { data: me } = user
@@ -70,6 +82,9 @@ export default async function ProjectDeliverablesPage({ params }: { params: Para
       submittalsEnabled={!subRes.error}
       submittalPrefix={(prefixRow as { submittal_prefix?: string | null } | null)?.submittal_prefix ?? null}
       userName={me?.full_name ?? ""}
+      packagesEnabled={packagesEnabled}
+      driveConnected={driveConfigured()}
+      driveFolderId={(folderRow as { submittal_drive_folder_id?: string | null } | null)?.submittal_drive_folder_id ?? null}
       today={new Date().toISOString().slice(0, 10)}
     />
   );
