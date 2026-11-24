@@ -10,8 +10,10 @@ import {
   DELIVERABLE_STATES,
   DEVICE_HINT,
   EXHIBIT_S,
+  EXHIBIT_S_TABS,
   PART_LABEL,
   STATE_LABEL,
+  tabOf,
   deliverableFileName,
   isDone,
   missedWeeks,
@@ -20,6 +22,7 @@ import {
   type CatalogItem,
   type DeliverablePart,
   type DeliverableState,
+  type ExhibitSTab,
   type ReviewDecision,
 } from "@/lib/exhibit-s";
 import { cn } from "@/lib/utils";
@@ -100,6 +103,7 @@ export function DeliverablesView({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>("open");
+  const [tab, setTab] = useState<ExhibitSTab>("design");
   const [spvDraft, setSpvDraft] = useState(spvName ?? projectName);
   const spv = spvName ?? projectName;
 
@@ -138,6 +142,19 @@ export function DeliverablesView({
       if (!c) continue;
       out[c.part].total++;
       if (isDone(r.state)) out[c.part].done++;
+    }
+    return out;
+  }, [rows]);
+
+  const tabProgress = useMemo(() => {
+    const out = new Map<ExhibitSTab, { done: number; total: number }>();
+    for (const r of rows) {
+      const c = CATALOG_BY_KEY.get(r.catalog_key);
+      if (!c) continue;
+      const t = out.get(tabOf(c)) ?? { done: 0, total: 0 };
+      t.total++;
+      if (isDone(r.state)) t.done++;
+      out.set(tabOf(c), t);
     }
     return out;
   }, [rows]);
@@ -205,6 +222,30 @@ export function DeliverablesView({
         </div>
       </div>
 
+      <div className="flex flex-wrap gap-1 border-b" role="tablist">
+        {EXHIBIT_S_TABS.map((t) => {
+          const p = tabProgress.get(t.key) ?? { done: 0, total: 0 };
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.key}
+              onClick={() => setTab(t.key)}
+              className={cn(
+                "-mb-px rounded-t-md border px-3 py-1.5 text-sm",
+                tab === t.key ? "border-b-background bg-background font-semibold" : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {t.label}
+              <span className="ml-1.5 text-xs tabular-nums text-muted-foreground">
+                {p.done}/{p.total}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
       <div className="flex items-center gap-2 text-xs">
         {(["open", "all", "done"] as Filter[]).map((f) => (
           <button
@@ -229,7 +270,10 @@ export function DeliverablesView({
       {error && <p className="text-xs text-destructive">{error}</p>}
 
       {parts.map((part) => {
-        const sections = Array.from(new Set(EXHIBIT_S.filter((c) => c.part === part).map((c) => c.section)));
+        const sections = Array.from(
+          new Set(EXHIBIT_S.filter((c) => c.part === part && tabOf(c) === tab).map((c) => c.section)),
+        );
+        if (sections.length === 0) return null;
         return (
           <section key={part} className="overflow-x-auto rounded-md border">
             <h3 className="bg-muted/50 px-3 py-2 text-sm font-semibold">{PART_LABEL[part]}</h3>
