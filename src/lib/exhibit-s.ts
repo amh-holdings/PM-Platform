@@ -349,3 +349,52 @@ export function missedWeeks(reportDates: string[], today: string): string[] {
   }
   return out;
 }
+
+/**
+ * Tabs on the Exhibit S page. Exhibit S files by milestone (Parts I to III);
+ * the tabs group the same items by kind of document so each discipline
+ * works one list. Every catalog section maps to exactly one tab.
+ */
+export const EXHIBIT_S_TABS = [
+  { key: "design", label: "Design & Engineering" },
+  { key: "reporting", label: "Progress Reporting" },
+  { key: "contracts", label: "Contracts & Insurance" },
+  { key: "equipment", label: "Equipment & Procurement" },
+  { key: "testing", label: "Testing & Commissioning" },
+  { key: "closeout", label: "Closeout & Certificates" },
+  { key: "photos", label: "Site Photos" },
+] as const;
+
+export type ExhibitSTab = (typeof EXHIBIT_S_TABS)[number]["key"];
+
+// Part + section number prefix -> tab. Matched longest prefix first.
+const TAB_BY_SECTION: Record<string, ExhibitSTab> = {
+  "I:1.": "design",
+  "I:2.5": "contracts",
+  "I:2.": "reporting",
+  "I:3.1": "contracts",
+  "I:3.2": "equipment",
+  "I:4.": "testing",
+  "I:5.": "closeout",
+  "II:1.": "testing",
+  "II:2.": "equipment",
+  "II:3.": "equipment",
+  "II:4.": "closeout",
+  "II:5.": "equipment",
+  "II:6.": "closeout",
+  "II:7.": "testing",
+  "II:8.": "closeout",
+  "III:1.": "photos",
+  "III:2.": "equipment",
+  "III:3.": "testing",
+  "III:4.": "closeout",
+  "III:5.": "contracts",
+  "III:6.": "closeout",
+};
+const TAB_PREFIXES = Object.keys(TAB_BY_SECTION).sort((a, b) => b.length - a.length);
+
+export function tabOf(c: Pick<CatalogItem, "part" | "section">): ExhibitSTab {
+  const id = `${c.part}:${c.section}`;
+  const hit = TAB_PREFIXES.find((p) => id.startsWith(p));
+  return hit ? TAB_BY_SECTION[hit] : "closeout";
+}
