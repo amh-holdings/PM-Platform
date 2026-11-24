@@ -18,7 +18,6 @@ import {
   tabOf,
   deliverableFileName,
   isDone,
-  missedWeeks,
   nextPeriod,
   REVIEW_DECISIONS,
   type CatalogItem,
@@ -33,7 +32,6 @@ import {
   addDeliverableDevice,
   addRevision,
   loadExhibitS,
-  recordMissedPeriod,
   removeDeliverableDevice,
   setRevisionDecision,
   setSpvName,
@@ -417,22 +415,6 @@ export function DeliverablesView({
                           </td>
                         </tr>
                       )}
-                      {filter !== "done" && deviceItems.filter((c) => c.recurring === "weekly").map((c) => {
-                        const gaps = missedWeeks((byKey.get(c.key) ?? []).map((r) => r.device_id), today);
-                        return gaps.length === 0 ? null : (
-                          <tr key={`gaps-${c.key}`} className="border-b bg-red-50/60">
-                            <td colSpan={5} className="px-3 py-2">
-                              <MissedWeeks
-                                label={c.item}
-                                weeks={gaps}
-                                disabled={busy}
-                                onRecord={(week, reason) => run(() => recordMissedPeriod(projectId, c.key, week, reason))}
-                                onAddReport={(week) => run(() => addDeliverableDevice(projectId, c.key, week))}
-                              />
-                            </td>
-                          </tr>
-                        );
-                      })}
                       {visible.map(({ c, r }) => (
                         <ItemRow
                           key={r.id}
@@ -604,7 +586,7 @@ function ItemRow({
         >
           {DELIVERABLE_STATES.filter((s) =>
             (s !== "not_applicable" || item.asApplicable || row.state === s) &&
-            (s !== "missed" || period || row.state === s),
+            (s !== "missed" || row.state === s),
           ).map((s) => (
             <option key={s} value={s}>{STATE_LABEL[s]}</option>
           ))}
@@ -694,52 +676,6 @@ function ItemRow({
       </tr>
     )}
     </>
-  );
-}
-
-/** Weeks with no report: add the report late, or record why it was missed. */
-function MissedWeeks({
-  label,
-  weeks,
-  disabled,
-  onRecord,
-  onAddReport,
-}: {
-  label: string;
-  weeks: string[];
-  disabled: boolean;
-  onRecord: (week: string, reason: string) => Promise<boolean>;
-  onAddReport: (week: string) => Promise<boolean>;
-}) {
-  const [reasons, setReasons] = useState<Record<string, string>>({});
-  return (
-    <div className="space-y-1 text-xs">
-      <div className="font-medium text-red-900">
-        {weeks.length} week{weeks.length === 1 ? "" : "s"} with no {label}
-      </div>
-      {weeks.map((w) => (
-        <div key={w} className="flex flex-wrap items-center gap-2">
-          <span className="w-28 tabular-nums">Week of {w}</span>
-          <input
-            value={reasons[w] ?? ""}
-            onChange={(e) => setReasons((r) => ({ ...r, [w]: e.target.value }))}
-            placeholder="Why it can't be submitted, e.g. site shut down for weather"
-            className="h-7 w-96 rounded-md border bg-background px-2"
-          />
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={disabled || !(reasons[w] ?? "").trim()}
-            onClick={() => void onRecord(w, reasons[w] ?? "")}
-          >
-            Record as missed
-          </Button>
-          <button type="button" className="text-muted-foreground underline-offset-2 hover:underline" disabled={disabled} onClick={() => void onAddReport(w)}>
-            or add the report for this week
-          </button>
-        </div>
-      ))}
-    </div>
   );
 }
 
