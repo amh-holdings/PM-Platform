@@ -29,8 +29,10 @@ import { ScheduleBranchFilter } from "./schedule-branch-filter";
 import {
   SchedulePrintDialog,
   SchedulePrintSheet,
+  type PrintOrientation,
   type PrintSelection,
 } from "./schedule-print-dialog";
+import { printLogo } from "@/lib/project-branding";
 import {
   applyProjectedDates,
   bulkUpdateScheduleTasks,
@@ -151,6 +153,7 @@ export function ScheduleWorkspace({
   // renders the page, and a selection held inside it would go with it.
   const [printOpen, setPrintOpen] = useState(false);
   const [printSelection, setPrintSelection] = useState<PrintSelection>(null);
+  const [printOrientation, setPrintOrientation] = useState<PrintOrientation>("landscape");
 
   // No default. The old one preselected Civil whenever civil was the only
   // discipline present, which on a fresh import showed an empty grid and read
@@ -588,6 +591,8 @@ export function ScheduleWorkspace({
               cpmByWbs={cpm.byWbs}
               selection={printSelection}
               setSelection={setPrintSelection}
+              orientation={printOrientation}
+              setOrientation={setPrintOrientation}
               open={printOpen}
               setOpen={setPrintOpen}
             />
@@ -718,6 +723,8 @@ export function ScheduleWorkspace({
         cpmByWbs={cpm.byWbs}
         dataDate={effectiveDataDate}
         selection={printSelection}
+        orientation={printOrientation}
+        logo={printLogo(projectId)}
       />
     </>
   );
