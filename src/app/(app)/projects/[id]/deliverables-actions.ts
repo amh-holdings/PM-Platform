@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { driveConfigured, driveFolderName, folderIdFromLink, uploadPdfToDrive } from "@/lib/google-drive";
 import { createClient } from "@/lib/supabase/server";
+import { buildPackage, packageFileName } from "@/lib/submittal-package";
 import {
   CATALOG_BY_KEY,
   DELIVERABLE_STATES,
@@ -12,11 +14,15 @@ import {
   TRANSMITTED_FOR,
   submittalNumber,
   deviceIdProblem,
+  deliverableFileName,
+  CATALOG_BY_KEY as CATALOG,
   stateForDecision,
   type DeliverableState,
   type ReviewDecision,
   type TransmittedFor,
 } from "@/lib/exhibit-s";
+
+import { DOCUMENT_BUCKET } from "./documents-constants";
 
 export type DeliverableResult = { ok: true; note?: string; id?: string } | { ok: false; error: string };
 
@@ -29,6 +35,9 @@ function friendly(message: string): string {
   }
   if (/project_submittals|submittal_id|submittal_prefix/i.test(message) && /does not exist|could not find/i.test(message)) {
     return "Submittals are not in the database yet. Run migration 0093 in the Supabase SQL Editor.";
+  }
+  if (/document_id|package_document_id|drive_file_id|submittal_drive_folder_id/i.test(message) && /does not exist|could not find/i.test(message)) {
+    return "Submittal packages are not in the database yet. Run migration 0094 in the Supabase SQL Editor.";
   }
   if (/duplicate key|project_deliverables_once/i.test(message)) return "That one is already on the list.";
   return message;
@@ -393,4 +402,197 @@ export async function setSubmittalPrefix(projectId: string, prefix: string): Pro
   if (error) return { ok: false, error: friendly(error.message) };
   done(projectId);
   return { ok: true };
+}
+
+// ------------------------------ submittal packages ----------------------------
+
+
+/** Tie an uploaded PDF (a Documents row) to the document's revision on a submittal. */
+export async function attachSubmittalFile(
+  projectId: string,
+  submittalId: string,
+  deliverableId: string,
+  documentId: string,
+): Promise<DeliverableResult> {
+  const auth = await signedIn();
+  if (!auth) return { ok: false, error: "Not signed in" };
+  const db = untyped(auth.supabase);
+  const { data: sub } = await db.from("project_submittals").select("id").eq("id", submittalId).eq("project_id", projectId).maybeSingle();
+  if (!sub) return { ok: false, error: "Submittal not found" };
+  const { data: doc } = await auth.supabase
+    .from("project_documents").select("id").eq("id", documentId).eq("project_id", projectId).maybeSingle();
+  if (!doc) return { ok: false, error: "Upload not found" };
+  const { error } = await db.from("project_deliverable_revisions")
+    .update({ document_id: documentId }).eq("submittal_id", submittalId).eq("deliverable_id", deliverableId);
+  if (error) return { ok: false, error: friendly(error.message) };
+  done(projectId);
+  return { ok: true };
+}
+
+const mdY = (iso: string | null | undefined) => {
+  if (!iso) return "";
+  const [y, m, d] = iso.slice(0, 10).split("-");
+  return `${m}/${d}/${y}`;
+};
+
+/**
+ * Fill the cover, merge the documents behind it, keep the package on the
+ * Documents page, and save it to the project's Drive folder as Phil when
+ * Drive is set up. Building again replaces the previous package.
+ */
+export async function buildSubmittalPackage(projectId: string, submittalId: string): Promise<DeliverableResult & { url?: string; driveUrl?: string }> {
+  const auth = await signedIn();
+  if (!auth) return { ok: false, error: "Not signed in" };
+  const db = untyped(auth.supabase);
+  const { data: sub, error: subErr } = await db.from("project_submittals").select("*")
+    .eq("id", submittalId).eq("project_id", projectId).maybeSingle();
+  if (subErr) return { ok: false, error: friendly(subErr.message) };
+  if (!sub) return { ok: false, error: "Submittal not found" };
+  const { data: project } = await db.from("projects")
+    .select("name, spv_name, submittal_prefix, submittal_drive_folder_id").eq("id", projectId).maybeSingle();
+  const { data: revs, error: revErr } = await db.from("project_deliverable_revisions")
+    .select("deliverable_id, rev_no, version_date, notes, document_id").eq("submittal_id", submittalId);
+  if (revErr) return { ok: false, error: friendly(revErr.message) };
+  if (!revs?.length) return { ok: false, error: "No documents on this submittal." };
+
+  const { data: delivs } = await auth.supabase.from("project_deliverables")
+    .select("id, catalog_key, device_id").in("id", revs.map((r: { deliverable_id: string }) => r.deliverable_id));
+  const byId = new Map((delivs ?? []).map((d) => [d.id, d]));
+  const spv = project?.spv_name || project?.name || "";
+  type Rev = { deliverable_id: string; rev_no: number; version_date: string; notes: string | null; document_id: string | null };
+  const items = (revs as Rev[]).map((r) => {
+    const d = byId.get(r.deliverable_id);
+    const c = d ? CATALOG.get(d.catalog_key) : undefined;
+    const name = c && d ? deliverableFileName({ spv, item: c, versionDate: r.version_date, deviceId: d.device_id || null }) : "Document";
+    return { r, name };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+
+  const missing = items.filter((i) => !i.r.document_id).map((i) => i.name);
+  if (missing.length) return { ok: false, error: `Attach the PDF first: ${missing.join(", ")}` };
+  const { data: docs } = await auth.supabase.from("project_documents")
+    .select("id, storage_path, mime_type, file_name").in("id", items.map((i) => i.r.document_id!));
+  const docById = new Map((docs ?? []).map((d) => [d.id, d]));
+
+  const files: Uint8Array[] = [];
+  for (const it of items) {
+    const d = docById.get(it.r.document_id!);
+    if (!d) return { ok: false, error: `The file for ${it.name} is gone. Attach it again.` };
+    if (!/pdf/i.test(d.mime_type ?? "") && !/\.pdf$/i.test(d.file_name)) {
+      return { ok: false, error: `${d.file_name} is not a PDF. Only PDFs can go behind the cover.` };
+    }
+    const { data: blob, error } = await auth.supabase.storage.from(DOCUMENT_BUCKET).download(d.storage_path);
+    if (error || !blob) return { ok: false, error: `Couldn't read ${d.file_name}: ${error?.message ?? "missing"}` };
+    files.push(new Uint8Array(await blob.arrayBuffer()));
+  }
+
+  const number = submittalNumber(project?.submittal_prefix, sub.submittal_no);
+  let bytes: Uint8Array;
+  try {
+    bytes = await buildPackage({
+      project: sub.project_label || project?.name || "",
+      date: mdY(sub.submitted_on),
+      submittalNo: number,
+      to: sub.to_name ?? "",
+      from: sub.from_name ?? "",
+      subject: sub.subject ?? "",
+      cc: sub.cc ?? "",
+      transmittedFor: sub.transmitted_for,
+      transmittedOther: sub.transmitted_other,
+      items: items.map((i) => (i.r.rev_no > 0 ? `${i.name} (Rev ${i.r.rev_no}${i.r.notes ? `: ${i.r.notes}` : ""})` : i.name)),
+      notes: sub.notes ?? "",
+      requestedResponseDate: mdY(sub.requested_response_date),
+    }, files);
+  } catch (e) {
+    return { ok: false, error: `Couldn't merge the PDFs: ${(e as Error).message}` };
+  }
+  // One document keeps its Exhibit S name; a bundle takes the subject and
+  // the submittal date in the same SPV_Item_vYYYY-MM-DD shape.
+  const exhibitName = items.length === 1
+    ? items[0].name
+    : `${spv}_${(sub.subject || "Submittal").replace(/[\\/:*?"<>|]+/g, "-")}_v${sub.submitted_on}`;
+  const fileName = packageFileName(number, exhibitName);
+
+  // Keep it on the Documents page, replacing an earlier build.
+  const docId = crypto.randomUUID();
+  const storagePath = `${projectId}/${docId}/${fileName.replace(/[^a-zA-Z0-9._-]+/g, "_")}`;
+  const up = await auth.supabase.storage.from(DOCUMENT_BUCKET)
+    .upload(storagePath, new Blob([Buffer.from(bytes)], { type: "application/pdf" }), { contentType: "application/pdf", upsert: false });
+  if (up.error) return { ok: false, error: `Couldn't save the package: ${up.error.message}` };
+  const { data: row, error: insErr } = await auth.supabase.from("project_documents").insert({
+    project_id: projectId,
+    uploaded_by_id: auth.userId,
+    file_name: fileName,
+    storage_path: storagePath,
+    mime_type: "application/pdf",
+    size_bytes: bytes.byteLength,
+    category: "submittal",
+    description: `Submittal ${number} package: cover and ${items.length} document${items.length === 1 ? "" : "s"}`,
+    text_status: "pending",
+  }).select("id").single();
+  if (insErr) {
+    await auth.supabase.storage.from(DOCUMENT_BUCKET).remove([storagePath]);
+    return { ok: false, error: friendly(insErr.message) };
+  }
+  if (sub.package_document_id) {
+    const { data: old } = await auth.supabase.from("project_documents").select("storage_path").eq("id", sub.package_document_id).maybeSingle();
+    await auth.supabase.from("project_documents").delete().eq("id", sub.package_document_id);
+    if (old?.storage_path) await auth.supabase.storage.from(DOCUMENT_BUCKET).remove([old.storage_path]);
+  }
+
+  let drive: { id: string; url: string } | null = null;
+  let note = `${fileName} is ready.`;
+  if (driveConfigured() && project?.submittal_drive_folder_id) {
+    try {
+      drive = await uploadPdfToDrive(project.submittal_drive_folder_id, fileName, bytes);
+      note = `${fileName} saved to Drive.`;
+    } catch (e) {
+      note = `${fileName} is ready, but Drive didn't take it: ${(e as Error).message}`;
+    }
+  } else if (!driveConfigured()) {
+    note = `${fileName} is ready. Drive isn't connected yet, so download it and drop it in the folder.`;
+  } else {
+    note = `${fileName} is ready. Set the Drive folder on this page to have it saved there.`;
+  }
+  await db.from("project_submittals").update({
+    package_document_id: row.id,
+    package_built_at: new Date().toISOString(),
+    ...(drive ? { drive_file_id: drive.id, drive_url: drive.url } : {}),
+  }).eq("id", submittalId);
+
+  const { data: signed } = await auth.supabase.storage.from(DOCUMENT_BUCKET).createSignedUrl(storagePath, 3600, { download: fileName });
+  done(projectId);
+  return { ok: true, note, url: signed?.signedUrl, driveUrl: drive?.url };
+}
+
+/** A short-lived download link for a submittal's package. */
+export async function packageDownloadUrl(projectId: string, submittalId: string): Promise<DeliverableResult & { url?: string }> {
+  const auth = await signedIn();
+  if (!auth) return { ok: false, error: "Not signed in" };
+  const db = untyped(auth.supabase);
+  const { data: sub } = await db.from("project_submittals").select("package_document_id")
+    .eq("id", submittalId).eq("project_id", projectId).maybeSingle();
+  if (!sub?.package_document_id) return { ok: false, error: "No package built yet." };
+  const { data: doc } = await auth.supabase.from("project_documents").select("storage_path, file_name").eq("id", sub.package_document_id).maybeSingle();
+  if (!doc) return { ok: false, error: "The package file is gone. Build it again." };
+  const { data: signed, error } = await auth.supabase.storage.from(DOCUMENT_BUCKET).createSignedUrl(doc.storage_path, 3600, { download: doc.file_name });
+  if (error || !signed) return { ok: false, error: error?.message ?? "Couldn't make a link" };
+  return { ok: true, url: signed.signedUrl };
+}
+
+/** The Drive folder this project's submittal packages are saved to. */
+export async function setSubmittalDriveFolder(projectId: string, link: string): Promise<DeliverableResult> {
+  const auth = await signedIn();
+  if (!auth) return { ok: false, error: "Not signed in" };
+  const id = link.trim() ? folderIdFromLink(link) : null;
+  if (link.trim() && !id) return { ok: false, error: "Paste the Drive folder's link, from the address bar." };
+  let note: string | undefined;
+  if (id && driveConfigured()) {
+    const name = await driveFolderName(id);
+    if (!name) return { ok: false, error: "Phil's Drive can't open that folder. Check the link, and that it is a folder." };
+    note = `Saving to "${name}".`;
+  }
+  const { error } = await untyped(auth.supabase).from("projects").update({ submittal_drive_folder_id: id }).eq("id", projectId);
+  if (error) return { ok: false, error: friendly(error.message) };
+  done(projectId);
+  return { ok: true, note };
 }

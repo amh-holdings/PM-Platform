@@ -36,7 +36,11 @@ import { cn } from "@/lib/utils";
 import {
   addDeliverableDevice,
   addRevision,
+  attachSubmittalFile,
+  buildSubmittalPackage,
   createSubmittal,
+  packageDownloadUrl,
+  setSubmittalDriveFolder,
   setSubmittalPrefix,
   loadExhibitS,
   removeDeliverableDevice,
@@ -45,6 +49,7 @@ import {
   updateDeliverable,
   type DeliverablePatch,
 } from "./deliverables-actions";
+import { uploadProjectDocument } from "./upload-document";
 
 export type DeliverableRow = {
   id: string;
@@ -78,6 +83,8 @@ export type RevisionRow = {
   notes: string | null;
   /** The submittal it went out on (0093). */
   submittal_id?: string | null;
+  /** The PDF that went out (0094), a Documents row. */
+  document_id?: string | null;
 };
 
 export type SubmittalRow = {
@@ -93,6 +100,10 @@ export type SubmittalRow = {
   subject: string | null;
   notes: string | null;
   requested_response_date: string | null;
+  /** The merged cover + documents (0094). */
+  package_document_id?: string | null;
+  drive_url?: string | null;
+  package_built_at?: string | null;
 };
 
 /** What the submittal form starts with. */
@@ -124,8 +135,14 @@ export function DeliverablesView({
   submittalsEnabled,
   submittalPrefix,
   userName,
+  packagesEnabled = false,
+  driveConnected = false,
+  driveFolderId = null,
   today,
 }: {
+  packagesEnabled?: boolean;
+  driveConnected?: boolean;
+  driveFolderId?: string | null;
   projectId: string;
   spvName: string | null;
   projectName: string;
@@ -147,7 +164,34 @@ export function DeliverablesView({
   // Rows ticked for one submittal, and the open submittal form.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState<SubmittalDraft | null>(null);
-  const [created, setCreated] = useState<{ id: string; label: string } | null>(null);
+  const [created, setCreated] = useState<{ id: string; label: string; note?: string; url?: string; driveUrl?: string } | null>(null);
+  const [folderDraft, setFolderDraft] = useState(driveFolderId ? `https://drive.google.com/drive/folders/${driveFolderId}` : "");
+  const [folderNote, setFolderNote] = useState<string | null>(null);
+
+  /** Upload a PDF to Documents (category Submittal) and tie it to the submittal. */
+  async function attachFile(submittalId: string, deliverableId: string, file: File, label: string): Promise<boolean> {
+    const up = await uploadProjectDocument({ projectId, file, category: "submittal", description: `Submittal ${label}` });
+    if (!up.ok) { setError(`${file.name}: ${up.error}`); return false; }
+    const res = await attachSubmittalFile(projectId, submittalId, deliverableId, up.id);
+    if (!res.ok) { setError(res.error); return false; }
+    return true;
+  }
+
+  async function buildPackage(submittalId: string, label: string) {
+    setBusy(true);
+    setError(null);
+    const res = await buildSubmittalPackage(projectId, submittalId);
+    setBusy(false);
+    if (!res.ok) { setError(res.error); return; }
+    setCreated({ id: submittalId, label, note: res.note, url: res.url, driveUrl: res.driveUrl });
+    startTransition(() => router.refresh());
+  }
+
+  async function download(submittalId: string) {
+    const res = await packageDownloadUrl(projectId, submittalId);
+    if (!res.ok || !res.url) { setError(res.ok ? "No link" : res.error); return; }
+    window.open(res.url, "_blank");
+  }
   const [prefixDraft, setPrefixDraft] = useState(submittalPrefix ?? "");
   // The section shown inside the tab, "part|section", or "all".
   const [sub, setSub] = useState<string | null>(null);
@@ -343,6 +387,47 @@ export function DeliverablesView({
             </div>
           </label>
         )}
+        {packagesEnabled && (
+          <label className="block text-xs sm:col-span-2">
+            <span className="font-medium">Drive folder for submittal packages</span>
+            <span className="text-muted-foreground">
+              {" "}- paste the folder link. Packages are saved there as Phil (phil@amh.holdings).{" "}
+              {driveConnected ? "" : "Drive isn't connected yet, so packages download instead."}
+            </span>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <input
+                value={folderDraft}
+                onChange={(e) => setFolderDraft(e.target.value)}
+                placeholder="https://drive.google.com/drive/folders/..."
+                className="h-8 w-[28rem] max-w-full rounded-md border bg-background px-2 text-sm"
+              />
+              {folderDraft.trim() !== (driveFolderId ? `https://drive.google.com/drive/folders/${driveFolderId}` : "") && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    setError(null);
+                    const res = await setSubmittalDriveFolder(projectId, folderDraft);
+                    setBusy(false);
+                    if (!res.ok) { setError(res.error); return; }
+                    setFolderNote(res.note ?? "Saved.");
+                    startTransition(() => router.refresh());
+                  }}
+                >
+                  Save
+                </Button>
+              )}
+              {driveFolderId && (
+                <a href={`https://drive.google.com/drive/folders/${driveFolderId}`} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline">
+                  open folder
+                </a>
+              )}
+              {folderNote && <span className="text-emerald-800">{folderNote}</span>}
+            </div>
+          </label>
+        )}
         <div className="flex items-end gap-3 text-xs sm:col-start-2 sm:row-start-1">
           {parts.map((p) => (
             <div key={p} className="text-right">
@@ -402,10 +487,21 @@ export function DeliverablesView({
 
       {created && (
         <div className="flex flex-wrap items-center gap-3 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-          <span>Submittal <span className="font-semibold">{created.label}</span> created.</span>
-          <a href={coverHref(created.id)} target="_blank" rel="noreferrer" className="font-medium underline">
-            Open the cover sheet
-          </a>
+          <span>
+            Submittal <span className="font-semibold">{created.label}</span>
+            {created.note ? `: ${created.note}` : " created."}
+          </span>
+          {created.url && (
+            <a href={created.url} target="_blank" rel="noreferrer" className="font-medium underline">Download the package</a>
+          )}
+          {created.driveUrl && (
+            <a href={created.driveUrl} target="_blank" rel="noreferrer" className="font-medium underline">Open in Drive</a>
+          )}
+          {!created.url && (
+            <a href={coverHref(created.id)} target="_blank" rel="noreferrer" className="font-medium underline">
+              Open the cover sheet
+            </a>
+          )}
           <button type="button" className="ml-auto text-xs underline-offset-2 hover:underline" onClick={() => setCreated(null)}>
             Close
           </button>
@@ -425,16 +521,26 @@ export function DeliverablesView({
           today={today}
           disabled={busy}
           onCancel={() => setDraft(null)}
-          onSubmit={async (input) => {
+          packagesEnabled={packagesEnabled}
+          onSubmit={async (input, files) => {
             setBusy(true);
             setError(null);
             const res = await createSubmittal(projectId, input);
-            setBusy(false);
-            if (!res.ok) { setError(res.error); return; }
+            if (!res.ok || !res.id) { setBusy(false); setError(res.ok ? "No submittal id" : res.error); return; }
+            const sid = res.id;
+            const label = res.note ?? "";
             setDraft(null);
             setSelected(new Set());
-            setCreated({ id: res.id ?? "", label: res.note ?? "" });
-            startTransition(() => router.refresh());
+            setCreated({ id: sid, label });
+            // Each PDF goes up, then the package is built once every document
+            // on the cover has its file.
+            let attached = 0;
+            for (const [deliverableId, file] of Array.from(files)) {
+              if (await attachFile(sid, deliverableId, file, label)) attached++;
+            }
+            setBusy(false);
+            if (attached > 0 && attached === input.items.length) await buildPackage(sid, label);
+            else startTransition(() => router.refresh());
           }}
         />
       )}
@@ -458,6 +564,17 @@ export function DeliverablesView({
           rows={rowById}
           spv={spv}
           prefix={submittalPrefix}
+          packagesEnabled={packagesEnabled}
+          disabled={busy}
+          onBuild={(id, label) => void buildPackage(id, label)}
+          onDownload={(id) => void download(id)}
+          onAttach={async (sid, did, file, label) => {
+            setBusy(true);
+            setError(null);
+            const ok = await attachFile(sid, did, file, label);
+            setBusy(false);
+            if (ok) startTransition(() => router.refresh());
+          }}
         />
       ) : (
       <>
@@ -1026,7 +1143,9 @@ function SubmittalForm({
   disabled,
   onCancel,
   onSubmit,
+  packagesEnabled,
 }: {
+  packagesEnabled: boolean;
   draft: SubmittalDraft;
   rows: Map<string, DeliverableRow>;
   spv: string;
@@ -1037,9 +1156,10 @@ function SubmittalForm({
   today: string;
   disabled: boolean;
   onCancel: () => void;
-  onSubmit: (input: Parameters<typeof createSubmittal>[1]) => Promise<void>;
+  onSubmit: (input: Parameters<typeof createSubmittal>[1], files: Map<string, File>) => Promise<void>;
 }) {
   const [items, setItems] = useState(draft.items);
+  const [files, setFiles] = useState<Map<string, File>>(new Map());
   const [submittedOn, setSubmittedOn] = useState(today);
   const [transmittedFor, setTransmittedFor] = useState<TransmittedFor>(draft.transmittedFor);
   const [other, setOther] = useState("");
@@ -1075,6 +1195,7 @@ function SubmittalForm({
             <th className="py-1">Document (file name)</th>
             <th className="py-1">Doc date</th>
             <th className="py-1">Note on the cover (e.g. why it was revised)</th>
+            {packagesEnabled && <th className="py-1">PDF</th>}
             <th />
           </tr>
         </thead>
@@ -1105,6 +1226,24 @@ function SubmittalForm({
                     className="h-7 w-full rounded-md border bg-background px-2"
                   />
                 </td>
+                {packagesEnabled && (
+                  <td className="py-1 pr-2">
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        setFiles((cur) => {
+                          const next = new Map(cur);
+                          if (file) next.set(it.deliverableId, file);
+                          else next.delete(it.deliverableId);
+                          return next;
+                        });
+                      }}
+                      className="w-48 text-[11px]"
+                    />
+                  </td>
+                )}
                 <td className="py-1">
                   {items.length > 1 && (
                     <button
@@ -1180,7 +1319,7 @@ function SubmittalForm({
               subject,
               notes,
               requestedResponseDate: respond || null,
-            })
+            }, new Map(Array.from(files).filter(([id]) => items.some((i) => i.deliverableId === id))))
           }
         >
           Create {nextLabel}
@@ -1189,7 +1328,11 @@ function SubmittalForm({
           Cancel
         </Button>
         <span className="text-xs text-muted-foreground">
-          Each document goes to Uploaded with its next revision. The cover sheet opens once it&apos;s created.
+          {packagesEnabled
+            ? files.size > 0 && files.size === items.length
+              ? "With every PDF attached, the cover is filled in, merged in front, and saved."
+              : "Attach each document's PDF to get the merged package. You can also attach them later from the Submittal Log."
+            : "Each document goes to Uploaded with its next revision. The cover sheet opens once it's created."}
         </span>
       </div>
     </section>
@@ -1203,12 +1346,22 @@ function SubmittalLog({
   rows,
   spv,
   prefix,
+  packagesEnabled,
+  disabled,
+  onBuild,
+  onDownload,
+  onAttach,
 }: {
   submittals: SubmittalRow[];
   revisions: RevisionRow[];
   rows: Map<string, DeliverableRow>;
   spv: string;
   prefix: string | null;
+  packagesEnabled: boolean;
+  disabled: boolean;
+  onBuild: (submittalId: string, label: string) => void;
+  onDownload: (submittalId: string) => void;
+  onAttach: (submittalId: string, deliverableId: string, file: File, label: string) => Promise<void>;
 }) {
   const [q, setQ] = useState("");
   const bySub = useMemo(() => {
@@ -1260,7 +1413,7 @@ function SubmittalLog({
               <th className="px-3 py-2">Documents</th>
               <th className="px-3 py-2">For</th>
               <th className="px-3 py-2">Response</th>
-              <th className="px-3 py-2">Cover</th>
+              <th className="px-3 py-2">{packagesEnabled ? "Package" : "Cover"}</th>
             </tr>
           </thead>
           <tbody>
@@ -1274,6 +1427,21 @@ function SubmittalLog({
                     <div key={d.rv.id}>
                       <code className="break-all">{d.name}</code>
                       {d.rv.rev_no > 0 && <span className="text-muted-foreground"> Rev {d.rv.rev_no}</span>}
+                      {packagesEnabled && !d.rv.document_id && (
+                        <label className="ml-2 cursor-pointer text-amber-800 underline-offset-2 hover:underline">
+                          attach PDF
+                          <input
+                            type="file"
+                            accept="application/pdf,.pdf"
+                            className="hidden"
+                            disabled={disabled}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) void onAttach(x.id, d.rv.deliverable_id, file, label);
+                            }}
+                          />
+                        </label>
+                      )}
                     </div>
                   ))}
                 </td>
@@ -1289,9 +1457,32 @@ function SubmittalLog({
                     </div>
                   ))}
                 </td>
-                <td className="px-3 py-2 text-xs">
-                  <a href={coverHref(x.id)} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline">
-                    Open
+                <td className="space-y-0.5 px-3 py-2 text-xs">
+                  {packagesEnabled && x.package_document_id && (
+                    <button type="button" className="block font-medium underline-offset-2 hover:underline" onClick={() => onDownload(x.id)}>
+                      Download
+                    </button>
+                  )}
+                  {packagesEnabled && x.drive_url && (
+                    <a href={x.drive_url} target="_blank" rel="noreferrer" className="block underline-offset-2 hover:underline">
+                      Drive
+                    </a>
+                  )}
+                  {packagesEnabled && docs.length > 0 && docs.every((d) => d.rv.document_id) && (
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      className="block text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => onBuild(x.id, label)}
+                    >
+                      {x.package_document_id ? "Rebuild" : "Build package"}
+                    </button>
+                  )}
+                  {packagesEnabled && docs.some((d) => !d.rv.document_id) && (
+                    <span className="block text-amber-800">Attach the PDFs</span>
+                  )}
+                  <a href={coverHref(x.id)} target="_blank" rel="noreferrer" className="block text-muted-foreground underline-offset-2 hover:underline">
+                    Cover only
                   </a>
                 </td>
               </tr>

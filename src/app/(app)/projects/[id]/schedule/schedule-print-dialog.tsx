@@ -7,8 +7,6 @@ import { cn } from "@/lib/utils";
 import {
   buildPrintRows,
   printRowClass,
-  printSheetStamp,
-  printSheetTitle,
   selectedPrintRows,
   type PrintCpmLike,
   type PrintableTask,
@@ -16,6 +14,12 @@ import {
 import { rangeSelect } from "@/lib/range-select";
 
 export type PrintSelection = ReadonlySet<string> | null;
+export type PrintOrientation = "landscape" | "portrait";
+
+const longDate = (iso: string) =>
+  new Date(`${iso.slice(0, 10)}T00:00:00Z`).toLocaleDateString("en-US", {
+    month: "short", day: "numeric", year: "numeric", timeZone: "UTC",
+  });
 
 type SheetProps = {
   projectName: string;
@@ -26,11 +30,15 @@ type SheetProps = {
   cpmByWbs: ReadonlyMap<string, PrintCpmLike>;
   dataDate?: string | null;
   selection: PrintSelection;
+  orientation: PrintOrientation;
+  /** The contractor's mark in the header, when the project has one. */
+  logo?: { src: string; alt: string } | null;
 };
 
 // The chooser needs the rows and the scope label, not the sheet's header
 // material. Narrowing it keeps the call site honest about what it is for.
-type DialogProps = Pick<SheetProps, "scope" | "tasks" | "cpmByWbs" | "selection"> & {
+type DialogProps = Pick<SheetProps, "scope" | "tasks" | "cpmByWbs" | "selection" | "orientation"> & {
+  setOrientation: (next: PrintOrientation) => void;
   open: boolean;
   setOpen: (open: boolean) => void;
   setSelection: (next: PrintSelection) => void;
@@ -50,57 +58,93 @@ export function SchedulePrintSheet({
   cpmByWbs,
   dataDate,
   selection,
+  orientation,
+  logo,
 }: SheetProps) {
   const rows = useMemo(() => buildPrintRows(tasks, cpmByWbs), [tasks, cpmByWbs]);
   const printing = useMemo(() => selectedPrintRows(rows, selection), [rows, selection]);
+  // A row with a printed child is a summary: bold, shaded, so the branches
+  // read as sections rather than one long list.
+  const summaries = useMemo(() => {
+    const out = new Set<string>();
+    for (let i = 0; i < printing.length - 1; i++) {
+      if (printing[i + 1].wbs.startsWith(`${printing[i].wbs}.`)) out.add(printing[i].wbs);
+    }
+    return out;
+  }, [printing]);
+  const count = printing.length === rows.length
+    ? `${rows.length} task${rows.length === 1 ? "" : "s"}`
+    : `${printing.length} of ${rows.length} tasks`;
 
   return (
-    <div className="sp-sheet hidden print:block">
-      <h1 className="sp-title">
-        {printSheetTitle(projectName, scope, printing, rows.length)}
-      </h1>
-      <p className="sp-stamp">
-        {printSheetStamp(dataDate, new Date().toISOString().slice(0, 10))}
+    <div className={cn("sp-sheet hidden print:block", orientation === "portrait" ? "sp-portrait" : "sp-landscape")}>
+      <header className="sp-head">
+        {logo && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={logo.src} alt={logo.alt} className="sp-logo" />
+        )}
+        <div className="sp-head-main">
+          <div className="sp-project">{projectName}</div>
+          <div className="sp-doc">
+            Project Schedule <span className="sp-scope">- {scope ?? "All branches"}</span>
+          </div>
+        </div>
+        <div className="sp-head-meta">
+          {dataDate && <div><span>Data date</span> {longDate(dataDate)}</div>}
+          <div><span>Printed</span> {longDate(new Date().toISOString())}</div>
+          <div><span>Showing</span> {count}</div>
+        </div>
+      </header>
+      <p className="sp-key">
+        <span className="k-complete">Complete</span>
+        <span className="k-critical">Critical path</span>
+        <span className="k-slip">Behind the plan</span>
+        <span>Slip is working days against the projection.</span>
       </p>
       <table className="sp-table">
+        <colgroup>
+          <col className="c-wbs" />
+          <col className="c-task" />
+          <col className="c-date" />
+          <col className="c-date" />
+          <col className="c-num" />
+          <col className="c-num" />
+          <col className="c-status" />
+          <col className="c-num" />
+        </colgroup>
         <thead>
           <tr>
             <th>WBS</th>
             <th>Task</th>
             <th>Start</th>
             <th>Finish</th>
-            <th>Days</th>
-            <th>%</th>
+            <th className="sp-num">Days</th>
+            <th className="sp-num">%</th>
             <th>Status</th>
-            <th>Slip</th>
+            <th className="sp-num">Slip</th>
           </tr>
         </thead>
         <tbody>
-          {printing.map((r) => (
-            <tr key={r.wbs} className={printRowClass(r)}>
-              <td className="sp-wbs">{r.wbs}</td>
-              <td>
-                {r.name}
-                {r.milestone ? " (milestone)" : ""}
-              </td>
-              <td>{r.start}</td>
-              <td>{r.finish}</td>
-              <td className="sp-num">{r.days}</td>
-              <td className="sp-num">{r.pct}</td>
-              <td className={r.complete ? "sp-done" : undefined}>{r.status}</td>
-              <td className="sp-num sp-slipcell">{r.slip}</td>
-            </tr>
-          ))}
+          {printing.map((r) => {
+            const depth = Math.max(0, r.wbs.split(".").length - 1);
+            return (
+              <tr key={r.wbs} className={cn(printRowClass(r), summaries.has(r.wbs) && "sp-row-summary", depth === 0 && "sp-row-top")}>
+                <td className="sp-wbs">{r.wbs}</td>
+                <td style={{ paddingLeft: `${4 + depth * 9}pt` }}>
+                  {r.milestone && <span className="sp-ms">&#9670; </span>}
+                  {r.name}
+                </td>
+                <td className="sp-date">{r.start}</td>
+                <td className="sp-date">{r.finish}</td>
+                <td className="sp-num">{r.days}</td>
+                <td className="sp-num">{r.pct}</td>
+                <td className={r.complete ? "sp-done" : undefined}>{r.status}</td>
+                <td className="sp-num sp-slipcell">{r.slip}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
-      <p className="sp-key">
-        <span className="k-complete">Complete</span>
-        {"  -  "}
-        <span className="k-critical">Critical path</span>
-        {"  -  "}
-        <span className="k-slip">Behind the plan</span>
-        {"  -  Slip is working days against the projection."}
-      </p>
     </div>
   );
 }
@@ -111,6 +155,8 @@ export function SchedulePrintDialog({
   tasks,
   cpmByWbs,
   selection,
+  orientation,
+  setOrientation,
   open,
   setOpen,
   setSelection,
@@ -250,10 +296,22 @@ export function SchedulePrintDialog({
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <span className="mr-auto text-xs text-muted-foreground">
-                Prints landscape. Planned dates, with slip against the projection
-                beside them.
-              </span>
+              <div className="mr-auto flex items-center gap-2 text-xs">
+                <span className="text-muted-foreground">Page</span>
+                {(["landscape", "portrait"] as PrintOrientation[]).map((o) => (
+                  <button
+                    key={o}
+                    type="button"
+                    onClick={() => setOrientation(o)}
+                    className={cn(
+                      "rounded-md border px-2.5 py-1 capitalize",
+                      orientation === o ? "bg-foreground text-background" : "bg-card hover:bg-muted",
+                    )}
+                  >
+                    {o}
+                  </button>
+                ))}
+              </div>
               <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
                 Cancel
               </Button>

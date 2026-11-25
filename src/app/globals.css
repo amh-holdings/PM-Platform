@@ -96,67 +96,155 @@
  * as well, and that sheet goes to Dimension in portrait. A browser without
  * named page support just prints this one portrait, which still reads.
  */
-@page schedule-sheet {
-  size: landscape;
-  margin: 12mm;
+@page schedule-landscape {
+  size: letter landscape;
+  margin: 10mm 10mm 12mm;
+  @bottom-right {
+    content: "Page " counter(page) " of " counter(pages);
+    font-size: 7pt;
+    color: #666;
+  }
+}
+@page schedule-portrait {
+  size: letter portrait;
+  margin: 10mm 9mm 12mm;
+  @bottom-right {
+    content: "Page " counter(page) " of " counter(pages);
+    font-size: 7pt;
+    color: #666;
+  }
 }
 
 @media print {
+  .sp-landscape {
+    page: schedule-landscape;
+  }
+  .sp-portrait {
+    page: schedule-portrait;
+  }
   .sp-sheet {
-    page: schedule-sheet;
+    font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+    color: #111;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
-  .sp-title {
-    font-size: 13pt;
+  /* Header band: the contractor's mark, the project and what this is, and
+     the dates a sheet found on a desk needs. */
+  .sp-head {
+    display: flex;
+    align-items: center;
+    gap: 12pt;
+    padding-bottom: 6pt;
+    border-bottom: 2pt solid #1f3864;
+  }
+  .sp-logo {
+    height: 30pt;
+    width: auto;
+  }
+  .sp-head-main {
+    flex: 1;
+    min-width: 0;
+  }
+  .sp-project {
+    font-size: 14pt;
     font-weight: 700;
-    margin: 0 0 2pt;
+    line-height: 1.15;
   }
-  .sp-stamp {
-    font-size: 8pt;
+  .sp-doc {
+    font-size: 9.5pt;
+    font-weight: 600;
+    color: #1f3864;
+  }
+  .sp-scope {
+    font-weight: 400;
     color: #444;
-    margin: 0 0 8pt;
   }
+  .sp-head-meta {
+    font-size: 7.5pt;
+    text-align: right;
+    line-height: 1.45;
+    white-space: nowrap;
+  }
+  .sp-head-meta span {
+    color: #666;
+    margin-right: 3pt;
+  }
+  .sp-key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4pt 12pt;
+    font-size: 7pt;
+    color: #555;
+    margin: 4pt 0 6pt;
+  }
+  .sp-key .k-complete { color: #15803d; font-weight: 600; }
+  .sp-key .k-critical { color: #b91c1c; font-weight: 700; }
+  .sp-key .k-slip { color: #b45309; font-weight: 600; }
+
   .sp-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 8.5pt;
+    table-layout: fixed;
+    font-size: 8pt;
   }
+  .sp-landscape .c-wbs { width: 9%; }
+  .sp-landscape .c-date { width: 10.5%; }
+  .sp-landscape .c-num { width: 5%; }
+  .sp-landscape .c-status { width: 10%; }
+  .sp-portrait .sp-table { font-size: 7.5pt; }
+  .sp-portrait .c-wbs { width: 11%; }
+  .sp-portrait .c-date { width: 12.5%; }
+  .sp-portrait .c-num { width: 6%; }
+  .sp-portrait .c-status { width: 12%; }
   .sp-table th,
   .sp-table td {
-    border-bottom: 0.5pt solid #bbb;
-    padding: 2.5pt 4pt;
+    border-bottom: 0.5pt solid #d4d4d4;
+    padding: 2.2pt 4pt;
     text-align: left;
     vertical-align: top;
+    overflow-wrap: anywhere;
   }
   .sp-table th {
-    border-bottom: 1pt solid #333;
-    font-size: 7.5pt;
-    letter-spacing: 0.04em;
+    background: #1f3864;
+    color: #fff;
+    font-size: 7pt;
+    font-weight: 600;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
+    border-bottom: 0;
   }
-  /* Repeat the header on every page. Eleven civil rows fit on one sheet; the
-     full 204-task schedule does not, and a second page of unlabelled columns
-     is a page nobody can read. */
+  /* Repeat the header on every page; a second page of unlabelled columns is
+     a page nobody can read. */
   .sp-table thead {
     display: table-header-group;
   }
   .sp-table tr {
-    page-break-inside: avoid;
+    break-inside: avoid;
   }
   .sp-wbs {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: ui-monospace, Consolas, Menlo, monospace;
+    font-size: 7.5pt;
+    white-space: nowrap;
+  }
+  .sp-date {
     white-space: nowrap;
   }
   .sp-num {
-    text-align: right;
+    text-align: right !important;
     white-space: nowrap;
   }
-  /* Colour, matching the legend on the schedule page, because that is what the
-     reader already knows how to read. Browsers drop backgrounds from print by
-     default, so the sheet opts back in; a black and white printer renders
-     these as greys and the bold weight still carries the critical rows. */
-  .sp-sheet {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
+  .sp-ms {
+    font-size: 6.5pt;
+  }
+  /* Summary rows head their branch: shaded and bold, so the sheet reads in
+     sections. Top-level rows get a darker band. */
+  .sp-row-summary td {
+    background: #eef2f7;
+    font-weight: 600;
+  }
+  .sp-row-top td {
+    background: #dde5f0;
+    font-weight: 700;
   }
   .sp-row-complete td {
     color: #15803d;
@@ -173,21 +261,5 @@
   }
   .sp-row-slipping .sp-slipcell {
     font-weight: 700;
-  }
-  /* The key, so a sheet read away from the screen explains its own colours. */
-  .sp-key {
-    font-size: 7.5pt;
-    margin: 6pt 0 0;
-    color: #444;
-  }
-  .sp-key .k-complete {
-    color: #15803d;
-  }
-  .sp-key .k-critical {
-    color: #b91c1c;
-    font-weight: 700;
-  }
-  .sp-key .k-slip {
-    color: #b45309;
   }
 }
